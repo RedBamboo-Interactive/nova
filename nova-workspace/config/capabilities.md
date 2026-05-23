@@ -7,7 +7,11 @@
 - **Edit** — Edit files in the workspace
 - **Glob** — Find files by pattern
 - **Grep** — Search file contents
+- **Bash** — Execute shell commands (git, npm, scripts, etc.)
+- **PowerShell** — Execute PowerShell commands
 - **WebFetch** — Fetch content from URLs
+- **WebSearch** — Search the internet for information
+- **TodoWrite** — Track tasks and progress
 
 ## Integrations (via internal API)
 

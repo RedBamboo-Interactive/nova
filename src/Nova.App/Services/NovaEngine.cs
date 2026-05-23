@@ -73,7 +73,7 @@ public class NovaEngine : IAsyncDisposable
                 SystemPrompt = systemPrompt,
                 SystemPromptHint = "chat",
                 WorkingDirectory = _memory.WorkspacePath,
-                AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "WebFetch"],
+                AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "PowerShell", "WebFetch", "WebSearch", "TodoWrite"],
                 Context = new Dictionary<string, string>
                 {
                     ["memory_manifest"] = string.Join("\n", memoryManifest),
@@ -117,7 +117,7 @@ public class NovaEngine : IAsyncDisposable
                 SystemPrompt = BuildHeartbeatPrompt(purpose),
                 SystemPromptHint = purpose,
                 WorkingDirectory = _memory.WorkspacePath,
-                AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "WebFetch"],
+                AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "PowerShell", "WebFetch", "WebSearch", "TodoWrite"],
             };
 
             var response = await _redCompute.InvokeClaudeAsync(request, ct);
