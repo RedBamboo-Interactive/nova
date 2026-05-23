@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Nova.App.Configuration;
 using RedBamboo.AppHost.Logging;
 
@@ -10,7 +9,6 @@ public class NovaEngine : IAsyncDisposable
     private readonly MemoryManager _memory;
     private readonly LogService _log;
     private readonly RedComputeClient _redCompute;
-    private readonly ConcurrentDictionary<string, ConversationContext> _contexts = new();
 
     private HeartbeatService? _heartbeat;
     private SchedulerService? _scheduler;
@@ -19,6 +17,7 @@ public class NovaEngine : IAsyncDisposable
     public bool IsRunning => _cts is { IsCancellationRequested: false };
     public int ActiveHeartbeatCount => _heartbeat?.ActiveCount ?? 0;
     public RedComputeClient RedCompute => _redCompute;
+    public MemoryManager Memory => _memory;
 
     public NovaEngine(NovaConfig config, MemoryManager memory, LogService log)
     {
@@ -52,51 +51,6 @@ public class NovaEngine : IAsyncDisposable
         _redCompute.Dispose();
     }
 
-    public async Task<ChatResponse> ChatAsync(string contextId, string message, CancellationToken ct = default)
-    {
-        var context = _contexts.GetOrAdd(contextId, id => new ConversationContext(id));
-
-        context.Status = ConversationStatus.Thinking;
-        _log.Info("engine", $"Chat [{contextId}]: processing");
-
-        try
-        {
-            var systemPrompt = BuildSystemPrompt(context);
-            var memoryManifest = _memory.GetMemoryManifest();
-
-            var request = new ClaudeRequest
-            {
-                Prompt = message,
-                SystemPrompt = systemPrompt,
-                SystemPromptHint = "chat",
-                WorkingDirectory = _memory.WorkspacePath,
-                AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "PowerShell", "WebFetch", "WebSearch", "TodoWrite"],
-                Context = new Dictionary<string, string>
-                {
-                    ["memory_manifest"] = string.Join("\n", memoryManifest),
-                    ["conversation_id"] = contextId,
-                }
-            };
-
-            var response = await _redCompute.InvokeClaudeAsync(request, ct);
-
-            context.Status = ConversationStatus.Idle;
-            context.LastActivity = DateTime.UtcNow;
-
-            return new ChatResponse
-            {
-                Text = response.Text ?? "",
-                ToolCalls = response.ToolCalls,
-                ContextId = contextId,
-            };
-        }
-        catch
-        {
-            context.Status = ConversationStatus.Idle;
-            throw;
-        }
-    }
-
     public async Task<string?> InvokeForHeartbeatAsync(string purpose, string prompt, CancellationToken ct)
     {
         _log.Info("engine", $"Heartbeat [{purpose}]: invoking");
@@ -112,49 +66,6 @@ public class NovaEngine : IAsyncDisposable
 
         var response = await _redCompute.InvokeClaudeAsync(request, ct);
         return response.Text;
-    }
-
-    public ConversationContext? GetContext(string contextId)
-    {
-        return _contexts.TryGetValue(contextId, out var ctx) ? ctx : null;
-    }
-
-    public IReadOnlyCollection<ConversationContext> GetAllContexts()
-    {
-        return _contexts.Values.ToList().AsReadOnly();
-    }
-
-    private string BuildSystemPrompt(ConversationContext context)
-    {
-        var identity = _memory.ReadIdentity();
-        var protocol = _memory.ReadOutputProtocol();
-        var capabilities = _memory.ReadCapabilities();
-
-        return $"""
-            {identity}
-
-            ---
-
-            # Output Protocol
-            {protocol}
-
-            ---
-
-            # Capabilities
-            {capabilities}
-
-            ---
-
-            # Memory
-            You have access to a file-based memory system in your working directory.
-            Use Read/Write/Edit tools to interact with memory files.
-            The memory manifest lists all available files — read what's relevant, don't load everything.
-
-            Periodically update your conversation index and note anything that would be lost without writing it down.
-            Keep it lightweight — dreaming handles the heavy consolidation from raw conversation exports.
-
-            # Conversation context: {context.Id}
-            """;
     }
 
     private string BuildHeartbeatPrompt(string purpose)
@@ -181,28 +92,4 @@ public class NovaEngine : IAsyncDisposable
     {
         await StopAsync();
     }
-}
-
-public class ChatResponse
-{
-    public string Text { get; set; } = "";
-    public List<ToolCall>? ToolCalls { get; set; }
-    public string ContextId { get; set; } = "";
-}
-
-public class ConversationContext
-{
-    public string Id { get; }
-    public ConversationStatus Status { get; set; } = ConversationStatus.Idle;
-    public DateTime CreatedAt { get; } = DateTime.UtcNow;
-    public DateTime LastActivity { get; set; } = DateTime.UtcNow;
-
-    public ConversationContext(string id) => Id = id;
-}
-
-public enum ConversationStatus
-{
-    Idle,
-    Thinking,
-    ToolUse,
 }

@@ -41,22 +41,6 @@ public class RedComputeClient : IDisposable
         return result ?? throw new InvalidOperationException("Empty response from RedCompute");
     }
 
-    public async Task<Stream> InvokeClaudeStreamAsync(ClaudeRequest request, CancellationToken ct = default)
-    {
-        _log.Info("redcompute", $"Invoking Claude (stream): {request.SystemPromptHint ?? "chat"}");
-
-        var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/claude-code/generate")
-        {
-            Content = JsonContent.Create(request, options: JsonOptions)
-        };
-        httpRequest.Headers.Accept.Add(new("text/event-stream"));
-
-        var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
-
-        return await response.Content.ReadAsStreamAsync(ct);
-    }
-
     public async Task<string> TranscribeAsync(Stream audio, string fileName, string contentType, CancellationToken ct = default)
     {
         using var content = new MultipartFormDataContent();

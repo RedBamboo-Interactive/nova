@@ -3,6 +3,7 @@ import { MasterDetailLayout } from "@redbamboo/ui"
 import { ChatPanel } from "@redbamboo/chat"
 import { useCommand } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
+import { NovaStatusLine } from "@/components/nova-status-line"
 import { createNovaSpeechBackend } from "@/lib/speech"
 import type { useDiscussions } from "@/hooks/use-discussions"
 
@@ -21,9 +22,12 @@ export function ChatView({ disc }: Props) {
     activeDiscussionId,
     activeMessages,
     isStreaming,
+    pendingQuestion,
     selectDiscussion,
     createDiscussion,
     sendMessage,
+    interruptDiscussion,
+    answerQuestion,
     archiveDiscussion,
     dismissDiscussion,
   } = disc
@@ -34,6 +38,16 @@ export function ChatView({ disc }: Props) {
     if (!activeDiscussionId) return
     sendMessage(activeDiscussionId, content)
   }, [activeDiscussionId, sendMessage])
+
+  const handleInterrupt = useCallback(() => {
+    if (!activeDiscussionId) return
+    interruptDiscussion(activeDiscussionId)
+  }, [activeDiscussionId, interruptDiscussion])
+
+  const handleAnswerQuestion = useCallback((answer: string) => {
+    if (!activeDiscussionId) return
+    answerQuestion(activeDiscussionId, answer)
+  }, [activeDiscussionId, answerQuestion])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -119,11 +133,17 @@ export function ChatView({ disc }: Props) {
       messages={activeMessages}
       isStreaming={isStreaming}
       onSend={handleSend}
+      onInterrupt={handleInterrupt}
       sessionId={activeDiscussionId}
-      disabled={activeDiscussion.status === "archived"}
+      disabled={activeDiscussion.status === "archived" || !activeDiscussion.sessionId}
+      pendingQuestion={pendingQuestion}
+      onAnswerQuestion={handleAnswerQuestion}
       placeholder="Talk to Nova..."
       header={chatHeader}
       speechBackend={speechBackend}
+      renderStatusLine={({ isStreaming, messages }) => (
+        <NovaStatusLine isStreaming={isStreaming} messages={messages} />
+      )}
     />
   ) : (
     <div className="flex-1 flex items-center justify-center text-text-muted">

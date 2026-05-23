@@ -30,7 +30,7 @@ public class NovaServiceDescriptor : IServiceDescriptor
                 "chat",
                 "Chat",
                 _engine.IsRunning ? "running" : "stopped",
-                Description: "AI chat with persistent context and memory"),
+                Description: "AI chat via Claude Code sessions (proxied to RedCompute)"),
             new CapabilityDescriptor(
                 "heartbeats",
                 "Heartbeats",
@@ -43,20 +43,21 @@ public class NovaServiceDescriptor : IServiceDescriptor
     {
         return
         [
-            new("GET",  "/api/chat/contexts",             "List active conversation contexts"),
-            new("POST", "/api/chat/send",                 "Send a message in a conversation"),
-            new("GET",  "/api/settings",                  "Get current settings including identity"),
-            new("PUT",  "/api/settings/identity",         "Update Nova's identity"),
-            new("PUT",  "/api/settings/general",          "Update general settings"),
-            new("GET",  "/api/memory/manifest",           "List all memory files"),
-            new("GET",  "/api/memory/file",               "Read a memory file"),
-            new("GET",  "/api/schedule",                  "List scheduled tasks"),
-            new("POST", "/api/schedule",                  "Create a scheduled task"),
-            new("DELETE", "/api/schedule/{name}",         "Remove a scheduled task"),
-            new("GET",  "/api/heartbeats",                "List active heartbeats"),
-            new("POST", "/api/heartbeats",                "Create a heartbeat"),
-            new("DELETE", "/api/heartbeats/{name}",       "Remove a heartbeat"),
-            new("GET",  "/api/discussions/export",        "Export conversations as markdown"),
+            new("GET",  "/api/discussions",                "List discussions"),
+            new("POST", "/api/discussions",                "Create a new discussion (starts a session)"),
+            new("GET",  "/api/discussions/{id}",           "Get discussion metadata"),
+            new("DELETE", "/api/discussions/{id}",         "Archive a discussion"),
+            new("GET",  "/api/settings",                   "Get current settings including identity"),
+            new("PUT",  "/api/settings/identity",          "Update Nova's identity"),
+            new("GET",  "/api/memory/manifest",            "List all memory files"),
+            new("GET",  "/api/memory/file",                "Read a memory file"),
+            new("GET",  "/api/schedule",                   "List scheduled tasks"),
+            new("POST", "/api/schedule",                   "Create a scheduled task"),
+            new("DELETE", "/api/schedule/{name}",          "Remove a scheduled task"),
+            new("GET",  "/api/heartbeats",                 "List active heartbeats"),
+            new("POST", "/api/heartbeats",                 "Create a heartbeat"),
+            new("DELETE", "/api/heartbeats/{name}",        "Remove a heartbeat"),
+            new("GET",  "/api/discussions/export",         "Export conversations as markdown"),
         ];
     }
 
@@ -65,7 +66,6 @@ public class NovaServiceDescriptor : IServiceDescriptor
         return Task.FromResult<object?>(new
         {
             engineRunning = _engine.IsRunning,
-            activeContexts = _engine.GetAllContexts().Count,
             activeHeartbeats = _engine.ActiveHeartbeatCount,
         });
     }

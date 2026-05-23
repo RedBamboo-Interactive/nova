@@ -36,6 +36,7 @@ public static class SettingsEndpoints
                 return Results.BadRequest(new { error = "Identity content is required" });
 
             memory.WriteIdentity(request.Content);
+            memory.GenerateClaudeMd();
             return Results.Ok(new { success = true });
         });
 

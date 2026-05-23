@@ -77,11 +77,17 @@ public class StaticServer
                 CloudflaredPath = App.Config.Tunnel.CloudflaredPath,
                 AccessToken = App.Config.Tunnel.AccessToken,
             },
-            logService);
+            logService,
+            proxyRoutes: new Dictionary<string, string>
+            {
+                ["/claude"] = "http://localhost:18800",
+                ["/ai-session"] = "http://localhost:18800",
+                ["/tts"] = "http://localhost:18800",
+                ["/stt"] = "http://localhost:18800",
+            });
 
         _app.MapDiscussionEndpoints(_engine);
         _app.MapDiscussionExportEndpoints();
-        _app.MapChatEndpoints(_engine);
         _app.MapSettingsEndpoints(_memory);
         _app.MapMemoryEndpoints(_memory);
         _app.MapScheduleEndpoints(_engine);
@@ -153,6 +159,18 @@ public class StaticServer
             CREATE INDEX IF NOT EXISTS IX_Discussions_LastActivity ON Discussions(LastActivity);
             """;
         cmd.ExecuteNonQuery();
+
+        cmd.CommandText = "PRAGMA table_info(Discussions)";
+        using var discReader = cmd.ExecuteReader();
+        var discColumns = new HashSet<string>();
+        while (discReader.Read()) discColumns.Add(discReader.GetString(1));
+        discReader.Close();
+
+        if (!discColumns.Contains("SessionId"))
+        {
+            cmd.CommandText = "ALTER TABLE Discussions ADD COLUMN SessionId TEXT";
+            cmd.ExecuteNonQuery();
+        }
 
         cmd.CommandText = "PRAGMA table_info(Conversations)";
         using var reader = cmd.ExecuteReader();

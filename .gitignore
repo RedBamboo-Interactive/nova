@@ -14,6 +14,7 @@ web/.vite/
 # Runtime workspace (memory is local, not versioned)
 nova-workspace/memory/
 nova-workspace/config/runtime/
+nova-workspace/CLAUDE.md
 
 # IDE
 .idea/

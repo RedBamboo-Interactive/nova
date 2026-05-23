@@ -113,6 +113,45 @@ public class MemoryManager
         _log.Info("memory", $"Backup created: {today}");
     }
 
+    public void GenerateClaudeMd()
+    {
+        var identity = ReadIdentity();
+        var protocol = ReadOutputProtocol();
+        var capabilities = ReadCapabilities();
+        var manifest = GetMemoryManifest();
+
+        var content = $"""
+            {identity}
+
+            ---
+
+            # Output Protocol
+            {protocol}
+
+            ---
+
+            # Capabilities
+            {capabilities}
+
+            ---
+
+            # Memory
+            You have access to a file-based memory system in your working directory.
+            Use Read/Write/Edit tools to interact with memory files.
+            The memory manifest lists all available files — read what's relevant, don't load everything.
+
+            Periodically update your conversation index and note anything that would be lost without writing it down.
+            Keep it lightweight — dreaming handles the heavy consolidation from raw conversation exports.
+
+            ## Memory manifest
+            {string.Join("\n", manifest.Select(p => $"- {p}"))}
+            """;
+
+        var path = Path.Combine(_workspacePath, "CLAUDE.md");
+        File.WriteAllText(path, content);
+        _log.Info("memory", "CLAUDE.md generated");
+    }
+
     public string ReadHeartbeats()
     {
         var path = Path.Combine(RuntimeConfigPath, "heartbeats.md");

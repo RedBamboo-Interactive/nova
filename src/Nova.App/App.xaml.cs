@@ -51,6 +51,7 @@ public partial class App : Application
 
         Memory = new MemoryManager(Config.WorkspacePath, LogService);
         Memory.EnsureDirectories();
+        Memory.GenerateClaudeMd();
 
         Engine = new NovaEngine(Config, Memory, LogService);
 

@@ -1,6 +1,7 @@
 export interface DiscussionInfo {
   id: string
   title: string | null
+  sessionId: string | null
   status: "idle" | "thinking" | "archived"
   createdAt: string
   lastActivity: string
@@ -21,9 +22,16 @@ export interface MessagePartDto {
   toolInput?: string
 }
 
-export interface DiscussionSendResponse {
-  text: string
-  discussionId: string
-  title: string | null
-  toolCalls?: { name: string; input?: string; output?: string }[]
+export interface ClaudeStreamEvent {
+  type: string
+  content?: string | null
+  toolName?: string | null
+  toolInput?: unknown
+  toolResult?: string | null
+  messageId?: string | null
+}
+
+export interface WsEvent {
+  type: string
+  data: unknown
 }

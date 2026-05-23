@@ -8,4 +8,5 @@ public class Discussion
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime LastActivity { get; set; } = DateTime.UtcNow;
     public int MessageCount { get; set; }
+    public string? SessionId { get; set; }
 }

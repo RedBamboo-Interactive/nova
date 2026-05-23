@@ -1,7 +1,9 @@
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { api } from "@/lib/api"
-import type { DiscussionInfo, DiscussionMessage, DiscussionSendResponse } from "@/lib/types"
-import type { MessageBlock, MessagePart } from "@redbamboo/chat"
+import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent } from "@/lib/types"
+import type { MessageBlock, MessagePart, PendingQuestion, ChatEvent } from "@redbamboo/chat"
+import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
+import type { PersistedMessage } from "@redbamboo/chat"
 
 function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
   return messages.map((m) => ({
@@ -22,12 +24,22 @@ export function useDiscussions() {
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Record<string, MessageBlock[]>>({})
   const [streaming, setStreaming] = useState<Record<string, boolean>>({})
+  const [pendingQuestions, setPendingQuestions] = useState<Record<string, PendingQuestion | null>>({})
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
   const loadedRef = useRef<Set<string>>(new Set())
 
   const activeDiscussion = discussions.find((d) => d.id === activeDiscussionId) ?? null
   const activeMessages = activeDiscussionId ? messages[activeDiscussionId] ?? [] : []
   const isStreaming = activeDiscussionId ? streaming[activeDiscussionId] ?? false : false
+  const activePendingQuestion = activeDiscussionId ? pendingQuestions[activeDiscussionId] ?? null : null
+
+  const sessionToDiscussion = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const d of discussions) {
+      if (d.sessionId) map.set(d.sessionId, d.id)
+    }
+    return map
+  }, [discussions])
 
   const refreshDiscussions = useCallback(async () => {
     const list = await api.get<DiscussionInfo[]>("/api/discussions")
@@ -49,9 +61,27 @@ export function useDiscussions() {
   const loadMessages = useCallback(async (id: string) => {
     if (loadedRef.current.has(id)) return
     loadedRef.current.add(id)
-    const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/discussions/${id}`)
-    setMessages((prev) => ({ ...prev, [id]: toChatMessages(data.messages) }))
-  }, [])
+
+    const disc = discussions.find((d) => d.id === id)
+    if (disc?.sessionId) {
+      try {
+        const data = await api.get<{ session: unknown; messages: PersistedMessage[] }>(`/claude/sessions/${disc.sessionId}`)
+        if (data.messages?.length) {
+          setMessages((prev) => ({ ...prev, [id]: rebuildBlocks(data.messages) }))
+          return
+        }
+      } catch {
+        // Session not found — fall through to legacy load
+      }
+    }
+
+    try {
+      const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/discussions/${id}`)
+      if (data.messages?.length) {
+        setMessages((prev) => ({ ...prev, [id]: toChatMessages(data.messages) }))
+      }
+    } catch { /* discussion not found */ }
+  }, [discussions])
 
   const selectDiscussion = useCallback((id: string) => {
     setActiveDiscussionId(id)
@@ -68,6 +98,9 @@ export function useDiscussions() {
   }, [])
 
   const sendMessage = useCallback(async (discussionId: string, content: string) => {
+    const disc = discussions.find((d) => d.id === discussionId)
+    if (!disc?.sessionId) return
+
     const userMsg: MessageBlock = {
       id: crypto.randomUUID(),
       role: "user",
@@ -84,57 +117,105 @@ export function useDiscussions() {
       prev.map((d) => d.id === discussionId ? { ...d, status: "thinking" as const } : d)
     )
 
-    try {
-      const response = await api.post<DiscussionSendResponse>(`/api/discussions/${discussionId}/send`, {
-        message: content,
-      })
+    if (!disc.title && disc.messageCount === 0) {
+      const title = content.length > 60 ? content.slice(0, 59) + "…" : content
+      setDiscussions((prev) =>
+        prev.map((d) => d.id === discussionId ? { ...d, title } : d)
+      )
+      api.put(`/api/discussions/${discussionId}/title`, { title }).catch(() => {})
+    }
 
-      const parts: MessagePart[] = []
-      if (response.toolCalls) {
-        for (const tc of response.toolCalls) {
-          parts.push({ type: "tool_use", content: tc.output ?? "", toolName: tc.name, toolInput: tc.input ?? "" })
-          if (tc.output) {
-            parts.push({ type: "tool_result", content: tc.output, toolName: tc.name })
-          }
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await api.post(`/claude/sessions/${disc.sessionId}/message`, { content })
+        return
+      } catch {
+        if (attempt < 4) {
+          await new Promise((r) => setTimeout(r, 1000))
+          continue
         }
-      }
-      parts.push({ type: "text", content: response.text })
-
-      const assistantMsg: MessageBlock = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        parts,
-        timestamp: new Date().toISOString(),
-      }
-      setMessages((prev) => ({
-        ...prev,
-        [discussionId]: [...(prev[discussionId] ?? []), assistantMsg],
-      }))
-
-      setDiscussions((prev) =>
-        prev.map((d) => d.id === discussionId
-          ? { ...d, status: "idle" as const, title: response.title ?? d.title, messageCount: d.messageCount + 2 }
-          : d
+        setStreaming((prev) => ({ ...prev, [discussionId]: false }))
+        setDiscussions((prev) =>
+          prev.map((d) => d.id === discussionId ? { ...d, status: "idle" as const } : d)
         )
-      )
-    } catch (err) {
-      const errorMsg: MessageBlock = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        parts: [{ type: "error", content: err instanceof Error ? err.message : "Unknown error" }],
-        timestamp: new Date().toISOString(),
       }
-      setMessages((prev) => ({
-        ...prev,
-        [discussionId]: [...(prev[discussionId] ?? []), errorMsg],
-      }))
-      setDiscussions((prev) =>
-        prev.map((d) => d.id === discussionId ? { ...d, status: "idle" as const } : d)
-      )
-    } finally {
+    }
+  }, [discussions])
+
+  const interruptDiscussion = useCallback(async (discussionId: string) => {
+    const disc = discussions.find((d) => d.id === discussionId)
+    if (!disc?.sessionId) return
+    try {
+      await api.post(`/claude/sessions/${disc.sessionId}/interrupt`)
+    } catch { /* best effort */ }
+  }, [discussions])
+
+  const answerQuestion = useCallback(async (discussionId: string, answer: string) => {
+    const disc = discussions.find((d) => d.id === discussionId)
+    if (!disc?.sessionId) return
+    setPendingQuestions((prev) => ({ ...prev, [discussionId]: null }))
+    setStreaming((prev) => ({ ...prev, [discussionId]: true }))
+    try {
+      await api.post(`/claude/sessions/${disc.sessionId}/answer`, { answer })
+    } catch {
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
     }
-  }, [])
+  }, [discussions])
+
+  const handleWsEvent = useCallback((event: WsEvent) => {
+    if (event.type === "claude.session.updated") {
+      const session = event.data as { id: string; status: string }
+      const discId = sessionToDiscussion.get(session.id)
+      if (!discId) return
+      if (session.status !== "Active") {
+        setStreaming((prev) => ({ ...prev, [discId]: false }))
+        setDiscussions((prev) =>
+          prev.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
+        )
+      }
+    } else if (event.type === "claude.session.ended") {
+      const { id } = event.data as { id: string }
+      const discId = sessionToDiscussion.get(id)
+      if (!discId) return
+      setStreaming((prev) => ({ ...prev, [discId]: false }))
+      setPendingQuestions((prev) => ({ ...prev, [discId]: null }))
+      setDiscussions((prev) =>
+        prev.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
+      )
+    } else if (event.type === "claude.stream") {
+      const { sessionId, event: evt } = event.data as { sessionId: string; event: ClaudeStreamEvent }
+      const discId = sessionToDiscussion.get(sessionId)
+      if (!discId) return
+
+      const chatEvent: ChatEvent = {
+        type: evt.type as ChatEvent["type"],
+        content: evt.content ?? null,
+        toolName: evt.toolName ?? null,
+        toolInput: typeof evt.toolInput === "string"
+          ? evt.toolInput
+          : evt.toolInput ? JSON.stringify(evt.toolInput) : null,
+        toolResult: evt.toolResult ?? null,
+        messageId: evt.messageId ?? null,
+      }
+
+      setMessages((prev) => {
+        const current = prev[discId] ?? []
+        const result = processStreamEvent(current, true, chatEvent)
+        setStreaming((p) => ({ ...p, [discId]: result.isStreaming }))
+        if (result.pendingQuestion) {
+          setPendingQuestions((p) => ({ ...p, [discId]: result.pendingQuestion }))
+        } else if (chatEvent.type === "status") {
+          setPendingQuestions((p) => ({ ...p, [discId]: null }))
+          if (!result.isStreaming) {
+            setDiscussions((p) =>
+              p.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
+            )
+          }
+        }
+        return { ...prev, [discId]: result.messages }
+      })
+    }
+  }, [sessionToDiscussion])
 
   const archiveDiscussion = useCallback(async (id: string) => {
     await api.delete(`/api/discussions/${id}`)
@@ -160,12 +241,16 @@ export function useDiscussions() {
     activeDiscussionId,
     activeMessages,
     isStreaming,
+    pendingQuestion: activePendingQuestion,
     selectDiscussion,
     createDiscussion,
     sendMessage,
+    interruptDiscussion,
+    answerQuestion,
     archiveDiscussion,
     dismissDiscussion,
     renameDiscussion,
     refreshDiscussions,
+    handleWsEvent,
   }
 }
