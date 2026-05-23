@@ -77,7 +77,17 @@ export function useDiscussions() {
           return
         }
       } catch {
-        // Session not found — fall through to legacy load
+        // Session may be dead — try to resume so it's ready for messages
+        try {
+          await api.post(`/claude/sessions/${disc.sessionId}/resume`)
+          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/claude/sessions/${disc.sessionId}`)
+          if (data.messages?.length) {
+            setMessages((prev) => ({ ...prev, [id]: rebuildBlocks(data.messages) }))
+            return
+          }
+        } catch {
+          // Resume failed — fall through to legacy load
+        }
       }
     }
 
@@ -131,19 +141,37 @@ export function useDiscussions() {
       api.put(`/api/discussions/${discussionId}/title`, { title }).catch(() => {})
     }
 
-    for (let attempt = 0; attempt < 5; attempt++) {
+    const fail = () => {
+      setStreaming((prev) => ({ ...prev, [discussionId]: false }))
+      setDiscussions((prev) =>
+        prev.map((d) => d.id === discussionId ? { ...d, status: "idle" as const } : d)
+      )
+    }
+
+    try {
+      await api.post(`/claude/sessions/${disc.sessionId}/message`, { content })
+      return
+    } catch {
+      // Session may be dead after RedCompute restart — try to resume
+    }
+
+    try {
+      await api.post(`/claude/sessions/${disc.sessionId}/resume`)
+    } catch {
+      fail()
+      return
+    }
+
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         await api.post(`/claude/sessions/${disc.sessionId}/message`, { content })
         return
       } catch {
-        if (attempt < 4) {
+        if (attempt < 2) {
           await new Promise((r) => setTimeout(r, 1000))
           continue
         }
-        setStreaming((prev) => ({ ...prev, [discussionId]: false }))
-        setDiscussions((prev) =>
-          prev.map((d) => d.id === discussionId ? { ...d, status: "idle" as const } : d)
-        )
+        fail()
       }
     }
   }, [discussions])
