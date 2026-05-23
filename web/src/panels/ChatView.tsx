@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react"
-import { MasterDetailLayout } from "@redbamboo/ui"
+import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
 import { ChatPanel } from "@redbamboo/chat"
 import { useCommand } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
@@ -115,8 +115,7 @@ export function ChatView({ disc }: Props) {
   )
 
   const sidebarHeader = (
-    <div className="flex items-center justify-between h-12 px-4 border-b border-overlay-6">
-      <span className="text-[14px] font-medium text-contrast">Discussions</span>
+    <PanelHeader title="Discussions">
       <button
         onClick={() => { createDiscussion(); setMobileTab(1) }}
         className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
@@ -125,7 +124,7 @@ export function ChatView({ disc }: Props) {
         <i className="fa-solid fa-plus text-xs" />
         <span>New</span>
       </button>
-    </div>
+    </PanelHeader>
   )
 
   const chatArea = activeDiscussion ? (
