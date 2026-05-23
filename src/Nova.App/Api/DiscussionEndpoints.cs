@@ -38,6 +38,20 @@ public static class DiscussionEndpoints
             return Results.Ok(result);
         });
 
+        app.MapGet("/api/discussions/pending", async (NovaDbContext db) =>
+        {
+            var count = await db.Discussions
+                .Where(d => d.Status == "idle" && d.MessageCount > 0)
+                .Where(d => db.Conversations
+                    .Where(m => m.ContextId == d.Id)
+                    .OrderByDescending(m => m.Timestamp)
+                    .Select(m => m.Role)
+                    .FirstOrDefault() == "assistant")
+                .CountAsync();
+
+            return Results.Ok(new { count });
+        });
+
         app.MapPost("/api/discussions", async (NovaDbContext db) =>
         {
             var discussion = new Discussion

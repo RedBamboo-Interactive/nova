@@ -9,5 +9,11 @@
   "orientation": "any",
   "icons": [
     { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
+  "protocol_handlers": [
+    { "protocol": "web+nova", "url": "/?from=%s" }
   ]
 }
