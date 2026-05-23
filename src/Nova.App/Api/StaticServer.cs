@@ -89,6 +89,7 @@ public class StaticServer
         {
             var db = scope.ServiceProvider.GetRequiredService<NovaDbContext>();
             db.Database.EnsureCreated();
+            EnsureSchema(db);
         }
 
         var repoWebDist = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "web", "dist");
@@ -128,6 +129,39 @@ public class StaticServer
             await _app.StopAsync();
             await _app.DisposeAsync();
             _app = null;
+        }
+    }
+
+    private static void EnsureSchema(NovaDbContext db)
+    {
+        var conn = db.Database.GetDbConnection();
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+
+        cmd.CommandText = """
+            CREATE TABLE IF NOT EXISTS Discussions (
+                Id TEXT PRIMARY KEY,
+                Title TEXT,
+                Status TEXT NOT NULL DEFAULT 'idle',
+                CreatedAt TEXT NOT NULL,
+                LastActivity TEXT NOT NULL,
+                MessageCount INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS IX_Discussions_Status ON Discussions(Status);
+            CREATE INDEX IF NOT EXISTS IX_Discussions_LastActivity ON Discussions(LastActivity);
+            """;
+        cmd.ExecuteNonQuery();
+
+        cmd.CommandText = "PRAGMA table_info(Conversations)";
+        using var reader = cmd.ExecuteReader();
+        var columns = new HashSet<string>();
+        while (reader.Read()) columns.Add(reader.GetString(1));
+        reader.Close();
+
+        if (!columns.Contains("PartsJson"))
+        {
+            cmd.CommandText = "ALTER TABLE Conversations ADD COLUMN PartsJson TEXT";
+            cmd.ExecuteNonQuery();
         }
     }
 
