@@ -1,0 +1,23 @@
+@import "tailwindcss";
+@import "@redbamboo/ui/tokens.css";
+
+@source "../node_modules/@redbamboo/ui/src";
+@source "../node_modules/@redbamboo/chat/src";
+
+/* ── Nova brand ─────────────────────────────────────────────────────── */
+
+:root, :root.dark {
+  --brand: #C74B7A;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+#root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  overflow: hidden;
+}

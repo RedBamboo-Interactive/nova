@@ -1,0 +1,20 @@
+namespace Nova.App.Configuration;
+
+public class NovaConfig
+{
+    public int Port { get; set; } = 18803;
+    public string RedComputeUrl { get; set; } = "http://localhost:18800";
+    public string WorkspacePath { get; set; } = "";
+    public int ClaudeTimeoutSeconds { get; set; } = 180;
+    public int MaxConcurrentInvocations { get; set; } = 1;
+    public TunnelSettings Tunnel { get; set; } = new();
+}
+
+public class TunnelSettings
+{
+    public bool Enabled { get; set; }
+    public string? TunnelToken { get; set; }
+    public string? Hostname { get; set; }
+    public string? CloudflaredPath { get; set; }
+    public string? AccessToken { get; set; }
+}

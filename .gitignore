@@ -1,0 +1,29 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.vs/
+.vs/
+
+# Frontend
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Runtime workspace (memory is local, not versioned)
+nova-workspace/memory/
+nova-workspace/config/runtime/
+
+# IDE
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Secrets
+.env
+*.pfx

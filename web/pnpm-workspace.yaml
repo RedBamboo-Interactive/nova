@@ -1,0 +1,6 @@
+allowBuilds:
+  msw: true
+overrides:
+  '@redbamboo/ui': link:../../redbamboo-packages/packages/ui
+  '@redbamboo/chat': link:../../redbamboo-packages/packages/chat
+  '@redbamboo/utility': link:../../redbamboo-packages/packages/utility
