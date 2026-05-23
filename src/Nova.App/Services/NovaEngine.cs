@@ -150,6 +150,9 @@ public class NovaEngine : IAsyncDisposable
             Use Read/Write/Edit tools to interact with memory files.
             The memory manifest lists all available files — read what's relevant, don't load everything.
 
+            Periodically update your conversation index and note anything that would be lost without writing it down.
+            Keep it lightweight — dreaming handles the heavy consolidation from raw conversation exports.
+
             # Conversation context: {context.Id}
             """;
     }
