@@ -1,14 +1,163 @@
+import { useState, useCallback, useEffect } from "react"
+import { MasterDetailLayout } from "@redbamboo/ui"
 import { ChatPanel } from "@redbamboo/chat"
-import type { ChatBackend } from "@redbamboo/chat"
+import { useCommand } from "@redbamboo/utility"
+import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
+import type { useDiscussions } from "@/hooks/use-discussions"
 
-interface ChatViewProps {
-  backend: ChatBackend
+type DiscussionsHook = ReturnType<typeof useDiscussions>
+
+interface Props {
+  disc: DiscussionsHook
 }
 
-export function ChatView({ backend }: ChatViewProps) {
-  return (
-    <div className="h-full flex flex-col">
-      <ChatPanel backend={backend} placeholder="Talk to Nova..." />
+export function ChatView({ disc }: Props) {
+  const {
+    discussions,
+    activeDiscussion,
+    activeDiscussionId,
+    activeMessages,
+    isStreaming,
+    selectDiscussion,
+    createDiscussion,
+    sendMessage,
+    archiveDiscussion,
+    dismissDiscussion,
+  } = disc
+
+  const [mobileTab, setMobileTab] = useState(0)
+
+  const handleSend = useCallback((content: string) => {
+    if (!activeDiscussionId) return
+    sendMessage(activeDiscussionId, content)
+  }, [activeDiscussionId, sendMessage])
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === "n") {
+        e.preventDefault()
+        createDiscussion()
+        setMobileTab(1)
+      }
+      if (e.ctrlKey && e.key === "w") {
+        e.preventDefault()
+        if (!activeDiscussionId) return
+        archiveDiscussion(activeDiscussionId)
+      }
+      if (e.ctrlKey && !e.shiftKey && e.key === "Tab") {
+        e.preventDefault()
+        if (discussions.length === 0) return
+        const idx = discussions.findIndex((d) => d.id === activeDiscussionId)
+        const next = discussions[(idx + 1) % discussions.length]
+        if (next) selectDiscussion(next.id)
+      }
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [discussions, activeDiscussionId, selectDiscussion, createDiscussion, archiveDiscussion])
+
+  useCommand("new-discussion", {
+    label: "New Discussion",
+    group: "Discussions",
+    shortcut: "Ctrl+N",
+    keywords: ["start", "create", "new", "chat"],
+    action: () => { createDiscussion(); setMobileTab(1) },
+  })
+
+  useCommand("switch-discussion", {
+    label: "Next Discussion",
+    group: "Discussions",
+    shortcut: "Ctrl+Tab",
+    keywords: ["switch", "cycle", "tab"],
+    action: () => {
+      if (discussions.length === 0) return
+      const idx = discussions.findIndex((d) => d.id === activeDiscussionId)
+      const next = discussions[(idx + 1) % discussions.length]
+      if (next) selectDiscussion(next.id)
+    },
+  })
+
+  useCommand("close-discussion", {
+    label: "Archive Discussion",
+    group: "Discussions",
+    shortcut: "Ctrl+W",
+    keywords: ["close", "archive", "remove"],
+    action: () => {
+      if (activeDiscussionId) archiveDiscussion(activeDiscussionId)
+    },
+  })
+
+  const chatHeader = activeDiscussion && (
+    <div className="max-w-3xl mx-auto flex items-center gap-3 px-4 py-2.5">
+      <div className="flex flex-col min-w-0">
+        <span className="font-medium text-sm truncate">
+          {activeDiscussion.title || "New discussion"}
+        </span>
+      </div>
     </div>
+  )
+
+  const sidebarHeader = (
+    <div className="flex items-center justify-between h-12 px-4 border-b border-overlay-6">
+      <span className="text-[14px] font-medium text-contrast">Discussions</span>
+      <button
+        onClick={() => { createDiscussion(); setMobileTab(1) }}
+        className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
+        title="New discussion"
+      >
+        <i className="fa-solid fa-plus text-xs" />
+        <span>New</span>
+      </button>
+    </div>
+  )
+
+  const chatArea = activeDiscussion ? (
+    <ChatPanel
+      messages={activeMessages}
+      isStreaming={isStreaming}
+      onSend={handleSend}
+      sessionId={activeDiscussionId}
+      disabled={activeDiscussion.status === "archived"}
+      placeholder="Talk to Nova..."
+      header={chatHeader}
+    />
+  ) : (
+    <div className="flex-1 flex items-center justify-center text-text-muted">
+      <div className="text-center">
+        <i className="fa-solid fa-star text-3xl mx-auto mb-3 opacity-30" />
+        <p className="text-sm mb-4">Start a conversation with Nova</p>
+        <button
+          onClick={() => { createDiscussion(); setMobileTab(1) }}
+          className="text-xs px-3 py-1.5 rounded bg-overlay-10 hover:bg-overlay-15 text-contrast transition-colors"
+        >
+          <i className="fa-solid fa-plus mr-1.5" />
+          New Discussion
+        </button>
+      </div>
+    </div>
+  )
+
+  return (
+    <MasterDetailLayout
+      layoutKey="nova-discussions"
+      mobileLabels={["Discussions", "Chat"]}
+      mobileTab={mobileTab}
+      onMobileTabChange={setMobileTab}
+      sidebar={
+        <>
+          {sidebarHeader}
+          <div className="flex-1 overflow-hidden">
+            <DiscussionSidebar
+              discussions={discussions}
+              activeDiscussionId={activeDiscussionId}
+              onSelect={(id) => { selectDiscussion(id); setMobileTab(1) }}
+              onArchive={archiveDiscussion}
+              onDismiss={dismissDiscussion}
+            />
+          </div>
+        </>
+      }
+      detail={chatArea}
+    />
   )
 }

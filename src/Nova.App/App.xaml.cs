@@ -85,7 +85,7 @@ public partial class App : Application
         {
             AppName = "Nova",
             Port = Config.Port,
-            LoadIcon = () => IconHelper.CreateTrayIcon(StatusColors.Magenta, TrayIcons.Terminal),
+            LoadIcon = () => IconHelper.CreateTrayIcon(StatusColors.Magenta, TrayIcons.Star),
             GetStatusLines = () => Task.FromResult<IReadOnlyList<string>>(
             [
                 $"Engine: {(Engine.IsRunning ? "active" : "idle")}",

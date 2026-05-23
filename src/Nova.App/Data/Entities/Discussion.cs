@@ -1,0 +1,11 @@
+namespace Nova.App.Data.Entities;
+
+public class Discussion
+{
+    public string Id { get; set; } = "";
+    public string? Title { get; set; }
+    public string Status { get; set; } = "idle";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime LastActivity { get; set; } = DateTime.UtcNow;
+    public int MessageCount { get; set; }
+}

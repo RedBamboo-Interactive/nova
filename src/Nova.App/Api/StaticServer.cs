@@ -79,6 +79,7 @@ public class StaticServer
             },
             logService);
 
+        _app.MapDiscussionEndpoints(_engine);
         _app.MapChatEndpoints(_engine);
         _app.MapSettingsEndpoints(_memory);
         _app.MapMemoryEndpoints(_memory);

@@ -7,11 +7,19 @@ public class NovaDbContext : DbContext
 {
     public NovaDbContext(DbContextOptions<NovaDbContext> options) : base(options) { }
 
+    public DbSet<Discussion> Discussions => Set<Discussion>();
     public DbSet<ConversationRecord> Conversations => Set<ConversationRecord>();
     public DbSet<InvocationLog> InvocationLogs => Set<InvocationLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<Discussion>(e =>
+        {
+            e.HasKey(d => d.Id);
+            e.HasIndex(d => d.Status);
+            e.HasIndex(d => d.LastActivity);
+        });
+
         modelBuilder.Entity<ConversationRecord>(e =>
         {
             e.HasKey(c => c.Id);
