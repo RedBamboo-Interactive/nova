@@ -5,7 +5,6 @@ import {
   DialogHeader,
   DialogTitle,
   Button,
-  Input,
 } from "@redbamboo/ui"
 import { TunnelSettingsPanel } from "@redbamboo/utility"
 import { useLocalSettings } from "@/hooks/use-local-settings"
@@ -74,7 +73,7 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 
 export function SettingsModal({ open, onOpenChange }: Props) {
   const localSettings = useLocalSettings()
-  const { settings, saving, updateIdentity, updateGeneral } = useSettings()
+  const { settings, saving, updateIdentity } = useSettings()
   const [identityDraft, setIdentityDraft] = useState("")
   const [identityDirty, setIdentityDirty] = useState(false)
 
@@ -151,20 +150,6 @@ export function SettingsModal({ open, onOpenChange }: Props) {
                 </Button>
               </div>
             )}
-          </div>
-
-          {/* General */}
-          <div className="py-4 px-1">
-            <SectionHeader>General</SectionHeader>
-            <SettingRow label="RedCompute URL">
-              <Input
-                className="w-48 h-7 text-xs"
-                value={settings?.general.redComputeUrl ?? ""}
-                onChange={(e) =>
-                  updateGeneral({ redComputeUrl: e.target.value })
-                }
-              />
-            </SettingRow>
           </div>
 
           {/* Remote Access */}

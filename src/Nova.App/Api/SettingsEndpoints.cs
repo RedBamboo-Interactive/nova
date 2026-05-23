@@ -20,7 +20,6 @@ public static class SettingsEndpoints
                 general = new
                 {
                     config.Port,
-                    config.RedComputeUrl,
                 },
                 tunnel = new
                 {
@@ -40,24 +39,10 @@ public static class SettingsEndpoints
             return Results.Ok(new { success = true });
         });
 
-        app.MapPut("/api/settings/general", (GeneralSettingsRequest request) =>
-        {
-            var config = App.Config;
-
-            if (request.RedComputeUrl != null)
-                config.RedComputeUrl = request.RedComputeUrl;
-            App.ConfigManager.Save();
-            return Results.Ok(new { success = true });
-        });
     }
 }
 
 public class IdentityUpdateRequest
 {
     public string Content { get; set; } = "";
-}
-
-public class GeneralSettingsRequest
-{
-    public string? RedComputeUrl { get; set; }
 }

@@ -3,7 +3,6 @@ namespace Nova.App.Configuration;
 public class NovaConfig
 {
     public int Port { get; set; } = 18803;
-    public string RedComputeUrl { get; set; } = "http://localhost:18800";
     public string WorkspacePath { get; set; } = "";
     public TunnelSettings Tunnel { get; set; } = new();
 }

@@ -5,7 +5,6 @@ export interface NovaSettings {
   identity: string
   general: {
     port: number
-    redComputeUrl: string
   }
   tunnel: {
     enabled: boolean
@@ -40,18 +39,5 @@ export function useSettings() {
     [refresh],
   )
 
-  const updateGeneral = useCallback(
-    async (updates: Partial<NovaSettings["general"]>) => {
-      setSaving(true)
-      try {
-        await api.put("/api/settings/general", updates)
-        await refresh()
-      } finally {
-        setSaving(false)
-      }
-    },
-    [refresh],
-  )
-
-  return { settings, saving, refresh, updateIdentity, updateGeneral }
+  return { settings, saving, refresh, updateIdentity }
 }
