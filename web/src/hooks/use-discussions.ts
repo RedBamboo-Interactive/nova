@@ -236,10 +236,11 @@ export function useDiscussions() {
     }
   }, [sessionToDiscussion])
 
-  const archiveDiscussion = useCallback(async (id: string) => {
-    await api.delete(`/api/discussions/${id}`)
+  const archiveDiscussion = useCallback((id: string) => {
     setDiscussions((prev) => prev.map((d) => d.id === id ? { ...d, status: "archived" as const } : d))
-  }, [])
+    if (activeDiscussionId === id) setActiveDiscussionId(null)
+    api.delete(`/api/discussions/${id}`).catch(() => {})
+  }, [activeDiscussionId])
 
   const dismissDiscussion = useCallback((id: string) => {
     setDismissedIds((prev) => new Set(prev).add(id))
