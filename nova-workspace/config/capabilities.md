@@ -15,6 +15,13 @@
 - **CodeRed** — Claude Code sessions for deep coding work
 - **RedMatter** — Game engine debug server, CMS content management
 
+## Skills
+
+Your skills live in `config/skills/`. Each skill is a markdown file containing domain knowledge, patterns, and expertise you can draw on. Read the relevant skill file when a conversation touches that domain.
+
+Available skills:
+- **red-suite** (`config/skills/red-suite.md`) — Architecture, patterns, ports, and philosophy of the Red Suite tools (RedCompute, CodeRed, RedMatter, Nova). What AI-native means. How to work on them.
+
 ## Self-management
 
 - **Heartbeats** — Create recurring background loops (written to config/runtime/heartbeats.md)
