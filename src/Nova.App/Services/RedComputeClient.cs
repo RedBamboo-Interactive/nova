@@ -25,7 +25,7 @@ public class RedComputeClient : IDisposable
         _http = new HttpClient
         {
             BaseAddress = new Uri(config.RedComputeUrl),
-            Timeout = TimeSpan.FromSeconds(config.ClaudeTimeoutSeconds)
+            Timeout = TimeSpan.FromSeconds(1800)
         };
         _http.DefaultRequestHeaders.Add("X-Caller-Info", "Nova");
     }

@@ -21,7 +21,6 @@ public static class SettingsEndpoints
                 {
                     config.Port,
                     config.RedComputeUrl,
-                    config.ClaudeTimeoutSeconds,
                 },
                 tunnel = new
                 {
@@ -47,9 +46,6 @@ public static class SettingsEndpoints
 
             if (request.RedComputeUrl != null)
                 config.RedComputeUrl = request.RedComputeUrl;
-            if (request.ClaudeTimeoutSeconds.HasValue)
-                config.ClaudeTimeoutSeconds = request.ClaudeTimeoutSeconds.Value;
-
             App.ConfigManager.Save();
             return Results.Ok(new { success = true });
         });
@@ -64,5 +60,4 @@ public class IdentityUpdateRequest
 public class GeneralSettingsRequest
 {
     public string? RedComputeUrl { get; set; }
-    public int? ClaudeTimeoutSeconds { get; set; }
 }

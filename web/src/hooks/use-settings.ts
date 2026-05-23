@@ -6,7 +6,6 @@ export interface NovaSettings {
   general: {
     port: number
     redComputeUrl: string
-    claudeTimeoutSeconds: number
   }
   tunnel: {
     enabled: boolean

@@ -5,7 +5,6 @@ public class NovaConfig
     public int Port { get; set; } = 18803;
     public string RedComputeUrl { get; set; } = "http://localhost:18800";
     public string WorkspacePath { get; set; } = "";
-    public int ClaudeTimeoutSeconds { get; set; } = 180;
     public TunnelSettings Tunnel { get; set; } = new();
 }
 

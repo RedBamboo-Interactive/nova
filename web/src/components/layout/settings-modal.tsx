@@ -165,21 +165,6 @@ export function SettingsModal({ open, onOpenChange }: Props) {
                 }
               />
             </SettingRow>
-            <SettingRow
-              label="Claude timeout"
-              hint="Maximum seconds to wait for a response"
-            >
-              <input
-                type="number"
-                className="bg-overlay-6 border border-overlay-10 rounded px-2 py-0.5 text-xs text-contrast outline-none focus:border-overlay-20 w-16 text-right"
-                value={settings?.general.claudeTimeoutSeconds ?? 180}
-                onChange={(e) =>
-                  updateGeneral({
-                    claudeTimeoutSeconds: parseInt(e.target.value) || 180,
-                  })
-                }
-              />
-            </SettingRow>
           </div>
 
           {/* Remote Access */}
