@@ -3,7 +3,10 @@ import { MasterDetailLayout } from "@redbamboo/ui"
 import { ChatPanel } from "@redbamboo/chat"
 import { useCommand } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
+import { createNovaSpeechBackend } from "@/lib/speech"
 import type { useDiscussions } from "@/hooks/use-discussions"
+
+const speechBackend = createNovaSpeechBackend()
 
 type DiscussionsHook = ReturnType<typeof useDiscussions>
 
@@ -120,6 +123,7 @@ export function ChatView({ disc }: Props) {
       disabled={activeDiscussion.status === "archived"}
       placeholder="Talk to Nova..."
       header={chatHeader}
+      speechBackend={speechBackend}
     />
   ) : (
     <div className="flex-1 flex items-center justify-center text-text-muted">

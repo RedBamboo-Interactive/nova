@@ -19,6 +19,7 @@ public class NovaEngine : IAsyncDisposable
 
     public bool IsRunning => _cts is { IsCancellationRequested: false };
     public int ActiveHeartbeatCount => _heartbeat?.ActiveCount ?? 0;
+    public RedComputeClient RedCompute => _redCompute;
 
     public NovaEngine(NovaConfig config, MemoryManager memory, LogService log)
     {

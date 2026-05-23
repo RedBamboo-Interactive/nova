@@ -84,6 +84,7 @@ public class StaticServer
         _app.MapSettingsEndpoints(_memory);
         _app.MapMemoryEndpoints(_memory);
         _app.MapScheduleEndpoints(_engine);
+        _app.MapSpeechEndpoints(_engine);
 
         using (var scope = _app.Services.CreateScope())
         {
