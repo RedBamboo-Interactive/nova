@@ -21,3 +21,25 @@ html, body {
   display: flex;
   overflow: hidden;
 }
+
+/* ── Fix: base-ui sets data-orientation, not data-horizontal ───────── */
+/* The @redbamboo/ui Tabs uses data-horizontal:flex-col which doesn't  */
+/* match base-ui's data-orientation="horizontal" attribute.            */
+
+[data-slot="tabs"][data-orientation="horizontal"] {
+  flex-direction: column;
+}
+
+[data-slot="tabs"][data-orientation="horizontal"] > [data-slot="tabs-list"] {
+  height: 2rem;
+  flex-shrink: 0;
+}
+
+[data-slot="tabs"][data-orientation="vertical"] {
+  flex-direction: row;
+}
+
+[data-slot="tabs"][data-orientation="vertical"] > [data-slot="tabs-list"] {
+  height: fit-content;
+  flex-direction: column;
+}
