@@ -61,7 +61,7 @@ public class SchedulerService
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(30), ct);
+                await Task.Delay(TimeSpan.FromMinutes(1), ct);
 
                 var now = DateTime.UtcNow;
                 var due = _tasks.Where(t => t.NextRun <= now && t.Enabled).ToList();
