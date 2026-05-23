@@ -65,7 +65,13 @@ export function useDiscussions() {
     const disc = discussions.find((d) => d.id === id)
     if (disc?.sessionId) {
       try {
-        const data = await api.get<{ session: unknown; messages: PersistedMessage[] }>(`/claude/sessions/${disc.sessionId}`)
+        const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/claude/sessions/${disc.sessionId}`)
+        if (data.session?.title && data.session.title !== disc.title) {
+          setDiscussions((prev) =>
+            prev.map((d) => d.id === id ? { ...d, title: data.session.title! } : d)
+          )
+          api.put(`/api/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
+        }
         if (data.messages?.length) {
           setMessages((prev) => ({ ...prev, [id]: rebuildBlocks(data.messages) }))
           return
@@ -164,7 +170,7 @@ export function useDiscussions() {
 
   const handleWsEvent = useCallback((event: WsEvent) => {
     if (event.type === "claude.session.updated") {
-      const session = event.data as { id: string; status: string }
+      const session = event.data as { id: string; status: string; title?: string }
       const discId = sessionToDiscussion.get(session.id)
       if (!discId) return
       if (session.status !== "Active") {
@@ -172,6 +178,19 @@ export function useDiscussions() {
         setDiscussions((prev) =>
           prev.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
         )
+        const syncTitle = (name: string) => {
+          setDiscussions((prev) =>
+            prev.map((d) => d.id === discId ? { ...d, title: name } : d)
+          )
+          api.put(`/api/discussions/${discId}/title`, { title: name }).catch(() => {})
+        }
+        if (session.title) {
+          syncTitle(session.title)
+        } else {
+          api.get<{ session: { title?: string } }>(`/claude/sessions/${session.id}`)
+            .then((data) => { if (data.session?.title) syncTitle(data.session.title) })
+            .catch(() => {})
+        }
       }
     } else if (event.type === "claude.session.ended") {
       const { id } = event.data as { id: string }

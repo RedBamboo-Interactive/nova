@@ -67,10 +67,12 @@ public static class DiscussionEndpoints
             {
                 memory.GenerateClaudeMd();
 
-                var resp = await RedCompute.PostAsJsonAsync("/claude/sessions", new
+                var req = new HttpRequestMessage(HttpMethod.Post, "/claude/sessions")
                 {
-                    projectPath = memory.WorkspacePath,
-                }, JsonOptions);
+                    Content = JsonContent.Create(new { projectPath = memory.WorkspacePath }, options: JsonOptions),
+                };
+                req.Headers.Add("X-Caller-Info", "Nova");
+                var resp = await RedCompute.SendAsync(req);
 
                 if (resp.IsSuccessStatusCode)
                 {
