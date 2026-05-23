@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { api } from "@/lib/api"
 import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent } from "@/lib/types"
-import type { MessageBlock, MessagePart, PendingQuestion, ChatEvent } from "@redbamboo/chat"
+import type { MessageBlock, MessagePart, PendingQuestion, ChatEvent, ImageAttachment } from "@redbamboo/chat"
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 
@@ -113,14 +113,14 @@ export function useDiscussions() {
     return d
   }, [])
 
-  const sendMessage = useCallback(async (discussionId: string, content: string) => {
+  const sendMessage = useCallback(async (discussionId: string, content: string, images?: ImageAttachment[]) => {
     const disc = discussions.find((d) => d.id === discussionId)
     if (!disc?.sessionId) return
 
     const userMsg: MessageBlock = {
       id: crypto.randomUUID(),
       role: "user",
-      parts: [{ type: "text", content }],
+      parts: [{ type: "text", content, images }],
       timestamp: new Date().toISOString(),
     }
     setMessages((prev) => ({
@@ -149,7 +149,7 @@ export function useDiscussions() {
     }
 
     try {
-      await api.post(`/claude/sessions/${disc.sessionId}/message`, { content })
+      await api.post(`/claude/sessions/${disc.sessionId}/message`, { content, images })
       return
     } catch {
       // Session may be dead after RedCompute restart — try to resume
@@ -164,7 +164,7 @@ export function useDiscussions() {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await api.post(`/claude/sessions/${disc.sessionId}/message`, { content })
+        await api.post(`/claude/sessions/${disc.sessionId}/message`, { content, images })
         return
       } catch {
         if (attempt < 2) {

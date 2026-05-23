@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react"
 import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
-import { ChatPanel } from "@redbamboo/chat"
+import { ChatPanel, type ImageAttachment } from "@redbamboo/chat"
 import { useCommand } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
 import { NovaStatusLine } from "@/components/nova-status-line"
@@ -8,6 +8,12 @@ import { createNovaSpeechBackend } from "@/lib/speech"
 import type { useDiscussions } from "@/hooks/use-discussions"
 
 const speechBackend = createNovaSpeechBackend()
+
+function resolveImageSrc(src: string): string | undefined {
+  if (/^[A-Za-z]:[\\\/]/.test(src))
+    return `/api/file?path=${encodeURIComponent(src)}`
+  return src
+}
 
 type DiscussionsHook = ReturnType<typeof useDiscussions>
 
@@ -34,9 +40,9 @@ export function ChatView({ disc }: Props) {
 
   const [mobileTab, setMobileTab] = useState(0)
 
-  const handleSend = useCallback((content: string) => {
+  const handleSend = useCallback((content: string, images?: ImageAttachment[]) => {
     if (!activeDiscussionId) return
-    sendMessage(activeDiscussionId, content)
+    sendMessage(activeDiscussionId, content, images)
   }, [activeDiscussionId, sendMessage])
 
   const handleInterrupt = useCallback(() => {
@@ -134,6 +140,7 @@ export function ChatView({ disc }: Props) {
       placeholder="Talk to Nova..."
       header={chatHeader}
       speechBackend={speechBackend}
+      resolveImageSrc={resolveImageSrc}
       renderStatusLine={({ isStreaming, messages }) => (
         <NovaStatusLine isStreaming={isStreaming} messages={messages} />
       )}

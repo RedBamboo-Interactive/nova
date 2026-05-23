@@ -86,6 +86,32 @@ public class StaticServer
                 ["/stt"] = "http://localhost:18800",
             });
 
+        _app.MapGet("/api/file", async (HttpContext ctx) =>
+        {
+            var path = ctx.Request.Query["path"].ToString();
+            if (string.IsNullOrEmpty(path)) { ctx.Response.StatusCode = 400; return; }
+
+            var fullPath = Path.GetFullPath(path);
+            if (!File.Exists(fullPath)) { ctx.Response.StatusCode = 404; return; }
+
+            var ext = Path.GetExtension(fullPath).ToLowerInvariant();
+            var mime = ext switch
+            {
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".webp" => "image/webp",
+                ".gif" => "image/gif",
+                ".svg" => "image/svg+xml",
+                ".bmp" => "image/bmp",
+                _ => (string?)null
+            };
+            if (mime == null) { ctx.Response.StatusCode = 403; return; }
+
+            ctx.Response.ContentType = mime;
+            ctx.Response.Headers["Cache-Control"] = "public, max-age=3600";
+            await ctx.Response.SendFileAsync(fullPath);
+        });
+
         _app.MapDiscussionEndpoints(_engine);
         _app.MapDiscussionExportEndpoints();
         _app.MapSettingsEndpoints(_memory);
