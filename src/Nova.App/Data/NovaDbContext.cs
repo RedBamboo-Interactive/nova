@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Nova.App.Data.Entities;
 
 namespace Nova.App.Data;
@@ -13,6 +14,14 @@ public class NovaDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        var utcConverter = new ValueConverter<DateTime, DateTime>(
+            v => v,
+            v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
+
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+            foreach (var property in entityType.GetProperties())
+                if (property.ClrType == typeof(DateTime))
+                    property.SetValueConverter(utcConverter);
         modelBuilder.Entity<Discussion>(e =>
         {
             e.HasKey(d => d.Id);

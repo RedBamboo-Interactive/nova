@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { MasterDetailLayout, ItemList, ItemListRow, Badge } from "@redbamboo/ui"
+import { MarkdownRenderer } from "@redbamboo/chat"
 import { api } from "@/lib/api"
 
 export function MemoryPanel() {
@@ -74,9 +75,9 @@ export function MemoryPanel() {
       <div className="flex items-center gap-2 mb-3">
         <Badge variant="outline">{selectedFile}</Badge>
       </div>
-      <pre className="text-xs text-contrast whitespace-pre-wrap font-mono leading-relaxed">
-        {content}
-      </pre>
+      <div className="text-sm leading-relaxed markdown-body">
+        <MarkdownRenderer content={content} />
+      </div>
     </div>
   ) : (
     <div className="h-full flex items-center justify-center text-text-muted">
