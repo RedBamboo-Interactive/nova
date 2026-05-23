@@ -26,6 +26,7 @@ export function useDiscussions() {
   const [streaming, setStreaming] = useState<Record<string, boolean>>({})
   const [pendingQuestions, setPendingQuestions] = useState<Record<string, PendingQuestion | null>>({})
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
+  const [isSpawning, setIsSpawning] = useState(false)
   const loadedRef = useRef<Set<string>>(new Set())
 
   const activeDiscussion = discussions.find((d) => d.id === activeDiscussionId) ?? null
@@ -104,13 +105,33 @@ export function useDiscussions() {
     loadMessages(id)
   }, [loadMessages])
 
+  const visibleDiscussions = useMemo(
+    () => discussions.filter((d) => d.status !== "archived"),
+    [discussions],
+  )
+
+  const autoSelected = useRef(false)
+  useEffect(() => {
+    const first = visibleDiscussions[0]
+    if (!autoSelected.current && !activeDiscussionId && first) {
+      autoSelected.current = true
+      selectDiscussion(first.id)
+    }
+  }, [visibleDiscussions, activeDiscussionId, selectDiscussion])
+
   const createDiscussion = useCallback(async () => {
-    const d = await api.post<DiscussionInfo>("/api/discussions")
-    setDiscussions((prev) => [d, ...prev])
-    setActiveDiscussionId(d.id)
-    setMessages((prev) => ({ ...prev, [d.id]: [] }))
-    loadedRef.current.add(d.id)
-    return d
+    setIsSpawning(true)
+    setActiveDiscussionId(null)
+    try {
+      const d = await api.post<DiscussionInfo>("/api/discussions")
+      setDiscussions((prev) => [d, ...prev])
+      setActiveDiscussionId(d.id)
+      setMessages((prev) => ({ ...prev, [d.id]: [] }))
+      loadedRef.current.add(d.id)
+      return d
+    } finally {
+      setIsSpawning(false)
+    }
   }, [])
 
   const sendMessage = useCallback(async (discussionId: string, content: string, images?: ImageAttachment[]) => {
@@ -281,14 +302,13 @@ export function useDiscussions() {
     setDiscussions((prev) => prev.map((d) => d.id === id ? { ...d, title } : d))
   }, [])
 
-  const visibleDiscussions = discussions.filter((d) => d.status !== "archived")
-
   return {
     discussions: visibleDiscussions,
     activeDiscussion,
     activeDiscussionId,
     activeMessages,
     isStreaming,
+    isSpawning,
     pendingQuestion: activePendingQuestion,
     selectDiscussion,
     createDiscussion,

@@ -28,6 +28,7 @@ export function ChatView({ disc }: Props) {
     activeDiscussionId,
     activeMessages,
     isStreaming,
+    isSpawning,
     pendingQuestion,
     selectDiscussion,
     createDiscussion,
@@ -147,17 +148,24 @@ export function ChatView({ disc }: Props) {
     />
   ) : (
     <div className="flex-1 flex items-center justify-center text-text-muted">
-      <div className="text-center">
-        <i className="fa-solid fa-star text-3xl mx-auto mb-3 opacity-30" />
-        <p className="text-sm mb-4">Start a conversation with Nova</p>
-        <button
-          onClick={() => { createDiscussion(); setMobileTab(1) }}
-          className="text-xs px-3 py-1.5 rounded bg-overlay-10 hover:bg-overlay-15 text-contrast transition-colors"
-        >
-          <i className="fa-solid fa-plus mr-1.5" />
-          New Discussion
-        </button>
-      </div>
+      {isSpawning ? (
+        <div className="text-center">
+          <i className="fa-solid fa-spinner fa-spin text-2xl mx-auto mb-3 opacity-40" />
+          <p className="text-sm">Starting discussion…</p>
+        </div>
+      ) : (
+        <div className="text-center">
+          <i className="fa-solid fa-star text-3xl mx-auto mb-3 opacity-30" />
+          <p className="text-sm mb-4">Start a conversation with Nova</p>
+          <button
+            onClick={() => { createDiscussion(); setMobileTab(1) }}
+            className="text-xs px-3 py-1.5 rounded bg-overlay-10 hover:bg-overlay-15 text-contrast transition-colors"
+          >
+            <i className="fa-solid fa-plus mr-1.5" />
+            New Discussion
+          </button>
+        </div>
+      )}
     </div>
   )
 
