@@ -27,6 +27,7 @@ public class RedComputeClient : IDisposable
             BaseAddress = new Uri(config.RedComputeUrl),
             Timeout = TimeSpan.FromSeconds(config.ClaudeTimeoutSeconds)
         };
+        _http.DefaultRequestHeaders.Add("X-Caller-Info", "Nova");
     }
 
     public async Task<ClaudeResponse> InvokeClaudeAsync(ClaudeRequest request, CancellationToken ct = default)
