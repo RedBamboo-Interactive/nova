@@ -180,23 +180,6 @@ export function SettingsModal({ open, onOpenChange }: Props) {
                 }
               />
             </SettingRow>
-            <SettingRow
-              label="Max concurrency"
-              hint="Parallel Claude invocations"
-            >
-              <input
-                type="number"
-                className="bg-overlay-6 border border-overlay-10 rounded px-2 py-0.5 text-xs text-contrast outline-none focus:border-overlay-20 w-16 text-right"
-                min={1}
-                max={4}
-                value={settings?.general.maxConcurrentInvocations ?? 1}
-                onChange={(e) =>
-                  updateGeneral({
-                    maxConcurrentInvocations: parseInt(e.target.value) || 1,
-                  })
-                }
-              />
-            </SettingRow>
           </div>
 
           {/* Remote Access */}

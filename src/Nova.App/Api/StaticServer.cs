@@ -57,7 +57,7 @@ public class StaticServer
         {
             GetAccessToken = () => App.Config.Tunnel.AccessToken,
             CookieName = "nova_token",
-            BypassPaths = ["/ping", "/api/remote/status"],
+            BypassPaths = ["/ping", "/api/remote/status", "/api/discussions/export"],
         });
 
         var logService = App.LogService;
@@ -80,6 +80,7 @@ public class StaticServer
             logService);
 
         _app.MapDiscussionEndpoints(_engine);
+        _app.MapDiscussionExportEndpoints();
         _app.MapChatEndpoints(_engine);
         _app.MapSettingsEndpoints(_memory);
         _app.MapMemoryEndpoints(_memory);

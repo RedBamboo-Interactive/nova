@@ -10,7 +10,6 @@ public class NovaEngine : IAsyncDisposable
     private readonly MemoryManager _memory;
     private readonly LogService _log;
     private readonly RedComputeClient _redCompute;
-    private readonly SemaphoreSlim _claudeSemaphore;
     private readonly ConcurrentDictionary<string, ConversationContext> _contexts = new();
 
     private HeartbeatService? _heartbeat;
@@ -27,7 +26,6 @@ public class NovaEngine : IAsyncDisposable
         _memory = memory;
         _log = log;
         _redCompute = new RedComputeClient(config, log);
-        _claudeSemaphore = new SemaphoreSlim(config.MaxConcurrentInvocations);
     }
 
     public async Task StartAsync(CancellationToken ct)
@@ -58,12 +56,11 @@ public class NovaEngine : IAsyncDisposable
     {
         var context = _contexts.GetOrAdd(contextId, id => new ConversationContext(id));
 
-        await _claudeSemaphore.WaitAsync(ct);
+        context.Status = ConversationStatus.Thinking;
+        _log.Info("engine", $"Chat [{contextId}]: processing");
+
         try
         {
-            context.Status = ConversationStatus.Thinking;
-            _log.Info("engine", $"Chat [{contextId}]: processing");
-
             var systemPrompt = BuildSystemPrompt(context);
             var memoryManifest = _memory.GetMemoryManifest();
 
@@ -93,40 +90,28 @@ public class NovaEngine : IAsyncDisposable
                 ContextId = contextId,
             };
         }
-        finally
+        catch
         {
-            _claudeSemaphore.Release();
+            context.Status = ConversationStatus.Idle;
+            throw;
         }
     }
 
     public async Task<string?> InvokeForHeartbeatAsync(string purpose, string prompt, CancellationToken ct)
     {
-        if (!await _claudeSemaphore.WaitAsync(TimeSpan.Zero, ct))
-        {
-            _log.Debug("engine", $"Heartbeat [{purpose}]: skipped, Claude is busy");
-            return null;
-        }
+        _log.Info("engine", $"Heartbeat [{purpose}]: invoking");
 
-        try
+        var request = new ClaudeRequest
         {
-            _log.Info("engine", $"Heartbeat [{purpose}]: invoking");
+            Prompt = prompt,
+            SystemPrompt = BuildHeartbeatPrompt(purpose),
+            SystemPromptHint = purpose,
+            WorkingDirectory = _memory.WorkspacePath,
+            AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "PowerShell", "WebFetch", "WebSearch", "TodoWrite"],
+        };
 
-            var request = new ClaudeRequest
-            {
-                Prompt = prompt,
-                SystemPrompt = BuildHeartbeatPrompt(purpose),
-                SystemPromptHint = purpose,
-                WorkingDirectory = _memory.WorkspacePath,
-                AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "PowerShell", "WebFetch", "WebSearch", "TodoWrite"],
-            };
-
-            var response = await _redCompute.InvokeClaudeAsync(request, ct);
-            return response.Text;
-        }
-        finally
-        {
-            _claudeSemaphore.Release();
-        }
+        var response = await _redCompute.InvokeClaudeAsync(request, ct);
+        return response.Text;
     }
 
     public ConversationContext? GetContext(string contextId)
@@ -180,7 +165,8 @@ public class NovaEngine : IAsyncDisposable
             ---
 
             # Heartbeat: {purpose}
-            You are running a scheduled heartbeat task. Be concise. If there is nothing to do, say so briefly.
+            You are running a scheduled task. Unless the task instructions say otherwise, be concise.
+            If there is nothing to do, say so briefly.
             If you need to notify the user, write to memory/meta/notifications.md.
 
             # Active heartbeats
@@ -191,7 +177,6 @@ public class NovaEngine : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
-        _claudeSemaphore.Dispose();
     }
 }
 

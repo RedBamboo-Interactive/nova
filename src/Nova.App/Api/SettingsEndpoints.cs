@@ -22,7 +22,6 @@ public static class SettingsEndpoints
                     config.Port,
                     config.RedComputeUrl,
                     config.ClaudeTimeoutSeconds,
-                    config.MaxConcurrentInvocations,
                 },
                 tunnel = new
                 {
@@ -50,8 +49,6 @@ public static class SettingsEndpoints
                 config.RedComputeUrl = request.RedComputeUrl;
             if (request.ClaudeTimeoutSeconds.HasValue)
                 config.ClaudeTimeoutSeconds = request.ClaudeTimeoutSeconds.Value;
-            if (request.MaxConcurrentInvocations.HasValue)
-                config.MaxConcurrentInvocations = request.MaxConcurrentInvocations.Value;
 
             App.ConfigManager.Save();
             return Results.Ok(new { success = true });
@@ -68,5 +65,4 @@ public class GeneralSettingsRequest
 {
     public string? RedComputeUrl { get; set; }
     public int? ClaudeTimeoutSeconds { get; set; }
-    public int? MaxConcurrentInvocations { get; set; }
 }

@@ -17,6 +17,7 @@ public class MemoryManager
     public string TopicsPath => Path.Combine(MemoryPath, "topics");
     public string MetaPath => Path.Combine(MemoryPath, "meta");
     public string BackupPath => Path.Combine(MemoryPath, "backup");
+    public string DreamingPath => Path.Combine(MemoryPath, "dreaming");
 
     public MemoryManager(string workspacePath, LogService log)
     {
@@ -32,6 +33,7 @@ public class MemoryManager
         Directory.CreateDirectory(TopicsPath);
         Directory.CreateDirectory(MetaPath);
         Directory.CreateDirectory(BackupPath);
+        Directory.CreateDirectory(DreamingPath);
 
         EnsureSeedsPopulated();
         EnsureRuntimeConfig();
@@ -74,6 +76,7 @@ public class MemoryManager
         CollectMarkdownFiles(ConversationsPath, paths);
         CollectMarkdownFiles(TopicsPath, paths);
         CollectMarkdownFiles(MetaPath, paths);
+        CollectMarkdownFiles(DreamingPath, paths);
         return paths.Select(p => Path.GetRelativePath(_workspacePath, p).Replace('\\', '/')).ToArray();
     }
 

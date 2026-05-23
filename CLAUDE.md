@@ -38,7 +38,7 @@ nova/
 - Server-persisted settings (identity editable from Settings panel)
 - Heartbeats/crons are NOT pre-configured — Nova sets them up through conversation
 - Memory uses manifest approach: Claude gets file paths, reads during reasoning
-- Per-context request queues with global Claude semaphore
+- Per-context request queues, no concurrency limit on Claude invocations
 
 ## Design system
 - FontAwesome icons only (no Lucide)

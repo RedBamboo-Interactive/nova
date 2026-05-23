@@ -56,6 +56,7 @@ public class NovaServiceDescriptor : IServiceDescriptor
             new("GET",  "/api/heartbeats",                "List active heartbeats"),
             new("POST", "/api/heartbeats",                "Create a heartbeat"),
             new("DELETE", "/api/heartbeats/{name}",       "Remove a heartbeat"),
+            new("GET",  "/api/discussions/export",        "Export conversations as markdown"),
         ];
     }
 

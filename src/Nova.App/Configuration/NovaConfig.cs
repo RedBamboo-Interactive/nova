@@ -6,7 +6,6 @@ public class NovaConfig
     public string RedComputeUrl { get; set; } = "http://localhost:18800";
     public string WorkspacePath { get; set; } = "";
     public int ClaudeTimeoutSeconds { get; set; } = 180;
-    public int MaxConcurrentInvocations { get; set; } = 1;
     public TunnelSettings Tunnel { get; set; } = new();
 }
 

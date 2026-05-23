@@ -7,7 +7,6 @@ export interface NovaSettings {
     port: number
     redComputeUrl: string
     claudeTimeoutSeconds: number
-    maxConcurrentInvocations: number
   }
   tunnel: {
     enabled: boolean
