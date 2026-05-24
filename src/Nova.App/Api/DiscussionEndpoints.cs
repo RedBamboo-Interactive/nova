@@ -52,10 +52,38 @@ public static class DiscussionEndpoints
 
         registry.MapGet("/api/discussions/pending", "Count unread discussions", async (NovaDbContext db) =>
         {
-            var count = await db.Discussions
-                .Where(d => d.Status == "idle" && d.MessageCount > 0
-                    && (d.LastReadAt == null || d.LastActivity > d.LastReadAt))
-                .CountAsync();
+            var discussions = await db.Discussions
+                .Where(d => d.Status != "archived" && d.SessionId != null)
+                .ToListAsync();
+
+            if (discussions.Count == 0)
+                return Results.Ok(new { count = 0 });
+
+            try
+            {
+                var sessions = await RedCompute.GetFromJsonAsync<List<RedComputeSession>>(
+                    "/ai-session/sessions", JsonOptions);
+                if (sessions != null)
+                {
+                    var map = sessions.ToDictionary(s => s.Id);
+                    bool changed = false;
+                    foreach (var d in discussions)
+                    {
+                        if (d.SessionId != null && map.TryGetValue(d.SessionId, out var s)
+                            && s.MessageCount > d.MessageCount)
+                        {
+                            d.MessageCount = s.MessageCount;
+                            d.LastActivity = DateTime.UtcNow;
+                            changed = true;
+                        }
+                    }
+                    if (changed) await db.SaveChangesAsync();
+                }
+            }
+            catch { /* RedCompute unavailable — use cached data */ }
+
+            var count = discussions.Count(d =>
+                d.MessageCount > 0 && (d.LastReadAt == null || d.LastActivity > d.LastReadAt));
 
             return Results.Ok(new { count });
         });
@@ -322,4 +350,10 @@ public class DiscussionEventRequest
 {
     public string Content { get; set; } = "";
     public string? Source { get; set; }
+}
+
+public class RedComputeSession
+{
+    public string Id { get; set; } = "";
+    public int MessageCount { get; set; }
 }
