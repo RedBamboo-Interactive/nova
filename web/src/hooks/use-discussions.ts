@@ -250,6 +250,19 @@ export function useDiscussions() {
       setDiscussions((prev) =>
         prev.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
       )
+    } else if (event.type === "discussion.event") {
+      const { discussionId, content } = event.data as { discussionId: string; sessionId: string; content: string; source: string }
+      if (!discussionId) return
+      setMessages((prev) => {
+        const current = prev[discussionId] ?? []
+        const newBlock: import("@redbamboo/chat").MessageBlock = {
+          id: `event-${Date.now()}`,
+          role: "user",
+          parts: [{ type: "text", content }],
+          timestamp: new Date().toISOString(),
+        }
+        return { ...prev, [discussionId]: [...current, newBlock] }
+      })
     } else if (event.type === "session.stream") {
       const { sessionId, event: evt } = event.data as { sessionId: string; event: ClaudeStreamEvent }
       const discId = sessionToDiscussion.get(sessionId)

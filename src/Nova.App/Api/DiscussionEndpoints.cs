@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RedBamboo.AppHost.Discovery;
+using RedBamboo.AppHost.WebSockets;
 using Nova.App.Data;
 using Nova.App.Data.Entities;
 using Nova.App.Services;
@@ -187,7 +188,7 @@ public static class DiscussionEndpoints
             return Results.Ok(new { query = q, results });
         });
 
-        registry.MapPost("/api/discussions/{id}/event", "Inject an automation event into a discussion", async (string id, DiscussionEventRequest request, NovaDbContext db) =>
+        registry.MapPost("/api/discussions/{id}/event", "Inject an automation event into a discussion", async (string id, DiscussionEventRequest request, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
@@ -210,6 +211,14 @@ public static class DiscussionEndpoints
 
             if (discussion.SessionId is not null)
             {
+                broadcaster?.Broadcast("discussion.event", new
+                {
+                    discussionId = id,
+                    sessionId = discussion.SessionId,
+                    content = request.Content,
+                    source = request.Source ?? "automation",
+                });
+
                 try
                 {
                     await RedCompute.PostAsJsonAsync(
