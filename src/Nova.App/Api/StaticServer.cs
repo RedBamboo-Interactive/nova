@@ -80,7 +80,6 @@ public class StaticServer
             logService,
             proxyRoutes: new Dictionary<string, string>
             {
-                ["/claude"] = "http://localhost:18800",
                 ["/ai-session"] = "http://localhost:18800",
                 ["/tts"] = "http://localhost:18800",
                 ["/stt"] = "http://localhost:18800",

@@ -66,7 +66,7 @@ export function useDiscussions() {
     const disc = discussions.find((d) => d.id === id)
     if (disc?.sessionId) {
       try {
-        const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/claude/sessions/${disc.sessionId}`)
+        const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
         if (data.session?.title && data.session.title !== disc.title) {
           setDiscussions((prev) =>
             prev.map((d) => d.id === id ? { ...d, title: data.session.title! } : d)
@@ -80,8 +80,8 @@ export function useDiscussions() {
       } catch {
         // Session may be dead — try to resume so it's ready for messages
         try {
-          await api.post(`/claude/sessions/${disc.sessionId}/resume`)
-          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/claude/sessions/${disc.sessionId}`)
+          await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
+          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
           if (data.messages?.length) {
             setMessages((prev) => ({ ...prev, [id]: rebuildBlocks(data.messages) }))
             return
@@ -170,14 +170,14 @@ export function useDiscussions() {
     }
 
     try {
-      await api.post(`/claude/sessions/${disc.sessionId}/message`, { content, images })
+      await api.post(`/ai-session/sessions/${disc.sessionId}/message`, { content, images })
       return
     } catch {
       // Session may be dead after RedCompute restart — try to resume
     }
 
     try {
-      await api.post(`/claude/sessions/${disc.sessionId}/resume`)
+      await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
     } catch {
       fail()
       return
@@ -185,7 +185,7 @@ export function useDiscussions() {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await api.post(`/claude/sessions/${disc.sessionId}/message`, { content, images })
+        await api.post(`/ai-session/sessions/${disc.sessionId}/message`, { content, images })
         return
       } catch {
         if (attempt < 2) {
@@ -201,7 +201,7 @@ export function useDiscussions() {
     const disc = discussions.find((d) => d.id === discussionId)
     if (!disc?.sessionId) return
     try {
-      await api.post(`/claude/sessions/${disc.sessionId}/interrupt`)
+      await api.post(`/ai-session/sessions/${disc.sessionId}/interrupt`)
     } catch { /* best effort */ }
   }, [discussions])
 
@@ -211,14 +211,14 @@ export function useDiscussions() {
     setPendingQuestions((prev) => ({ ...prev, [discussionId]: null }))
     setStreaming((prev) => ({ ...prev, [discussionId]: true }))
     try {
-      await api.post(`/claude/sessions/${disc.sessionId}/answer`, { answer })
+      await api.post(`/ai-session/sessions/${disc.sessionId}/answer`, { answer })
     } catch {
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
     }
   }, [discussions])
 
   const handleWsEvent = useCallback((event: WsEvent) => {
-    if (event.type === "claude.session.updated") {
+    if (event.type === "session.updated") {
       const session = event.data as { id: string; status: string; title?: string }
       const discId = sessionToDiscussion.get(session.id)
       if (!discId) return
@@ -236,12 +236,12 @@ export function useDiscussions() {
         if (session.title) {
           syncTitle(session.title)
         } else {
-          api.get<{ session: { title?: string } }>(`/claude/sessions/${session.id}`)
+          api.get<{ session: { title?: string } }>(`/ai-session/sessions/${session.id}`)
             .then((data) => { if (data.session?.title) syncTitle(data.session.title) })
             .catch(() => {})
         }
       }
-    } else if (event.type === "claude.session.ended") {
+    } else if (event.type === "session.ended") {
       const { id } = event.data as { id: string }
       const discId = sessionToDiscussion.get(id)
       if (!discId) return
@@ -250,7 +250,7 @@ export function useDiscussions() {
       setDiscussions((prev) =>
         prev.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
       )
-    } else if (event.type === "claude.stream") {
+    } else if (event.type === "session.stream") {
       const { sessionId, event: evt } = event.data as { sessionId: string; event: ClaudeStreamEvent }
       const discId = sessionToDiscussion.get(sessionId)
       if (!discId) return

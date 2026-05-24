@@ -67,7 +67,7 @@ public static class DiscussionEndpoints
             {
                 memory.GenerateClaudeMd();
 
-                var req = new HttpRequestMessage(HttpMethod.Post, "/claude/sessions")
+                var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
                 {
                     Content = JsonContent.Create(new { projectPath = memory.WorkspacePath }, options: JsonOptions),
                 };
@@ -123,7 +123,7 @@ public static class DiscussionEndpoints
 
             if (discussion.SessionId is not null)
             {
-                try { await RedCompute.PostAsync($"/claude/sessions/{discussion.SessionId}/stop", null); }
+                try { await RedCompute.PostAsync($"/ai-session/sessions/{discussion.SessionId}/stop", null); }
                 catch { /* best effort */ }
             }
 
