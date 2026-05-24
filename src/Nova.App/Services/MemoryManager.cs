@@ -17,6 +17,7 @@ public class MemoryManager
     public string TopicsPath => Path.Combine(MemoryPath, "topics");
     public string MetaPath => Path.Combine(MemoryPath, "meta");
     public string BackupPath => Path.Combine(MemoryPath, "backup");
+    public string ProjectsPath => Path.Combine(MemoryPath, "projects");
     public string DreamingPath => Path.Combine(MemoryPath, "dreaming");
 
     public MemoryManager(string workspacePath, LogService log)
@@ -33,6 +34,7 @@ public class MemoryManager
         Directory.CreateDirectory(TopicsPath);
         Directory.CreateDirectory(MetaPath);
         Directory.CreateDirectory(BackupPath);
+        Directory.CreateDirectory(ProjectsPath);
         Directory.CreateDirectory(DreamingPath);
 
         EnsureSeedsPopulated();
@@ -72,12 +74,13 @@ public class MemoryManager
 
     public string[] GetMemoryManifest()
     {
-        var paths = new List<string>();
-        CollectMarkdownFiles(ConversationsPath, paths);
-        CollectMarkdownFiles(TopicsPath, paths);
-        CollectMarkdownFiles(MetaPath, paths);
-        CollectMarkdownFiles(DreamingPath, paths);
-        return paths.Select(p => Path.GetRelativePath(_workspacePath, p).Replace('\\', '/')).ToArray();
+        if (!Directory.Exists(MemoryPath)) return [];
+
+        return Directory.GetFiles(MemoryPath, "*.md", SearchOption.AllDirectories)
+            .Where(p => !p.StartsWith(BackupPath, StringComparison.OrdinalIgnoreCase))
+            .Select(p => Path.GetRelativePath(_workspacePath, p).Replace('\\', '/'))
+            .OrderBy(p => p)
+            .ToArray();
     }
 
     public string? ReadMemoryFile(string relativePath)
@@ -136,14 +139,13 @@ public class MemoryManager
             ---
 
             # Memory
-            You have access to a file-based memory system in your working directory.
-            Use Read/Write/Edit tools to interact with memory files.
-            The memory manifest lists all available files — read what's relevant, don't load everything.
+            You have a file-based memory system in `memory/`.
+            This is YOUR memory. You own it. Create files, add folders, reorganize as you see fit.
 
-            Periodically update your conversation index and note anything that would be lost without writing it down.
-            Keep it lightweight — dreaming handles the heavy consolidation from raw conversation exports.
+            When you learn something worth remembering across conversations, write it down.
+            Don't wait for dreaming to do it. Dreaming consolidates, but you should capture in real-time.
 
-            ## Memory manifest
+            Read `memory/index.md` for structure and details. Current files:
             {string.Join("\n", manifest.Select(p => $"- {p}"))}
             """;
 
