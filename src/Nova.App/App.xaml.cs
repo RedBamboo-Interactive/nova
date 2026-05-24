@@ -90,7 +90,7 @@ public partial class App : Application
             GetStatusLines = () => Task.FromResult<IReadOnlyList<string>>(
             [
                 $"Engine: {(Engine.IsRunning ? "active" : "idle")}",
-                $"Heartbeats: {Engine.ActiveHeartbeatCount}",
+                $"Automations: {Engine.ActiveAutomationCount}",
                 $"Tunnel: {TunnelService.Status}",
             ]),
         });

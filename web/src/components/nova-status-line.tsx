@@ -36,9 +36,9 @@ function getStatusFromMessages(messages: MessageBlock[]): { icon: string; label:
           return { icon: "fa-solid fa-brain", label: "Memorizing..." }
         }
 
-        const schedulePath = part.toolInput?.includes("schedule") || part.toolInput?.includes("heartbeat") || part.toolInput?.includes("cron")
-        if (schedulePath) {
-          return { icon: "fa-solid fa-clock", label: "Scheduling..." }
+        const automationPath = part.toolInput?.includes("automation") || part.toolInput?.includes("schedule") || part.toolInput?.includes("cron")
+        if (automationPath) {
+          return { icon: "fa-solid fa-bolt", label: "Automating..." }
         }
 
         const known = toolLabels[part.toolName]

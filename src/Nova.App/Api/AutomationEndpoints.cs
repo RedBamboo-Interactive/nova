@@ -1,0 +1,112 @@
+using System.Text.Json;
+using Microsoft.AspNetCore.Http;
+using RedBamboo.AppHost.Discovery;
+using Nova.App.Services;
+
+namespace Nova.App.Api;
+
+public static class AutomationEndpoints
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
+    public static void MapAutomationEndpoints(this EndpointRegistry registry, NovaEngine engine)
+    {
+        registry.MapGet("/api/automations", "List all automations", () =>
+        {
+            var automations = engine.Automations?.GetAll() ?? [];
+            return Results.Ok(new
+            {
+                automations = automations.Select(a => new
+                {
+                    a.Name,
+                    a.Description,
+                    a.Schedule,
+                    a.Enabled,
+                    a.RemoveOnTrigger,
+                    a.ActionType,
+                    actionConfig = a.ActionConfigJson != null
+                        ? JsonSerializer.Deserialize<JsonElement>(a.ActionConfigJson)
+                        : (JsonElement?)null,
+                    a.ReportToDiscussionId,
+                    a.LastRun,
+                    a.NextRun,
+                    lastResult = a.LastResultJson != null
+                        ? JsonSerializer.Deserialize<JsonElement>(a.LastResultJson)
+                        : (JsonElement?)null,
+                }),
+            });
+        });
+
+        registry.MapPost("/api/automations", "Create an automation", (AutomationCreateRequest request) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.Name))
+                return Results.BadRequest(new { error = "Name is required" });
+            if (string.IsNullOrWhiteSpace(request.Schedule))
+                return Results.BadRequest(new { error = "Schedule (cron expression) is required" });
+            if (string.IsNullOrWhiteSpace(request.ActionType))
+                return Results.BadRequest(new { error = "ActionType is required" });
+
+            var automation = new Automation
+            {
+                Name = request.Name,
+                Description = request.Description ?? "",
+                Schedule = request.Schedule,
+                Enabled = true,
+                RemoveOnTrigger = request.RemoveOnTrigger,
+                ActionType = request.ActionType,
+                ActionConfigJson = request.ActionConfig != null
+                    ? JsonSerializer.Serialize(request.ActionConfig, JsonOptions)
+                    : null,
+                ReportToDiscussionId = request.ReportToDiscussionId,
+            };
+
+            engine.Automations?.Add(automation);
+            return Results.Ok(new { success = true, name = automation.Name, nextRun = automation.NextRun });
+        });
+
+        registry.MapGet("/api/automations/{name}", "Get automation details", (string name) =>
+        {
+            var a = engine.Automations?.GetAll().FirstOrDefault(x => x.Name == name);
+            if (a == null) return Results.NotFound(new { error = "Automation not found" });
+
+            return Results.Ok(new
+            {
+                a.Name,
+                a.Description,
+                a.Schedule,
+                a.Enabled,
+                a.RemoveOnTrigger,
+                a.ActionType,
+                actionConfig = a.ActionConfigJson != null
+                    ? JsonSerializer.Deserialize<JsonElement>(a.ActionConfigJson)
+                    : (JsonElement?)null,
+                a.ReportToDiscussionId,
+                a.LastRun,
+                a.NextRun,
+                lastResult = a.LastResultJson != null
+                    ? JsonSerializer.Deserialize<JsonElement>(a.LastResultJson)
+                    : (JsonElement?)null,
+            });
+        });
+
+        registry.MapDelete("/api/automations/{name}", "Remove an automation", (string name) =>
+        {
+            var removed = engine.Automations?.Remove(name) ?? false;
+            return Results.Ok(new { success = removed });
+        });
+    }
+}
+
+public class AutomationCreateRequest
+{
+    public string Name { get; set; } = "";
+    public string? Description { get; set; }
+    public string Schedule { get; set; } = "";
+    public string ActionType { get; set; } = "";
+    public JsonElement? ActionConfig { get; set; }
+    public bool RemoveOnTrigger { get; set; }
+    public string? ReportToDiscussionId { get; set; }
+}

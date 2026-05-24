@@ -10,16 +10,14 @@ public class NovaEngine : IAsyncDisposable
     private readonly LogService _log;
     private readonly RedComputeClient _redCompute;
 
-    private HeartbeatService? _heartbeat;
-    private SchedulerService? _scheduler;
+    private AutomationService? _automations;
     private CancellationTokenSource? _cts;
 
     public bool IsRunning => _cts is { IsCancellationRequested: false };
-    public int ActiveHeartbeatCount => _heartbeat?.ActiveCount ?? 0;
+    public int ActiveAutomationCount => _automations?.ActiveCount ?? 0;
     public RedComputeClient RedCompute => _redCompute;
     public MemoryManager Memory => _memory;
-    public SchedulerService? Scheduler => _scheduler;
-    public HeartbeatService? Heartbeat => _heartbeat;
+    public AutomationService? Automations => _automations;
 
     public NovaEngine(NovaConfig config, MemoryManager memory, LogService log)
     {
@@ -33,11 +31,8 @@ public class NovaEngine : IAsyncDisposable
     {
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        _heartbeat = new HeartbeatService(this, _memory, _log);
-        _scheduler = new SchedulerService(this, _memory, _log);
-
-        await _heartbeat.StartAsync(_cts.Token);
-        await _scheduler.StartAsync(_cts.Token);
+        _automations = new AutomationService(this, _memory, _log);
+        await _automations.StartAsync(_cts.Token);
 
         _log.Info("engine", "Nova engine started");
     }
@@ -47,21 +42,20 @@ public class NovaEngine : IAsyncDisposable
         _log.Info("engine", "Nova engine stopping");
         _cts?.Cancel();
 
-        if (_heartbeat != null) await _heartbeat.StopAsync();
-        if (_scheduler != null) await _scheduler.StopAsync();
+        if (_automations != null) await _automations.StopAsync();
 
         _redCompute.Dispose();
     }
 
-    public async Task<string?> InvokeForHeartbeatAsync(string purpose, string prompt, CancellationToken ct)
+    public async Task<string?> InvokeForAutomationAsync(string name, string prompt, string? hint, CancellationToken ct)
     {
-        _log.Info("engine", $"Heartbeat [{purpose}]: invoking");
+        _log.Info("engine", $"Automation [{name}]: invoking");
 
         var request = new ClaudeRequest
         {
             Prompt = prompt,
-            SystemPrompt = BuildHeartbeatPrompt(purpose),
-            SystemPromptHint = purpose,
+            SystemPrompt = BuildAutomationPrompt(name),
+            SystemPromptHint = hint ?? name,
             WorkingDirectory = _memory.WorkspacePath,
             AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "PowerShell", "WebFetch", "WebSearch", "TodoWrite"],
         };
@@ -70,23 +64,19 @@ public class NovaEngine : IAsyncDisposable
         return response.Text;
     }
 
-    private string BuildHeartbeatPrompt(string purpose)
+    private string BuildAutomationPrompt(string name)
     {
         var identity = _memory.ReadIdentity();
-        var heartbeats = _memory.ReadHeartbeats();
 
         return $"""
             {identity}
 
             ---
 
-            # Heartbeat: {purpose}
-            You are running a scheduled task. Unless the task instructions say otherwise, be concise.
+            # Automation: {name}
+            You are running an automated task. Be concise.
             If there is nothing to do, say so briefly.
             If you need to notify the user, write to memory/meta/notifications.md.
-
-            # Active heartbeats
-            {heartbeats}
             """;
     }
 

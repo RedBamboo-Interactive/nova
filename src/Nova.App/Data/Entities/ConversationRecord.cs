@@ -7,5 +7,6 @@ public class ConversationRecord
     public string Role { get; set; } = "";
     public string Content { get; set; } = "";
     public string? PartsJson { get; set; }
+    public string Source { get; set; } = "user";
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
 }

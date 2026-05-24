@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using RedBamboo.AppHost.Auth;
+using RedBamboo.AppHost.Discovery;
 using RedBamboo.AppHost.Extensions;
 using RedBamboo.AppHost.Logging;
 using Nova.App.Data;
@@ -61,31 +62,11 @@ public class StaticServer
         });
 
         var logService = App.LogService;
-        var descriptor = new NovaServiceDescriptor(port, logService, _engine);
+        var registry = _app.CreateEndpointRegistry();
 
         _app.UseWebSockets();
 
-        _app.MapAppHostEndpoints(
-            descriptor,
-            App.TunnelService,
-            "Nova",
-            () => new RedBamboo.AppHost.Tunnel.TunnelConfig
-            {
-                Enabled = App.Config.Tunnel.Enabled,
-                TunnelToken = App.Config.Tunnel.TunnelToken,
-                Hostname = App.Config.Tunnel.Hostname,
-                CloudflaredPath = App.Config.Tunnel.CloudflaredPath,
-                AccessToken = App.Config.Tunnel.AccessToken,
-            },
-            logService,
-            proxyRoutes: new Dictionary<string, string>
-            {
-                ["/ai-session"] = "http://localhost:18800",
-                ["/tts"] = "http://localhost:18800",
-                ["/stt"] = "http://localhost:18800",
-            });
-
-        _app.MapGet("/api/file", async (HttpContext ctx) =>
+        registry.MapGet("/api/file", "Serve an image file by path", async (HttpContext ctx) =>
         {
             var path = ctx.Request.Query["path"].ToString();
             if (string.IsNullOrEmpty(path)) { ctx.Response.StatusCode = 400; return; }
@@ -111,12 +92,34 @@ public class StaticServer
             await ctx.Response.SendFileAsync(fullPath);
         });
 
-        _app.MapDiscussionEndpoints(_engine);
-        _app.MapDiscussionExportEndpoints();
-        _app.MapSettingsEndpoints(_memory);
-        _app.MapMemoryEndpoints(_memory);
-        _app.MapScheduleEndpoints(_engine);
-        _app.MapSpeechEndpoints(_engine);
+        registry.MapDiscussionEndpoints(_engine);
+        registry.MapDiscussionExportEndpoints();
+        registry.MapSettingsEndpoints(_memory);
+        registry.MapMemoryEndpoints(_memory);
+        registry.MapAutomationEndpoints(_engine);
+        registry.MapSpeechEndpoints(_engine);
+
+        var descriptor = new NovaServiceDescriptor(port, logService, _engine, registry);
+
+        _app.MapAppHostEndpoints(
+            descriptor,
+            App.TunnelService,
+            "Nova",
+            () => new RedBamboo.AppHost.Tunnel.TunnelConfig
+            {
+                Enabled = App.Config.Tunnel.Enabled,
+                TunnelToken = App.Config.Tunnel.TunnelToken,
+                Hostname = App.Config.Tunnel.Hostname,
+                CloudflaredPath = App.Config.Tunnel.CloudflaredPath,
+                AccessToken = App.Config.Tunnel.AccessToken,
+            },
+            logService,
+            proxyRoutes: new Dictionary<string, string>
+            {
+                ["/ai-session"] = "http://localhost:18800",
+                ["/tts"] = "http://localhost:18800",
+                ["/stt"] = "http://localhost:18800",
+            });
 
         using (var scope = _app.Services.CreateScope())
         {
@@ -206,6 +209,12 @@ public class StaticServer
         if (!columns.Contains("PartsJson"))
         {
             cmd.CommandText = "ALTER TABLE Conversations ADD COLUMN PartsJson TEXT";
+            cmd.ExecuteNonQuery();
+        }
+
+        if (!columns.Contains("Source"))
+        {
+            cmd.CommandText = "ALTER TABLE Conversations ADD COLUMN Source TEXT NOT NULL DEFAULT 'user'";
             cmd.ExecuteNonQuery();
         }
     }

@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using RedBamboo.AppHost.Discovery;
 using Nova.App.Data;
 using Nova.App.Data.Entities;
 using Nova.App.Services;
@@ -25,11 +26,11 @@ public static class DiscussionEndpoints
         Timeout = TimeSpan.FromSeconds(30),
     };
 
-    public static void MapDiscussionEndpoints(this IEndpointRouteBuilder app, NovaEngine engine)
+    public static void MapDiscussionEndpoints(this EndpointRegistry registry, NovaEngine engine)
     {
         var memory = engine.Memory;
 
-        app.MapGet("/api/discussions", async (HttpContext ctx, NovaDbContext db) =>
+        registry.MapGet("/api/discussions", "List discussions (filter: status, search)", async (HttpContext ctx, NovaDbContext db) =>
         {
             var status = ctx.Request.Query["status"].FirstOrDefault();
             var search = ctx.Request.Query["search"].FirstOrDefault();
@@ -46,7 +47,7 @@ public static class DiscussionEndpoints
             return Results.Ok(discussions.Select(ToInfo));
         });
 
-        app.MapGet("/api/discussions/pending", async (NovaDbContext db) =>
+        registry.MapGet("/api/discussions/pending", "Count pending discussions", async (NovaDbContext db) =>
         {
             var count = await db.Discussions
                 .Where(d => d.Status == "idle" && d.MessageCount > 0)
@@ -55,7 +56,7 @@ public static class DiscussionEndpoints
             return Results.Ok(new { count });
         });
 
-        app.MapPost("/api/discussions", async (NovaDbContext db) =>
+        registry.MapPost("/api/discussions", "Create a new discussion (starts a session)", async (NovaDbContext db) =>
         {
             var discussion = new Discussion
             {
@@ -92,7 +93,7 @@ public static class DiscussionEndpoints
             return Results.Ok(ToInfo(discussion));
         });
 
-        app.MapGet("/api/discussions/{id}", async (string id, NovaDbContext db) =>
+        registry.MapGet("/api/discussions/{id}", "Get discussion metadata", async (string id, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
@@ -101,7 +102,7 @@ public static class DiscussionEndpoints
             return Results.Ok(new { discussion = ToInfo(discussion) });
         });
 
-        app.MapPut("/api/discussions/{id}/title", async (string id, DiscussionTitleRequest request, NovaDbContext db) =>
+        registry.MapPut("/api/discussions/{id}/title", "Update discussion title", async (string id, DiscussionTitleRequest request, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
@@ -113,7 +114,7 @@ public static class DiscussionEndpoints
             return Results.Ok(ToInfo(discussion));
         });
 
-        app.MapDelete("/api/discussions/{id}", async (string id, NovaDbContext db) =>
+        registry.MapDelete("/api/discussions/{id}", "Archive a discussion", async (string id, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
@@ -131,7 +132,7 @@ public static class DiscussionEndpoints
 
             return Results.Ok(ToInfo(discussion));
         });
-        app.MapGet("/api/discussions/search", async (HttpContext ctx, NovaDbContext db) =>
+        registry.MapGet("/api/discussions/search", "Search conversation content (query: q, limit)", async (HttpContext ctx, NovaDbContext db) =>
         {
             var q = ctx.Request.Query["q"].FirstOrDefault();
             if (string.IsNullOrWhiteSpace(q))
@@ -184,6 +185,41 @@ public static class DiscussionEndpoints
             });
 
             return Results.Ok(new { query = q, results });
+        });
+
+        registry.MapPost("/api/discussions/{id}/event", "Inject an automation event into a discussion", async (string id, DiscussionEventRequest request, NovaDbContext db) =>
+        {
+            var discussion = await db.Discussions.FindAsync(id);
+            if (discussion is null)
+                return Results.NotFound(new { error = "Discussion not found" });
+
+            if (string.IsNullOrWhiteSpace(request.Content))
+                return Results.BadRequest(new { error = "Content is required" });
+
+            db.Conversations.Add(new ConversationRecord
+            {
+                ContextId = id,
+                Role = "user",
+                Content = request.Content,
+                Source = $"event:{request.Source ?? "automation"}",
+            });
+
+            discussion.LastActivity = DateTime.UtcNow;
+            discussion.MessageCount++;
+            await db.SaveChangesAsync();
+
+            if (discussion.SessionId is not null)
+            {
+                try
+                {
+                    await RedCompute.PostAsJsonAsync(
+                        $"/ai-session/sessions/{discussion.SessionId}/message",
+                        new { content = request.Content }, JsonOptions);
+                }
+                catch { }
+            }
+
+            return Results.Ok(new { success = true });
         });
     }
 
@@ -243,4 +279,10 @@ public static class DiscussionEndpoints
 public class DiscussionTitleRequest
 {
     public string? Title { get; set; }
+}
+
+public class DiscussionEventRequest
+{
+    public string Content { get; set; } = "";
+    public string? Source { get; set; }
 }

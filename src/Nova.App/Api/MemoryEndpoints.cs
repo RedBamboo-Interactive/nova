@@ -1,21 +1,22 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using RedBamboo.AppHost.Discovery;
 using Nova.App.Services;
 
 namespace Nova.App.Api;
 
 public static class MemoryEndpoints
 {
-    public static void MapMemoryEndpoints(this IEndpointRouteBuilder app, MemoryManager memory)
+    public static void MapMemoryEndpoints(this EndpointRegistry registry, MemoryManager memory)
     {
-        app.MapGet("/api/memory/manifest", () =>
+        registry.MapGet("/api/memory/manifest", "List all memory files", () =>
         {
             var files = memory.GetMemoryManifest();
             return Results.Ok(new { files });
         });
 
-        app.MapGet("/api/memory/file", (string path) =>
+        registry.MapGet("/api/memory/file", "Read a memory file", (string path) =>
         {
             if (string.IsNullOrWhiteSpace(path))
                 return Results.BadRequest(new { error = "Path is required" });
@@ -27,7 +28,7 @@ public static class MemoryEndpoints
             return Results.Ok(new { path, content });
         });
 
-        app.MapPut("/api/memory/file", (MemoryFileRequest request) =>
+        registry.MapPut("/api/memory/file", "Write a memory file", (MemoryFileRequest request) =>
         {
             if (string.IsNullOrWhiteSpace(request.Path) || request.Content == null)
                 return Results.BadRequest(new { error = "Path and content are required" });

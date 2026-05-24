@@ -27,7 +27,7 @@ const shellConfig: AppShellConfig = {
   },
 }
 
-export type Tab = "chat" | "heartbeats" | "memory"
+export type Tab = "chat" | "automations" | "memory"
 
 function SettingsCommand({ onSettings }: { onSettings: () => void }) {
   useCommand("open-settings", {
@@ -73,11 +73,11 @@ export function AppShell({ children, activeTab, onTabChange }: Props) {
             <span className="hidden sm:inline">Chat</span>
           </NavTab>
           <NavTab
-            active={activeTab === "heartbeats"}
-            icon="fa-solid fa-heart"
-            onClick={() => onTabChange("heartbeats")}
+            active={activeTab === "automations"}
+            icon="fa-solid fa-bolt"
+            onClick={() => onTabChange("automations")}
           >
-            <span className="hidden sm:inline">Heartbeats</span>
+            <span className="hidden sm:inline">Automations</span>
           </NavTab>
           <NavTab
             active={activeTab === "memory"}

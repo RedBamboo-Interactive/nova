@@ -1,15 +1,16 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using RedBamboo.AppHost.Discovery;
 using Nova.App.Services;
 
 namespace Nova.App.Api;
 
 public static class SettingsEndpoints
 {
-    public static void MapSettingsEndpoints(this IEndpointRouteBuilder app, MemoryManager memory)
+    public static void MapSettingsEndpoints(this EndpointRegistry registry, MemoryManager memory)
     {
-        app.MapGet("/api/settings", () =>
+        registry.MapGet("/api/settings", "Get current settings including identity", () =>
         {
             var identity = memory.ReadIdentity();
             var config = App.Config;
@@ -30,7 +31,7 @@ public static class SettingsEndpoints
             });
         });
 
-        app.MapPut("/api/settings/identity", (IdentityUpdateRequest request) =>
+        registry.MapPut("/api/settings/identity", "Update Nova's identity", (IdentityUpdateRequest request) =>
         {
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Identity content is required" });

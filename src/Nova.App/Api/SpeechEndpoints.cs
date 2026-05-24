@@ -1,15 +1,16 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using RedBamboo.AppHost.Discovery;
 using Nova.App.Services;
 
 namespace Nova.App.Api;
 
 public static class SpeechEndpoints
 {
-    public static void MapSpeechEndpoints(this IEndpointRouteBuilder app, NovaEngine engine)
+    public static void MapSpeechEndpoints(this EndpointRegistry registry, NovaEngine engine)
     {
-        app.MapPost("/api/speech/transcribe", async (HttpRequest req, CancellationToken ct) =>
+        registry.MapPost("/api/speech/transcribe", "Transcribe audio (multipart form)", async (HttpRequest req, CancellationToken ct) =>
         {
             if (!req.HasFormContentType)
                 return Results.BadRequest(new { error = "Expected multipart form data" });
@@ -32,7 +33,7 @@ public static class SpeechEndpoints
             }
         });
 
-        app.MapPost("/api/speech/speak", async (SpeakRequest request, CancellationToken ct) =>
+        registry.MapPost("/api/speech/speak", "Text-to-speech", async (SpeakRequest request, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(request.Text))
                 return Results.BadRequest(new { error = "Text is required" });
@@ -49,7 +50,7 @@ public static class SpeechEndpoints
             }
         });
 
-        app.MapPost("/api/speech/prompt", async (PromptRequest request, CancellationToken ct) =>
+        registry.MapPost("/api/speech/prompt", "Execute a prompt via RedCompute", async (PromptRequest request, CancellationToken ct) =>
         {
             try
             {
