@@ -131,6 +131,92 @@ public static class DiscussionEndpoints
 
             return Results.Ok(ToInfo(discussion));
         });
+        app.MapGet("/api/discussions/search", async (HttpContext ctx, NovaDbContext db) =>
+        {
+            var q = ctx.Request.Query["q"].FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(q))
+                return Results.BadRequest(new { error = "Query parameter 'q' is required" });
+
+            var limit = 20;
+            if (ctx.Request.Query.TryGetValue("limit", out var lv) && int.TryParse(lv, out var parsed))
+                limit = Math.Clamp(parsed, 1, 100);
+
+            var snippetLen = 120;
+
+            var matches = await db.Conversations
+                .Where(m => m.Content.Contains(q) || (m.PartsJson != null && m.PartsJson.Contains(q)))
+                .OrderByDescending(m => m.Timestamp)
+                .Select(m => new { m.ContextId, m.Role, m.Content, m.PartsJson, m.Timestamp })
+                .ToListAsync();
+
+            var grouped = matches
+                .GroupBy(m => m.ContextId)
+                .Take(limit)
+                .ToList();
+
+            var discussionIds = grouped.Select(g => g.Key).ToList();
+            var discussions = await db.Discussions
+                .Where(d => discussionIds.Contains(d.Id))
+                .ToDictionaryAsync(d => d.Id);
+
+            var results = grouped.Select(g =>
+            {
+                discussions.TryGetValue(g.Key, out var disc);
+                var snippets = g.Take(3).Select(m =>
+                {
+                    var text = m.Content;
+                    if (string.IsNullOrEmpty(text) && m.PartsJson != null)
+                        text = ExtractTextFromParts(m.PartsJson);
+
+                    var snippet = ExtractSnippet(text, q, snippetLen);
+                    return new { role = m.Role, timestamp = m.Timestamp, snippet };
+                });
+
+                return new
+                {
+                    discussionId = g.Key,
+                    title = disc?.Title,
+                    status = disc?.Status,
+                    lastActivity = disc?.LastActivity,
+                    matchCount = g.Count(),
+                    snippets,
+                };
+            });
+
+            return Results.Ok(new { query = q, results });
+        });
+    }
+
+    private static string ExtractTextFromParts(string partsJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(partsJson);
+            var texts = doc.RootElement.EnumerateArray()
+                .Where(p => p.GetProperty("type").GetString() == "text"
+                         && p.TryGetProperty("content", out _))
+                .Select(p => p.GetProperty("content").GetString())
+                .Where(t => !string.IsNullOrWhiteSpace(t));
+            return string.Join(" ", texts);
+        }
+        catch { return ""; }
+    }
+
+    private static string ExtractSnippet(string? text, string query, int maxLen)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+
+        var idx = text.IndexOf(query, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return text.Length > maxLen ? text[..maxLen] + "..." : text;
+
+        var start = Math.Max(0, idx - maxLen / 3);
+        var end = Math.Min(text.Length, start + maxLen);
+        start = Math.Max(0, end - maxLen);
+
+        var snippet = text[start..end];
+        if (start > 0) snippet = "..." + snippet;
+        if (end < text.Length) snippet += "...";
+        return snippet;
     }
 
     private static object ToInfo(Discussion d)
