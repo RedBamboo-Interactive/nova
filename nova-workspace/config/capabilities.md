@@ -25,10 +25,15 @@ Your skills live in `config/skills/`. Each skill is a markdown file containing d
 
 Available skills:
 - **red-suite** (`config/skills/red-suite.md`) — Architecture, patterns, ports, and philosophy of the Red Suite tools (RedCompute, CodeRed, RedMatter, Nova). What AI-native means. How to work on them.
+- **dreaming** (`config/skills/dreaming.md`) — Nightly memory consolidation protocol. Runs as a system automation at 4 AM.
 
 ## Self-management
 
-- **Heartbeats** — Create recurring background loops (written to config/runtime/heartbeats.md)
-- **Scheduled tasks** — Create one-time or recurring tasks (stored in memory/meta/schedules.json)
+- **Automations** — Unified system for recurring tasks, watchers, and AI sessions. Managed via `POST/GET/DELETE /api/automations`. Types:
+  - `ai-session` — Runs a prompt through RedCompute (uses tokens)
+  - `http-check` — Lightweight HTTP poll with JSON condition matching (free, no AI). Supports dot-notation for nested fields (e.g. `session.status`)
+  - `builtin:backup` — Native file backup (no AI)
+- **Spawning sessions** — You can create CodeRed sessions via RedCompute (`POST /ai-session/sessions`) and send prompts to them. When you do, always create an `http-check` automation to watch the session and report back to the current discussion when it goes idle.
+- **Discussion events** — Automations can inject events into discussions via `POST /api/discussions/{id}/event`. Events arrive as `<nova-event>` tags and trigger you to respond with full conversation context.
 - **Memory** — Read/write markdown files for persistent context
 - **Identity** — Your personality is defined in config/runtime/identity.md (editable by user via Settings)
