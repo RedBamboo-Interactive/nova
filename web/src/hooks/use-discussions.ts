@@ -34,6 +34,9 @@ export function useDiscussions() {
   const isStreaming = activeDiscussionId ? streaming[activeDiscussionId] ?? false : false
   const activePendingQuestion = activeDiscussionId ? pendingQuestions[activeDiscussionId] ?? null : null
 
+  const activeIdRef = useRef(activeDiscussionId)
+  activeIdRef.current = activeDiscussionId
+
   const sessionToDiscussion = useMemo(() => {
     const map = new Map<string, string>()
     for (const d of discussions) {
@@ -103,6 +106,10 @@ export function useDiscussions() {
   const selectDiscussion = useCallback((id: string) => {
     setActiveDiscussionId(id)
     loadMessages(id)
+    api.put(`/api/discussions/${id}/read`).catch(() => {})
+    setDiscussions((prev) =>
+      prev.map((d) => d.id === id ? { ...d, lastReadAt: new Date().toISOString() } : d)
+    )
   }, [loadMessages])
 
   const visibleDiscussions = useMemo(
@@ -224,9 +231,20 @@ export function useDiscussions() {
       if (!discId) return
       if (session.status !== "Active") {
         setStreaming((prev) => ({ ...prev, [discId]: false }))
+        const now = new Date().toISOString()
+        const isViewing = activeIdRef.current === discId
         setDiscussions((prev) =>
-          prev.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
+          prev.map((d) => d.id === discId && d.status !== "archived" ? {
+            ...d,
+            status: "idle" as const,
+            lastActivity: now,
+            ...(isViewing ? { lastReadAt: now } : {}),
+          } : d)
         )
+        api.put(`/api/discussions/${discId}/activity`).catch(() => {})
+        if (isViewing) {
+          api.put(`/api/discussions/${discId}/read`).catch(() => {})
+        }
         const syncTitle = (name: string) => {
           setDiscussions((prev) =>
             prev.map((d) => d.id === discId ? { ...d, title: name } : d)
@@ -248,7 +266,7 @@ export function useDiscussions() {
       setStreaming((prev) => ({ ...prev, [discId]: false }))
       setPendingQuestions((prev) => ({ ...prev, [discId]: null }))
       setDiscussions((prev) =>
-        prev.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
+        prev.map((d) => d.id === discId && d.status !== "archived" ? { ...d, status: "idle" as const } : d)
       )
     } else if (event.type === "discussion.event") {
       const { discussionId, content } = event.data as { discussionId: string; sessionId: string; content: string; source: string }

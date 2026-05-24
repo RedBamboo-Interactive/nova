@@ -40,6 +40,8 @@ public static class DiscussionEndpoints
 
             if (!string.IsNullOrEmpty(status))
                 query = query.Where(d => d.Status == status);
+            else
+                query = query.Where(d => d.Status != "archived");
 
             if (!string.IsNullOrEmpty(search))
                 query = query.Where(d => d.Title != null && d.Title.Contains(search));
@@ -48,10 +50,11 @@ public static class DiscussionEndpoints
             return Results.Ok(discussions.Select(ToInfo));
         });
 
-        registry.MapGet("/api/discussions/pending", "Count pending discussions", async (NovaDbContext db) =>
+        registry.MapGet("/api/discussions/pending", "Count unread discussions", async (NovaDbContext db) =>
         {
             var count = await db.Discussions
-                .Where(d => d.Status == "idle" && d.MessageCount > 0)
+                .Where(d => d.Status == "idle" && d.MessageCount > 0
+                    && (d.LastReadAt == null || d.LastActivity > d.LastReadAt))
                 .CountAsync();
 
             return Results.Ok(new { count });
@@ -110,6 +113,30 @@ public static class DiscussionEndpoints
                 return Results.NotFound(new { error = "Discussion not found" });
 
             discussion.Title = request.Title;
+            await db.SaveChangesAsync();
+
+            return Results.Ok(ToInfo(discussion));
+        });
+
+        registry.MapPut("/api/discussions/{id}/read", "Mark discussion as read", async (string id, NovaDbContext db) =>
+        {
+            var discussion = await db.Discussions.FindAsync(id);
+            if (discussion is null)
+                return Results.NotFound(new { error = "Discussion not found" });
+
+            discussion.LastReadAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+
+            return Results.Ok(ToInfo(discussion));
+        });
+
+        registry.MapPut("/api/discussions/{id}/activity", "Update discussion last activity", async (string id, NovaDbContext db) =>
+        {
+            var discussion = await db.Discussions.FindAsync(id);
+            if (discussion is null)
+                return Results.NotFound(new { error = "Discussion not found" });
+
+            discussion.LastActivity = DateTime.UtcNow;
             await db.SaveChangesAsync();
 
             return Results.Ok(ToInfo(discussion));
@@ -275,6 +302,7 @@ public static class DiscussionEndpoints
             d.CreatedAt,
             d.LastActivity,
             d.MessageCount,
+            d.LastReadAt,
         };
     }
 

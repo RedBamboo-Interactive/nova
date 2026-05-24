@@ -6,6 +6,7 @@ export interface DiscussionInfo {
   createdAt: string
   lastActivity: string
   messageCount: number
+  lastReadAt: string | null
 }
 
 export interface DiscussionMessage {

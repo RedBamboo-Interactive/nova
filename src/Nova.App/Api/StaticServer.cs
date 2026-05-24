@@ -200,6 +200,12 @@ public class StaticServer
             cmd.ExecuteNonQuery();
         }
 
+        if (!discColumns.Contains("LastReadAt"))
+        {
+            cmd.CommandText = "ALTER TABLE Discussions ADD COLUMN LastReadAt TEXT";
+            cmd.ExecuteNonQuery();
+        }
+
         cmd.CommandText = "PRAGMA table_info(Conversations)";
         using var reader = cmd.ExecuteReader();
         var columns = new HashSet<string>();
