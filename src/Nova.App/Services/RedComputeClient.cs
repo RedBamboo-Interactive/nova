@@ -70,7 +70,6 @@ public class RedComputeClient : IDisposable
             request.System,
             request.Messages,
             request.MaxTokens,
-            mode = "oneshot",
             rationale = "Voice prompt",
         };
         var response = await _http.PostAsJsonAsync("/ai-session/generate", body, JsonOptions, ct);
