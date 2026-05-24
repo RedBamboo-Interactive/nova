@@ -13,8 +13,17 @@ public static class ScheduleEndpoints
 
         app.MapGet("/api/heartbeats", () =>
         {
-            // HeartbeatService is internal to engine; we'll expose via a method
-            return Results.Ok(new { heartbeats = Array.Empty<object>() });
+            var heartbeats = engine.Heartbeat?.GetAll() ?? [];
+            return Results.Ok(new
+            {
+                heartbeats = heartbeats.Where(h => !h.Cancelled).Select(h => new
+                {
+                    name = h.Name,
+                    description = h.Description,
+                    intervalMinutes = h.IntervalMinutes,
+                    lastRun = h.LastRun,
+                })
+            });
         });
 
         app.MapPost("/api/heartbeats", (HeartbeatCreateRequest request) =>
@@ -22,13 +31,19 @@ public static class ScheduleEndpoints
             if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.Prompt))
                 return Results.BadRequest(new { error = "Name and prompt are required" });
 
-            // TODO: expose heartbeat add through engine
+            engine.Heartbeat?.AddHeartbeat(new HeartbeatDefinition
+            {
+                Name = request.Name,
+                Description = request.Description,
+                Prompt = request.Prompt,
+                IntervalMinutes = request.IntervalMinutes,
+            });
             return Results.Ok(new { success = true, name = request.Name });
         });
 
         app.MapDelete("/api/heartbeats/{name}", (string name) =>
         {
-            // TODO: expose heartbeat remove through engine
+            engine.Heartbeat?.RemoveHeartbeat(name);
             return Results.Ok(new { success = true });
         });
 
@@ -36,7 +51,19 @@ public static class ScheduleEndpoints
 
         app.MapGet("/api/schedule", () =>
         {
-            return Results.Ok(new { tasks = Array.Empty<object>() });
+            var tasks = engine.Scheduler?.GetAll() ?? [];
+            return Results.Ok(new
+            {
+                tasks = tasks.Select(t => new
+                {
+                    name = t.Name,
+                    description = t.Description,
+                    nextRun = t.NextRun,
+                    lastRun = t.LastRun,
+                    recurring = t.Recurring,
+                    enabled = t.Enabled,
+                })
+            });
         });
 
         app.MapPost("/api/schedule", (ScheduleCreateRequest request) =>
@@ -44,14 +71,24 @@ public static class ScheduleEndpoints
             if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.Prompt))
                 return Results.BadRequest(new { error = "Name and prompt are required" });
 
-            // TODO: expose scheduler add through engine
+            engine.Scheduler?.AddTask(new ScheduledTask
+            {
+                Name = request.Name,
+                Description = request.Description,
+                Prompt = request.Prompt,
+                NextRun = request.NextRun ?? DateTime.UtcNow,
+                Recurring = request.Recurring,
+                CronExpression = request.CronExpression,
+                IntervalMinutes = request.IntervalMinutes,
+                Enabled = true,
+            });
             return Results.Ok(new { success = true, name = request.Name });
         });
 
         app.MapDelete("/api/schedule/{name}", (string name) =>
         {
-            // TODO: expose scheduler remove through engine
-            return Results.Ok(new { success = true });
+            var removed = engine.Scheduler?.RemoveTask(name) ?? false;
+            return Results.Ok(new { success = removed });
         });
     }
 }
@@ -71,5 +108,6 @@ public class ScheduleCreateRequest
     public string Prompt { get; set; } = "";
     public DateTime? NextRun { get; set; }
     public bool Recurring { get; set; }
+    public string? CronExpression { get; set; }
     public int IntervalMinutes { get; set; }
 }

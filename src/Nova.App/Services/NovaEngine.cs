@@ -18,6 +18,8 @@ public class NovaEngine : IAsyncDisposable
     public int ActiveHeartbeatCount => _heartbeat?.ActiveCount ?? 0;
     public RedComputeClient RedCompute => _redCompute;
     public MemoryManager Memory => _memory;
+    public SchedulerService? Scheduler => _scheduler;
+    public HeartbeatService? Heartbeat => _heartbeat;
 
     public NovaEngine(NovaConfig config, MemoryManager memory, LogService log)
     {

@@ -32,9 +32,27 @@ public class RedComputeClient : IDisposable
 
     public async Task<ClaudeResponse> InvokeClaudeAsync(ClaudeRequest request, CancellationToken ct = default)
     {
-        _log.Info("redcompute", $"Invoking Claude: {request.SystemPromptHint ?? "chat"}");
+        var jobName = request.SystemPromptHint ?? "chat";
+        _log.Info("redcompute", $"Invoking Claude: {jobName}");
 
-        var response = await _http.PostAsJsonAsync("/claude-code/generate", request, JsonOptions, ct);
+        var body = new
+        {
+            prompt = request.SystemPrompt != null
+                ? $"{request.SystemPrompt}\n\n---\n\n{request.Prompt}"
+                : request.Prompt,
+            provider = "claude-code",
+            workingDir = request.WorkingDirectory,
+            allowedTools = request.AllowedTools,
+            timeout = 600,
+        };
+
+        var msg = new HttpRequestMessage(HttpMethod.Post, "/ai-session/execute")
+        {
+            Content = JsonContent.Create(body, options: JsonOptions),
+        };
+        msg.Headers.Add("X-Job-Name", $"Nova: {jobName}");
+
+        var response = await _http.SendAsync(msg, ct);
         response.EnsureSuccessStatusCode();
 
         var result = await response.Content.ReadFromJsonAsync<ClaudeResponse>(JsonOptions, ct);
@@ -106,17 +124,13 @@ public class ClaudeRequest
 
 public class ClaudeResponse
 {
+    public bool Success { get; set; }
     public string? Text { get; set; }
-    public string? SessionId { get; set; }
-    public List<ToolCall>? ToolCalls { get; set; }
     public string? Error { get; set; }
-}
-
-public class ToolCall
-{
-    public string Name { get; set; } = "";
-    public string? Input { get; set; }
-    public string? Output { get; set; }
+    public string? Model { get; set; }
+    public int? InputTokens { get; set; }
+    public int? OutputTokens { get; set; }
+    public decimal? CostUsd { get; set; }
 }
 
 public class SttResponse

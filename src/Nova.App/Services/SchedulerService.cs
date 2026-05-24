@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Cronos;
 using RedBamboo.AppHost.Logging;
 
 namespace Nova.App.Services;
@@ -72,16 +73,19 @@ public class SchedulerService
                     {
                         await _engine.InvokeForHeartbeatAsync($"schedule:{task.Name}", task.Prompt, ct);
                         task.LastRun = now;
-                        task.NextRun = CalculateNextRun(task);
-
-                        if (!task.Recurring)
-                            task.Enabled = false;
-
-                        SaveTasks();
                     }
                     catch (Exception ex)
                     {
                         _log.Error("scheduler", $"Task [{task.Name}] failed: {ex.Message}");
+                    }
+                    finally
+                    {
+                        if (task.Recurring)
+                            task.NextRun = CalculateNextRun(task);
+                        else
+                            task.Enabled = false;
+
+                        SaveTasks();
                     }
                 }
             }
@@ -91,11 +95,20 @@ public class SchedulerService
 
     private static DateTime CalculateNextRun(ScheduledTask task)
     {
-        if (!task.Recurring || string.IsNullOrEmpty(task.CronExpression))
+        if (!task.Recurring)
             return DateTime.MaxValue;
 
-        // Simple interval-based recurrence for now.
-        // Full cron parsing can be added later.
+        if (!string.IsNullOrEmpty(task.CronExpression))
+        {
+            try
+            {
+                var expr = CronExpression.Parse(task.CronExpression);
+                var next = expr.GetNextOccurrence(DateTime.UtcNow);
+                if (next.HasValue) return next.Value;
+            }
+            catch { }
+        }
+
         if (task.IntervalMinutes > 0)
             return DateTime.UtcNow.AddMinutes(task.IntervalMinutes);
 
