@@ -135,7 +135,7 @@ meta file, compare against the harvest:
 
 ### Step 5: Rebuild Index
 
-Rebuild `memory/meta/index.md`. This is your most important output — it's what
+Rebuild `memory/index.md`. This is your most important output — it's what
 you'll scan first in every future conversation to decide what to read.
 
 Format:
@@ -156,12 +156,12 @@ Total memory files: {count}
 
 {Key facts about the user: who they are, role, current focus, important
 relationships, communication preferences}
-Source: memory/meta/user_context.md
+Source: memory/meta/user_profile.md
 
 ## Active Projects
 
 {Projects with recent activity — what they are, current state, key files}
-- `memory/topics/{project}.md` — {one-line description} [active]
+- `memory/projects/{project}.md` — {one-line description} [active]
 
 ## Active Topics
 
