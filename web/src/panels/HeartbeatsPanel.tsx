@@ -225,13 +225,13 @@ export function AutomationsPanel() {
 
   const sidebar = (
     <>
-      <PanelHeader title="Automations" />
+      <PanelHeader title="Pulse" />
       <ScrollArea className="flex-1">
         {automations.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-text-muted">
             <div className="text-center">
-              <i className="fa-solid fa-bolt text-2xl mb-3 opacity-30" />
-              <p className="text-sm">No automations</p>
+              <i className="fa-solid fa-heart-pulse text-2xl mb-3 opacity-30" />
+              <p className="text-sm">No routines yet</p>
               <p className="text-xs text-text-disabled mt-1">
                 Ask Nova to set one up in chat
               </p>
@@ -273,8 +273,8 @@ export function AutomationsPanel() {
   ) : (
     <div className="h-full flex items-center justify-center text-text-muted">
       <div className="text-center">
-        <i className="fa-solid fa-bolt text-2xl mb-3 opacity-30" />
-        <p className="text-sm">Select an automation to view details</p>
+        <i className="fa-solid fa-heart-pulse text-2xl mb-3 opacity-30" />
+        <p className="text-sm">Select a routine to view details</p>
       </div>
     </div>
   )
@@ -282,7 +282,7 @@ export function AutomationsPanel() {
   return (
     <MasterDetailLayout
       layoutKey="nova-automations"
-      mobileLabels={["Automations", "Detail"]}
+      mobileLabels={["Pulse", "Detail"]}
       mobileTab={mobileTab}
       onMobileTabChange={(tab) => {
         setMobileTab(tab)

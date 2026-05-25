@@ -35,13 +35,13 @@ export function MemoryPanel() {
 
   const sidebar = (
     <>
-      <PanelHeader title="Memory" />
+      <PanelHeader title="Journal" />
       <ScrollArea className="flex-1">
         {files.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-text-muted">
             <div className="text-center">
-              <i className="fa-solid fa-brain text-2xl mb-3 opacity-30" />
-              <p className="text-sm">No memory files yet</p>
+              <i className="fa-solid fa-book text-2xl mb-3 opacity-30" />
+              <p className="text-sm">No journal entries yet</p>
               <p className="text-xs text-text-disabled mt-1">
                 Nova will create them as you chat
               </p>
