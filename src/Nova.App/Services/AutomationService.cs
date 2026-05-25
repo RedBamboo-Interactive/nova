@@ -231,17 +231,9 @@ public class AutomationService
                 </nova-event>
                 """;
 
-            var payload = new { content = eventContent };
-            var sessionId = await GetSessionIdForDiscussion(discussionId, ct);
-            if (sessionId == null)
-            {
-                _log.Warn("automations", $"[{automation.Name}] No session found for discussion {discussionId}");
-                return;
-            }
-
             await _http.PostAsJsonAsync(
-                $"http://localhost:18800/ai-session/sessions/{sessionId}/message",
-                payload, ct);
+                $"http://localhost:18803/api/discussions/{discussionId}/event",
+                new { content = eventContent, source = automation.Name }, ct);
         }
         catch (Exception ex)
         {
