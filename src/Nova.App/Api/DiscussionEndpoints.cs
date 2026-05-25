@@ -361,7 +361,8 @@ public static class DiscussionEndpoints
             var isLoopback = remoteIp is null || System.Net.IPAddress.IsLoopback(remoteIp);
             var device = isLoopback ? "desktop" : "mobile";
 
-            var contextBlock = BuildNovaContext(allDiscussions, id, now, device);
+            var input = request.InputMethod ?? "typed";
+            var contextBlock = BuildNovaContext(allDiscussions, id, now, device, input);
             var enrichedContent = contextBlock + "\n\n" + request.Content;
 
             try
@@ -378,13 +379,13 @@ public static class DiscussionEndpoints
         });
     }
 
-    private static string BuildNovaContext(List<Discussion> discussions, string currentId, DateTime now, string device)
+    private static string BuildNovaContext(List<Discussion> discussions, string currentId, DateTime now, string device, string input)
     {
         var active = discussions.Where(d => d.Status != "archived").ToList();
         var archived = discussions.Where(d => d.Status == "archived" && d.MessageCount > 0).Take(10).ToList();
 
         var sb = new System.Text.StringBuilder();
-        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" device=\"{device}\" discussion=\"{currentId}\">");
+        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" device=\"{device}\" input=\"{input}\" discussion=\"{currentId}\">");
 
         if (active.Count > 0)
         {
@@ -484,6 +485,7 @@ public class DiscussionMessageRequest
 {
     public string Content { get; set; } = "";
     public ImageAttachmentDto[]? Images { get; set; }
+    public string? InputMethod { get; set; }
 }
 
 public class ImageAttachmentDto

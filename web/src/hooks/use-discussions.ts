@@ -146,7 +146,7 @@ export function useDiscussions() {
     }
   }, [])
 
-  const sendMessage = useCallback(async (discussionId: string, content: string, images?: ImageAttachment[]) => {
+  const sendMessage = useCallback(async (discussionId: string, content: string, images?: ImageAttachment[], inputMethod?: string) => {
     const disc = discussions.find((d) => d.id === discussionId)
     if (!disc?.sessionId) return
 
@@ -182,7 +182,7 @@ export function useDiscussions() {
     }
 
     try {
-      await api.post(`/api/discussions/${discussionId}/message`, { content, images })
+      await api.post(`/api/discussions/${discussionId}/message`, { content, images, inputMethod })
       return
     } catch {
       // Session may be dead after RedCompute restart — try to resume
@@ -197,7 +197,7 @@ export function useDiscussions() {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await api.post(`/api/discussions/${discussionId}/message`, { content, images })
+        await api.post(`/api/discussions/${discussionId}/message`, { content, images, inputMethod })
         return
       } catch {
         if (attempt < 2) {
@@ -252,12 +252,16 @@ export function useDiscussions() {
         const now = new Date().toISOString()
         const isViewing = activeIdRef.current === discId
         setDiscussions((prev) =>
-          prev.map((d) => d.id === discId && d.status !== "archived" ? {
-            ...d,
-            status: discStatus,
-            lastActivity: now,
-            ...(isViewing && !isStopped ? { lastReadAt: now } : {}),
-          } : d)
+          prev.map((d) => {
+            if (d.id !== discId || d.status === "archived") return d
+            if (d.status === "thinking" && !isStopped) return d
+            return {
+              ...d,
+              status: discStatus,
+              lastActivity: now,
+              ...(isViewing && !isStopped ? { lastReadAt: now } : {}),
+            }
+          })
         )
         if (isStopped) {
           api.put(`/api/discussions/${discId}/stopped`).catch(() => {})

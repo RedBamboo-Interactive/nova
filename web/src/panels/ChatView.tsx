@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react"
 import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
-import { ChatPanel, type ImageAttachment } from "@redbamboo/chat"
+import { ChatPanel, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
 import { useCommand } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
 import { NovaStatusLine } from "@/components/nova-status-line"
@@ -42,9 +42,9 @@ export function ChatView({ disc }: Props) {
 
   const [mobileTab, setMobileTab] = useState(0)
 
-  const handleSend = useCallback((content: string, images?: ImageAttachment[]) => {
+  const handleSend = useCallback((content: string, images?: ImageAttachment[], options?: SendOptions) => {
     if (!activeDiscussionId) return
-    sendMessage(activeDiscussionId, content, images)
+    sendMessage(activeDiscussionId, content, images, options?.inputMethod)
   }, [activeDiscussionId, sendMessage])
 
   const handleInterrupt = useCallback(() => {
