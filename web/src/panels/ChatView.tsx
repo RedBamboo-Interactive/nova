@@ -37,6 +37,7 @@ export function ChatView({ disc }: Props) {
     answerQuestion,
     archiveDiscussion,
     dismissDiscussion,
+    resumeDiscussion,
   } = disc
 
   const [mobileTab, setMobileTab] = useState(0)
@@ -55,6 +56,11 @@ export function ChatView({ disc }: Props) {
     if (!activeDiscussionId) return
     answerQuestion(activeDiscussionId, answer)
   }, [activeDiscussionId, answerQuestion])
+
+  const handleResume = useCallback(async () => {
+    if (!activeDiscussionId) return
+    await resumeDiscussion(activeDiscussionId)
+  }, [activeDiscussionId, resumeDiscussion])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -135,9 +141,10 @@ export function ChatView({ disc }: Props) {
       onSend={handleSend}
       onInterrupt={handleInterrupt}
       sessionId={activeDiscussionId}
-      disabled={activeDiscussion.status === "archived" || !activeDiscussion.sessionId}
+      disabled={activeDiscussion.status === "archived" || activeDiscussion.status === "stopped" || !activeDiscussion.sessionId}
       pendingQuestion={pendingQuestion}
       onAnswerQuestion={handleAnswerQuestion}
+      onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
       placeholder="Talk to Nova..."
       header={chatHeader}
       speechBackend={speechBackend}

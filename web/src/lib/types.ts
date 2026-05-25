@@ -2,7 +2,7 @@ export interface DiscussionInfo {
   id: string
   title: string | null
   sessionId: string | null
-  status: "idle" | "thinking" | "archived"
+  status: "idle" | "thinking" | "stopped" | "archived"
   createdAt: string
   lastActivity: string
   messageCount: number

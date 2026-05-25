@@ -50,17 +50,22 @@ export function useDiscussions() {
     setDiscussions(list.filter((d) => !dismissedIds.has(d.id)))
   }, [dismissedIds])
 
-  useEffect(() => {
-    refreshDiscussions()
+  const syncAndRefresh = useCallback(async () => {
+    await api.post("/api/discussions/sync").catch(() => {})
+    await refreshDiscussions()
   }, [refreshDiscussions])
 
   useEffect(() => {
+    syncAndRefresh()
+  }, [syncAndRefresh])
+
+  useEffect(() => {
     const onVisibility = () => {
-      if (document.visibilityState === "visible") refreshDiscussions()
+      if (document.visibilityState === "visible") syncAndRefresh()
     }
     document.addEventListener("visibilitychange", onVisibility)
     return () => document.removeEventListener("visibilitychange", onVisibility)
-  }, [refreshDiscussions])
+  }, [syncAndRefresh])
 
   const loadMessages = useCallback(async (id: string) => {
     if (loadedRef.current.has(id)) return
@@ -172,12 +177,12 @@ export function useDiscussions() {
     const fail = () => {
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
       setDiscussions((prev) =>
-        prev.map((d) => d.id === discussionId ? { ...d, status: "idle" as const } : d)
+        prev.map((d) => d.id === discussionId ? { ...d, status: "stopped" as const } : d)
       )
     }
 
     try {
-      await api.post(`/ai-session/sessions/${disc.sessionId}/message`, { content, images })
+      await api.post(`/api/discussions/${discussionId}/message`, { content, images })
       return
     } catch {
       // Session may be dead after RedCompute restart — try to resume
@@ -192,7 +197,7 @@ export function useDiscussions() {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await api.post(`/ai-session/sessions/${disc.sessionId}/message`, { content, images })
+        await api.post(`/api/discussions/${discussionId}/message`, { content, images })
         return
       } catch {
         if (attempt < 2) {
@@ -224,6 +229,17 @@ export function useDiscussions() {
     }
   }, [discussions])
 
+  const resumeDiscussion = useCallback(async (discussionId: string) => {
+    const disc = discussions.find((d) => d.id === discussionId)
+    if (!disc?.sessionId) return
+    try {
+      await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
+      setDiscussions((prev) =>
+        prev.map((d) => d.id === discussionId ? { ...d, status: "idle" as const } : d)
+      )
+    } catch { /* resume failed — stays stopped */ }
+  }, [discussions])
+
   const handleWsEvent = useCallback((event: WsEvent) => {
     if (event.type === "session.updated") {
       const session = event.data as { id: string; status: string; title?: string }
@@ -231,32 +247,38 @@ export function useDiscussions() {
       if (!discId) return
       if (session.status !== "Active") {
         setStreaming((prev) => ({ ...prev, [discId]: false }))
+        const isStopped = session.status === "Stopped" || session.status === "Error"
+        const discStatus = isStopped ? "stopped" as const : "idle" as const
         const now = new Date().toISOString()
         const isViewing = activeIdRef.current === discId
         setDiscussions((prev) =>
           prev.map((d) => d.id === discId && d.status !== "archived" ? {
             ...d,
-            status: "idle" as const,
+            status: discStatus,
             lastActivity: now,
-            ...(isViewing ? { lastReadAt: now } : {}),
+            ...(isViewing && !isStopped ? { lastReadAt: now } : {}),
           } : d)
         )
-        api.put(`/api/discussions/${discId}/activity`).catch(() => {})
-        if (isViewing) {
-          api.put(`/api/discussions/${discId}/read`).catch(() => {})
-        }
-        const syncTitle = (name: string) => {
-          setDiscussions((prev) =>
-            prev.map((d) => d.id === discId ? { ...d, title: name } : d)
-          )
-          api.put(`/api/discussions/${discId}/title`, { title: name }).catch(() => {})
-        }
-        if (session.title) {
-          syncTitle(session.title)
+        if (isStopped) {
+          api.put(`/api/discussions/${discId}/stopped`).catch(() => {})
         } else {
-          api.get<{ session: { title?: string } }>(`/ai-session/sessions/${session.id}`)
-            .then((data) => { if (data.session?.title) syncTitle(data.session.title) })
-            .catch(() => {})
+          api.put(`/api/discussions/${discId}/activity`).catch(() => {})
+          if (isViewing) {
+            api.put(`/api/discussions/${discId}/read`).catch(() => {})
+          }
+          const syncTitle = (name: string) => {
+            setDiscussions((prev) =>
+              prev.map((d) => d.id === discId ? { ...d, title: name } : d)
+            )
+            api.put(`/api/discussions/${discId}/title`, { title: name }).catch(() => {})
+          }
+          if (session.title) {
+            syncTitle(session.title)
+          } else {
+            api.get<{ session: { title?: string } }>(`/ai-session/sessions/${session.id}`)
+              .then((data) => { if (data.session?.title) syncTitle(data.session.title) })
+              .catch(() => {})
+          }
         }
       }
     } else if (event.type === "session.ended") {
@@ -266,8 +288,9 @@ export function useDiscussions() {
       setStreaming((prev) => ({ ...prev, [discId]: false }))
       setPendingQuestions((prev) => ({ ...prev, [discId]: null }))
       setDiscussions((prev) =>
-        prev.map((d) => d.id === discId && d.status !== "archived" ? { ...d, status: "idle" as const } : d)
+        prev.map((d) => d.id === discId && d.status !== "archived" ? { ...d, status: "stopped" as const } : d)
       )
+      api.put(`/api/discussions/${discId}/stopped`).catch(() => {})
     } else if (event.type === "discussion.event") {
       const { discussionId, content } = event.data as { discussionId: string; sessionId: string; content: string; source: string }
       if (!discussionId) return
@@ -349,6 +372,7 @@ export function useDiscussions() {
     archiveDiscussion,
     dismissDiscussion,
     renameDiscussion,
+    resumeDiscussion,
     refreshDiscussions,
     handleWsEvent,
   }

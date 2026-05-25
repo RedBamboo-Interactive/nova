@@ -5,6 +5,7 @@ import type { DiscussionInfo } from "@/lib/types"
 const statusColor: Record<string, string> = {
   thinking: "var(--color-accent-gold)",
   idle: "var(--color-accent-teal)",
+  stopped: "var(--color-text-disabled)",
   archived: "var(--color-text-disabled)",
 }
 
@@ -28,7 +29,7 @@ export function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, o
       keyFn={(d) => d.id}
       emptyMessage="No discussions yet"
       renderItem={(discussion) => {
-        const alive = discussion.status !== "archived"
+        const alive = discussion.status !== "archived" && discussion.status !== "stopped"
         const unread = alive && isUnread(discussion)
         return (
           <ItemListRow
@@ -43,7 +44,7 @@ export function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, o
               : ""
             }
             trailing={
-              alive ? (
+              discussion.status !== "archived" ? (
                 <div className="flex items-center gap-1.5">
                   {unread && (
                     <span className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />

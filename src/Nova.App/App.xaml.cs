@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using Nova.App.Api;
 using Nova.App.Configuration;
@@ -87,6 +88,7 @@ public partial class App : Application
             AppName = "Nova",
             Port = Config.Port,
             EnableAutoStartToggle = true,
+            RebuildScript = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "rebuild.ps1")),
             LoadIcon = () => IconHelper.CreateTrayIcon(StatusColors.Magenta, TrayIcons.Star),
             GetStatusLines = () => Task.FromResult<IReadOnlyList<string>>(
             [
