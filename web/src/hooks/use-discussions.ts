@@ -254,7 +254,7 @@ export function useDiscussions() {
         setDiscussions((prev) =>
           prev.map((d) => {
             if (d.id !== discId || d.status === "archived") return d
-            if (d.status === "thinking" && !isStopped) return d
+            if (d.status === "thinking") return d
             return {
               ...d,
               status: discStatus,
