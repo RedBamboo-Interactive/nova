@@ -196,26 +196,23 @@ export function ChatView({ disc }: Props) {
       />
       {showAvatar && (
         <div
-          className="absolute bottom-18 w-48 h-48 z-10 pointer-events-none drop-shadow-lg"
+          className="absolute bottom-18 w-48 h-48 z-10 pointer-events-none rounded-full overflow-hidden drop-shadow-lg"
           style={{
             left: "calc((50% - 384px) / 2 - 96px)",
             opacity: avatarOpacity,
           }}
         >
-          <div
-            className="absolute inset-0 rounded-full"
-            style={{
-              background: "var(--brand)",
-              opacity: 0.08,
-              maskImage: "linear-gradient(to top, transparent, black)",
-              WebkitMaskImage: "linear-gradient(to top, transparent, black)",
-            }}
-          />
           <img
             src={avatarSrc}
             alt=""
             className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
             style={{ filter: `hue-rotate(${eyeHueRotation})` }}
+          />
+          <div
+            className="absolute inset-0 rounded-full"
+            style={{
+              border: "1.5px solid color-mix(in oklch, var(--brand), transparent 90%)",
+            }}
           />
         </div>
       )}
