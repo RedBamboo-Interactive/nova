@@ -86,6 +86,7 @@ public partial class App : Application
         {
             AppName = "Nova",
             Port = Config.Port,
+            EnableAutoStartToggle = true,
             LoadIcon = () => IconHelper.CreateTrayIcon(StatusColors.Magenta, TrayIcons.Star),
             GetStatusLines = () => Task.FromResult<IReadOnlyList<string>>(
             [
