@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useMemo } from "react"
 import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
 import { ChatPanel, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
 import { useCommand } from "@redbamboo/utility"
@@ -9,6 +9,38 @@ import { useNovaEmotion } from "@/hooks/use-nova-emotion"
 import type { useDiscussions } from "@/hooks/use-discussions"
 
 const speechBackend = createNovaSpeechBackend()
+
+const BASE_EYE_HUE = 300 // original magenta
+
+function hexToHue(hex: string): number {
+  const n = parseInt(hex.replace("#", ""), 16)
+  const r = ((n >> 16) & 255) / 255
+  const g = ((n >> 8) & 255) / 255
+  const b = (n & 255) / 255
+  const max = Math.max(r, g, b), min = Math.min(r, g, b)
+  if (max === min) return 0
+  const d = max - min
+  let h = 0
+  if (max === r) h = ((g - b) / d + 6) % 6
+  else if (max === g) h = (b - r) / d + 2
+  else h = (r - g) / d + 4
+  return h * 60
+}
+
+function useBrandHueRotation(): string {
+  const [rotation, setRotation] = useState("0deg")
+  useEffect(() => {
+    const update = () => {
+      const brand = getComputedStyle(document.documentElement).getPropertyValue("--brand").trim()
+      if (brand) setRotation(`${Math.round(hexToHue(brand) - BASE_EYE_HUE)}deg`)
+    }
+    update()
+    const observer = new MutationObserver(update)
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class"] })
+    return () => observer.disconnect()
+  }, [])
+  return rotation
+}
 
 function resolveImageSrc(src: string): string | undefined {
   if (/^[A-Za-z]:[\\\/]/.test(src))
@@ -136,6 +168,7 @@ export function ChatView({ disc }: Props) {
   )
 
   const { src: avatarSrc } = useNovaEmotion(activeMessages, isStreaming)
+  const eyeHueRotation = useBrandHueRotation()
   const showAvatar = activeDiscussion && activeMessages.some(m => m.role === "assistant")
 
   const chatArea = activeDiscussion ? (
@@ -159,12 +192,17 @@ export function ChatView({ disc }: Props) {
         )}
       />
       {showAvatar && (
-        <img
-          src={avatarSrc}
-          alt=""
-          className="absolute bottom-18 w-48 h-48 rounded-full object-cover object-top z-10 pointer-events-none drop-shadow-lg transition-opacity duration-500"
+        <div
+          className="absolute bottom-18 w-48 h-48 z-10 pointer-events-none drop-shadow-lg"
           style={{ left: "calc((50% - 384px) / 2 - 96px)" }}
-        />
+        >
+          <img
+            src={avatarSrc}
+            alt=""
+            className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
+            style={{ filter: `hue-rotate(${eyeHueRotation})` }}
+          />
+        </div>
       )}
     </div>
   ) : (
