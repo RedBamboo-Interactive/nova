@@ -141,7 +141,8 @@ public class AutomationService
         return new AutomationResult
         {
             Triggered = true,
-            Summary = response ?? "(no response)",
+            Summary = response.Text ?? "(no response)",
+            SessionId = response.SessionId,
         };
     }
 
@@ -387,6 +388,7 @@ public class AutomationResult
     public bool Triggered { get; set; }
     public string Summary { get; set; } = "";
     public string? Data { get; set; }
+    public string? SessionId { get; set; }
 }
 
 public class AiSessionConfig

@@ -128,6 +128,7 @@ public class ClaudeResponse
     public string? Text { get; set; }
     public string? Error { get; set; }
     public string? Model { get; set; }
+    public string? SessionId { get; set; }
     public int? InputTokens { get; set; }
     public int? OutputTokens { get; set; }
     public decimal? CostUsd { get; set; }

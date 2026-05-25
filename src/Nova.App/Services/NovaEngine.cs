@@ -47,7 +47,7 @@ public class NovaEngine : IAsyncDisposable
         _redCompute.Dispose();
     }
 
-    public async Task<string?> InvokeForAutomationAsync(string name, string prompt, string? hint, CancellationToken ct)
+    public async Task<ClaudeResponse> InvokeForAutomationAsync(string name, string prompt, string? hint, CancellationToken ct)
     {
         _log.Info("engine", $"Automation [{name}]: invoking");
 
@@ -60,8 +60,7 @@ public class NovaEngine : IAsyncDisposable
             AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "PowerShell", "WebFetch", "WebSearch", "TodoWrite"],
         };
 
-        var response = await _redCompute.InvokeClaudeAsync(request, ct);
-        return response.Text;
+        return await _redCompute.InvokeClaudeAsync(request, ct);
     }
 
     private string BuildAutomationPrompt(string name)

@@ -5,6 +5,7 @@ import { useCommand } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
 import { NovaStatusLine } from "@/components/nova-status-line"
 import { createNovaSpeechBackend } from "@/lib/speech"
+import { useNovaEmotion } from "@/hooks/use-nova-emotion"
 import type { useDiscussions } from "@/hooks/use-discussions"
 
 const speechBackend = createNovaSpeechBackend()
@@ -134,25 +135,38 @@ export function ChatView({ disc }: Props) {
     </PanelHeader>
   )
 
+  const { src: avatarSrc } = useNovaEmotion(activeMessages, isStreaming)
+  const showAvatar = activeDiscussion && activeMessages.some(m => m.role === "assistant")
+
   const chatArea = activeDiscussion ? (
-    <ChatPanel
-      messages={activeMessages}
-      isStreaming={isStreaming}
-      onSend={handleSend}
-      onInterrupt={handleInterrupt}
-      sessionId={activeDiscussionId}
-      disabled={activeDiscussion.status === "archived" || activeDiscussion.status === "stopped" || !activeDiscussion.sessionId}
-      pendingQuestion={pendingQuestion}
-      onAnswerQuestion={handleAnswerQuestion}
-      onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
-      placeholder="Talk to Nova..."
-      header={chatHeader}
-      speechBackend={speechBackend}
-      resolveImageSrc={resolveImageSrc}
-      renderStatusLine={({ isStreaming, messages }) => (
-        <NovaStatusLine isStreaming={isStreaming} messages={messages} />
+    <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
+      <ChatPanel
+        messages={activeMessages}
+        isStreaming={isStreaming}
+        onSend={handleSend}
+        onInterrupt={handleInterrupt}
+        sessionId={activeDiscussionId}
+        disabled={activeDiscussion.status === "archived" || activeDiscussion.status === "stopped" || !activeDiscussion.sessionId}
+        pendingQuestion={pendingQuestion}
+        onAnswerQuestion={handleAnswerQuestion}
+        onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
+        placeholder="Talk to Nova..."
+        header={chatHeader}
+        speechBackend={speechBackend}
+        resolveImageSrc={resolveImageSrc}
+        renderStatusLine={({ isStreaming, messages }) => (
+          <NovaStatusLine isStreaming={isStreaming} messages={messages} />
+        )}
+      />
+      {showAvatar && (
+        <img
+          src={avatarSrc}
+          alt=""
+          className="absolute bottom-18 w-48 h-48 rounded-full object-cover object-top z-10 pointer-events-none drop-shadow-lg transition-opacity duration-500"
+          style={{ left: "calc((50% - 384px) / 2 - 96px)" }}
+        />
       )}
-    />
+    </div>
   ) : (
     <div className="flex-1 flex items-center justify-center text-text-muted">
       {isSpawning ? (

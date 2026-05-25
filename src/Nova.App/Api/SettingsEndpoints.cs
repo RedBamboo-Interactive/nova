@@ -10,7 +10,7 @@ public static class SettingsEndpoints
 {
     public static void MapSettingsEndpoints(this EndpointRegistry registry, MemoryManager memory)
     {
-        registry.MapGet("/api/settings", "Get current settings including identity", () =>
+        registry.MapGet("/api/settings", "Get current settings including identity, docker, tunnel", () =>
         {
             var identity = memory.ReadIdentity();
             var config = App.Config;
@@ -21,6 +21,11 @@ public static class SettingsEndpoints
                 general = new
                 {
                     config.Port,
+                },
+                docker = new
+                {
+                    enabled = !string.IsNullOrEmpty(config.DockerImage),
+                    image = config.DockerImage,
                 },
                 tunnel = new
                 {
@@ -41,10 +46,27 @@ public static class SettingsEndpoints
             return Results.Ok(new { success = true });
         });
 
+        registry.MapPut("/api/settings/docker", "Enable or disable Docker containerization for AI sessions. Set image to a Docker image name to enable, or null/empty to disable.", (DockerSettingsRequest request) =>
+        {
+            App.Config.DockerImage = string.IsNullOrWhiteSpace(request.Image) ? null : request.Image.Trim();
+            App.ConfigManager.Save();
+            return Results.Ok(new
+            {
+                success = true,
+                enabled = !string.IsNullOrEmpty(App.Config.DockerImage),
+                image = App.Config.DockerImage,
+            });
+        });
+
     }
 }
 
 public class IdentityUpdateRequest
 {
     public string Content { get; set; } = "";
+}
+
+public class DockerSettingsRequest
+{
+    public string? Image { get; set; }
 }

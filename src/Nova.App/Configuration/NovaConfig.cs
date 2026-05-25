@@ -4,6 +4,7 @@ public class NovaConfig
 {
     public int Port { get; set; } = 18803;
     public string WorkspacePath { get; set; } = "";
+    public string? DockerImage { get; set; }
     public TunnelSettings Tunnel { get; set; } = new();
 }
 

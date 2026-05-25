@@ -20,7 +20,7 @@ interface Automation {
   reportToDiscussionId?: string
   lastRun?: string
   nextRun?: string
-  lastResult?: { triggered: boolean; summary: string }
+  lastResult?: { triggered: boolean; summary: string; sessionId?: string }
 }
 
 const actionMeta: Record<string, { icon: string; label: string }> = {
@@ -181,10 +181,23 @@ function AutomationDetail({ automation, onDelete }: { automation: Automation; on
             <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
               Last Result
             </div>
-            <div className="text-xs bg-overlay-5 rounded-md p-3 flex items-center gap-2">
-              <i className={`fa-solid ${automation.lastResult.triggered ? "fa-circle-check text-green-500" : "fa-circle-xmark text-text-muted"} text-xs`} />
-              {automation.lastResult.summary}
-            </div>
+            {automation.lastResult.sessionId ? (
+              <a
+                href={`http://localhost:18800/ai-session/sessions/${automation.lastResult.sessionId}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs bg-overlay-5 rounded-md p-3 flex items-center gap-2 hover:bg-overlay-8 transition-colors cursor-pointer"
+              >
+                <i className={`fa-solid ${automation.lastResult.triggered ? "fa-circle-check text-green-500" : "fa-circle-xmark text-text-muted"} text-xs`} />
+                <span className="flex-1 truncate">{automation.lastResult.summary}</span>
+                <i className="fa-solid fa-arrow-up-right-from-square text-text-muted text-[10px]" />
+              </a>
+            ) : (
+              <div className="text-xs bg-overlay-5 rounded-md p-3 flex items-center gap-2">
+                <i className={`fa-solid ${automation.lastResult.triggered ? "fa-circle-check text-green-500" : "fa-circle-xmark text-text-muted"} text-xs`} />
+                {automation.lastResult.summary}
+              </div>
+            )}
           </div>
         )}
       </div>

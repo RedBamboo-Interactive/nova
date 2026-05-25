@@ -73,16 +73,26 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 
 export function SettingsModal({ open, onOpenChange }: Props) {
   const localSettings = useLocalSettings()
-  const { settings, saving, updateIdentity } = useSettings()
+  const { settings, saving, updateIdentity, updateDocker } = useSettings()
   const [identityDraft, setIdentityDraft] = useState("")
   const [identityDirty, setIdentityDirty] = useState(false)
   const [autoStart, setAutoStart] = useState(false)
+  const [dockerEnabled, setDockerEnabled] = useState(false)
+  const [dockerImage, setDockerImage] = useState("")
+  const [dockerDirty, setDockerDirty] = useState(false)
 
   useEffect(() => {
     if (settings?.identity && !identityDirty) {
       setIdentityDraft(settings.identity)
     }
   }, [settings?.identity, identityDirty])
+
+  useEffect(() => {
+    if (settings?.docker && !dockerDirty) {
+      setDockerEnabled(settings.docker.enabled)
+      setDockerImage(settings.docker.image ?? "")
+    }
+  }, [settings?.docker, dockerDirty])
 
   useEffect(() => {
     if (!open) return
@@ -130,6 +140,67 @@ export function SettingsModal({ open, onOpenChange }: Props) {
                 }}
               />
             </SettingRow>
+          </div>
+
+          {/* Docker */}
+          <div className="py-4 px-1">
+            <SectionHeader>Docker</SectionHeader>
+            <SettingRow label="Containerize AI sessions" hint="Run delegated AI sessions inside a Docker container for isolation.">
+              <Toggle
+                checked={dockerEnabled}
+                onChange={async (v) => {
+                  setDockerEnabled(v)
+                  if (!v) {
+                    setDockerImage("")
+                    setDockerDirty(false)
+                    await updateDocker(null)
+                  } else {
+                    setDockerDirty(true)
+                  }
+                }}
+              />
+            </SettingRow>
+            {dockerEnabled && (
+              <>
+                <div className="mt-2">
+                  <input
+                    type="text"
+                    placeholder="redsuite/ai-sandbox:latest"
+                    className="w-full bg-overlay-6 border border-overlay-10 rounded px-3 py-1.5 text-sm text-contrast outline-none focus:border-overlay-20 font-mono"
+                    value={dockerImage}
+                    onChange={(e) => {
+                      setDockerImage(e.target.value)
+                      setDockerDirty(true)
+                    }}
+                  />
+                </div>
+                {dockerDirty && dockerImage.trim() && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <Button
+                      size="sm"
+                      disabled={saving}
+                      onClick={async () => {
+                        await updateDocker(dockerImage.trim())
+                        setDockerDirty(false)
+                      }}
+                    >
+                      {saving ? "Saving..." : "Save"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setDockerImage(settings?.docker?.image ?? "")
+                        setDockerEnabled(settings?.docker?.enabled ?? false)
+                        setDockerDirty(false)
+                      }}
+                    >
+                      Discard
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           {/* Identity */}

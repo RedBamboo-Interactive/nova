@@ -6,6 +6,10 @@ export interface NovaSettings {
   general: {
     port: number
   }
+  docker: {
+    enabled: boolean
+    image?: string | null
+  }
   tunnel: {
     enabled: boolean
     hostname?: string
@@ -39,5 +43,18 @@ export function useSettings() {
     [refresh],
   )
 
-  return { settings, saving, refresh, updateIdentity }
+  const updateDocker = useCallback(
+    async (image: string | null) => {
+      setSaving(true)
+      try {
+        await api.put("/api/settings/docker", { image })
+        await refresh()
+      } finally {
+        setSaving(false)
+      }
+    },
+    [refresh],
+  )
+
+  return { settings, saving, refresh, updateIdentity, updateDocker }
 }
