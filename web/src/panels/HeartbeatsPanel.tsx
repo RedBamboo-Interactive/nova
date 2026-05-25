@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, Fragment } from "react"
 import {
   MasterDetailLayout,
   PanelHeader,
@@ -43,19 +43,51 @@ function cronToHuman(cron: string): string {
   return cron
 }
 
+function formatCronTime(hour: string, min: string): string {
+  const h = parseInt(hour)
+  const m = parseInt(min)
+  const period = h >= 12 ? "PM" : "AM"
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+  return `${h12}:${m.toString().padStart(2, "0")} ${period}`
+}
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const
+
 function cronFiveToHuman([min, hour, dom, mon, dow]: [string, string, string, string, string]): string {
   if (min.startsWith("*/")) return `Every ${min.slice(2)} min`
   if (hour.startsWith("*/")) return `Every ${hour.slice(2)}h`
   if (min === "0" && hour === "*") return "Every hour"
-  if (dom === "*" && mon === "*" && dow === "*") {
-    if (hour !== "*" && min !== "*") {
-      const h = parseInt(hour)
-      const m = parseInt(min)
-      const period = h >= 12 ? "PM" : "AM"
-      const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h
-      return `Daily at ${h12}:${m.toString().padStart(2, "0")} ${period}`
-    }
+
+  const hasTime = hour !== "*" && min !== "*"
+  const timeStr = hasTime ? formatCronTime(hour, min) : null
+
+  // Weekly: specific day(s) of week, any date/month
+  if (dom === "*" && mon === "*" && dow !== "*") {
+    const days = dow.split(",").map(d => DAY_NAMES[parseInt(d) % 7] ?? d).join(", ")
+    return timeStr ? `${days} at ${timeStr}` : `${days}`
   }
+
+  // Monthly: specific day of month, any month, any dow
+  if (dom !== "*" && mon === "*" && dow === "*") {
+    const ordinal = dom === "1" || dom === "21" || dom === "31" ? `${dom}st`
+      : dom === "2" || dom === "22" ? `${dom}nd`
+      : dom === "3" || dom === "23" ? `${dom}rd`
+      : `${dom}th`
+    return timeStr ? `Monthly on the ${ordinal} at ${timeStr}` : `Monthly on the ${ordinal}`
+  }
+
+  // Yearly: specific day and month
+  if (dom !== "*" && mon !== "*" && dow === "*") {
+    const monthName = MONTH_NAMES[parseInt(mon) - 1] ?? mon
+    return timeStr ? `${monthName} ${dom} at ${timeStr}` : `${monthName} ${dom}`
+  }
+
+  // Daily with specific time
+  if (dom === "*" && mon === "*" && dow === "*" && timeStr) {
+    return `Daily at ${timeStr}`
+  }
+
   return `${min} ${hour} ${dom} ${mon} ${dow}`
 }
 
@@ -245,7 +277,7 @@ export function AutomationsPanel() {
                   User
                 </div>
                 {userAutomations.map((a) => (
-                  <div key={a.name}>{renderRow(a)}</div>
+                  <Fragment key={a.name}>{renderRow(a)}</Fragment>
                 ))}
               </>
             )}
@@ -255,7 +287,7 @@ export function AutomationsPanel() {
                   System
                 </div>
                 {systemAutomations.map((a) => (
-                  <div key={a.name}>{renderRow(a, true)}</div>
+                  <Fragment key={a.name}>{renderRow(a, true)}</Fragment>
                 ))}
               </>
             )}
