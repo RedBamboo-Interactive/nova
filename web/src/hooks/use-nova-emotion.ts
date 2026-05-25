@@ -45,8 +45,8 @@ export function useNovaEmotion(
     })
   }, [])
 
-  const applyEmotion = useCallback(async (next: NovaEmotion) => {
-    if (next === emotion) return
+  const applyEmotion = useCallback(async (next: NovaEmotion, force?: boolean) => {
+    if (next === emotion && !force) return
 
     if (await checkAvailable(next)) {
       setEmotion(next)
@@ -64,6 +64,10 @@ export function useNovaEmotion(
     setSrc(STATIC_FALLBACK)
     lastChangeRef.current = Date.now()
   }, [emotion, checkAvailable])
+
+  useEffect(() => {
+    if (src === STATIC_FALLBACK) applyEmotion("idle", true)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const ctx = buildEmotionContext(messages, isStreaming)
