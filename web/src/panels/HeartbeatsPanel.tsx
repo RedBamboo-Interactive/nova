@@ -1,13 +1,11 @@
 import { useState, useEffect, useCallback } from "react"
 import {
-  Button,
-  ItemList,
+  MasterDetailLayout,
+  PanelHeader,
+  ScrollArea,
   ItemListRow,
   Badge,
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
+  Button,
 } from "@redbamboo/ui"
 import { api } from "@/lib/api"
 
@@ -71,94 +69,101 @@ function formatTime(iso?: string): string | null {
   })
 }
 
-function AutomationDetail({ automation, onClose }: { automation: Automation; onClose: () => void }) {
+function AutomationDetail({ automation, onDelete }: { automation: Automation; onDelete: () => void }) {
   const meta = actionMeta[automation.actionType] ?? { icon: "fa-solid fa-gear", label: automation.actionType }
+  const isSystem = automation.name.startsWith("system:")
 
   return (
-    <Dialog open onOpenChange={() => onClose()}>
-      <DialogContent className="max-w-md sm:max-w-lg max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="text-lg flex items-center gap-2">
-            <i className={`${meta.icon} text-sm text-primary`} />
-            {automation.name}
-          </DialogTitle>
-        </DialogHeader>
+    <div className="h-full flex flex-col">
+      <PanelHeader title={isSystem ? automation.name.replace("system:", "") : automation.name}>
+        {!isSystem && (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={onDelete}
+            title="Delete automation"
+          >
+            <i className="fa-solid fa-trash text-xs" />
+          </Button>
+        )}
+      </PanelHeader>
 
-        <div className="space-y-4 text-sm">
-          {automation.description && (
-            <p className="text-text-muted">{automation.description}</p>
+      <div className="flex-1 overflow-y-auto p-4 space-y-5">
+        <div className="flex items-center gap-2">
+          <i className={`${meta.icon} text-sm text-primary`} />
+          <span className="text-sm font-medium">{meta.label}</span>
+          {automation.enabled ? (
+            <Badge variant="default">Active</Badge>
+          ) : (
+            <Badge variant="secondary">Disabled</Badge>
+          )}
+          {automation.removeOnTrigger && <Badge variant="secondary">One-shot</Badge>}
+        </div>
+
+        {automation.description && (
+          <p className="text-sm text-text-muted leading-relaxed">{automation.description}</p>
+        )}
+
+        <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2.5 text-xs">
+          <span className="text-text-muted">Schedule</span>
+          <span>
+            {cronToHuman(automation.schedule)}
+            <span className="text-text-disabled ml-2">({automation.schedule})</span>
+          </span>
+
+          {automation.reportToDiscussionId && (
+            <>
+              <span className="text-text-muted">Reports to</span>
+              <span className="font-mono text-xs">Discussion {automation.reportToDiscussionId}</span>
+            </>
           )}
 
-          <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
-            <span className="text-text-muted">Type</span>
-            <span>{meta.label}</span>
-
-            <span className="text-text-muted">Schedule</span>
-            <span>{cronToHuman(automation.schedule)} <span className="text-text-muted">({automation.schedule})</span></span>
-
-            <span className="text-text-muted">Status</span>
-            <span className="flex items-center gap-2">
-              {automation.enabled ? (
-                <Badge variant="default">Active</Badge>
-              ) : (
-                <Badge variant="secondary">Disabled</Badge>
-              )}
-              {automation.removeOnTrigger && <Badge variant="secondary">One-shot</Badge>}
-            </span>
-
-            {automation.reportToDiscussionId && (
-              <>
-                <span className="text-text-muted">Reports to</span>
-                <span className="font-mono text-xs">Discussion {automation.reportToDiscussionId}</span>
-              </>
-            )}
-
-            {automation.lastRun && (
-              <>
-                <span className="text-text-muted">Last run</span>
-                <span>{formatTime(automation.lastRun)}</span>
-              </>
-            )}
-
-            {automation.nextRun && (
-              <>
-                <span className="text-text-muted">Next run</span>
-                <span>{formatTime(automation.nextRun)}</span>
-              </>
-            )}
-          </div>
-
-          {automation.actionConfig && Object.keys(automation.actionConfig).length > 0 && (
-            <div>
-              <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
-                Configuration
-              </div>
-              <pre className="text-xs bg-overlay-5 rounded-md p-3 overflow-x-auto whitespace-pre-wrap break-all">
-                {JSON.stringify(automation.actionConfig, null, 2)}
-              </pre>
-            </div>
+          {automation.lastRun && (
+            <>
+              <span className="text-text-muted">Last run</span>
+              <span>{formatTime(automation.lastRun)}</span>
+            </>
           )}
 
-          {automation.lastResult && (
-            <div>
-              <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
-                Last Result
-              </div>
-              <div className="text-xs bg-overlay-5 rounded-md p-3 flex items-center gap-2">
-                <i className={`fa-solid ${automation.lastResult.triggered ? "fa-circle-check text-green-500" : "fa-circle-xmark text-text-muted"} text-xs`} />
-                {automation.lastResult.summary}
-              </div>
-            </div>
+          {automation.nextRun && (
+            <>
+              <span className="text-text-muted">Next run</span>
+              <span>{formatTime(automation.nextRun)}</span>
+            </>
           )}
         </div>
-      </DialogContent>
-    </Dialog>
+
+        {automation.actionConfig && Object.keys(automation.actionConfig).length > 0 && (
+          <div>
+            <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
+              Configuration
+            </div>
+            <pre className="text-xs bg-overlay-5 rounded-md p-3 overflow-x-auto whitespace-pre-wrap break-all">
+              {JSON.stringify(automation.actionConfig, null, 2)}
+            </pre>
+          </div>
+        )}
+
+        {automation.lastResult && (
+          <div>
+            <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
+              Last Result
+            </div>
+            <div className="text-xs bg-overlay-5 rounded-md p-3 flex items-center gap-2">
+              <i className={`fa-solid ${automation.lastResult.triggered ? "fa-circle-check text-green-500" : "fa-circle-xmark text-text-muted"} text-xs`} />
+              {automation.lastResult.summary}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
 export function AutomationsPanel() {
   const [automations, setAutomations] = useState<Automation[]>([])
-  const [selected, setSelected] = useState<Automation | null>(null)
+  const [selectedName, setSelectedName] = useState<string | null>(null)
+  const [mobileTab, setMobileTab] = useState(0)
 
   const refresh = useCallback(async () => {
     const data = await api.get<{ automations: Automation[] }>("/api/automations")
@@ -169,20 +174,27 @@ export function AutomationsPanel() {
     refresh()
   }, [refresh])
 
+  const selected = automations.find((a) => a.name === selectedName) ?? null
+
   const userAutomations = automations.filter((a) => !a.name.startsWith("system:"))
   const systemAutomations = automations.filter((a) => a.name.startsWith("system:"))
 
-  const renderItem = (a: Automation, isSystem = false) => {
+  const handleDelete = useCallback(async (name: string) => {
+    await api.delete(`/api/automations/${name}`)
+    if (selectedName === name) setSelectedName(null)
+    refresh()
+  }, [selectedName, refresh])
+
+  const renderRow = (a: Automation, isSystem = false) => {
     const meta = actionMeta[a.actionType] ?? { icon: "fa-solid fa-gear", label: a.actionType }
     return (
       <ItemListRow
+        selected={a.name === selectedName}
         icon={
           <i className={`${meta.icon} text-xs ${isSystem ? "text-text-muted" : a.enabled ? "text-primary" : "text-text-disabled"}`} />
         }
         title={isSystem ? a.name.replace("system:", "") : a.name}
-        subtitle={
-          [a.description, cronToHuman(a.schedule)].filter(Boolean).join(" — ")
-        }
+        subtitle={cronToHuman(a.schedule)}
         badge={
           !isSystem ? (
             <>
@@ -191,19 +203,19 @@ export function AutomationsPanel() {
             </>
           ) : undefined
         }
-        onClick={() => setSelected(a)}
+        onClick={() => { setSelectedName(a.name); setMobileTab(1) }}
         trailing={
           !isSystem ? (
             <Button
               variant="ghost"
               size="icon-xs"
+              className="opacity-0 group-hover/row:opacity-100 transition-opacity"
               onClick={async (e) => {
                 e.stopPropagation()
-                await api.delete(`/api/automations/${a.name}`)
-                refresh()
+                handleDelete(a.name)
               }}
             >
-              <i className="fa-solid fa-xmark" />
+              <i className="fa-solid fa-xmark text-xs" />
             </Button>
           ) : undefined
         }
@@ -211,58 +223,73 @@ export function AutomationsPanel() {
     )
   }
 
-  return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-2xl mx-auto p-6 space-y-8">
-        <section>
-          <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-3">
-            <i className="fa-solid fa-bolt mr-1.5" />
-            Automations
+  const sidebar = (
+    <>
+      <PanelHeader title="Automations" />
+      <ScrollArea className="flex-1">
+        {automations.length === 0 ? (
+          <div className="flex items-center justify-center py-12 text-text-muted">
+            <div className="text-center">
+              <i className="fa-solid fa-bolt text-2xl mb-3 opacity-30" />
+              <p className="text-sm">No automations</p>
+              <p className="text-xs text-text-disabled mt-1">
+                Ask Nova to set one up in chat
+              </p>
+            </div>
           </div>
-          <p className="text-xs text-muted-a60 mb-3 leading-relaxed">
-            Background tasks Nova manages on her own. AI sessions, watchers,
-            scheduled checks. Ask her to set one up in chat.
-          </p>
-          {userAutomations.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center py-12 text-text-muted">
-              <div className="text-center">
-                <i className="fa-solid fa-bolt text-2xl mb-3 opacity-30" />
-                <p className="text-sm">No active automations</p>
-                <p className="text-xs text-muted-a60 mt-1">
-                  Ask Nova to watch something or schedule a task
-                </p>
-              </div>
-            </div>
-          ) : (
-            <ItemList
-              items={userAutomations}
-              keyFn={(a) => a.name}
-              renderItem={(a) => renderItem(a)}
-            />
-          )}
-        </section>
-
-        {systemAutomations.length > 0 && (
-          <section>
-            <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-3">
-              <i className="fa-solid fa-gear mr-1.5" />
-              System
-            </div>
-            <ItemList
-              items={systemAutomations}
-              keyFn={(a) => a.name}
-              renderItem={(a) => renderItem(a, true)}
-            />
-          </section>
+        ) : (
+          <div className="flex flex-col">
+            {userAutomations.length > 0 && (
+              <>
+                <div className="text-[10px] font-medium text-text-disabled uppercase tracking-wider px-4 pt-3 pb-1">
+                  User
+                </div>
+                {userAutomations.map((a) => (
+                  <div key={a.name}>{renderRow(a)}</div>
+                ))}
+              </>
+            )}
+            {systemAutomations.length > 0 && (
+              <>
+                <div className="text-[10px] font-medium text-text-disabled uppercase tracking-wider px-4 pt-3 pb-1">
+                  System
+                </div>
+                {systemAutomations.map((a) => (
+                  <div key={a.name}>{renderRow(a, true)}</div>
+                ))}
+              </>
+            )}
+          </div>
         )}
-      </div>
+      </ScrollArea>
+    </>
+  )
 
-      {selected && (
-        <AutomationDetail
-          automation={selected}
-          onClose={() => setSelected(null)}
-        />
-      )}
+  const detail = selected ? (
+    <AutomationDetail
+      automation={selected}
+      onDelete={() => handleDelete(selected.name)}
+    />
+  ) : (
+    <div className="h-full flex items-center justify-center text-text-muted">
+      <div className="text-center">
+        <i className="fa-solid fa-bolt text-2xl mb-3 opacity-30" />
+        <p className="text-sm">Select an automation to view details</p>
+      </div>
     </div>
+  )
+
+  return (
+    <MasterDetailLayout
+      layoutKey="nova-automations"
+      mobileLabels={["Automations", "Detail"]}
+      mobileTab={mobileTab}
+      onMobileTabChange={(tab) => {
+        setMobileTab(tab)
+        if (tab === 0) setSelectedName(null)
+      }}
+      sidebar={sidebar}
+      detail={detail}
+    />
   )
 }

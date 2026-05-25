@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react"
-import { MasterDetailLayout, ItemList, ItemListRow, Badge } from "@redbamboo/ui"
+import { MasterDetailLayout, PanelHeader, ScrollArea, ItemListRow, Badge } from "@redbamboo/ui"
 import { MarkdownRenderer } from "@redbamboo/chat"
 import { api } from "@/lib/api"
 
@@ -7,6 +7,7 @@ export function MemoryPanel() {
   const [files, setFiles] = useState<string[]>([])
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [content, setContent] = useState("")
+  const [mobileTab, setMobileTab] = useState(0)
 
   const refreshManifest = useCallback(async () => {
     const data = await api.get<{ files: string[] }>("/api/memory/manifest")
@@ -19,6 +20,7 @@ export function MemoryPanel() {
 
   const loadFile = useCallback(async (path: string) => {
     setSelectedFile(path)
+    setMobileTab(1)
     const data = await api.get<{ content: string }>(
       `/api/memory/file?path=${encodeURIComponent(path)}`,
     )
@@ -32,51 +34,57 @@ export function MemoryPanel() {
   }, {})
 
   const sidebar = (
-    <div className="h-full overflow-y-auto p-3">
-      <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-3 px-1">
-        <i className="fa-solid fa-brain mr-1.5" />
-        Memory
-      </div>
-      {files.length === 0 ? (
-        <p className="text-xs text-text-muted px-1">
-          No memory files yet. Nova will create them as you chat.
-        </p>
-      ) : (
-        Object.entries(grouped).map(([dir, dirFiles]) => (
-          <div key={dir} className="mb-3">
-            <div className="text-[10px] font-medium text-text-disabled uppercase tracking-wider mb-1 px-1">
-              {dir}
+    <>
+      <PanelHeader title="Memory" />
+      <ScrollArea className="flex-1">
+        {files.length === 0 ? (
+          <div className="flex items-center justify-center py-12 text-text-muted">
+            <div className="text-center">
+              <i className="fa-solid fa-brain text-2xl mb-3 opacity-30" />
+              <p className="text-sm">No memory files yet</p>
+              <p className="text-xs text-text-disabled mt-1">
+                Nova will create them as you chat
+              </p>
             </div>
-            <ItemList
-              items={dirFiles}
-              keyFn={(f) => f}
-              renderItem={(file) => {
-                const name = file.split("/").pop() ?? file
-                return (
-                  <ItemListRow
-                    selected={selectedFile === file}
-                    onClick={() => loadFile(file)}
-                    icon={
-                      <i className="fa-solid fa-file-lines text-xs text-text-muted" />
-                    }
-                    title={name}
-                  />
-                )
-              }}
-            />
           </div>
-        ))
-      )}
-    </div>
+        ) : (
+          <div className="flex flex-col">
+            {Object.entries(grouped).map(([dir, dirFiles]) => (
+              <div key={dir}>
+                <div className="text-[10px] font-medium text-text-disabled uppercase tracking-wider px-4 pt-3 pb-1">
+                  {dir}
+                </div>
+                {dirFiles.map((file) => {
+                  const name = file.split("/").pop() ?? file
+                  return (
+                    <ItemListRow
+                      key={file}
+                      selected={selectedFile === file}
+                      onClick={() => loadFile(file)}
+                      icon={
+                        <i className="fa-solid fa-file-lines text-xs text-text-muted" />
+                      }
+                      title={name}
+                    />
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+        )}
+      </ScrollArea>
+    </>
   )
 
   const detail = selectedFile ? (
-    <div className="h-full overflow-y-auto p-4">
-      <div className="flex items-center gap-2 mb-3">
+    <div className="h-full flex flex-col">
+      <PanelHeader title={selectedFile.split("/").pop() ?? selectedFile}>
         <Badge variant="outline">{selectedFile}</Badge>
-      </div>
-      <div className="text-sm leading-relaxed markdown-body">
-        <MarkdownRenderer content={content} />
+      </PanelHeader>
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="text-sm leading-relaxed markdown-body">
+          <MarkdownRenderer content={content} />
+        </div>
       </div>
     </div>
   ) : (
@@ -90,13 +98,15 @@ export function MemoryPanel() {
 
   return (
     <MasterDetailLayout
-      sidebar={sidebar}
-      detail={detail}
+      layoutKey="nova-memory"
       mobileLabels={["Files", "Content"]}
-      mobileTab={selectedFile !== null ? 1 : 0}
+      mobileTab={mobileTab}
       onMobileTabChange={(tab) => {
+        setMobileTab(tab)
         if (tab === 0) setSelectedFile(null)
       }}
+      sidebar={sidebar}
+      detail={detail}
     />
   )
 }
