@@ -58,6 +58,7 @@ public class NovaEngine : IAsyncDisposable
             SystemPromptHint = hint ?? name,
             WorkingDirectory = _memory.WorkspacePath,
             AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "PowerShell", "WebFetch", "WebSearch", "TodoWrite"],
+            MaxTurns = 50,
         };
 
         return await _redCompute.InvokeClaudeAsync(request, ct);

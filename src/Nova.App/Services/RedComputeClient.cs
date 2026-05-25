@@ -43,6 +43,7 @@ public class RedComputeClient : IDisposable
             provider = "claude-code",
             workingDir = request.WorkingDirectory,
             allowedTools = request.AllowedTools,
+            maxTurns = request.MaxTurns,
             timeout = 600,
         };
 
@@ -119,6 +120,7 @@ public class ClaudeRequest
     public string? SystemPromptHint { get; set; }
     public string? WorkingDirectory { get; set; }
     public List<string>? AllowedTools { get; set; }
+    public int? MaxTurns { get; set; }
     public Dictionary<string, string>? Context { get; set; }
 }
 
