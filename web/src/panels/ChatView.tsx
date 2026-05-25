@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react"
+import { useState, useCallback, useEffect } from "react"
 import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
 import { ChatPanel, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
 import { useCommand } from "@redbamboo/utility"
@@ -27,19 +27,22 @@ function hexToHue(hex: string): number {
   return h * 60
 }
 
-function useBrandHueRotation(): string {
-  const [rotation, setRotation] = useState("0deg")
+function useAvatarStyle() {
+  const [hueRotation, setHueRotation] = useState("0deg")
+  const [opacity, setOpacity] = useState(0.9)
   useEffect(() => {
     const update = () => {
-      const brand = getComputedStyle(document.documentElement).getPropertyValue("--brand").trim()
-      if (brand) setRotation(`${Math.round(hexToHue(brand) - BASE_EYE_HUE)}deg`)
+      const root = document.documentElement
+      const brand = getComputedStyle(root).getPropertyValue("--brand").trim()
+      if (brand) setHueRotation(`${Math.round(hexToHue(brand) - BASE_EYE_HUE)}deg`)
+      setOpacity(root.dataset.contrast === "low" ? 0.7 : 0.9)
     }
     update()
     const observer = new MutationObserver(update)
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class"] })
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class", "data-contrast"] })
     return () => observer.disconnect()
   }, [])
-  return rotation
+  return { hueRotation, opacity }
 }
 
 function resolveImageSrc(src: string): string | undefined {
@@ -168,7 +171,7 @@ export function ChatView({ disc }: Props) {
   )
 
   const { src: avatarSrc } = useNovaEmotion(activeMessages, isStreaming)
-  const eyeHueRotation = useBrandHueRotation()
+  const { hueRotation: eyeHueRotation, opacity: avatarOpacity } = useAvatarStyle()
   const showAvatar = activeDiscussion && activeMessages.some(m => m.role === "assistant")
 
   const chatArea = activeDiscussion ? (
@@ -194,8 +197,20 @@ export function ChatView({ disc }: Props) {
       {showAvatar && (
         <div
           className="absolute bottom-18 w-48 h-48 z-10 pointer-events-none drop-shadow-lg"
-          style={{ left: "calc((50% - 384px) / 2 - 96px)" }}
+          style={{
+            left: "calc((50% - 384px) / 2 - 96px)",
+            opacity: avatarOpacity,
+          }}
         >
+          <div
+            className="absolute inset-0 rounded-full"
+            style={{
+              background: "var(--brand)",
+              opacity: 0.08,
+              maskImage: "linear-gradient(to top, transparent, black)",
+              WebkitMaskImage: "linear-gradient(to top, transparent, black)",
+            }}
+          />
           <img
             src={avatarSrc}
             alt=""
