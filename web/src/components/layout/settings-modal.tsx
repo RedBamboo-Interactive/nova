@@ -76,12 +76,18 @@ export function SettingsModal({ open, onOpenChange }: Props) {
   const { settings, saving, updateIdentity } = useSettings()
   const [identityDraft, setIdentityDraft] = useState("")
   const [identityDirty, setIdentityDirty] = useState(false)
+  const [autoStart, setAutoStart] = useState(false)
 
   useEffect(() => {
     if (settings?.identity && !identityDirty) {
       setIdentityDraft(settings.identity)
     }
   }, [settings?.identity, identityDirty])
+
+  useEffect(() => {
+    if (!open) return
+    fetch("/api/autostart").then(r => r.json()).then(d => setAutoStart(d.enabled)).catch(() => {})
+  }, [open])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -108,6 +114,20 @@ export function SettingsModal({ open, onOpenChange }: Props) {
                 onChange={(v) =>
                   setLocalSettings({ contrast: v ? "high" : "low" })
                 }
+              />
+            </SettingRow>
+          </div>
+
+          {/* System */}
+          <div className="pb-4 px-1">
+            <SectionHeader>System</SectionHeader>
+            <SettingRow label="Start with Windows" hint="Launch Nova automatically when you sign in.">
+              <Toggle
+                checked={autoStart}
+                onChange={async (v) => {
+                  setAutoStart(v)
+                  await fetch("/api/autostart", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: v }) })
+                }}
               />
             </SettingRow>
           </div>
