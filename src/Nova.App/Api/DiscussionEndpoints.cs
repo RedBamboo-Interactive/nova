@@ -370,7 +370,8 @@ public static class DiscussionEndpoints
                 var resp = await RedCompute.PostAsJsonAsync(
                     $"/ai-session/sessions/{discussion.SessionId}/message",
                     new { content = enrichedContent, images = request.Images }, JsonOptions);
-                return Results.StatusCode((int)resp.StatusCode);
+                resp.EnsureSuccessStatusCode();
+                return Results.Ok(new { success = true });
             }
             catch
             {
