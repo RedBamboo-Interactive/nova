@@ -182,7 +182,7 @@ public class AutomationService
                 var actual = element.Value.ValueKind == JsonValueKind.String
                     ? element.Value.GetString()
                     : element.Value.GetRawText();
-                matched = string.Equals(actual, config.Condition.Value, StringComparison.OrdinalIgnoreCase);
+                matched = string.Equals(actual, config.Condition.Equals, StringComparison.OrdinalIgnoreCase);
             }
         }
         catch
@@ -194,8 +194,8 @@ public class AutomationService
         {
             Triggered = matched,
             Summary = matched
-                ? $"Condition met: {config.Condition.Field} == {config.Condition.Value}"
-                : $"Waiting: {config.Condition.Field} != {config.Condition.Value}",
+                ? $"Condition met: {config.Condition.Field} == {config.Condition.Equals}"
+                : $"Waiting: {config.Condition.Field} != {config.Condition.Equals}",
             Data = body,
         };
     }
@@ -407,6 +407,6 @@ public class HttpCheckConfig
 public class HttpCheckCondition
 {
     public string Field { get; set; } = "";
-    public string Value { get; set; } = "";
+    public new string Equals { get; set; } = "";
 }
 

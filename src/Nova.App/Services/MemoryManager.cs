@@ -72,6 +72,16 @@ public class MemoryManager
         return File.Exists(path) ? File.ReadAllText(path) : "";
     }
 
+    public string ReadMemoryInstructions()
+    {
+        var runtimePath = Path.Combine(RuntimeConfigPath, "memory.md");
+        if (File.Exists(runtimePath))
+            return File.ReadAllText(runtimePath);
+
+        var seedPath = Path.Combine(SeedsPath, "memory.md");
+        return File.Exists(seedPath) ? File.ReadAllText(seedPath) : "";
+    }
+
     public string[] GetMemoryManifest()
     {
         if (!Directory.Exists(MemoryPath)) return [];
@@ -121,9 +131,15 @@ public class MemoryManager
         var identity = ReadIdentity();
         var protocol = ReadOutputProtocol();
         var capabilities = ReadCapabilities();
+        var memoryInstructions = ReadMemoryInstructions();
         var manifest = GetMemoryManifest();
+        var manifestList = string.Join("\n", manifest.Select(p => $"- {p}"));
 
         var content = $"""
+            > **This file is generated. Do not edit it directly.**
+            > To change these instructions, edit the source files in `config/runtime/` or `config/seeds/`.
+            > Sections: identity.md, output_protocol.md, capabilities.md, memory.md
+
             {identity}
 
             ---
@@ -138,20 +154,18 @@ public class MemoryManager
 
             ---
 
-            # Memory
-            You have a file-based memory system in `memory/`.
-            This is YOUR memory. You own it. Create files, add folders, reorganize as you see fit.
+            {memoryInstructions}
 
-            When you learn something worth remembering across conversations, write it down.
-            Don't wait for dreaming to do it. Dreaming consolidates, but you should capture in real-time.
-
-            Read `memory/index.md` for structure and details. Current files:
-            {string.Join("\n", manifest.Select(p => $"- {p}"))}
+            ## Current files
+            {manifestList}
             """;
 
-        var path = Path.Combine(_workspacePath, "CLAUDE.md");
-        File.WriteAllText(path, content);
-        _log.Info("memory", "CLAUDE.md generated");
+        foreach (var name in new[] { "CLAUDE.md", "AGENTS.md" })
+        {
+            var path = Path.Combine(_workspacePath, name);
+            File.WriteAllText(path, content);
+        }
+        _log.Info("memory", "CLAUDE.md + AGENTS.md generated");
     }
 
     public string ReadHeartbeats()
@@ -167,24 +181,28 @@ public class MemoryManager
 
     private void EnsureSeedsPopulated()
     {
-        var seedIdentity = Path.Combine(SeedsPath, "identity.md");
-        if (!File.Exists(seedIdentity))
+        foreach (var name in new[] { "identity.md", "memory.md" })
         {
-            var repoSeed = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "nova-workspace", "config", "seeds", "identity.md");
+            var seedPath = Path.Combine(SeedsPath, name);
+            if (File.Exists(seedPath)) continue;
+
+            var repoSeed = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "nova-workspace", "config", "seeds", name);
             repoSeed = Path.GetFullPath(repoSeed);
             if (File.Exists(repoSeed))
-                File.Copy(repoSeed, seedIdentity);
+                File.Copy(repoSeed, seedPath);
         }
     }
 
     private void EnsureRuntimeConfig()
     {
-        var runtimeIdentity = Path.Combine(RuntimeConfigPath, "identity.md");
-        if (!File.Exists(runtimeIdentity))
+        foreach (var name in new[] { "identity.md", "memory.md" })
         {
-            var seed = Path.Combine(SeedsPath, "identity.md");
+            var runtimePath = Path.Combine(RuntimeConfigPath, name);
+            if (File.Exists(runtimePath)) continue;
+
+            var seed = Path.Combine(SeedsPath, name);
             if (File.Exists(seed))
-                File.Copy(seed, runtimeIdentity);
+                File.Copy(seed, runtimePath);
         }
     }
 

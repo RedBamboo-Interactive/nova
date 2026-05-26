@@ -15,6 +15,7 @@ web/.vite/
 nova-workspace/memory/
 nova-workspace/config/runtime/
 nova-workspace/CLAUDE.md
+nova-workspace/AGENTS.md
 
 # IDE
 .idea/

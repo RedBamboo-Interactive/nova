@@ -134,7 +134,7 @@ public static class DelegateEndpoints
                         Condition = new HttpCheckCondition
                         {
                             Field = "session.status",
-                            Value = "Idle",
+                            Equals = "Idle",
                         },
                     }, JsonOptions),
                     ReportToDiscussionId = request.DiscussionId,
