@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, Fragment } from "react"
 import { MasterDetailLayout, PanelHeader, ScrollArea, ItemListRow, Badge } from "@redbamboo/ui"
 import { MarkdownRenderer } from "@redbamboo/chat"
 import { api } from "@/lib/api"
@@ -50,7 +50,7 @@ export function MemoryPanel() {
         ) : (
           <div className="flex flex-col">
             {Object.entries(grouped).map(([dir, dirFiles]) => (
-              <div key={dir}>
+              <Fragment key={dir}>
                 <div className="text-[10px] font-medium text-text-disabled uppercase tracking-wider px-4 pt-3 pb-1">
                   {dir}
                 </div>
@@ -68,7 +68,7 @@ export function MemoryPanel() {
                     />
                   )
                 })}
-              </div>
+              </Fragment>
             ))}
           </div>
         )}

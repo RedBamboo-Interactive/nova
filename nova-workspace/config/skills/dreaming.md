@@ -57,11 +57,15 @@ The suite runs on localhost. Probe what's available and pull recent activity.
   work done, projects touched.
 - **RedMatter** (port 18802): Game engine / CMS. Check for content changes,
   builds, deployments.
+- **Nova** (port 18803): That's you. Persistent AI companion with conversations,
+  memory, and automations. The discussions export API (`/api/discussions/export`)
+  is your primary source for conversation history.
 
 ```bash
 curl -s "http://localhost:18800/ping" && echo "RedCompute is up"
 curl -s "http://localhost:18801/ping" && echo "CodeRed is up"
 curl -s "http://localhost:18802/ping" && echo "RedMatter is up"
+curl -s "http://localhost:18803/ping" && echo "Nova is up"
 ```
 
 Discover available endpoints and pull what's useful. These services evolve —

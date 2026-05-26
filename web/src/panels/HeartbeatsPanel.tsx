@@ -7,6 +7,7 @@ import {
   Badge,
   Button,
 } from "@redbamboo/ui"
+import { MarkdownRenderer } from "@redbamboo/chat"
 import { api } from "@/lib/api"
 
 interface Automation {
@@ -20,7 +21,7 @@ interface Automation {
   reportToDiscussionId?: string
   lastRun?: string
   nextRun?: string
-  lastResult?: { triggered: boolean; summary: string; sessionId?: string }
+  lastResult?: { triggered: boolean; summary: string; data?: string; sessionId?: string }
 }
 
 const actionMeta: Record<string, { icon: string; label: string }> = {
@@ -101,6 +102,61 @@ function formatTime(iso?: string): string | null {
   })
 }
 
+const configLabels: Record<string, string> = {
+  prompt: "Prompt",
+  systemPromptHint: "System hint",
+  url: "URL",
+  method: "Method",
+  condition: "Condition",
+}
+
+function ConfigDisplay({ config }: { config: Record<string, unknown> }) {
+  const entries = Object.entries(config)
+
+  return (
+    <div className="space-y-2">
+      {entries.map(([key, value]) => {
+        const label = configLabels[key] ?? key
+        const isLongText = typeof value === "string" && value.length > 80
+
+        if (typeof value === "object" && value !== null) {
+          return (
+            <div key={key}>
+              <div className="text-[11px] text-text-muted mb-1">{label}</div>
+              <div className="bg-overlay-5 rounded-md px-3 py-2 text-xs grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                {Object.entries(value as Record<string, unknown>).map(([k, v]) => (
+                  <Fragment key={k}>
+                    <span className="text-text-muted">{k}</span>
+                    <span className="font-mono">{String(v)}</span>
+                  </Fragment>
+                ))}
+              </div>
+            </div>
+          )
+        }
+
+        if (isLongText) {
+          return (
+            <div key={key}>
+              <div className="text-[11px] text-text-muted mb-1">{label}</div>
+              <div className="bg-overlay-5 rounded-md px-3 py-2 text-sm leading-relaxed markdown-body">
+                <MarkdownRenderer content={String(value)} />
+              </div>
+            </div>
+          )
+        }
+
+        return (
+          <div key={key} className="flex items-baseline gap-3 text-xs">
+            <span className="text-text-muted shrink-0">{label}</span>
+            <span className={`font-mono ${key === "url" ? "text-primary" : ""}`}>{String(value)}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function AutomationDetail({ automation, onDelete }: { automation: Automation; onDelete: () => void }) {
   const meta = actionMeta[automation.actionType] ?? { icon: "fa-solid fa-gear", label: automation.actionType }
   const isSystem = automation.name.startsWith("system:")
@@ -170,9 +226,7 @@ function AutomationDetail({ automation, onDelete }: { automation: Automation; on
             <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
               Configuration
             </div>
-            <pre className="text-xs bg-overlay-5 rounded-md p-3 overflow-x-auto whitespace-pre-wrap break-all">
-              {JSON.stringify(automation.actionConfig, null, 2)}
-            </pre>
+            <ConfigDisplay config={automation.actionConfig} />
           </div>
         )}
 
@@ -181,23 +235,28 @@ function AutomationDetail({ automation, onDelete }: { automation: Automation; on
             <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
               Last Result
             </div>
-            {automation.lastResult.sessionId ? (
-              <a
-                href={`http://localhost:18800/ai-session/sessions/${automation.lastResult.sessionId}`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs bg-overlay-5 rounded-md p-3 flex items-center gap-2 hover:bg-overlay-8 transition-colors cursor-pointer"
-              >
-                <i className={`fa-solid ${automation.lastResult.triggered ? "fa-circle-check text-green-500" : "fa-circle-xmark text-text-muted"} text-xs`} />
-                <span className="flex-1 truncate">{automation.lastResult.summary}</span>
-                <i className="fa-solid fa-arrow-up-right-from-square text-text-muted text-[10px]" />
-              </a>
-            ) : (
-              <div className="text-xs bg-overlay-5 rounded-md p-3 flex items-center gap-2">
-                <i className={`fa-solid ${automation.lastResult.triggered ? "fa-circle-check text-green-500" : "fa-circle-xmark text-text-muted"} text-xs`} />
-                {automation.lastResult.summary}
+            <div className="bg-overlay-5 rounded-md p-3 space-y-2">
+              <div className="flex items-center gap-2 text-xs">
+                <i className={`fa-solid ${automation.lastResult.triggered ? "fa-circle-check text-green-500" : "fa-circle-xmark text-text-muted"}`} />
+                <span className="font-medium">
+                  {automation.lastResult.triggered ? "Triggered" : "Not triggered"}
+                </span>
+                {automation.lastResult.sessionId && (
+                  <a
+                    href={`http://localhost:18800/ai-session/sessions/${automation.lastResult.sessionId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="ml-auto text-text-muted hover:text-primary transition-colors"
+                    title="View session"
+                  >
+                    <i className="fa-solid fa-arrow-up-right-from-square text-[10px]" />
+                  </a>
+                )}
               </div>
-            )}
+              <div className="text-sm leading-relaxed markdown-body">
+                <MarkdownRenderer content={automation.lastResult.summary} />
+              </div>
+            </div>
           </div>
         )}
       </div>
