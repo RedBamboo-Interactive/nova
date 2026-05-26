@@ -195,26 +195,43 @@ export function ChatView({ disc }: Props) {
         )}
       />
       {showAvatar && (
-        <div
-          className="absolute bottom-18 w-48 h-48 z-10 pointer-events-none rounded-full overflow-hidden drop-shadow-lg"
-          style={{
-            left: "calc((50% - 384px) / 2 - 96px)",
-            opacity: avatarOpacity,
-          }}
-        >
-          <img
-            src={avatarSrc}
-            alt=""
-            className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
-            style={{ filter: `hue-rotate(${eyeHueRotation})` }}
-          />
+        <>
+          {/* Desktop: left margin */}
           <div
-            className="absolute inset-0 rounded-full"
+            className="absolute bottom-18 w-48 h-48 z-10 pointer-events-none rounded-full overflow-hidden drop-shadow-lg hidden md:block"
             style={{
-              border: "1.5px solid color-mix(in oklch, var(--brand), transparent 90%)",
+              left: "calc((50% - 384px) / 2 - 96px)",
+              opacity: avatarOpacity,
             }}
-          />
-        </div>
+          >
+            <img
+              src={avatarSrc}
+              alt=""
+              className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
+              style={{ filter: `hue-rotate(${eyeHueRotation})` }}
+            />
+            <div
+              className="absolute inset-0 rounded-full"
+              style={{ border: "1.5px solid color-mix(in oklch, var(--brand), transparent 90%)" }}
+            />
+          </div>
+          {/* Mobile: top left under header */}
+          <div
+            className="absolute top-16 left-3 w-[92px] h-[92px] z-10 pointer-events-none rounded-full overflow-hidden drop-shadow-md md:hidden"
+            style={{ backgroundColor: "var(--background)" }}
+          >
+            <img
+              src={avatarSrc}
+              alt=""
+              className="w-full h-full rounded-full object-cover object-top"
+              style={{ filter: `hue-rotate(${eyeHueRotation})`, opacity: avatarOpacity }}
+            />
+            <div
+              className="absolute inset-0 rounded-full"
+              style={{ border: "1px solid color-mix(in oklch, var(--brand), transparent 90%)" }}
+            />
+          </div>
+        </>
       )}
     </div>
   ) : (
