@@ -5,6 +5,7 @@ import {
   type EmotionRule,
   defaultRules,
   resolveEmotion,
+  emotionDuration,
   buildEmotionContext,
 } from "@/lib/nova-emotion"
 
@@ -12,8 +13,8 @@ const DEBOUNCE_MS = 600
 const MIN_HOLD_MS = 2000
 const STATIC_FALLBACK = "/nova-avatar.png"
 
-function emotionSrc(emotion: NovaEmotion): string {
-  return `/nova-${emotion}.webp`
+function emotionSrc(emotion: NovaEmotion, bust?: number): string {
+  return bust ? `/nova-${emotion}.webp?t=${bust}` : `/nova-${emotion}.webp`
 }
 
 export function useNovaEmotion(
@@ -26,6 +27,7 @@ export function useNovaEmotion(
   const availableRef = useRef<Set<string>>(new Set())
   const lastChangeRef = useRef(0)
   const pendingRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const durationRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const checkAvailable = useCallback((emotionName: NovaEmotion): Promise<boolean> => {
     if (availableRef.current.has(emotionName)) return Promise.resolve(true)
@@ -41,29 +43,51 @@ export function useNovaEmotion(
         availableRef.current.add(`!${emotionName}`)
         resolve(false)
       }
-      img.src = emotionSrc(emotionName)
+      img.src = `/nova-${emotionName}.webp`
     })
   }, [])
 
   const applyEmotion = useCallback(async (next: NovaEmotion, force?: boolean) => {
     if (next === emotion && !force) return
 
+    if (durationRef.current) {
+      clearTimeout(durationRef.current)
+      durationRef.current = null
+    }
+
+    const bust = Date.now()
+
     if (await checkAvailable(next)) {
       setEmotion(next)
-      setSrc(emotionSrc(next))
+      setSrc(emotionSrc(next, bust))
       lastChangeRef.current = Date.now()
-      return
-    }
-    if (next !== "idle" && await checkAvailable("idle")) {
+    } else if (next !== "idle" && await checkAvailable("idle")) {
       setEmotion("idle")
       setSrc(emotionSrc("idle"))
       lastChangeRef.current = Date.now()
       return
+    } else {
+      setEmotion("idle")
+      setSrc(STATIC_FALLBACK)
+      lastChangeRef.current = Date.now()
+      return
     }
-    setEmotion("idle")
-    setSrc(STATIC_FALLBACK)
-    lastChangeRef.current = Date.now()
-  }, [emotion, checkAvailable])
+
+    const dur = emotionDuration(rules, next)
+    if (dur) {
+      durationRef.current = setTimeout(async () => {
+        durationRef.current = null
+        if (await checkAvailable("idle")) {
+          setEmotion("idle")
+          setSrc(emotionSrc("idle"))
+        } else {
+          setEmotion("idle")
+          setSrc(STATIC_FALLBACK)
+        }
+        lastChangeRef.current = Date.now()
+      }, dur)
+    }
+  }, [emotion, checkAvailable, rules])
 
   useEffect(() => {
     if (src === STATIC_FALLBACK) applyEmotion("idle", true)
@@ -97,6 +121,12 @@ export function useNovaEmotion(
       }
     }
   }, [messages, isStreaming, rules, emotion, applyEmotion])
+
+  useEffect(() => {
+    return () => {
+      if (durationRef.current) clearTimeout(durationRef.current)
+    }
+  }, [])
 
   return { emotion, src }
 }

@@ -11,6 +11,7 @@ export interface EmotionContext {
 export interface EmotionRule {
   emotion: NovaEmotion
   priority?: number
+  duration?: number
   match: (ctx: EmotionContext) => boolean
 }
 
@@ -34,17 +35,20 @@ export const defaultRules: EmotionRule[] = [
   },
   {
     emotion: "frustrated",
+    duration: 5000,
     match: (ctx) =>
       ctx.parts.some(p => p.type === "error") ||
       (!ctx.isStreaming && FRUSTRATION_PATTERN.test(ctx.textContent.slice(-200))),
   },
   {
     emotion: "greeting",
+    duration: 4000,
     match: (ctx) =>
       !ctx.isStreaming && GREETING_PATTERN.test(ctx.textContent.trim()),
   },
   {
     emotion: "happy",
+    duration: 4000,
     match: (ctx) =>
       !ctx.isStreaming && EXCITEMENT_PATTERN.test(ctx.textContent.slice(-300)),
   },
@@ -58,6 +62,10 @@ export function resolveEmotion(
     if (rule.match(ctx)) return rule.emotion
   }
   return "idle"
+}
+
+export function emotionDuration(rules: EmotionRule[], emotion: NovaEmotion): number | undefined {
+  return rules.find(r => r.emotion === emotion)?.duration
 }
 
 export function buildEmotionContext(
