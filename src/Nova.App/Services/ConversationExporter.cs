@@ -12,7 +12,7 @@ public static class ConversationExporter
         maxDiscussions = Math.Clamp(maxDiscussions, 1, 200);
 
         var discussions = await db.Discussions
-            .Where(d => d.LastActivity >= since && d.Status != "archived")
+            .Where(d => d.LastActivity >= since)
             .OrderByDescending(d => d.LastActivity)
             .Take(maxDiscussions)
             .ToListAsync();
