@@ -35,10 +35,16 @@ export function App() {
 
   const onReconnect = useCallback(() => {
     discRef.current.refreshDiscussions()
+    discRef.current.reloadActiveMessages()
+  }, [])
+
+  const onVisibilityChange = useCallback(() => {
+    discRef.current.syncAndRefresh()
+    discRef.current.reloadActiveMessages()
   }, [])
 
   return (
-    <WsEventProvider url={wsUrl} onReconnect={onReconnect}>
+    <WsEventProvider url={wsUrl} onReconnect={onReconnect} onVisibilityChange={onVisibilityChange}>
       <WsDiscussionBridge discRef={discRef} />
       <AppShell activeTab={activeTab} onTabChange={setActiveTab}>
         <div className="h-full overflow-hidden">

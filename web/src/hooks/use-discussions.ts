@@ -36,6 +36,8 @@ export function useDiscussions() {
 
   const activeIdRef = useRef(activeDiscussionId)
   activeIdRef.current = activeDiscussionId
+  const streamingRef = useRef(streaming)
+  streamingRef.current = streaming
 
   const sessionToDiscussion = useMemo(() => {
     const map = new Map<string, string>()
@@ -57,14 +59,6 @@ export function useDiscussions() {
 
   useEffect(() => {
     syncAndRefresh()
-  }, [syncAndRefresh])
-
-  useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") syncAndRefresh()
-    }
-    document.addEventListener("visibilitychange", onVisibility)
-    return () => document.removeEventListener("visibilitychange", onVisibility)
   }, [syncAndRefresh])
 
   const loadMessages = useCallback(async (id: string) => {
@@ -107,6 +101,14 @@ export function useDiscussions() {
       }
     } catch { /* discussion not found */ }
   }, [discussions])
+
+  const reloadActiveMessages = useCallback(() => {
+    const id = activeIdRef.current
+    if (id && !streamingRef.current[id]) {
+      loadedRef.current.delete(id)
+      loadMessages(id)
+    }
+  }, [loadMessages])
 
   const selectDiscussion = useCallback((id: string) => {
     setActiveDiscussionId(id)
@@ -378,6 +380,8 @@ export function useDiscussions() {
     renameDiscussion,
     resumeDiscussion,
     refreshDiscussions,
+    syncAndRefresh,
+    reloadActiveMessages,
     handleWsEvent,
   }
 }
