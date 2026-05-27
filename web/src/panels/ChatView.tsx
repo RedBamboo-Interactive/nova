@@ -98,30 +98,6 @@ export function ChatView({ disc }: Props) {
     await resumeDiscussion(activeDiscussionId)
   }, [activeDiscussionId, resumeDiscussion])
 
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "n") {
-        e.preventDefault()
-        createDiscussion()
-        setMobileTab(1)
-      }
-      if (e.ctrlKey && e.key === "w") {
-        e.preventDefault()
-        if (!activeDiscussionId) return
-        archiveDiscussion(activeDiscussionId)
-      }
-      if (e.ctrlKey && !e.shiftKey && e.key === "Tab") {
-        e.preventDefault()
-        if (discussions.length === 0) return
-        const idx = discussions.findIndex((d) => d.id === activeDiscussionId)
-        const next = discussions[(idx + 1) % discussions.length]
-        if (next) selectDiscussion(next.id)
-      }
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [discussions, activeDiscussionId, selectDiscussion, createDiscussion, archiveDiscussion])
-
   useCommand("new-discussion", {
     label: "New Discussion",
     group: "Discussions",
