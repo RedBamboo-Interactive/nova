@@ -92,6 +92,18 @@ public static class AutomationEndpoints
             });
         });
 
+        registry.MapPost("/api/automations/{name}/trigger", "Manually trigger an automation", async (string name, CancellationToken ct) =>
+        {
+            if (engine.Automations == null)
+                return Results.StatusCode(503);
+
+            var result = await engine.Automations.TriggerAsync(name, ct);
+            if (result == null)
+                return Results.NotFound(new { error = "Automation not found" });
+
+            return Results.Ok(new { success = true, result = new { result.Triggered, result.Summary, result.SessionId } });
+        });
+
         registry.MapDelete("/api/automations/{name}", "Remove an automation", (string name) =>
         {
             var removed = engine.Automations?.Remove(name) ?? false;

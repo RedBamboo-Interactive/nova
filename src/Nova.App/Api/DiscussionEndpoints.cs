@@ -337,6 +337,50 @@ public static class DiscussionEndpoints
             return Results.Ok(new { success = true });
         });
 
+        registry.MapPost("/api/discussions/{id}/nova-message", "Inject a Nova-authored (assistant) message into a discussion without triggering inference", async (string id, NovaMessageRequest request, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
+        {
+            var discussion = await db.Discussions.FindAsync(id);
+            if (discussion is null)
+                return Results.NotFound(new { error = "Discussion not found" });
+
+            if (discussion.SessionId is null)
+                return Results.BadRequest(new { error = "Discussion has no active session" });
+
+            if (string.IsNullOrWhiteSpace(request.Content))
+                return Results.BadRequest(new { error = "Content is required" });
+
+            try
+            {
+                var resp = await RedCompute.PostAsJsonAsync(
+                    $"/ai-session/sessions/{discussion.SessionId}/inject",
+                    new { role = "assistant", content = request.Content }, JsonOptions);
+                resp.EnsureSuccessStatusCode();
+            }
+            catch
+            {
+                return Results.StatusCode(502);
+            }
+
+            discussion.LastActivity = DateTime.UtcNow;
+            discussion.MessageCount++;
+            await db.SaveChangesAsync();
+
+            broadcaster?.Broadcast("discussion.nova-message", new
+            {
+                discussionId = id,
+                sessionId = discussion.SessionId,
+                content = request.Content,
+            });
+
+            if (!string.IsNullOrWhiteSpace(request.Title))
+            {
+                discussion.Title = request.Title;
+                await db.SaveChangesAsync();
+            }
+
+            return Results.Ok(new { success = true });
+        });
+
         registry.MapPost("/api/discussions/{id}/message", "Send a message to a discussion (enriches with cross-discussion context)", async (string id, DiscussionMessageRequest request, HttpContext ctx, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
@@ -480,6 +524,12 @@ public class DiscussionEventRequest
 {
     public string Content { get; set; } = "";
     public string? Source { get; set; }
+}
+
+public class NovaMessageRequest
+{
+    public string Content { get; set; } = "";
+    public string? Title { get; set; }
 }
 
 public class DiscussionMessageRequest

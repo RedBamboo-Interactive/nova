@@ -69,6 +69,26 @@ public class AutomationService
 
     public int ActiveCount => _automations.Count(a => a.Enabled);
 
+    public async Task<AutomationResult?> TriggerAsync(string name, CancellationToken ct)
+    {
+        var automation = _automations.FirstOrDefault(x => x.Name == name);
+        if (automation == null) return null;
+
+        _log.Info("automations", $"[{automation.Name}] Manual trigger");
+        var result = await ExecuteAsync(automation, ct);
+        automation.LastRun = DateTime.UtcNow;
+        automation.LastResultJson = result != null
+            ? JsonSerializer.Serialize(result, JsonOptions)
+            : null;
+        automation.NextRun = CalculateNextRun(automation);
+        Save();
+
+        if (result?.Triggered == true && automation.ReportToDiscussionId != null)
+            await ReportToDiscussionAsync(automation, result, ct);
+
+        return result;
+    }
+
     private async Task RunAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
