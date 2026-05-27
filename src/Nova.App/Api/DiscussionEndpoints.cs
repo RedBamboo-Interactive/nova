@@ -401,9 +401,9 @@ public static class DiscussionEndpoints
                 .OrderByDescending(d => d.LastActivity)
                 .ToListAsync();
 
-            var remoteIp = ctx.Connection.RemoteIpAddress;
-            var isLoopback = remoteIp is null || System.Net.IPAddress.IsLoopback(remoteIp);
-            var device = isLoopback ? "desktop" : "mobile";
+            var ua = ctx.Request.Headers.UserAgent.ToString();
+            var device = System.Text.RegularExpressions.Regex.IsMatch(ua, @"Mobile|Android|iPhone|iPad|iPod", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                ? "mobile" : "desktop";
 
             var input = request.InputMethod ?? "typed";
             var contextBlock = BuildNovaContext(allDiscussions, id, now, device, input);
@@ -430,7 +430,7 @@ public static class DiscussionEndpoints
         var archived = discussions.Where(d => d.Status == "archived" && d.MessageCount > 0).Take(10).ToList();
 
         var sb = new System.Text.StringBuilder();
-        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" device=\"{device}\" input=\"{input}\" discussion=\"{currentId}\">");
+        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device}\" input=\"{input}\" discussion=\"{currentId}\">");
 
         if (active.Count > 0)
         {
