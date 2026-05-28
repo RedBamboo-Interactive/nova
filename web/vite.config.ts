@@ -23,6 +23,7 @@ export default defineConfig({
     port: 18903,
     proxy: {
       "/api": "http://localhost:18803",
+      "/ai-session": "http://localhost:18803",
       "/ws": { target: "ws://localhost:18803", ws: true },
       "/ping": "http://localhost:18803",
       "/health": "http://localhost:18803",

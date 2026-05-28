@@ -1,12 +1,13 @@
 import { useState, useCallback, useEffect } from "react"
 import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
-import { ChatPanel, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
+import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
 import { useCommand } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
 import { NovaStatusLine } from "@/components/nova-status-line"
 import { createNovaSpeechBackend } from "@/lib/speech"
 import { useNovaEmotion } from "@/hooks/use-nova-emotion"
 import type { useDiscussions } from "@/hooks/use-discussions"
+import { useSessionStats } from "@/hooks/use-session-stats"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -76,6 +77,7 @@ export function ChatView({ disc }: Props) {
     resumeDiscussion,
   } = disc
 
+  const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming)
   const [mobileTab, setMobileTab] = useState(0)
 
   const handleSend = useCallback((content: string, images?: ImageAttachment[], options?: SendOptions) => {
@@ -130,7 +132,9 @@ export function ChatView({ disc }: Props) {
   })
 
   const chatHeader = activeDiscussion && (
-    <PanelHeader title={activeDiscussion.title || "New discussion"} />
+    <PanelHeader title={activeDiscussion.title || "New discussion"}>
+      <ContextIndicator stats={sessionStats} messages={activeMessages} />
+    </PanelHeader>
   )
 
   const sidebarHeader = (
