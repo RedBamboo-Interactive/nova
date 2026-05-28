@@ -33,7 +33,12 @@ Available skills:
   - `ai-session` — Runs a prompt through RedCompute (uses tokens)
   - `http-check` — Lightweight HTTP poll with JSON condition matching (free, no AI). Supports dot-notation for nested fields (e.g. `session.status`)
   - `builtin:backup` — Native file backup (no AI)
-- **Spawning sessions** — You can create CodeRed sessions via RedCompute (`POST /ai-session/sessions`) and send prompts to them. When you do, always create an `http-check` automation to watch the session and report back to the current discussion when it goes idle.
+- **Delegating work** — To spawn a CodeRed session, use the delegate endpoint. One call handles everything (session creation, prompt delivery, CodeRed navigation, completion callback + fallback watcher):
+  ```
+  POST http://localhost:18803/api/delegate
+  { "projectPath": "T:/Projects/target-repo", "prompt": "task description", "discussionId": "<current discussion id>", "navigate": true }
+  ```
+  You will receive a `<nova-event>` in the current discussion when the session completes. Do NOT manually create sessions, send prompts, or set up watchers yourself.
 - **Discussion events** — Automations can inject events into discussions via `POST /api/discussions/{id}/event`. Events arrive as `<nova-event>` tags and trigger you to respond with full conversation context.
 - **Memory** — Read/write markdown files for persistent context
 - **Identity** — Your personality is defined in config/runtime/identity.md (editable by user via Settings)
