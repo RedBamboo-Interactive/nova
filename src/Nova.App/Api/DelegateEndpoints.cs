@@ -115,31 +115,49 @@ public static class DelegateEndpoints
                 catch { }
             }
 
-            // 4. Create completion watcher
+            // 4. Register completion callback + fallback watcher
             string? watcherName = null;
-            if (request.DiscussionId != null && engine.Automations != null)
+            bool callbackRegistered = false;
+            if (request.DiscussionId != null)
             {
-                watcherName = $"delegate:{sessionId}";
-                var automation = new Automation
+                // Primary: register callback with RedCompute (instant notification)
+                try
                 {
-                    Name = watcherName,
-                    Description = $"Watch delegated session {sessionId}",
-                    Schedule = "*/30 * * * * *",
-                    Enabled = true,
-                    RemoveOnTrigger = true,
-                    ActionType = "http-check",
-                    ActionConfigJson = JsonSerializer.Serialize(new HttpCheckConfig
+                    var callbackUrl = $"http://localhost:18803/api/callbacks/session-complete?discussionId={request.DiscussionId}";
+                    var cbResp = await RedCompute.PostAsJsonAsync(
+                        $"/ai-session/sessions/{sessionId}/callback",
+                        new { url = callbackUrl }, JsonOptions);
+                    callbackRegistered = cbResp.IsSuccessStatusCode;
+                }
+                catch { }
+
+                // Fallback: http-check watcher (in case callback fails or RedCompute doesn't support it yet)
+                if (engine.Automations != null)
+                {
+                    watcherName = $"delegate:{sessionId}";
+                    var automation = new Automation
                     {
-                        Url = $"http://localhost:18800/ai-session/sessions/{sessionId}",
-                        Condition = new HttpCheckCondition
+                        Name = watcherName,
+                        Description = $"Watch delegated session {sessionId}",
+                        Schedule = "*/30 * * * * *",
+                        Enabled = true,
+                        RemoveOnTrigger = true,
+                        MaxFailures = 20,
+                        ExpiresAt = DateTime.UtcNow.AddMinutes(30),
+                        ActionType = "http-check",
+                        ActionConfigJson = JsonSerializer.Serialize(new HttpCheckConfig
                         {
-                            Field = "session.status",
-                            Equals = "Idle",
-                        },
-                    }, JsonOptions),
-                    ReportToDiscussionId = request.DiscussionId,
-                };
-                engine.Automations.Add(automation);
+                            Url = $"http://localhost:18800/ai-session/sessions/{sessionId}",
+                            Condition = new HttpCheckCondition
+                            {
+                                Field = "session.status",
+                                Equals = "Idle",
+                            },
+                        }, JsonOptions),
+                        ReportToDiscussionId = request.DiscussionId,
+                    };
+                    engine.Automations.Add(automation);
+                }
             }
 
             return Results.Ok(new
@@ -147,6 +165,7 @@ public static class DelegateEndpoints
                 sessionId,
                 promptSent,
                 watcherName,
+                callbackRegistered,
                 message = $"Session delegated to {request.ProjectPath}",
             });
         });

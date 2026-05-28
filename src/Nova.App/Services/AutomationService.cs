@@ -49,10 +49,26 @@ public class AutomationService
 
     public void Add(Automation automation)
     {
+        if (!ValidateCron(automation.Schedule))
+        {
+            _log.Error("automations", $"Invalid cron expression for {automation.Name}: {automation.Schedule}");
+            throw new ArgumentException($"Invalid cron expression: {automation.Schedule}");
+        }
+
         automation.NextRun = CalculateNextRun(automation);
         _automations.Add(automation);
         Save();
         _log.Info("automations", $"Added: {automation.Name} [{automation.ActionType}] next={automation.NextRun:g}");
+    }
+
+    private static bool ValidateCron(string schedule)
+    {
+        try { CronExpression.Parse(schedule, CronFormat.IncludeSeconds); return true; }
+        catch
+        {
+            try { CronExpression.Parse(schedule); return true; }
+            catch { return false; }
+        }
     }
 
     public bool Remove(string name)
@@ -101,10 +117,24 @@ public class AutomationService
 
                 foreach (var automation in due)
                 {
+                    if (automation.ExpiresAt.HasValue && now >= automation.ExpiresAt.Value)
+                    {
+                        automation.Enabled = false;
+                        automation.LastError = "Expired";
+                        _log.Warn("automations", $"[{automation.Name}] Expired, disabling");
+                        if (automation.ReportToDiscussionId != null)
+                            await ReportFailureAsync(automation, "Watcher expired without triggering", ct);
+                        if (automation.RemoveOnTrigger) _automations.Remove(automation);
+                        Save();
+                        continue;
+                    }
+
                     try
                     {
                         var result = await ExecuteAsync(automation, ct);
                         automation.LastRun = now;
+                        automation.LastError = null;
+                        automation.ConsecutiveFailures = 0;
                         automation.LastResultJson = result != null
                             ? JsonSerializer.Serialize(result, JsonOptions)
                             : null;
@@ -126,8 +156,23 @@ public class AutomationService
                     }
                     catch (Exception ex)
                     {
-                        _log.Error("automations", $"[{automation.Name}] failed: {ex.Message}");
-                        automation.NextRun = CalculateNextRun(automation);
+                        automation.ConsecutiveFailures++;
+                        automation.LastError = ex.Message;
+                        _log.Error("automations", $"[{automation.Name}] failed ({automation.ConsecutiveFailures}x): {ex.Message}");
+
+                        var max = automation.MaxFailures > 0 ? automation.MaxFailures : 20;
+                        if (automation.ConsecutiveFailures >= max)
+                        {
+                            automation.Enabled = false;
+                            _log.Error("automations", $"[{automation.Name}] Hit {max} consecutive failures, disabling");
+                            if (automation.ReportToDiscussionId != null)
+                                await ReportFailureAsync(automation, $"Failed {max} times consecutively: {ex.Message}", ct);
+                            if (automation.RemoveOnTrigger) _automations.Remove(automation);
+                        }
+                        else
+                        {
+                            automation.NextRun = CalculateNextRun(automation);
+                        }
                     }
                     finally
                     {
@@ -182,40 +227,35 @@ public class AutomationService
         var response = await _http.SendAsync(request, ct);
         var body = await response.Content.ReadAsStringAsync(ct);
 
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"HTTP {(int)response.StatusCode}: {body[..Math.Min(body.Length, 200)]}");
+
         if (config.Condition == null)
         {
             return new AutomationResult
             {
-                Triggered = response.IsSuccessStatusCode,
+                Triggered = true,
                 Summary = $"HTTP {(int)response.StatusCode}",
                 Data = body,
             };
         }
 
-        bool matched = false;
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            var element = ResolveJsonPath(doc.RootElement, config.Condition.Field);
-            if (element != null)
-            {
-                var actual = element.Value.ValueKind == JsonValueKind.String
-                    ? element.Value.GetString()
-                    : element.Value.GetRawText();
-                matched = string.Equals(actual, config.Condition.Equals, StringComparison.OrdinalIgnoreCase);
-            }
-        }
-        catch
-        {
-            _log.Warn("automations", $"[{automation.Name}] Could not parse response as JSON");
-        }
+        using var doc = JsonDocument.Parse(body);
+        var element = ResolveJsonPath(doc.RootElement, config.Condition.Field);
+        if (element == null)
+            throw new InvalidOperationException($"Field '{config.Condition.Field}' not found in response");
+
+        var actual = element.Value.ValueKind == JsonValueKind.String
+            ? element.Value.GetString()
+            : element.Value.GetRawText();
+        var matched = string.Equals(actual, config.Condition.Equals, StringComparison.OrdinalIgnoreCase);
 
         return new AutomationResult
         {
             Triggered = matched,
             Summary = matched
                 ? $"Condition met: {config.Condition.Field} == {config.Condition.Equals}"
-                : $"Waiting: {config.Condition.Field} != {config.Condition.Equals}",
+                : $"Waiting: {config.Condition.Field} = {actual}",
             Data = body,
         };
     }
@@ -237,6 +277,29 @@ public class AutomationService
         await _memory.BackupAsync();
         _log.Info("automations", "Daily backup completed");
         return new AutomationResult { Triggered = true, Summary = "Backup completed" };
+    }
+
+    private async Task ReportFailureAsync(Automation automation, string reason, CancellationToken ct)
+    {
+        var discussionId = automation.ReportToDiscussionId!;
+        _log.Warn("automations", $"[{automation.Name}] Reporting failure to discussion {discussionId}");
+
+        try
+        {
+            var eventContent = $"""
+                <nova-event source="automation:{automation.Name}" type="watcher-failed">
+                Watcher "{automation.Name}" failed: {reason}
+                </nova-event>
+                """;
+
+            await _http.PostAsJsonAsync(
+                $"http://localhost:18803/api/discussions/{discussionId}/event",
+                new { content = eventContent, source = automation.Name }, ct);
+        }
+        catch (Exception ex)
+        {
+            _log.Error("automations", $"[{automation.Name}] Failed to report failure: {ex.Message}");
+        }
     }
 
     private async Task ReportToDiscussionAsync(Automation automation, AutomationResult result, CancellationToken ct)
@@ -292,16 +355,12 @@ public class AutomationService
         }
         catch
         {
-            try
-            {
-                var expr = CronExpression.Parse(automation.Schedule);
-                var next = expr.GetNextOccurrence(DateTime.UtcNow);
-                if (next.HasValue) return next.Value;
-            }
-            catch { }
+            var expr = CronExpression.Parse(automation.Schedule);
+            var next = expr.GetNextOccurrence(DateTime.UtcNow);
+            if (next.HasValue) return next.Value;
         }
 
-        return DateTime.UtcNow.AddMinutes(1);
+        return DateTime.MaxValue;
     }
 
     private void Load()
@@ -401,6 +460,11 @@ public class Automation
     public DateTime? LastRun { get; set; }
     public DateTime NextRun { get; set; }
     public string? LastResultJson { get; set; }
+
+    public int ConsecutiveFailures { get; set; }
+    public int MaxFailures { get; set; }
+    public DateTime? ExpiresAt { get; set; }
+    public string? LastError { get; set; }
 }
 
 public class AutomationResult

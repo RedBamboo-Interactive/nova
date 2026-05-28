@@ -68,23 +68,26 @@ export function AppShell({ children, activeTab, onTabChange }: Props) {
           <NavTab
             active={activeTab === "chat"}
             icon="fa-solid fa-comment"
+            shortcut="F1"
             onClick={() => onTabChange("chat")}
           >
-            <span className="hidden sm:inline">Chat</span>
+            Chat
           </NavTab>
           <NavTab
             active={activeTab === "automations"}
             icon="fa-solid fa-heart-pulse"
+            shortcut="F2"
             onClick={() => onTabChange("automations")}
           >
-            <span className="hidden sm:inline">Pulse</span>
+            Pulse
           </NavTab>
           <NavTab
             active={activeTab === "memory"}
             icon="fa-solid fa-book"
+            shortcut="F3"
             onClick={() => onTabChange("memory")}
           >
-            <span className="hidden sm:inline">Journal</span>
+            Journal
           </NavTab>
         </NavTabs>
       }
