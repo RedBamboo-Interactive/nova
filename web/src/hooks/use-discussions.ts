@@ -102,12 +102,16 @@ export function useDiscussions() {
     } catch { /* discussion not found */ }
   }, [discussions])
 
-  const reloadActiveMessages = useCallback(() => {
+  const reloadActiveMessages = useCallback((force?: boolean) => {
     const id = activeIdRef.current
-    if (id && !streamingRef.current[id]) {
-      loadedRef.current.delete(id)
-      loadMessages(id)
+    if (!id) return
+    if (force) {
+      setStreaming((prev) => ({ ...prev, [id]: false }))
+    } else if (streamingRef.current[id]) {
+      return
     }
+    loadedRef.current.delete(id)
+    loadMessages(id)
   }, [loadMessages])
 
   const selectDiscussion = useCallback((id: string) => {

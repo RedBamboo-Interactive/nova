@@ -35,7 +35,7 @@ export function App() {
 
   const onReconnect = useCallback(() => {
     discRef.current.refreshDiscussions()
-    discRef.current.reloadActiveMessages()
+    discRef.current.reloadActiveMessages(true)
   }, [])
 
   const onVisibilityChange = useCallback(() => {
