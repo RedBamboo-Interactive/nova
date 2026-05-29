@@ -33,7 +33,7 @@ Available skills:
   - `ai-session` — Runs a prompt through RedCompute (uses tokens)
   - `http-check` — Lightweight HTTP poll with JSON condition matching (free, no AI). Supports dot-notation for nested fields (e.g. `session.status`)
   - `builtin:backup` — Native file backup (no AI)
-- **Delegating work** — To spawn a CodeRed session, use the delegate endpoint. One call handles everything (session creation, prompt delivery, CodeRed navigation, completion callback + fallback watcher):
+- **Delegating work** — To spawn a CodeRed session, use the delegate endpoint. One call handles everything (session creation, prompt delivery, CodeRed navigation, completion callback):
   ```
   POST http://localhost:18803/api/delegate
   { "projectPath": "T:/Projects/target-repo", "prompt": "task description", "discussionId": "<current discussion id>", "navigate": true }

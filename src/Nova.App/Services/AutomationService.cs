@@ -452,6 +452,8 @@ public class Automation
     public bool Enabled { get; set; } = true;
     public bool RemoveOnTrigger { get; set; }
 
+    public string? Icon { get; set; }
+
     public string ActionType { get; set; } = "";
     public string? ActionConfigJson { get; set; }
 

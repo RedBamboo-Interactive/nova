@@ -4,7 +4,6 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using RedBamboo.AppHost.Discovery;
 using RedBamboo.AppHost.Logging;
-using Nova.App.Services;
 
 namespace Nova.App.Api;
 
@@ -12,7 +11,7 @@ public static class CallbackEndpoints
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
 
-    public static void MapCallbackEndpoints(this EndpointRegistry registry, NovaEngine engine)
+    public static void MapCallbackEndpoints(this EndpointRegistry registry)
     {
         registry.MapPost("/api/callbacks/session-complete", "Callback from RedCompute when a delegated session finishes", async (HttpContext ctx) =>
         {
@@ -55,10 +54,6 @@ public static class CallbackEndpoints
                 App.LogService.Error("callbacks", $"Failed to inject event for session {sessionId}: {ex.Message}");
                 return Results.Json(new { error = "event_injection_failed", message = ex.Message }, statusCode: 502);
             }
-
-            // Clean up the http-check watcher if one exists (belt + suspenders during migration)
-            var watcherName = $"delegate:{sessionId}";
-            engine.Automations?.Remove(watcherName);
 
             App.LogService.Info("callbacks", $"Session {sessionId} completed, notified discussion {discussionId}");
             return Results.Ok(new { handled = true, sessionId, discussionId, status });

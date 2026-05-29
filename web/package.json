@@ -14,7 +14,7 @@
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@fontsource-variable/lora": "^5.2.8",
-    "@fortawesome/fontawesome-free": "^7.2.0",
+    "@fortawesome/fontawesome-pro": "^7.2.0",
     "@redbamboo/chat": "link:../../redbamboo-packages/packages/chat",
     "@redbamboo/ui": "link:../../redbamboo-packages/packages/ui",
     "@redbamboo/utility": "link:../../redbamboo-packages/packages/utility",

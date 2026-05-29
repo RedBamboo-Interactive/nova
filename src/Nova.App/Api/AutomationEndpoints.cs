@@ -26,6 +26,7 @@ public static class AutomationEndpoints
                     a.Schedule,
                     a.Enabled,
                     a.RemoveOnTrigger,
+                    a.Icon,
                     a.ActionType,
                     actionConfig = a.ActionConfigJson != null
                         ? JsonSerializer.Deserialize<JsonElement>(a.ActionConfigJson)
@@ -56,6 +57,7 @@ public static class AutomationEndpoints
                 Schedule = request.Schedule,
                 Enabled = true,
                 RemoveOnTrigger = request.RemoveOnTrigger,
+                Icon = request.Icon,
                 ActionType = request.ActionType,
                 ActionConfigJson = request.ActionConfig != null
                     ? JsonSerializer.Serialize(request.ActionConfig, JsonOptions)
@@ -117,6 +119,7 @@ public class AutomationCreateRequest
     public string Name { get; set; } = "";
     public string? Description { get; set; }
     public string Schedule { get; set; } = "";
+    public string? Icon { get; set; }
     public string ActionType { get; set; } = "";
     public JsonElement? ActionConfig { get; set; }
     public bool RemoveOnTrigger { get; set; }

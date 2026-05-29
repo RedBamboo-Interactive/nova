@@ -22,7 +22,7 @@ importers:
       '@fontsource-variable/lora':
         specifier: ^5.2.8
         version: 5.2.8
-      '@fortawesome/fontawesome-free':
+      '@fortawesome/fontawesome-pro':
         specifier: ^7.2.0
         version: 7.2.0
       '@redbamboo/chat':
@@ -131,8 +131,8 @@ packages:
   '@fontsource-variable/lora@5.2.8':
     resolution: {integrity: sha512-cxjTJ9BbOWIzusewR4UMBLVePvTSWV6dtNaNsCkF/oKoyA68fJGWfaYCILOOP1BObE4dmjfZ3xo6m9hdHhtYhg==}
 
-  '@fortawesome/fontawesome-free@7.2.0':
-    resolution: {integrity: sha512-3DguDv/oUE+7vjMeTSOjCSG+KeawgVQOHrKRnvUuqYh1mfArrh7s+s8hXW3e4RerBA1+Wh+hBqf8sJNpqNrBWg==}
+  '@fortawesome/fontawesome-pro@7.2.0':
+    resolution: {integrity: sha512-RwDO9NWOVdUdO2yDzyTx5cA1PjyqwPmTqAtfJZa82ap+OS4H89IZ4Jhr5VCEtS6Ij94L5if411CgF0BzI+/b7Q==}
     engines: {node: '>=6'}
 
   '@humanfs/core@0.19.2':
@@ -1141,7 +1141,7 @@ snapshots:
 
   '@fontsource-variable/lora@5.2.8': {}
 
-  '@fortawesome/fontawesome-free@7.2.0': {}
+  '@fortawesome/fontawesome-pro@7.2.0': {}
 
   '@humanfs/core@0.19.2':
     dependencies:

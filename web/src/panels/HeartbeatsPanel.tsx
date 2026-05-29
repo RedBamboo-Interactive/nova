@@ -16,6 +16,7 @@ interface Automation {
   schedule: string
   enabled: boolean
   removeOnTrigger: boolean
+  icon?: string
   actionType: string
   actionConfig?: Record<string, unknown>
   reportToDiscussionId?: string
@@ -157,6 +158,11 @@ function ConfigDisplay({ config }: { config: Record<string, unknown> }) {
   )
 }
 
+function getIcon(a: Automation): string {
+  if (a.icon) return a.icon.startsWith("fa-") ? `fa-solid ${a.icon}` : a.icon
+  return (actionMeta[a.actionType] ?? { icon: "fa-solid fa-gear" }).icon
+}
+
 function AutomationDetail({ automation, onDelete }: { automation: Automation; onDelete: () => void }) {
   const meta = actionMeta[automation.actionType] ?? { icon: "fa-solid fa-gear", label: automation.actionType }
   const isSystem = automation.name.startsWith("system:")
@@ -178,7 +184,7 @@ function AutomationDetail({ automation, onDelete }: { automation: Automation; on
 
       <div className="flex-1 overflow-y-auto p-4 space-y-5">
         <div className="flex items-center gap-2">
-          <i className={`${meta.icon} text-sm text-primary`} />
+          <i className={`${getIcon(automation)} text-sm text-primary`} />
           <span className="text-sm font-medium">{meta.label}</span>
           {automation.enabled ? (
             <Badge variant="default">Active</Badge>
@@ -295,7 +301,7 @@ export function AutomationsPanel() {
       <ItemListRow
         selected={a.name === selectedName}
         icon={
-          <i className={`${meta.icon} text-xs ${isSystem ? "text-text-muted" : a.enabled ? "text-primary" : "text-text-disabled"}`} />
+          <i className={`${getIcon(a)} text-xs ${isSystem ? "text-text-muted" : a.enabled ? "text-primary" : "text-text-disabled"}`} />
         }
         title={isSystem ? a.name.replace("system:", "") : a.name}
         subtitle={cronToHuman(a.schedule)}

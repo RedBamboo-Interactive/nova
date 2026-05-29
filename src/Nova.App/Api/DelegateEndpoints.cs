@@ -3,7 +3,6 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using RedBamboo.AppHost.Discovery;
-using Nova.App.Services;
 
 namespace Nova.App.Api;
 
@@ -26,9 +25,9 @@ public static class DelegateEndpoints
         Timeout = TimeSpan.FromSeconds(5),
     };
 
-    public static void MapDelegateEndpoints(this EndpointRegistry registry, NovaEngine engine)
+    public static void MapDelegateEndpoints(this EndpointRegistry registry)
     {
-        registry.MapPost("/api/delegate", "Delegate work to a CodeRed session: creates session on RedCompute, sends prompt, navigates CodeRed, sets up completion watcher that reports back to discussionId. Returns sessionId. Options: navigate (bool, default true), dockerImage (string, passed to session creation for containerized execution)", async (DelegateRequest request) =>
+        registry.MapPost("/api/delegate", "Delegate work to a CodeRed session: creates session on RedCompute, sends prompt, navigates CodeRed, registers completion callback that reports back to discussionId. Returns sessionId. Options: navigate (bool, default true), dockerImage (string, passed to session creation for containerized execution)", async (DelegateRequest request) =>
         {
             if (string.IsNullOrWhiteSpace(request.ProjectPath))
                 return Results.BadRequest(new { error = "projectPath is required" });
@@ -115,12 +114,10 @@ public static class DelegateEndpoints
                 catch { }
             }
 
-            // 4. Register completion callback + fallback watcher
-            string? watcherName = null;
+            // 4. Register completion callback with RedCompute
             bool callbackRegistered = false;
             if (request.DiscussionId != null)
             {
-                // Primary: register callback with RedCompute (instant notification)
                 try
                 {
                     var callbackUrl = $"http://localhost:18803/api/callbacks/session-complete?discussionId={request.DiscussionId}";
@@ -130,41 +127,12 @@ public static class DelegateEndpoints
                     callbackRegistered = cbResp.IsSuccessStatusCode;
                 }
                 catch { }
-
-                // Fallback: http-check watcher (in case callback fails or RedCompute doesn't support it yet)
-                if (engine.Automations != null)
-                {
-                    watcherName = $"delegate:{sessionId}";
-                    var automation = new Automation
-                    {
-                        Name = watcherName,
-                        Description = $"Watch delegated session {sessionId}",
-                        Schedule = "*/30 * * * * *",
-                        Enabled = true,
-                        RemoveOnTrigger = true,
-                        MaxFailures = 20,
-                        ExpiresAt = DateTime.UtcNow.AddMinutes(30),
-                        ActionType = "http-check",
-                        ActionConfigJson = JsonSerializer.Serialize(new HttpCheckConfig
-                        {
-                            Url = $"http://localhost:18800/ai-session/sessions/{sessionId}",
-                            Condition = new HttpCheckCondition
-                            {
-                                Field = "session.status",
-                                Equals = "Idle",
-                            },
-                        }, JsonOptions),
-                        ReportToDiscussionId = request.DiscussionId,
-                    };
-                    engine.Automations.Add(automation);
-                }
             }
 
             return Results.Ok(new
             {
                 sessionId,
                 promptSent,
-                watcherName,
                 callbackRegistered,
                 message = $"Session delegated to {request.ProjectPath}",
             });

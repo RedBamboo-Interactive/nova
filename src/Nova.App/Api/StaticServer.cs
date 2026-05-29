@@ -97,8 +97,8 @@ public class StaticServer
         registry.MapSettingsEndpoints(_memory);
         registry.MapMemoryEndpoints(_memory);
         registry.MapAutomationEndpoints(_engine);
-        registry.MapDelegateEndpoints(_engine);
-        registry.MapCallbackEndpoints(_engine);
+        registry.MapDelegateEndpoints();
+        registry.MapCallbackEndpoints();
         registry.MapSpeechEndpoints(_engine);
 
         var descriptor = new NovaServiceDescriptor(port, logService, _engine, registry);
