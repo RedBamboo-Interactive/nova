@@ -41,6 +41,7 @@ public class StaticServer
         });
 
         builder.Services.AddAppHostWebSocket();
+        builder.Services.AddAppHostTelemetry(opts => opts.AppName = "Nova");
 
         var dbDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Nova");
@@ -52,6 +53,7 @@ public class StaticServer
         builder.Services.AddSingleton(_memory);
 
         _app = builder.Build();
+        _app.UseAppHostTelemetry();
         _app.UseCors();
 
         _app.UseAppHostAuth(new BearerAuthOptions
