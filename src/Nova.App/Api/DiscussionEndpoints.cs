@@ -363,6 +363,7 @@ public static class DiscussionEndpoints
 
             discussion.LastActivity = DateTime.UtcNow;
             discussion.MessageCount++;
+            discussion.InjectedContext = request.Content;
             await db.SaveChangesAsync();
 
             broadcaster?.Broadcast("discussion.nova-message", new
@@ -407,7 +408,16 @@ public static class DiscussionEndpoints
 
             var input = request.InputMethod ?? "typed";
             var contextBlock = BuildNovaContext(allDiscussions, id, now, device, input);
-            var enrichedContent = contextBlock + "\n\n" + request.Content;
+
+            var injected = discussion.InjectedContext;
+            var enrichedContent = contextBlock + "\n\n";
+            if (injected != null)
+            {
+                enrichedContent += "<nova-prior-messages hint=\"You said this earlier in the conversation. The user can see it but it was injected before your session started.\">\n"
+                    + injected
+                    + "\n</nova-prior-messages>\n\n";
+            }
+            enrichedContent += request.Content;
 
             try
             {
@@ -415,6 +425,13 @@ public static class DiscussionEndpoints
                     $"/ai-session/sessions/{discussion.SessionId}/message",
                     new { content = enrichedContent, images = request.Images }, JsonOptions);
                 resp.EnsureSuccessStatusCode();
+
+                if (injected != null)
+                {
+                    discussion.InjectedContext = null;
+                    await db.SaveChangesAsync();
+                }
+
                 return Results.Ok(new { success = true });
             }
             catch

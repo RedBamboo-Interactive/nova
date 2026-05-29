@@ -10,4 +10,5 @@ public class Discussion
     public int MessageCount { get; set; }
     public string? SessionId { get; set; }
     public DateTime? LastReadAt { get; set; }
+    public string? InjectedContext { get; set; }
 }

@@ -208,6 +208,12 @@ public class StaticServer
             cmd.ExecuteNonQuery();
         }
 
+        if (!discColumns.Contains("InjectedContext"))
+        {
+            cmd.CommandText = "ALTER TABLE Discussions ADD COLUMN InjectedContext TEXT";
+            cmd.ExecuteNonQuery();
+        }
+
         cmd.CommandText = "PRAGMA table_info(Conversations)";
         using var reader = cmd.ExecuteReader();
         var columns = new HashSet<string>();

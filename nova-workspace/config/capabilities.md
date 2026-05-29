@@ -26,6 +26,7 @@ Your skills live in `config/skills/`. Each skill is a markdown file containing d
 Available skills:
 - **red-suite** (`config/skills/red-suite.md`) — Architecture, patterns, ports, and philosophy of the Red Suite tools (RedCompute, CodeRed, RedMatter, Nova). What AI-native means. How to work on them.
 - **dreaming** (`config/skills/dreaming.md`) — Nightly memory consolidation protocol. Runs as a system automation at 4 AM.
+- **playwright-testing** (`config/skills/playwright-testing.md`) — Navigating Red Suite UIs with Playwright. Port map, selector patterns, gotchas, the @redbamboo/testing package.
 
 ## Self-management
 
