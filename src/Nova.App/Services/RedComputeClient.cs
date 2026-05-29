@@ -85,6 +85,7 @@ public class RedComputeClient : IDisposable
     {
         var body = new
         {
+            mode = "oneshot",
             request.Model,
             request.System,
             request.Messages,
