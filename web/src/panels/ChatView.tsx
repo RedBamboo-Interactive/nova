@@ -178,9 +178,11 @@ export function ChatView({ disc }: Props) {
         <>
           {/* Desktop: left margin */}
           <div
-            className="absolute bottom-18 w-48 h-48 z-10 pointer-events-none rounded-full overflow-hidden drop-shadow-lg hidden md:block"
+            className="absolute w-48 h-48 z-10 pointer-events-none rounded-full overflow-hidden drop-shadow-lg hidden md:block"
             style={{
               left: "calc((50% - 384px) / 2 - 96px)",
+              top: "50%",
+              transform: "translateY(-50%)",
               opacity: avatarOpacity,
             }}
           >
@@ -191,8 +193,7 @@ export function ChatView({ disc }: Props) {
               style={{ filter: `hue-rotate(${eyeHueRotation})` }}
             />
             <div
-              className="absolute inset-0 rounded-full"
-              style={{ border: "1.5px solid color-mix(in oklch, var(--brand), transparent 90%)" }}
+              className="absolute inset-0 rounded-full border-[1.5px] border-surface-elevated"
             />
           </div>
           {/* Mobile: top left under header */}
@@ -207,8 +208,7 @@ export function ChatView({ disc }: Props) {
               style={{ filter: `hue-rotate(${eyeHueRotation})`, opacity: avatarOpacity }}
             />
             <div
-              className="absolute inset-0 rounded-full"
-              style={{ border: "1px solid color-mix(in oklch, var(--brand), transparent 90%)" }}
+              className="absolute inset-0 rounded-full border border-surface-elevated"
             />
           </div>
         </>
