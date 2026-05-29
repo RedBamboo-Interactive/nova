@@ -1,5 +1,7 @@
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Nova.App.Data;
 
@@ -7,6 +9,18 @@ namespace Nova.App.Services;
 
 public static class ConversationExporter
 {
+    private static readonly HttpClient RedCompute = new()
+    {
+        BaseAddress = new Uri("http://localhost:18800"),
+        Timeout = TimeSpan.FromSeconds(15),
+    };
+
+    private static readonly Regex NovaContextTag = new(
+        @"<nova-context[^>]*>[\s\S]*?</nova-context>\s*", RegexOptions.Compiled);
+
+    private static readonly Regex NovaPriorTag = new(
+        @"<nova-prior-messages[^>]*>[\s\S]*?</nova-prior-messages>\s*", RegexOptions.Compiled);
+
     public static async Task<string> ExportAsync(NovaDbContext db, DateTime since, int maxDiscussions = 50)
     {
         maxDiscussions = Math.Clamp(maxDiscussions, 1, 200);
@@ -27,33 +41,132 @@ public static class ConversationExporter
 
         foreach (var disc in discussions)
         {
-            var messages = await db.Conversations
-                .Where(m => m.ContextId == disc.Id)
-                .OrderBy(m => m.Timestamp)
-                .ToListAsync();
+            var sessionMessages = disc.SessionId is not null
+                ? await FetchSessionMessages(disc.SessionId)
+                : null;
 
-            sb.AppendLine($"## {disc.Title ?? "Untitled"} [{disc.Id}]");
-            sb.AppendLine($"Created: {disc.CreatedAt:yyyy-MM-dd HH:mm} — {messages.Count} message(s)");
-            sb.AppendLine();
-
-            foreach (var msg in messages)
-            {
-                var role = msg.Role == "user" ? "user" : "nova";
-                sb.AppendLine($"**{role}** ({msg.Timestamp:HH:mm}):");
-
-                if (!string.IsNullOrEmpty(msg.PartsJson))
-                    AppendParts(sb, msg.PartsJson);
-                else
-                    sb.AppendLine(msg.Content);
-
-                sb.AppendLine();
-            }
+            if (sessionMessages is { Count: > 0 })
+                AppendSessionExport(sb, disc, sessionMessages);
+            else
+                await AppendLocalExport(sb, disc, db);
 
             sb.AppendLine("---");
             sb.AppendLine();
         }
 
         return sb.ToString();
+    }
+
+    private static async Task<List<RawMessage>?> FetchSessionMessages(string sessionId)
+    {
+        try
+        {
+            var resp = await RedCompute.GetAsync($"/ai-session/sessions/{sessionId}");
+            if (!resp.IsSuccessStatusCode) return null;
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            if (!doc.RootElement.TryGetProperty("messages", out var arr)) return null;
+
+            var messages = new List<RawMessage>();
+            foreach (var el in arr.EnumerateArray())
+            {
+                messages.Add(new RawMessage
+                {
+                    Role = el.GetProperty("role").GetString() ?? "unknown",
+                    EventType = el.TryGetProperty("eventType", out var et) ? et.GetString() ?? "text" : "text",
+                    Content = el.TryGetProperty("content", out var c) ? c.GetString() : null,
+                    Timestamp = el.TryGetProperty("timestamp", out var ts) ? ts.GetDateTime() : DateTime.MinValue,
+                });
+            }
+
+            return messages;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void AppendSessionExport(StringBuilder sb, Data.Entities.Discussion disc, List<RawMessage> raw)
+    {
+        var collapsed = CollapseMessages(raw);
+        var textMessages = collapsed.Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content)).ToList();
+
+        sb.AppendLine($"## {disc.Title ?? "Untitled"} [{disc.Id}]");
+        sb.AppendLine($"Created: {disc.CreatedAt:yyyy-MM-dd HH:mm} — {textMessages.Count} message(s)");
+        sb.AppendLine();
+
+        foreach (var msg in textMessages)
+        {
+            var role = msg.Role == "user" ? "user" : "nova";
+            sb.AppendLine($"**{role}** ({msg.Timestamp:HH:mm}):");
+            sb.AppendLine(msg.Content);
+            sb.AppendLine();
+        }
+    }
+
+    private static List<CollapsedMessage> CollapseMessages(List<RawMessage> raw)
+    {
+        var result = new List<CollapsedMessage>();
+
+        foreach (var msg in raw)
+        {
+            if (msg.EventType is "thinking" or "status") continue;
+
+            var last = result.Count > 0 ? result[^1] : null;
+
+            if (msg.EventType == "text" && last is { EventType: "text" } && last.Role == msg.Role)
+            {
+                last.Content = (last.Content ?? "") + (msg.Content ?? "");
+                continue;
+            }
+
+            var content = msg.Content;
+            if (msg.EventType == "text" && msg.Role == "user")
+                content = StripInjectedTags(content ?? "");
+
+            result.Add(new CollapsedMessage
+            {
+                Role = msg.Role,
+                EventType = msg.EventType,
+                Content = content,
+                Timestamp = msg.Timestamp,
+            });
+        }
+
+        return result;
+    }
+
+    private static string StripInjectedTags(string content)
+    {
+        content = NovaContextTag.Replace(content, "");
+        content = NovaPriorTag.Replace(content, "");
+        return content.TrimStart();
+    }
+
+    private static async Task AppendLocalExport(StringBuilder sb, Data.Entities.Discussion disc, NovaDbContext db)
+    {
+        var messages = await db.Conversations
+            .Where(m => m.ContextId == disc.Id)
+            .OrderBy(m => m.Timestamp)
+            .ToListAsync();
+
+        sb.AppendLine($"## {disc.Title ?? "Untitled"} [{disc.Id}]");
+        sb.AppendLine($"Created: {disc.CreatedAt:yyyy-MM-dd HH:mm} — {messages.Count} message(s) [events only, session expired]");
+        sb.AppendLine();
+
+        foreach (var msg in messages)
+        {
+            var role = msg.Role == "user" ? "user" : "nova";
+            sb.AppendLine($"**{role}** ({msg.Timestamp:HH:mm}):");
+
+            if (!string.IsNullOrEmpty(msg.PartsJson))
+                AppendParts(sb, msg.PartsJson);
+            else
+                sb.AppendLine(msg.Content);
+
+            sb.AppendLine();
+        }
     }
 
     private static void AppendParts(StringBuilder sb, string partsJson)
@@ -93,4 +206,20 @@ public static class ConversationExporter
 
     private static string? Truncate(string? s, int max) =>
         s is { Length: > 0 } && s.Length > max ? s[..max] + "..." : s;
+
+    private class RawMessage
+    {
+        public string Role { get; set; } = "";
+        public string EventType { get; set; } = "";
+        public string? Content { get; set; }
+        public DateTime Timestamp { get; set; }
+    }
+
+    private class CollapsedMessage
+    {
+        public string Role { get; set; } = "";
+        public string EventType { get; set; } = "";
+        public string? Content { get; set; }
+        public DateTime Timestamp { get; set; }
+    }
 }
