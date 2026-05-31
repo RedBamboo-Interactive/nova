@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, Fragment } from "react"
+import { useParams, useNavigate } from "react-router-dom"
 import {
   MasterDetailLayout,
   PanelHeader,
@@ -8,6 +9,7 @@ import {
   Button,
 } from "@redbamboo/ui"
 import { MarkdownRenderer } from "@redbamboo/chat"
+import { useBreadcrumbLabel } from "@redbamboo/utility"
 import { api } from "@/lib/api"
 
 interface Automation {
@@ -64,13 +66,11 @@ function cronFiveToHuman([min, hour, dom, mon, dow]: [string, string, string, st
   const hasTime = hour !== "*" && min !== "*"
   const timeStr = hasTime ? formatCronTime(hour, min) : null
 
-  // Weekly: specific day(s) of week, any date/month
   if (dom === "*" && mon === "*" && dow !== "*") {
     const days = dow.split(",").map(d => DAY_NAMES[parseInt(d) % 7] ?? d).join(", ")
     return timeStr ? `${days} at ${timeStr}` : `${days}`
   }
 
-  // Monthly: specific day of month, any month, any dow
   if (dom !== "*" && mon === "*" && dow === "*") {
     const ordinal = dom === "1" || dom === "21" || dom === "31" ? `${dom}st`
       : dom === "2" || dom === "22" ? `${dom}nd`
@@ -79,13 +79,11 @@ function cronFiveToHuman([min, hour, dom, mon, dow]: [string, string, string, st
     return timeStr ? `Monthly on the ${ordinal} at ${timeStr}` : `Monthly on the ${ordinal}`
   }
 
-  // Yearly: specific day and month
   if (dom !== "*" && mon !== "*" && dow === "*") {
     const monthName = MONTH_NAMES[parseInt(mon) - 1] ?? mon
     return timeStr ? `${monthName} ${dom} at ${timeStr}` : `${monthName} ${dom}`
   }
 
-  // Daily with specific time
   if (dom === "*" && mon === "*" && dow === "*" && timeStr) {
     return `Daily at ${timeStr}`
   }
@@ -271,9 +269,17 @@ function AutomationDetail({ automation, onDelete }: { automation: Automation; on
 }
 
 export function AutomationsPanel() {
+  const { automationName: urlAutomationName } = useParams()
+  const navigate = useNavigate()
   const [automations, setAutomations] = useState<Automation[]>([])
-  const [selectedName, setSelectedName] = useState<string | null>(null)
   const [mobileTab, setMobileTab] = useState(0)
+
+  const selectedName = urlAutomationName ?? null
+
+  useBreadcrumbLabel(
+    urlAutomationName ? `/pulse/${urlAutomationName}` : undefined,
+    urlAutomationName ?? undefined,
+  )
 
   const refresh = useCallback(async () => {
     const data = await api.get<{ automations: Automation[] }>("/api/automations")
@@ -291,9 +297,14 @@ export function AutomationsPanel() {
 
   const handleDelete = useCallback(async (name: string) => {
     await api.delete(`/api/automations/${name}`)
-    if (selectedName === name) setSelectedName(null)
+    if (selectedName === name) navigate("/pulse")
     refresh()
-  }, [selectedName, refresh])
+  }, [selectedName, refresh, navigate])
+
+  const handleSelect = useCallback((name: string) => {
+    navigate(`/pulse/${encodeURIComponent(name)}`)
+    setMobileTab(1)
+  }, [navigate])
 
   const renderRow = (a: Automation, isSystem = false) => {
     const meta = actionMeta[a.actionType] ?? { icon: "fa-solid fa-gear", label: a.actionType }
@@ -313,7 +324,7 @@ export function AutomationsPanel() {
             </>
           ) : undefined
         }
-        onClick={() => { setSelectedName(a.name); setMobileTab(1) }}
+        onClick={() => handleSelect(a.name)}
         trailing={
           !isSystem ? (
             <Button
@@ -396,7 +407,7 @@ export function AutomationsPanel() {
       mobileTab={mobileTab}
       onMobileTabChange={(tab) => {
         setMobileTab(tab)
-        if (tab === 0) setSelectedName(null)
+        if (tab === 0) navigate("/pulse")
       }}
       sidebar={sidebar}
       detail={detail}

@@ -1,5 +1,7 @@
 import { useState } from "react"
+import { useLocation, useNavigate, useMatches } from "react-router-dom"
 import {
+  Breadcrumb,
   DropdownMenuItem,
   NavTabs,
   NavTab,
@@ -7,8 +9,16 @@ import {
   ResizablePanel,
   ResizableHandle,
 } from "@redbamboo/ui"
-import { AppShell as Shell, useCommand, useLogStream, LogPanel } from "@redbamboo/utility"
-import type { AppShellConfig } from "@redbamboo/utility"
+import {
+  AppShell as Shell,
+  useCommand,
+  useLogStream,
+  LogPanel,
+  buildBreadcrumbs,
+  useBreadcrumbLabelsContext,
+  useNavigateUp,
+} from "@redbamboo/utility"
+import type { AppShellConfig, RouteMatch } from "@redbamboo/utility"
 import { SettingsModal } from "@/components/layout/settings-modal"
 
 const shellConfig: AppShellConfig = {
@@ -26,8 +36,6 @@ const shellConfig: AppShellConfig = {
     company: "https://github.com/RedBamboo-Interactive",
   },
 }
-
-export type Tab = "chat" | "automations" | "memory"
 
 function SettingsCommand({ onSettings }: { onSettings: () => void }) {
   useCommand("open-settings", {
@@ -49,43 +57,80 @@ function ConsoleCommand({ onToggle }: { onToggle: () => void }) {
   return null
 }
 
-interface Props {
-  children: React.ReactNode
-  activeTab: Tab
-  onTabChange: (tab: Tab) => void
+function TabCommands({ navigate }: { navigate: (path: string) => void }) {
+  useCommand("tab-chat", {
+    label: "Go to Chat",
+    group: "Navigation",
+    shortcut: "F1",
+    keywords: ["chat", "discussions"],
+    action: () => navigate("/chat"),
+  })
+  useCommand("tab-pulse", {
+    label: "Go to Pulse",
+    group: "Navigation",
+    shortcut: "F2",
+    keywords: ["pulse", "automations", "heartbeats"],
+    action: () => navigate("/pulse"),
+  })
+  useCommand("tab-journal", {
+    label: "Go to Journal",
+    group: "Navigation",
+    shortcut: "F3",
+    keywords: ["journal", "memory", "files"],
+    action: () => navigate("/journal"),
+  })
+  return null
 }
 
-export function AppShell({ children, activeTab, onTabChange }: Props) {
+interface Props {
+  children: React.ReactNode
+}
+
+export function AppShell({ children }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [consoleOpen, setConsoleOpen] = useState(false)
   const logStream = useLogStream()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const matches = useMatches()
+
+  const labelCtx = useBreadcrumbLabelsContext()
+  const crumbs = buildBreadcrumbs(matches as RouteMatch[], labelCtx?.labels)
+
+  const getParentPath = () => {
+    if (crumbs.length >= 2) return crumbs[crumbs.length - 2]!.href ?? null
+    return null
+  }
+  useNavigateUp({ getParentPath, navigate })
+
+  const breadcrumb = crumbs.length > 1 ? (
+    <Breadcrumb items={crumbs} onNavigate={navigate} />
+  ) : null
 
   return (
     <Shell
       config={shellConfig}
+      breadcrumb={breadcrumb}
       headerContent={
         <NavTabs>
           <NavTab
-            active={activeTab === "chat"}
+            active={location.pathname.startsWith("/chat")}
             icon="fa-solid fa-comment"
-            shortcut="F1"
-            onClick={() => onTabChange("chat")}
+            onClick={() => navigate("/chat")}
           >
             Chat
           </NavTab>
           <NavTab
-            active={activeTab === "automations"}
+            active={location.pathname.startsWith("/pulse")}
             icon="fa-solid fa-heart-pulse"
-            shortcut="F2"
-            onClick={() => onTabChange("automations")}
+            onClick={() => navigate("/pulse")}
           >
             Pulse
           </NavTab>
           <NavTab
-            active={activeTab === "memory"}
+            active={location.pathname.startsWith("/journal")}
             icon="fa-solid fa-book"
-            shortcut="F3"
-            onClick={() => onTabChange("memory")}
+            onClick={() => navigate("/journal")}
           >
             Journal
           </NavTab>
@@ -109,6 +154,7 @@ export function AppShell({ children, activeTab, onTabChange }: Props) {
         </>
       }
     >
+      <TabCommands navigate={navigate} />
       <SettingsCommand onSettings={() => setSettingsOpen(true)} />
       <ConsoleCommand onToggle={() => setConsoleOpen((prev) => !prev)} />
       {consoleOpen ? (

@@ -1,12 +1,13 @@
 import { useState, useCallback, useEffect } from "react"
+import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
 import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
-import { useCommand } from "@redbamboo/utility"
+import { useCommand, useBreadcrumbLabel } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
 import { NovaStatusLine } from "@/components/nova-status-line"
 import { createNovaSpeechBackend } from "@/lib/speech"
 import { useNovaEmotion } from "@/hooks/use-nova-emotion"
-import type { useDiscussions } from "@/hooks/use-discussions"
+import { useDisc } from "@/App"
 import { useSessionStats } from "@/hooks/use-session-stats"
 
 const speechBackend = createNovaSpeechBackend()
@@ -52,13 +53,11 @@ function resolveImageSrc(src: string): string | undefined {
   return src
 }
 
-type DiscussionsHook = ReturnType<typeof useDiscussions>
+export function ChatView() {
+  const { discussionId: urlDiscussionId } = useParams()
+  const navigate = useNavigate()
+  const disc = useDisc()
 
-interface Props {
-  disc: DiscussionsHook
-}
-
-export function ChatView({ disc }: Props) {
   const {
     discussions,
     activeDiscussion,
@@ -76,6 +75,17 @@ export function ChatView({ disc }: Props) {
     dismissDiscussion,
     resumeDiscussion,
   } = disc
+
+  useEffect(() => {
+    if (urlDiscussionId && urlDiscussionId !== activeDiscussionId) {
+      selectDiscussion(urlDiscussionId)
+    }
+  }, [urlDiscussionId, activeDiscussionId, selectDiscussion])
+
+  useBreadcrumbLabel(
+    urlDiscussionId ? `/chat/${urlDiscussionId}` : undefined,
+    activeDiscussion?.title || "New Discussion",
+  )
 
   const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming)
   const [mobileTab, setMobileTab] = useState(0)
@@ -100,12 +110,23 @@ export function ChatView({ disc }: Props) {
     await resumeDiscussion(activeDiscussionId)
   }, [activeDiscussionId, resumeDiscussion])
 
+  const handleSelectDiscussion = useCallback((id: string) => {
+    navigate(`/chat/${id}`)
+    setMobileTab(1)
+  }, [navigate])
+
+  const handleNewDiscussion = useCallback(async () => {
+    const d = await createDiscussion()
+    if (d) navigate(`/chat/${d.id}`)
+    setMobileTab(1)
+  }, [createDiscussion, navigate])
+
   useCommand("new-discussion", {
     label: "New Discussion",
     group: "Discussions",
     shortcut: "Ctrl+N",
     keywords: ["start", "create", "new", "chat"],
-    action: () => { createDiscussion(); setMobileTab(1) },
+    action: handleNewDiscussion,
   })
 
   useCommand("switch-discussion", {
@@ -117,7 +138,7 @@ export function ChatView({ disc }: Props) {
       if (discussions.length === 0) return
       const idx = discussions.findIndex((d) => d.id === activeDiscussionId)
       const next = discussions[(idx + 1) % discussions.length]
-      if (next) selectDiscussion(next.id)
+      if (next) navigate(`/chat/${next.id}`)
     },
   })
 
@@ -127,7 +148,10 @@ export function ChatView({ disc }: Props) {
     shortcut: "Ctrl+W",
     keywords: ["close", "archive", "remove"],
     action: () => {
-      if (activeDiscussionId) archiveDiscussion(activeDiscussionId)
+      if (activeDiscussionId) {
+        archiveDiscussion(activeDiscussionId)
+        navigate("/chat")
+      }
     },
   })
 
@@ -140,7 +164,7 @@ export function ChatView({ disc }: Props) {
   const sidebarHeader = (
     <PanelHeader title="Discussions">
       <button
-        onClick={() => { createDiscussion(); setMobileTab(1) }}
+        onClick={handleNewDiscussion}
         className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
         title="New discussion"
       >
@@ -226,7 +250,7 @@ export function ChatView({ disc }: Props) {
           <i className="fa-solid fa-star text-3xl mx-auto mb-3 opacity-30" />
           <p className="text-sm mb-4">Start a conversation with Nova</p>
           <button
-            onClick={() => { createDiscussion(); setMobileTab(1) }}
+            onClick={handleNewDiscussion}
             className="text-xs px-3 py-1.5 rounded bg-overlay-10 hover:bg-overlay-15 text-contrast transition-colors"
           >
             <i className="fa-solid fa-plus mr-1.5" />
@@ -250,7 +274,7 @@ export function ChatView({ disc }: Props) {
             <DiscussionSidebar
               discussions={discussions}
               activeDiscussionId={activeDiscussionId}
-              onSelect={(id) => { selectDiscussion(id); setMobileTab(1) }}
+              onSelect={handleSelectDiscussion}
               onArchive={archiveDiscussion}
               onDismiss={dismissDiscussion}
             />

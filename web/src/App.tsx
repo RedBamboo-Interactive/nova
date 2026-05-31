@@ -1,22 +1,28 @@
-import { useState, useEffect, useCallback, useRef } from "react"
-import { WsEventProvider, useWsSubscribe } from "@redbamboo/utility"
-import { AppShell, type Tab } from "@/components/layout/app-shell"
-import { ChatView } from "@/panels/ChatView"
-import { AutomationsPanel } from "@/panels/HeartbeatsPanel"
-import { MemoryPanel } from "@/panels/MemoryPanel"
+import { useEffect, useCallback, useRef, createContext, useContext } from "react"
+import { createBrowserRouter, RouterProvider, Outlet } from "react-router-dom"
+import { WsEventProvider, useWsSubscribe, BreadcrumbLabelProvider } from "@redbamboo/utility"
+import { AppShell } from "@/components/layout/app-shell"
 import { useLocalSettings } from "@/hooks/use-local-settings"
 import { useDiscussions } from "@/hooks/use-discussions"
 import type { WsEvent } from "@/lib/types"
+import { routes } from "@/routes"
 
-function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<ReturnType<typeof useDiscussions>> }) {
+type DiscussionsHook = ReturnType<typeof useDiscussions>
+
+const DiscussionsContext = createContext<DiscussionsHook>(null!)
+
+export function useDisc(): DiscussionsHook {
+  return useContext(DiscussionsContext)
+}
+
+function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<DiscussionsHook> }) {
   useWsSubscribe((event) => {
     discRef.current.handleWsEvent(event as WsEvent)
   })
   return null
 }
 
-export function App() {
-  const [activeTab, setActiveTab] = useState<Tab>("chat")
+function AppLayout() {
   const settings = useLocalSettings()
   const disc = useDiscussions()
   const discRef = useRef(disc)
@@ -46,13 +52,26 @@ export function App() {
   return (
     <WsEventProvider url={wsUrl} onReconnect={onReconnect} onVisibilityChange={onVisibilityChange}>
       <WsDiscussionBridge discRef={discRef} />
-      <AppShell activeTab={activeTab} onTabChange={setActiveTab}>
-        <div className="h-full overflow-hidden">
-          {activeTab === "chat" && <ChatView disc={disc} />}
-          {activeTab === "automations" && <AutomationsPanel />}
-          {activeTab === "memory" && <MemoryPanel />}
-        </div>
-      </AppShell>
+      <DiscussionsContext.Provider value={disc}>
+        <BreadcrumbLabelProvider>
+          <AppShell>
+            <div className="h-full overflow-hidden">
+              <Outlet />
+            </div>
+          </AppShell>
+        </BreadcrumbLabelProvider>
+      </DiscussionsContext.Provider>
     </WsEventProvider>
   )
+}
+
+const router = createBrowserRouter([
+  {
+    element: <AppLayout />,
+    children: routes,
+  },
+])
+
+export function App() {
+  return <RouterProvider router={router} />
 }

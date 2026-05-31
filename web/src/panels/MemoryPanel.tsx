@@ -1,13 +1,23 @@
 import { useState, useEffect, useCallback, Fragment } from "react"
+import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, ScrollArea, ItemListRow, Badge } from "@redbamboo/ui"
 import { MarkdownRenderer } from "@redbamboo/chat"
+import { useBreadcrumbLabel } from "@redbamboo/utility"
 import { api } from "@/lib/api"
 
 export function MemoryPanel() {
+  const { "*": splatPath } = useParams()
+  const navigate = useNavigate()
   const [files, setFiles] = useState<string[]>([])
-  const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [content, setContent] = useState("")
   const [mobileTab, setMobileTab] = useState(0)
+
+  const selectedFile = splatPath || null
+
+  useBreadcrumbLabel(
+    selectedFile ? `/journal/${selectedFile}` : undefined,
+    selectedFile?.split("/").pop(),
+  )
 
   const refreshManifest = useCallback(async () => {
     const data = await api.get<{ files: string[] }>("/api/memory/manifest")
@@ -18,14 +28,17 @@ export function MemoryPanel() {
     refreshManifest()
   }, [refreshManifest])
 
-  const loadFile = useCallback(async (path: string) => {
-    setSelectedFile(path)
+  useEffect(() => {
+    if (!selectedFile) return
+    api.get<{ content: string }>(
+      `/api/memory/file?path=${encodeURIComponent(selectedFile)}`,
+    ).then((data) => setContent(data.content))
+  }, [selectedFile])
+
+  const handleSelectFile = useCallback((path: string) => {
+    navigate(`/journal/${path}`)
     setMobileTab(1)
-    const data = await api.get<{ content: string }>(
-      `/api/memory/file?path=${encodeURIComponent(path)}`,
-    )
-    setContent(data.content)
-  }, [])
+  }, [navigate])
 
   const grouped = files.reduce<Record<string, string[]>>((acc, file) => {
     const dir = file.split("/").slice(0, -1).join("/") || "root"
@@ -60,7 +73,7 @@ export function MemoryPanel() {
                     <ItemListRow
                       key={file}
                       selected={selectedFile === file}
-                      onClick={() => loadFile(file)}
+                      onClick={() => handleSelectFile(file)}
                       icon={
                         <i className="fa-solid fa-file-lines text-xs text-text-muted" />
                       }
@@ -103,7 +116,7 @@ export function MemoryPanel() {
       mobileTab={mobileTab}
       onMobileTabChange={(tab) => {
         setMobileTab(tab)
-        if (tab === 0) setSelectedFile(null)
+        if (tab === 0) navigate("/journal")
       }}
       sidebar={sidebar}
       detail={detail}
