@@ -67,6 +67,10 @@ public class NovaEngine : IAsyncDisposable
     private string BuildAutomationPrompt(string name)
     {
         var identity = _memory.ReadIdentity();
+        var now = DateTimeOffset.Now;
+        var date = now.ToString("yyyy-MM-dd");
+        var day = now.ToString("dddd");
+        var time = now.ToString("HH:mm");
 
         return $"""
             {identity}
@@ -74,6 +78,7 @@ public class NovaEngine : IAsyncDisposable
             ---
 
             # Automation: {name}
+            Current date: {date} ({day}), {time} local time.
             You are running an automated task. Be concise.
             If there is nothing to do, say so briefly.
             If you need to notify the user, write to memory/meta/notifications.md.
