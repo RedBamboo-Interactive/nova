@@ -99,6 +99,8 @@ Read through everything you gathered and extract:
 - **Decisions**: choices made, conclusions reached, approaches selected or rejected
 - **Work done**: code written, features shipped, bugs fixed, PRs merged, deploys
   completed — across all projects and tools
+- **Creative work**: world-building, scenario design, brainstorming, planning for
+  personal projects — these are as important as code
 - **Preferences**: likes, dislikes, workflow preferences, communication style,
   tool preferences, coding conventions
 - **Action items**: tasks mentioned, committed to, completed, or abandoned
@@ -108,6 +110,15 @@ Read through everything you gathered and extract:
 - **Patterns**: recurring themes, evolving interests, ongoing concerns
 - **Technical context**: architecture decisions, stack changes, dependency updates,
   infrastructure changes
+
+**IMPORTANT: Every discussion deserves attention, not just code-heavy ones.**
+Don't skip or skim discussions based on their title. A conversation called
+"non-work topics" might contain hours of creative world-building for a tracked
+project. A "casual chat" might surface important user context or decisions.
+Cross-reference discussion content against existing memory topics — if a
+discussion touches a tracked project (even a personal one like a TTRPG scenario),
+it's substantive content that belongs in the harvest. Judge by what was actually
+said, not by the title or the session cost.
 
 Write the harvest to `memory/dreaming/harvest/{yyyy-MM-dd}.md`, grouped by
 source with traceability (discussion IDs, commit hashes, etc). Extract everything
