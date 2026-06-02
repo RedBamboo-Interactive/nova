@@ -59,14 +59,78 @@ All Red Suite apps use `@redbamboo/ui` and share common UI patterns:
 - `page.waitForTimeout(1000)` is reliable for most transitions
 - For API-dependent content, prefer `page.waitForSelector` over fixed waits
 
-## Viewing Screenshots
+## Video Recording
+
+Playwright can record the entire test flow as a video. Use `recordVideo` on the browser context:
+
+```js
+const context = await browser.newContext({
+  recordVideo: { dir: 'videos/', size: { width: 1280, height: 720 } }
+});
+const page = await context.newPage();
+// ... run the flow ...
+const videoPath = await page.video().path();
+await context.close(); // video is finalized on context close
+await browser.close();
+```
+
+**Important**: the video file is only complete after `context.close()`. Call `page.video().path()` before closing to get the file path. Playwright saves as `.webm` (VP8).
+
+### Frame Extraction with ffmpeg
+
+Extract frames from the video to validate the flow visually (since we can view PNGs but not video inline):
+
+```bash
+# Extract one frame every 2 seconds
+ffmpeg -i video.webm -vf "fps=0.5" frames/frame_%03d.png
+
+# Extract frame at a specific timestamp
+ffmpeg -i video.webm -ss 00:00:03 -frames:v 1 frame_3s.png
+
+# Extract N evenly-spaced frames
+ffmpeg -i video.webm -vf "select='not(mod(n\,30))'" -vsync vfill frames/frame_%03d.png
+```
+
+### Recommended Flow
+
+1. **Record video** of the entire test (always-on, cheap)
+2. **Take screenshots** at key checkpoints for immediate self-validation
+3. **Extract frames** from the video at the end for flow validation (transitions, animations, timing)
+4. **Show Laurent the video path** so he can watch the full flow
+5. **Show key frames inline** using markdown image syntax for quick review
+
+### Video + Screenshots Together
+
+When testing, use both. Screenshots give you instant validation at specific states. Video captures everything in between: transitions, scroll behavior, loading states, timing issues.
+
+```js
+// Pattern: video context with checkpoint screenshots
+const context = await browser.newContext({
+  recordVideo: { dir: 'videos/', size: { width: 1280, height: 720 } }
+});
+const page = await context.newPage();
+await page.goto('http://localhost:18904');
+await page.screenshot({ path: 'screenshots/01_initial.png' });
+// ... navigate ...
+await page.screenshot({ path: 'screenshots/02_after_click.png' });
+// ... more flow ...
+const videoPath = await page.video().path();
+await context.close();
+await browser.close();
+// Now extract frames for flow review
+// execSync('ffmpeg -i ' + videoPath + ' -vf "fps=1" frames/frame_%03d.png');
+```
+
+## Viewing Screenshots & Videos
 
 Use the Read tool to view `.png` files — they render inline. Save screenshots to the testing package directory for easy access.
 
-When showing screenshots to Laurent (mobile), use markdown image syntax:
+When showing screenshots to Laurent, use markdown image syntax:
 ```
 ![description](T:/Projects/redbamboo-packages/packages/testing/screenshot.png)
 ```
+
+For videos, provide the file path. Laurent can open `.webm` files directly.
 
 ## RedLeaf Specific
 

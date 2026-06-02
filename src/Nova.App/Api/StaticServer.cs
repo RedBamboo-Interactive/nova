@@ -85,6 +85,10 @@ public class StaticServer
                 ".gif" => "image/gif",
                 ".svg" => "image/svg+xml",
                 ".bmp" => "image/bmp",
+                ".webm" => "video/webm",
+                ".mp4" => "video/mp4",
+                ".mov" => "video/quicktime",
+                ".ogg" => "video/ogg",
                 _ => (string?)null
             };
             if (mime == null) { ctx.Response.StatusCode = 403; return; }
