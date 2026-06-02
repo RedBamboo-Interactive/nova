@@ -186,6 +186,7 @@ export function ChatView() {
         onSend={handleSend}
         onInterrupt={handleInterrupt}
         sessionId={activeDiscussionId}
+        draftStorageKey="nova-drafts"
         disabled={activeDiscussion.status === "archived" || activeDiscussion.status === "stopped" || !activeDiscussion.sessionId}
         pendingQuestion={pendingQuestion}
         onAnswerQuestion={handleAnswerQuestion}
