@@ -1,19 +1,12 @@
 import { useState, useEffect } from "react"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  Button,
-} from "@redbamboo/ui"
+import { PanelHeader, Button } from "@redbamboo/ui"
 import { TunnelSettingsPanel } from "@redbamboo/utility"
 import { useLocalSettings } from "@/hooks/use-local-settings"
 import { setSettings as setLocalSettings } from "@/lib/settings-store"
 import { useSettings } from "@/hooks/use-settings"
 
 interface Props {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+  onClose: () => void
 }
 
 function SettingRow({
@@ -71,7 +64,7 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
   )
 }
 
-export function SettingsModal({ open, onOpenChange }: Props) {
+export function SettingsPanel({ onClose }: Props) {
   const localSettings = useLocalSettings()
   const { settings, saving, updateIdentity, updateDocker } = useSettings()
   const [identityDraft, setIdentityDraft] = useState("")
@@ -95,20 +88,21 @@ export function SettingsModal({ open, onOpenChange }: Props) {
   }, [settings?.docker, dockerDirty])
 
   useEffect(() => {
-    if (!open) return
     fetch("/api/autostart").then(r => r.json()).then(d => setAutoStart(d.enabled)).catch(() => {})
-  }, [open])
+  }, [])
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md sm:max-w-lg max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="text-lg">Settings</DialogTitle>
-        </DialogHeader>
+    <div data-slot="settings-panel" className="flex flex-col h-full">
+      <PanelHeader title="Settings" leading={<i className="fa-solid fa-gear text-sm text-text-muted" />}>
+        <Button variant="ghost" size="icon-xs" onClick={onClose}>
+          <i className="fa-solid fa-xmark" />
+        </Button>
+      </PanelHeader>
 
-        <div className="divide-y divide-overlay-6 -mx-1">
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="divide-y divide-overlay-6">
           {/* Appearance */}
-          <div className="pb-4 px-1">
+          <div className="pb-4">
             <SectionHeader>Appearance</SectionHeader>
             <SettingRow label="Light mode">
               <Toggle
@@ -129,7 +123,7 @@ export function SettingsModal({ open, onOpenChange }: Props) {
           </div>
 
           {/* System */}
-          <div className="pb-4 px-1">
+          <div className="py-4">
             <SectionHeader>System</SectionHeader>
             <SettingRow label="Start with Windows" hint="Launch Nova automatically when you sign in.">
               <Toggle
@@ -143,7 +137,7 @@ export function SettingsModal({ open, onOpenChange }: Props) {
           </div>
 
           {/* Docker */}
-          <div className="py-4 px-1">
+          <div className="py-4">
             <SectionHeader>Docker</SectionHeader>
             <SettingRow label="Containerize AI sessions" hint="Run delegated AI sessions inside a Docker container for isolation.">
               <Toggle
@@ -204,7 +198,7 @@ export function SettingsModal({ open, onOpenChange }: Props) {
           </div>
 
           {/* Identity */}
-          <div className="py-4 px-1">
+          <div className="py-4">
             <SectionHeader>Identity</SectionHeader>
             <p className="text-xs text-muted-a60 mb-3 leading-relaxed">
               Nova's personality, tone, and behavioral guidelines.
@@ -244,12 +238,12 @@ export function SettingsModal({ open, onOpenChange }: Props) {
           </div>
 
           {/* Remote Access */}
-          <div className="pt-4 px-1">
+          <div className="pt-4">
             <SectionHeader>Remote Access</SectionHeader>
             <TunnelSettingsPanel />
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   )
 }
