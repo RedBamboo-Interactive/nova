@@ -26,6 +26,11 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# Test artifacts
+screenshots/
+test-results/
+videos/
+
 # Secrets
 .env
 *.pfx
