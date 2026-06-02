@@ -63,9 +63,11 @@ export function useDiscussions() {
 
   const loadMessages = useCallback(async (id: string) => {
     if (loadedRef.current.has(id)) return
-    loadedRef.current.add(id)
 
     const disc = discussions.find((d) => d.id === id)
+    if (!disc) return
+
+    loadedRef.current.add(id)
     if (disc?.sessionId) {
       try {
         const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
@@ -127,6 +129,12 @@ export function useDiscussions() {
     () => discussions.filter((d) => d.status !== "archived"),
     [discussions],
   )
+
+  useEffect(() => {
+    if (activeDiscussionId && !loadedRef.current.has(activeDiscussionId)) {
+      loadMessages(activeDiscussionId)
+    }
+  }, [discussions, activeDiscussionId, loadMessages])
 
   const autoSelected = useRef(false)
   useEffect(() => {
