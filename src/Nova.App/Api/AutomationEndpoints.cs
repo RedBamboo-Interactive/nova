@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using RedBamboo.AppHost.Discovery;
@@ -14,9 +15,13 @@ public static class AutomationEndpoints
 
     public static void MapAutomationEndpoints(this EndpointRegistry registry, NovaEngine engine)
     {
-        registry.MapGet("/api/automations", "List all automations", () =>
+        registry.MapGet("/api/automations", "List all automations", (HttpContext ctx) =>
         {
             var automations = engine.Automations?.GetAll() ?? [];
+            var userId = ctx.User.FindFirstValue("sub");
+            if (userId != null && userId != "local-user")
+                automations = automations.Where(a => a.OwnerId == null || a.OwnerId == userId).ToList();
+
             return Results.Ok(new
             {
                 automations = automations.Select(a => new
@@ -41,7 +46,7 @@ public static class AutomationEndpoints
             });
         });
 
-        registry.MapPost("/api/automations", "Create an automation", (AutomationCreateRequest request) =>
+        registry.MapPost("/api/automations", "Create an automation", (AutomationCreateRequest request, HttpContext ctx) =>
         {
             if (string.IsNullOrWhiteSpace(request.Name))
                 return Results.BadRequest(new { error = "Name is required" });
@@ -63,16 +68,21 @@ public static class AutomationEndpoints
                     ? JsonSerializer.Serialize(request.ActionConfig, JsonOptions)
                     : null,
                 ReportToDiscussionId = request.ReportToDiscussionId,
+                OwnerId = ctx.User.FindFirstValue("sub"),
             };
 
             engine.Automations?.Add(automation);
             return Results.Ok(new { success = true, name = automation.Name, nextRun = automation.NextRun });
         });
 
-        registry.MapGet("/api/automations/{name}", "Get automation details", (string name) =>
+        registry.MapGet("/api/automations/{name}", "Get automation details", (string name, HttpContext ctx) =>
         {
             var a = engine.Automations?.GetAll().FirstOrDefault(x => x.Name == name);
             if (a == null) return Results.NotFound(new { error = "Automation not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (a.OwnerId != null && userId != "local-user" && a.OwnerId != userId)
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             return Results.Ok(new
             {
@@ -94,10 +104,18 @@ public static class AutomationEndpoints
             });
         });
 
-        registry.MapPost("/api/automations/{name}/trigger", "Manually trigger an automation", async (string name, CancellationToken ct) =>
+        registry.MapPost("/api/automations/{name}/trigger", "Manually trigger an automation", async (string name, HttpContext ctx, CancellationToken ct) =>
         {
             if (engine.Automations == null)
                 return Results.StatusCode(503);
+
+            var a = engine.Automations.GetAll().FirstOrDefault(x => x.Name == name);
+            if (a == null)
+                return Results.NotFound(new { error = "Automation not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (a.OwnerId != null && userId != "local-user" && a.OwnerId != userId)
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             var result = await engine.Automations.TriggerAsync(name, ct);
             if (result == null)
@@ -106,8 +124,15 @@ public static class AutomationEndpoints
             return Results.Ok(new { success = true, result = new { result.Triggered, result.Summary, result.SessionId } });
         });
 
-        registry.MapDelete("/api/automations/{name}", "Remove an automation", (string name) =>
+        registry.MapDelete("/api/automations/{name}", "Remove an automation", (string name, HttpContext ctx) =>
         {
+            var a = engine.Automations?.GetAll().FirstOrDefault(x => x.Name == name);
+            if (a == null) return Results.Ok(new { success = false });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (a.OwnerId != null && userId != "local-user" && a.OwnerId != userId)
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
+
             var removed = engine.Automations?.Remove(name) ?? false;
             return Results.Ok(new { success = removed });
         });

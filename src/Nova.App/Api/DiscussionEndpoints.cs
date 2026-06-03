@@ -459,8 +459,13 @@ public static class DiscussionEndpoints
             var now = DateTime.UtcNow;
             var cutoff = now.AddDays(-2);
 
-            var allDiscussions = await db.Discussions
-                .Where(d => d.Status != "archived" || (d.Status == "archived" && d.LastActivity >= cutoff))
+            IQueryable<Discussion> contextQuery = db.Discussions
+                .Where(d => d.Status != "archived" || (d.Status == "archived" && d.LastActivity >= cutoff));
+
+            if (userId != null && userId != "local-user")
+                contextQuery = contextQuery.Where(d => d.OwnerId == null || d.OwnerId == userId);
+
+            var allDiscussions = await contextQuery
                 .OrderByDescending(d => d.LastActivity)
                 .ToListAsync();
 

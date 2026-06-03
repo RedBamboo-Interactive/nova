@@ -68,7 +68,7 @@ public class StaticServer
         {
             GetAccessToken = () => App.Config.Tunnel.AccessToken,
             CookieName = "nova_token",
-            BypassPaths = ["/ping", "/api/remote/status", "/api/discussions/export"],
+            BypassPaths = ["/ping", "/api/remote/status"],
         });
         _app.UseAppHostJwtAuth();
 
