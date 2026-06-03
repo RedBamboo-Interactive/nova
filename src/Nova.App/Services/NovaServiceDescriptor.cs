@@ -21,6 +21,8 @@ public class NovaServiceDescriptor : RegistryServiceDescriptor
     public override string Version => "0.1.0";
     public override string Description => "Persistent AI companion with identity, memory, and proactive capabilities";
     public override string ApiBase => $"http://localhost:{_port}";
+    public override string? IconClass => "fa-solid fa-star";
+    public override string? IconColor => "#D4AA4F";
 
     public override Task<IReadOnlyList<CapabilityDescriptor>> GetCapabilitiesAsync()
     {
