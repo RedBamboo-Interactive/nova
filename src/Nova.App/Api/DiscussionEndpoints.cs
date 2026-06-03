@@ -55,11 +55,16 @@ public static class DiscussionEndpoints
             return Results.Ok(discussions.Select(ToInfo));
         });
 
-        registry.MapGet("/api/discussions/pending", "Count unread discussions", async (NovaDbContext db) =>
+        registry.MapGet("/api/discussions/pending", "Count unread discussions", async (HttpContext ctx, NovaDbContext db) =>
         {
-            var discussions = await db.Discussions
-                .Where(d => d.Status != "archived" && d.SessionId != null)
-                .ToListAsync();
+            IQueryable<Discussion> pendingQuery = db.Discussions
+                .Where(d => d.Status != "archived" && d.SessionId != null);
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (userId != null && userId != "local-user")
+                pendingQuery = pendingQuery.Where(d => d.OwnerId == null || d.OwnerId == userId);
+
+            var discussions = await pendingQuery.ToListAsync();
 
             if (discussions.Count == 0)
                 return Results.Ok(new { count = 0 });
@@ -93,11 +98,16 @@ public static class DiscussionEndpoints
             return Results.Ok(new { count });
         });
 
-        registry.MapPost("/api/discussions/sync", "Sync discussion statuses with RedCompute session liveness", async (NovaDbContext db) =>
+        registry.MapPost("/api/discussions/sync", "Sync discussion statuses with RedCompute session liveness", async (HttpContext ctx, NovaDbContext db) =>
         {
-            var discussions = await db.Discussions
-                .Where(d => d.Status != "archived" && d.SessionId != null)
-                .ToListAsync();
+            IQueryable<Discussion> syncQuery = db.Discussions
+                .Where(d => d.Status != "archived" && d.SessionId != null);
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (userId != null && userId != "local-user")
+                syncQuery = syncQuery.Where(d => d.OwnerId == null || d.OwnerId == userId);
+
+            var discussions = await syncQuery.ToListAsync();
 
             if (discussions.Count == 0)
                 return Results.Ok(new { synced = 0 });
@@ -184,11 +194,15 @@ public static class DiscussionEndpoints
             return Results.Ok(new { discussion = ToInfo(discussion) });
         });
 
-        registry.MapPut("/api/discussions/{id}/title", "Update discussion title", async (string id, DiscussionTitleRequest request, NovaDbContext db) =>
+        registry.MapPut("/api/discussions/{id}/title", "Update discussion title", async (string id, DiscussionTitleRequest request, HttpContext ctx, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
                 return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (discussion.OwnerId != null && userId != "local-user" && discussion.OwnerId != userId)
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             discussion.Title = request.Title;
             await db.SaveChangesAsync();
@@ -196,11 +210,15 @@ public static class DiscussionEndpoints
             return Results.Ok(ToInfo(discussion));
         });
 
-        registry.MapPut("/api/discussions/{id}/read", "Mark discussion as read", async (string id, NovaDbContext db) =>
+        registry.MapPut("/api/discussions/{id}/read", "Mark discussion as read", async (string id, HttpContext ctx, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
                 return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (discussion.OwnerId != null && userId != "local-user" && discussion.OwnerId != userId)
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             discussion.LastReadAt = DateTime.UtcNow;
             await db.SaveChangesAsync();
@@ -208,11 +226,15 @@ public static class DiscussionEndpoints
             return Results.Ok(ToInfo(discussion));
         });
 
-        registry.MapPut("/api/discussions/{id}/activity", "Update discussion last activity", async (string id, NovaDbContext db) =>
+        registry.MapPut("/api/discussions/{id}/activity", "Update discussion last activity", async (string id, HttpContext ctx, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
                 return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (discussion.OwnerId != null && userId != "local-user" && discussion.OwnerId != userId)
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             discussion.LastActivity = DateTime.UtcNow;
             await db.SaveChangesAsync();
@@ -220,11 +242,15 @@ public static class DiscussionEndpoints
             return Results.Ok(ToInfo(discussion));
         });
 
-        registry.MapPut("/api/discussions/{id}/stopped", "Mark discussion as stopped (session ended)", async (string id, NovaDbContext db) =>
+        registry.MapPut("/api/discussions/{id}/stopped", "Mark discussion as stopped (session ended)", async (string id, HttpContext ctx, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
                 return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (discussion.OwnerId != null && userId != "local-user" && discussion.OwnerId != userId)
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             if (discussion.Status is not "archived")
                 discussion.Status = "stopped";
@@ -279,9 +305,16 @@ public static class DiscussionEndpoints
                 .ToList();
 
             var discussionIds = grouped.Select(g => g.Key).ToList();
-            var discussions = await db.Discussions
-                .Where(d => discussionIds.Contains(d.Id))
-                .ToDictionaryAsync(d => d.Id);
+            IQueryable<Discussion> searchDiscQuery = db.Discussions
+                .Where(d => discussionIds.Contains(d.Id));
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (userId != null && userId != "local-user")
+                searchDiscQuery = searchDiscQuery.Where(d => d.OwnerId == null || d.OwnerId == userId);
+
+            var discussions = await searchDiscQuery.ToDictionaryAsync(d => d.Id);
+
+            grouped = grouped.Where(g => discussions.ContainsKey(g.Key)).ToList();
 
             var results = grouped.Select(g =>
             {
@@ -316,6 +349,10 @@ public static class DiscussionEndpoints
             if (discussion is null)
                 return Results.NotFound(new { error = "Discussion not found" });
 
+            var userId = ctx.User.FindFirstValue("sub");
+            if (discussion.OwnerId != null && userId != "local-user" && discussion.OwnerId != userId)
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
+
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });
 
@@ -325,7 +362,7 @@ public static class DiscussionEndpoints
                 Role = "user",
                 Content = request.Content,
                 Source = $"event:{request.Source ?? "automation"}",
-                UserId = ctx.User.FindFirstValue("sub"),
+                UserId = userId,
             });
 
             discussion.LastActivity = DateTime.UtcNow;
@@ -354,11 +391,15 @@ public static class DiscussionEndpoints
             return Results.Ok(new { success = true });
         });
 
-        registry.MapPost("/api/discussions/{id}/nova-message", "Inject a Nova-authored (assistant) message into a discussion without triggering inference", async (string id, NovaMessageRequest request, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
+        registry.MapPost("/api/discussions/{id}/nova-message", "Inject a Nova-authored (assistant) message into a discussion without triggering inference", async (string id, NovaMessageRequest request, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
                 return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (discussion.OwnerId != null && userId != "local-user" && discussion.OwnerId != userId)
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             if (discussion.SessionId is null)
                 return Results.BadRequest(new { error = "Discussion has no active session" });
@@ -404,6 +445,10 @@ public static class DiscussionEndpoints
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
                 return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (discussion.OwnerId != null && userId != "local-user" && discussion.OwnerId != userId)
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             if (discussion.SessionId is null)
                 return Results.BadRequest(new { error = "Discussion has no active session" });
