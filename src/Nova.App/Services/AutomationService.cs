@@ -405,9 +405,10 @@ public class AutomationService
             changed = true;
         }
 
-        if (_automations.All(a => a.Name != "system:dreaming"))
+        var dreamingSkill = _memory.ReadMemoryFile("config/skills/dreaming.md") ?? "";
+        var existingDreaming = _automations.FirstOrDefault(a => a.Name == "system:dreaming");
+        if (existingDreaming == null)
         {
-            var dreamingSkill = _memory.ReadMemoryFile("config/skills/dreaming.md") ?? "";
             _automations.Add(new Automation
             {
                 Name = "system:dreaming",
@@ -423,6 +424,17 @@ public class AutomationService
             });
             _log.Info("automations", "Added built-in dreaming automation");
             changed = true;
+        }
+        else
+        {
+            var currentConfig = Deserialize<AiSessionConfig>(existingDreaming.ActionConfigJson);
+            if (currentConfig.Prompt != dreamingSkill)
+            {
+                currentConfig.Prompt = dreamingSkill;
+                existingDreaming.ActionConfigJson = JsonSerializer.Serialize(currentConfig, JsonOptions);
+                _log.Info("automations", "Synced dreaming prompt from skill file");
+                changed = true;
+            }
         }
 
         if (changed) Save();
