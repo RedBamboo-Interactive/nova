@@ -20,6 +20,12 @@ public static class DelegateEndpoints
         Timeout = TimeSpan.FromSeconds(30),
     };
 
+    public static void SetAuthToken(string token)
+    {
+        RedCompute.DefaultRequestHeaders.Remove("Authorization");
+        RedCompute.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+    }
+
     private static readonly HttpClient CodeRed = new()
     {
         BaseAddress = new Uri("http://localhost:18801"),

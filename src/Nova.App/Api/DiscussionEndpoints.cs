@@ -28,6 +28,12 @@ public static class DiscussionEndpoints
         Timeout = TimeSpan.FromSeconds(30),
     };
 
+    public static void SetAuthToken(string token)
+    {
+        RedCompute.DefaultRequestHeaders.Remove("Authorization");
+        RedCompute.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+    }
+
     public static void MapDiscussionEndpoints(this EndpointRegistry registry, NovaEngine engine)
     {
         var memory = engine.Memory;

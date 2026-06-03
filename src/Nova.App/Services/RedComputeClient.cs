@@ -40,6 +40,8 @@ public class RedComputeClient : IDisposable
 
     private string? _currentUserId;
 
+    public event Action<string>? TokenChanged;
+
     public void SetUser(string userId, string email, string? name)
     {
         if (_jwtService is null || userId == _currentUserId) return;
@@ -47,6 +49,7 @@ public class RedComputeClient : IDisposable
         _serviceToken = _jwtService.GenerateAccessToken(userId, email, name, ["admin"]);
         _http.DefaultRequestHeaders.Remove("Authorization");
         _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {_serviceToken}");
+        TokenChanged?.Invoke(_serviceToken);
         _log.Info("redcompute", $"Authenticated as {email}");
     }
 

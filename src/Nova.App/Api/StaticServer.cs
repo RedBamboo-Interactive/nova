@@ -66,6 +66,9 @@ public class StaticServer
 
         var jwtService = _app.Services.GetRequiredService<JwtService>();
         _engine.RedCompute.SetJwtService(jwtService);
+        _engine.RedCompute.TokenChanged += DiscussionEndpoints.SetAuthToken;
+        _engine.RedCompute.TokenChanged += DelegateEndpoints.SetAuthToken;
+        _engine.RedCompute.TokenChanged += ConversationExporter.SetAuthToken;
 
         _app.UseAppHostTelemetry();
         _app.UseCors();

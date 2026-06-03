@@ -15,6 +15,12 @@ public static class ConversationExporter
         Timeout = TimeSpan.FromSeconds(15),
     };
 
+    public static void SetAuthToken(string token)
+    {
+        RedCompute.DefaultRequestHeaders.Remove("Authorization");
+        RedCompute.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+    }
+
     private static readonly Regex NovaContextTag = new(
         @"<nova-context[^>]*>[\s\S]*?</nova-context>\s*", RegexOptions.Compiled);
 
