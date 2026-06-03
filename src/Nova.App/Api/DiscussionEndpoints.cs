@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using RedBamboo.AppHost.Auth;
 using RedBamboo.AppHost.Discovery;
 using RedBamboo.AppHost.WebSockets;
 using Nova.App.Data;
@@ -22,16 +23,15 @@ public static class DiscussionEndpoints
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    private static readonly HttpClient RedCompute = new()
+    private static HttpClient RedCompute = new()
     {
         BaseAddress = new Uri("http://localhost:18800"),
         Timeout = TimeSpan.FromSeconds(30),
     };
 
-    public static void SetAuthToken(string token)
+    public static void Initialize(AuthenticatedHttpClientFactory factory)
     {
-        RedCompute.DefaultRequestHeaders.Remove("Authorization");
-        RedCompute.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+        RedCompute = factory.CreateClient("http://localhost:18800", TimeSpan.FromSeconds(30));
     }
 
     public static void MapDiscussionEndpoints(this EndpointRegistry registry, NovaEngine engine)

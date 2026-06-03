@@ -1,6 +1,6 @@
 import { useEffect, useCallback, useRef, createContext, useContext } from "react"
 import { createBrowserRouter, RouterProvider, Outlet } from "react-router-dom"
-import { WsEventProvider, useWsSubscribe, BreadcrumbLabelProvider } from "@redbamboo/utility"
+import { WsEventProvider, useWsSubscribe, BreadcrumbLabelProvider, AuthProvider, useAuth } from "@redbamboo/utility"
 import { AppShell } from "@/components/layout/app-shell"
 import { useLocalSettings } from "@/hooks/use-local-settings"
 import { useDiscussions } from "@/hooks/use-discussions"
@@ -24,9 +24,16 @@ function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<DiscussionsH
 
 function AppLayout() {
   const settings = useLocalSettings()
+  const { isLoading, isAuthenticated } = useAuth()
   const disc = useDiscussions()
   const discRef = useRef(disc)
   discRef.current = disc
+
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      window.location.href = "/login"
+    }
+  }, [isLoading, isAuthenticated])
 
   useEffect(() => {
     const root = document.documentElement
@@ -48,6 +55,8 @@ function AppLayout() {
     discRef.current.syncAndRefresh()
     discRef.current.reloadActiveMessages()
   }, [])
+
+  if (isLoading || !isAuthenticated) return null
 
   return (
     <WsEventProvider url={wsUrl} onReconnect={onReconnect} onVisibilityChange={onVisibilityChange}>
@@ -73,5 +82,9 @@ const router = createBrowserRouter([
 ])
 
 export function App() {
-  return <RouterProvider router={router} />
+  return (
+    <AuthProvider>
+      <RouterProvider router={router} />
+    </AuthProvider>
+  )
 }

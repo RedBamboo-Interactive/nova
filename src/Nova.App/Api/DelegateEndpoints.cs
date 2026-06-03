@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
+using RedBamboo.AppHost.Auth;
 using RedBamboo.AppHost.Discovery;
 
 namespace Nova.App.Api;
@@ -14,23 +15,23 @@ public static class DelegateEndpoints
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    private static readonly HttpClient RedCompute = new()
+    private static HttpClient RedCompute = new()
     {
         BaseAddress = new Uri("http://localhost:18800"),
         Timeout = TimeSpan.FromSeconds(30),
     };
 
-    public static void SetAuthToken(string token)
-    {
-        RedCompute.DefaultRequestHeaders.Remove("Authorization");
-        RedCompute.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bearer {token}");
-    }
-
-    private static readonly HttpClient CodeRed = new()
+    private static HttpClient CodeRed = new()
     {
         BaseAddress = new Uri("http://localhost:18801"),
         Timeout = TimeSpan.FromSeconds(5),
     };
+
+    public static void Initialize(AuthenticatedHttpClientFactory factory)
+    {
+        RedCompute = factory.CreateClient("http://localhost:18800", TimeSpan.FromSeconds(30));
+        CodeRed = factory.CreateClient("http://localhost:18801", TimeSpan.FromSeconds(5));
+    }
 
     public static void MapDelegateEndpoints(this EndpointRegistry registry)
     {

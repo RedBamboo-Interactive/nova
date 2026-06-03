@@ -64,11 +64,11 @@ public class StaticServer
 
         _app = builder.Build();
 
-        var jwtService = _app.Services.GetRequiredService<JwtService>();
-        _engine.RedCompute.SetJwtService(jwtService);
-        _engine.RedCompute.TokenChanged += DiscussionEndpoints.SetAuthToken;
-        _engine.RedCompute.TokenChanged += DelegateEndpoints.SetAuthToken;
-        _engine.RedCompute.TokenChanged += ConversationExporter.SetAuthToken;
+        var authFactory = _app.Services.GetRequiredService<AuthenticatedHttpClientFactory>();
+        _engine.RedCompute.SetAuthFactory(authFactory);
+        DiscussionEndpoints.Initialize(authFactory);
+        DelegateEndpoints.Initialize(authFactory);
+        ConversationExporter.Initialize(authFactory);
 
         _app.UseAppHostTelemetry();
         _app.UseCors();
@@ -80,18 +80,7 @@ public class StaticServer
             BypassPaths = ["/ping", "/api/remote/status"],
         });
         _app.UseAppHostJwtAuth();
-
-        _app.Use(async (ctx, next) =>
-        {
-            var sub = ctx.User?.FindFirst("sub")?.Value;
-            if (sub is not null && sub != "local-user")
-            {
-                var email = ctx.User!.FindFirst("email")?.Value ?? "";
-                var name = ctx.User!.FindFirst("name")?.Value;
-                _engine.RedCompute.SetUser(sub, email, name);
-            }
-            await next();
-        });
+        _app.UseUserDetection();
 
         var logService = App.LogService;
         var registry = _app.CreateEndpointRegistry();

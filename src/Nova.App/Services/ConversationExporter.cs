@@ -3,22 +3,22 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using RedBamboo.AppHost.Auth;
 using Nova.App.Data;
 
 namespace Nova.App.Services;
 
 public static class ConversationExporter
 {
-    private static readonly HttpClient RedCompute = new()
+    private static HttpClient RedCompute = new()
     {
         BaseAddress = new Uri("http://localhost:18800"),
         Timeout = TimeSpan.FromSeconds(15),
     };
 
-    public static void SetAuthToken(string token)
+    public static void Initialize(AuthenticatedHttpClientFactory factory)
     {
-        RedCompute.DefaultRequestHeaders.Remove("Authorization");
-        RedCompute.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+        RedCompute = factory.CreateClient("http://localhost:18800", TimeSpan.FromSeconds(15));
     }
 
     private static readonly Regex NovaContextTag = new(

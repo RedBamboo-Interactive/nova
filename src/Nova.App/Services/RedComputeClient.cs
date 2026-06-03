@@ -11,10 +11,8 @@ namespace Nova.App.Services;
 
 public class RedComputeClient : IDisposable
 {
-    private readonly HttpClient _http;
+    private HttpClient _http;
     private readonly LogService _log;
-    private JwtService? _jwtService;
-    private string? _serviceToken;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -33,24 +31,11 @@ public class RedComputeClient : IDisposable
         _http.DefaultRequestHeaders.Add("X-Caller-Info", "Nova");
     }
 
-    public void SetJwtService(JwtService jwtService)
+    public void SetAuthFactory(AuthenticatedHttpClientFactory factory)
     {
-        _jwtService = jwtService;
-    }
-
-    private string? _currentUserId;
-
-    public event Action<string>? TokenChanged;
-
-    public void SetUser(string userId, string email, string? name)
-    {
-        if (_jwtService is null || userId == _currentUserId) return;
-        _currentUserId = userId;
-        _serviceToken = _jwtService.GenerateAccessToken(userId, email, name, ["admin"]);
-        _http.DefaultRequestHeaders.Remove("Authorization");
-        _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {_serviceToken}");
-        TokenChanged?.Invoke(_serviceToken);
-        _log.Info("redcompute", $"Authenticated as {email}");
+        var newClient = factory.CreateClient("http://localhost:18800", TimeSpan.FromSeconds(1800));
+        newClient.DefaultRequestHeaders.Add("X-Caller-Info", "Nova");
+        _http = newClient;
     }
 
     public async Task<ClaudeResponse> InvokeClaudeAsync(ClaudeRequest request, CancellationToken ct = default)
