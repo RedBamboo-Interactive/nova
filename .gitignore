@@ -34,7 +34,7 @@ videos/
 # Temp files
 scripts/
 nova-workspace/temp/
-*.raw.png
+*_raw.png
 
 # Secrets
 .env
