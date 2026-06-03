@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -12,13 +13,14 @@ public static class DiscussionExportEndpoints
 {
     public static void MapDiscussionExportEndpoints(this EndpointRegistry registry)
     {
-        registry.MapGet("/api/discussions/export", "Export conversations as markdown (query: since, limit)", async (NovaDbContext db, string? since, int? limit) =>
+        registry.MapGet("/api/discussions/export", "Export conversations as markdown (query: since, limit)", async (HttpContext ctx, NovaDbContext db, string? since, int? limit) =>
         {
+            var userId = ctx.User.FindFirstValue("sub");
             var sinceDate = since != null
                 ? DateTime.Parse(since, null, DateTimeStyles.RoundtripKind)
                 : DateTime.UtcNow.AddDays(-7);
 
-            var markdown = await ConversationExporter.ExportAsync(db, sinceDate, limit ?? 50);
+            var markdown = await ConversationExporter.ExportAsync(db, sinceDate, limit ?? 50, userId);
             return Results.Text(markdown, "text/markdown");
         });
     }

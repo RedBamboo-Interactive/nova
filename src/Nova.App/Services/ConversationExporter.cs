@@ -21,12 +21,15 @@ public static class ConversationExporter
     private static readonly Regex NovaPriorTag = new(
         @"<nova-prior-messages[^>]*>[\s\S]*?</nova-prior-messages>\s*", RegexOptions.Compiled);
 
-    public static async Task<string> ExportAsync(NovaDbContext db, DateTime since, int maxDiscussions = 50)
+    public static async Task<string> ExportAsync(NovaDbContext db, DateTime since, int maxDiscussions = 50, string? userId = null)
     {
         maxDiscussions = Math.Clamp(maxDiscussions, 1, 200);
 
-        var discussions = await db.Discussions
-            .Where(d => d.LastActivity >= since)
+        var query = db.Discussions.Where(d => d.LastActivity >= since);
+        if (userId != null && userId != "local-user")
+            query = query.Where(d => d.OwnerId == null || d.OwnerId == userId);
+
+        var discussions = await query
             .OrderByDescending(d => d.LastActivity)
             .Take(maxDiscussions)
             .ToListAsync();
