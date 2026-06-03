@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Nova.App.Configuration;
+using RedBamboo.AppHost.Auth;
 using RedBamboo.AppHost.Logging;
 
 namespace Nova.App.Services;
@@ -12,6 +13,8 @@ public class RedComputeClient : IDisposable
 {
     private readonly HttpClient _http;
     private readonly LogService _log;
+    private JwtService? _jwtService;
+    private string? _serviceToken;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -28,6 +31,23 @@ public class RedComputeClient : IDisposable
             Timeout = TimeSpan.FromSeconds(1800)
         };
         _http.DefaultRequestHeaders.Add("X-Caller-Info", "Nova");
+    }
+
+    public void SetJwtService(JwtService jwtService)
+    {
+        _jwtService = jwtService;
+    }
+
+    private string? _currentUserId;
+
+    public void SetUser(string userId, string email, string? name)
+    {
+        if (_jwtService is null || userId == _currentUserId) return;
+        _currentUserId = userId;
+        _serviceToken = _jwtService.GenerateAccessToken(userId, email, name, ["admin"]);
+        _http.DefaultRequestHeaders.Remove("Authorization");
+        _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {_serviceToken}");
+        _log.Info("redcompute", $"Authenticated as {email}");
     }
 
     public async Task<ClaudeResponse> InvokeClaudeAsync(ClaudeRequest request, CancellationToken ct = default)

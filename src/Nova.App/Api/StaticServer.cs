@@ -54,13 +54,19 @@ public class StaticServer
 
         var redSuiteDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RedSuite");
         var signingKey = SigningKeyPersistence.EnsureSigningKey(redSuiteDir);
+        var googleAuth = SigningKeyPersistence.LoadGoogleOAuth(redSuiteDir);
         builder.Services.AddAppHostAuth(new AuthOptions
         {
             Jwt = new JwtOptions { SigningKey = signingKey },
-            Google = SigningKeyPersistence.LoadGoogleOAuth(redSuiteDir),
+            Google = googleAuth,
+            Mode = googleAuth != null ? AuthMode.Required : AuthMode.LocalDefault,
         });
 
         _app = builder.Build();
+
+        var jwtService = _app.Services.GetRequiredService<JwtService>();
+        _engine.RedCompute.SetJwtService(jwtService);
+
         _app.UseAppHostTelemetry();
         _app.UseCors();
 
@@ -72,8 +78,21 @@ public class StaticServer
         });
         _app.UseAppHostJwtAuth();
 
+        _app.Use(async (ctx, next) =>
+        {
+            var sub = ctx.User?.FindFirst("sub")?.Value;
+            if (sub is not null && sub != "local-user")
+            {
+                var email = ctx.User!.FindFirst("email")?.Value ?? "";
+                var name = ctx.User!.FindFirst("name")?.Value;
+                _engine.RedCompute.SetUser(sub, email, name);
+            }
+            await next();
+        });
+
         var logService = App.LogService;
         var registry = _app.CreateEndpointRegistry();
+        registry.MapAuthEndpoints();
 
         _app.UseWebSockets();
 
