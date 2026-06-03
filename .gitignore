@@ -31,6 +31,11 @@ screenshots/
 test-results/
 videos/
 
+# Temp files
+scripts/
+nova-workspace/temp/
+*.raw.png
+
 # Secrets
 .env
 *.pfx
