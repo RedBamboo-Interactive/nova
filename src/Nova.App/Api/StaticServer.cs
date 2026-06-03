@@ -52,6 +52,14 @@ public class StaticServer
         builder.Services.AddSingleton(_engine);
         builder.Services.AddSingleton(_memory);
 
+        var redSuiteDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RedSuite");
+        var signingKey = SigningKeyPersistence.EnsureSigningKey(redSuiteDir);
+        builder.Services.AddAppHostAuth(new AuthOptions
+        {
+            Jwt = new JwtOptions { SigningKey = signingKey },
+            Google = SigningKeyPersistence.LoadGoogleOAuth(redSuiteDir),
+        });
+
         _app = builder.Build();
         _app.UseAppHostTelemetry();
         _app.UseCors();
@@ -62,6 +70,7 @@ public class StaticServer
             CookieName = "nova_token",
             BypassPaths = ["/ping", "/api/remote/status", "/api/discussions/export"],
         });
+        _app.UseAppHostJwtAuth();
 
         var logService = App.LogService;
         var registry = _app.CreateEndpointRegistry();
@@ -220,6 +229,14 @@ public class StaticServer
             cmd.ExecuteNonQuery();
         }
 
+        if (!discColumns.Contains("OwnerId"))
+        {
+            cmd.CommandText = "ALTER TABLE Discussions ADD COLUMN OwnerId TEXT";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "CREATE INDEX IF NOT EXISTS IX_Discussions_OwnerId ON Discussions(OwnerId)";
+            cmd.ExecuteNonQuery();
+        }
+
         cmd.CommandText = "PRAGMA table_info(Conversations)";
         using var reader = cmd.ExecuteReader();
         var columns = new HashSet<string>();
@@ -235,6 +252,14 @@ public class StaticServer
         if (!columns.Contains("Source"))
         {
             cmd.CommandText = "ALTER TABLE Conversations ADD COLUMN Source TEXT NOT NULL DEFAULT 'user'";
+            cmd.ExecuteNonQuery();
+        }
+
+        if (!columns.Contains("UserId"))
+        {
+            cmd.CommandText = "ALTER TABLE Conversations ADD COLUMN UserId TEXT";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "CREATE INDEX IF NOT EXISTS IX_Conversations_UserId ON Conversations(UserId)";
             cmd.ExecuteNonQuery();
         }
     }

@@ -27,12 +27,14 @@ public class NovaDbContext : DbContext
             e.HasKey(d => d.Id);
             e.HasIndex(d => d.Status);
             e.HasIndex(d => d.LastActivity);
+            e.HasIndex(d => d.OwnerId);
         });
 
         modelBuilder.Entity<ConversationRecord>(e =>
         {
             e.HasKey(c => c.Id);
             e.HasIndex(c => c.ContextId);
+            e.HasIndex(c => c.UserId);
         });
 
         modelBuilder.Entity<InvocationLog>(e =>

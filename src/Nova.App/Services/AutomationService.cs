@@ -479,6 +479,7 @@ public class Automation
     public int MaxFailures { get; set; }
     public DateTime? ExpiresAt { get; set; }
     public string? LastError { get; set; }
+    public string? OwnerId { get; set; }
 }
 
 public class AutomationResult

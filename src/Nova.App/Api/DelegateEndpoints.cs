@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using RedBamboo.AppHost.Discovery;
@@ -27,7 +28,7 @@ public static class DelegateEndpoints
 
     public static void MapDelegateEndpoints(this EndpointRegistry registry)
     {
-        registry.MapPost("/api/delegate", "Delegate work to a CodeRed session: creates session on RedCompute, sends prompt, navigates CodeRed, registers completion callback that reports back to discussionId. Returns sessionId. Options: navigate (bool, default true), dockerImage (string, passed to session creation for containerized execution)", async (DelegateRequest request) =>
+        registry.MapPost("/api/delegate", "Delegate work to a CodeRed session: creates session on RedCompute, sends prompt, navigates CodeRed, registers completion callback that reports back to discussionId. Returns sessionId. Options: navigate (bool, default true), dockerImage (string, passed to session creation for containerized execution)", async (HttpContext ctx, DelegateRequest request) =>
         {
             if (string.IsNullOrWhiteSpace(request.ProjectPath))
                 return Results.BadRequest(new { error = "projectPath is required" });
@@ -47,6 +48,9 @@ public static class DelegateEndpoints
                     Content = JsonContent.Create(createBody, options: JsonOptions),
                 };
                 createReq.Headers.Add("X-Caller-Info", "Nova");
+                var userId = ctx.User.FindFirstValue("sub");
+                if (userId != null)
+                    createReq.Headers.Add("X-User-Id", userId);
                 var createResp = await RedCompute.SendAsync(createReq);
 
                 if (!createResp.IsSuccessStatusCode)

@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -45,6 +46,10 @@ public static class DiscussionEndpoints
 
             if (!string.IsNullOrEmpty(search))
                 query = query.Where(d => d.Title != null && d.Title.Contains(search));
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (userId != null && userId != "local-user")
+                query = query.Where(d => d.OwnerId == null || d.OwnerId == userId);
 
             var discussions = await query.ToListAsync();
             return Results.Ok(discussions.Select(ToInfo));
@@ -126,12 +131,13 @@ public static class DiscussionEndpoints
             return Results.Ok(discussions.Select(ToInfo));
         });
 
-        registry.MapPost("/api/discussions", "Create a new discussion (starts a session)", async (NovaDbContext db) =>
+        registry.MapPost("/api/discussions", "Create a new discussion (starts a session)", async (HttpContext ctx, NovaDbContext db) =>
         {
             var discussion = new Discussion
             {
                 Id = Guid.NewGuid().ToString("N")[..8],
                 Status = "idle",
+                OwnerId = ctx.User.FindFirstValue("sub"),
             };
 
             try
@@ -143,6 +149,8 @@ public static class DiscussionEndpoints
                     Content = JsonContent.Create(new { projectPath = memory.WorkspacePath }, options: JsonOptions),
                 };
                 req.Headers.Add("X-Caller-Info", "Nova");
+                if (discussion.OwnerId != null)
+                    req.Headers.Add("X-User-Id", discussion.OwnerId);
                 var resp = await RedCompute.SendAsync(req);
 
                 if (resp.IsSuccessStatusCode)
@@ -163,11 +171,15 @@ public static class DiscussionEndpoints
             return Results.Ok(ToInfo(discussion));
         });
 
-        registry.MapGet("/api/discussions/{id}", "Get discussion metadata", async (string id, NovaDbContext db) =>
+        registry.MapGet("/api/discussions/{id}", "Get discussion metadata", async (string id, HttpContext ctx, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
                 return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (discussion.OwnerId != null && userId != "local-user" && discussion.OwnerId != userId)
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             return Results.Ok(new { discussion = ToInfo(discussion) });
         });
@@ -221,11 +233,15 @@ public static class DiscussionEndpoints
             return Results.Ok(ToInfo(discussion));
         });
 
-        registry.MapDelete("/api/discussions/{id}", "Archive a discussion", async (string id, NovaDbContext db) =>
+        registry.MapDelete("/api/discussions/{id}", "Archive a discussion", async (string id, HttpContext ctx, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
                 return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (discussion.OwnerId != null && userId != "local-user" && discussion.OwnerId != userId)
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             discussion.Status = "archived";
 
@@ -294,7 +310,7 @@ public static class DiscussionEndpoints
             return Results.Ok(new { query = q, results });
         });
 
-        registry.MapPost("/api/discussions/{id}/event", "Inject an automation event into a discussion", async (string id, DiscussionEventRequest request, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
+        registry.MapPost("/api/discussions/{id}/event", "Inject an automation event into a discussion", async (string id, DiscussionEventRequest request, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
@@ -309,6 +325,7 @@ public static class DiscussionEndpoints
                 Role = "user",
                 Content = request.Content,
                 Source = $"event:{request.Source ?? "automation"}",
+                UserId = ctx.User.FindFirstValue("sub"),
             });
 
             discussion.LastActivity = DateTime.UtcNow;

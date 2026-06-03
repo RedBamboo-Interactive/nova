@@ -9,4 +9,5 @@ public class ConversationRecord
     public string? PartsJson { get; set; }
     public string Source { get; set; } = "user";
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    public string? UserId { get; set; }
 }
