@@ -70,6 +70,7 @@ public class StaticServer
         DelegateEndpoints.Initialize(authFactory);
         ConversationExporter.Initialize(authFactory);
 
+        _app.UseAppHostForwardedHeaders();
         _app.UseAppHostTelemetry();
         _app.UseCors();
 
