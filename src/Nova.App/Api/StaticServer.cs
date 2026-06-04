@@ -78,6 +78,7 @@ public class StaticServer
             GetAccessToken = () => App.Config.Tunnel.AccessToken,
             CookieName = "nova_token",
             BypassPaths = ["/ping", "/api/remote/status"],
+            FallThroughOnFailure = googleAuth != null,
         });
         _app.UseAppHostJwtAuth();
         _app.UseUserDetection();
