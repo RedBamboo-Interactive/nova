@@ -147,7 +147,6 @@ export function useDiscussions() {
 
   const createDiscussion = useCallback(async () => {
     setIsSpawning(true)
-    setActiveDiscussionId(null)
     try {
       const d = await api.post<DiscussionInfo>("/api/discussions")
       setDiscussions((prev) => [d, ...prev])
