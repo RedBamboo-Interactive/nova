@@ -35,45 +35,53 @@ public static class DelegateEndpoints
 
     public static void MapDelegateEndpoints(this EndpointRegistry registry)
     {
-        registry.MapPost("/api/delegate", "Delegate work to a CodeRed session: creates session on RedCompute, sends prompt, navigates CodeRed, registers completion callback that reports back to discussionId. Returns sessionId. Options: navigate (bool, default true), dockerImage (string, passed to session creation for containerized execution)", async (HttpContext ctx, DelegateRequest request) =>
+        registry.MapPost("/api/delegate", "Delegate work to a CodeRed session: creates session on RedCompute, sends prompt, navigates CodeRed, registers completion callback that reports back to discussionId. Returns sessionId. Options: navigate (bool, default true), dockerImage (string, passed to session creation for containerized execution). To continue an existing session, provide sessionId instead of projectPath.", async (HttpContext ctx, DelegateRequest request) =>
         {
-            if (string.IsNullOrWhiteSpace(request.ProjectPath))
-                return Results.BadRequest(new { error = "projectPath is required" });
+            bool isContinuation = !string.IsNullOrWhiteSpace(request.SessionId);
+            if (!isContinuation && string.IsNullOrWhiteSpace(request.ProjectPath))
+                return Results.BadRequest(new { error = "Either sessionId or projectPath is required" });
             if (string.IsNullOrWhiteSpace(request.Prompt))
                 return Results.BadRequest(new { error = "prompt is required" });
 
-            // 1. Create session on RedCompute
+            // 1. Create session on RedCompute (skip if continuing existing session)
             string sessionId;
-            try
+            if (isContinuation)
             {
-                var dockerImage = request.DockerImage ?? App.Config.DockerImage;
-                var createBody = dockerImage != null
-                    ? (object)new { projectPath = request.ProjectPath, dockerImage }
-                    : new { projectPath = request.ProjectPath };
-                var createReq = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
+                sessionId = request.SessionId!;
+            }
+            else
+            {
+                try
                 {
-                    Content = JsonContent.Create(createBody, options: JsonOptions),
-                };
-                createReq.Headers.Add("X-Caller-Info", "Nova");
-                var userId = ctx.User.FindFirstValue("sub");
-                if (userId != null)
-                    createReq.Headers.Add("X-User-Id", userId);
-                var createResp = await RedCompute.SendAsync(createReq);
+                    var dockerImage = request.DockerImage ?? App.Config.DockerImage;
+                    var createBody = dockerImage != null
+                        ? (object)new { projectPath = request.ProjectPath, dockerImage }
+                        : new { projectPath = request.ProjectPath };
+                    var createReq = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
+                    {
+                        Content = JsonContent.Create(createBody, options: JsonOptions),
+                    };
+                    createReq.Headers.Add("X-Caller-Info", "Nova");
+                    var userId = ctx.User.FindFirstValue("sub");
+                    if (userId != null)
+                        createReq.Headers.Add("X-User-Id", userId);
+                    var createResp = await RedCompute.SendAsync(createReq);
 
-                if (!createResp.IsSuccessStatusCode)
+                    if (!createResp.IsSuccessStatusCode)
+                    {
+                        var err = await createResp.Content.ReadAsStringAsync();
+                        return Results.Json(new { error = "session_create_failed", message = err },
+                            statusCode: 502);
+                    }
+
+                    var session = await createResp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+                    sessionId = session.GetProperty("id").GetString()!;
+                }
+                catch (Exception ex)
                 {
-                    var err = await createResp.Content.ReadAsStringAsync();
-                    return Results.Json(new { error = "session_create_failed", message = err },
+                    return Results.Json(new { error = "redcompute_unavailable", message = ex.Message },
                         statusCode: 502);
                 }
-
-                var session = await createResp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
-                sessionId = session.GetProperty("id").GetString()!;
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { error = "redcompute_unavailable", message = ex.Message },
-                    statusCode: 502);
             }
 
             // 2. Send prompt and verify delivery
@@ -145,7 +153,7 @@ public static class DelegateEndpoints
                 sessionId,
                 promptSent,
                 callbackRegistered,
-                message = $"Session delegated to {request.ProjectPath}",
+                continued = isContinuation,
             });
         });
     }
@@ -153,7 +161,8 @@ public static class DelegateEndpoints
 
 public class DelegateRequest
 {
-    public string ProjectPath { get; set; } = "";
+    public string? SessionId { get; set; }
+    public string? ProjectPath { get; set; }
     public string Prompt { get; set; } = "";
     public string? DiscussionId { get; set; }
     public bool? Navigate { get; set; }
