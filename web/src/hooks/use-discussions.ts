@@ -265,9 +265,10 @@ export function useDiscussions() {
         const discStatus = isStopped ? "stopped" as const : "idle" as const
         const now = new Date().toISOString()
         const isViewing = activeIdRef.current === discId
+        let wasArchived = false
         setDiscussions((prev) =>
           prev.map((d) => {
-            if (d.id !== discId || d.status === "archived") return d
+            if (d.id !== discId || d.status === "archived") { if (d.id === discId) wasArchived = true; return d }
             if (d.status === "thinking") return d
             return {
               ...d,
@@ -277,6 +278,7 @@ export function useDiscussions() {
             }
           })
         )
+        if (wasArchived) return
         if (isStopped) {
           api.put(`/api/discussions/${discId}/stopped`).catch(() => {})
         } else {
@@ -305,10 +307,14 @@ export function useDiscussions() {
       if (!discId) return
       setStreaming((prev) => ({ ...prev, [discId]: false }))
       setPendingQuestions((prev) => ({ ...prev, [discId]: null }))
+      let wasArchived = false
       setDiscussions((prev) =>
-        prev.map((d) => d.id === discId && d.status !== "archived" ? { ...d, status: "stopped" as const } : d)
+        prev.map((d) => {
+          if (d.id === discId && d.status === "archived") { wasArchived = true; return d }
+          return d.id === discId ? { ...d, status: "stopped" as const } : d
+        })
       )
-      api.put(`/api/discussions/${discId}/stopped`).catch(() => {})
+      if (!wasArchived) api.put(`/api/discussions/${discId}/stopped`).catch(() => {})
     } else if (event.type === "discussion.event") {
       const { discussionId, content } = event.data as { discussionId: string; sessionId: string; content: string; source: string }
       if (!discussionId) return

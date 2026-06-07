@@ -276,14 +276,21 @@ public static class DiscussionEndpoints
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             discussion.Status = "archived";
+            await db.SaveChangesAsync();
 
             if (discussion.SessionId is not null)
             {
-                try { await RedCompute.PostAsync($"/ai-session/sessions/{discussion.SessionId}/stop", null); }
-                catch { /* best effort */ }
+                try
+                {
+                    var resp = await RedCompute.PostAsync($"/ai-session/sessions/{discussion.SessionId}/stop", null);
+                    resp.EnsureSuccessStatusCode();
+                }
+                catch
+                {
+                    discussion.Status = "stopped";
+                    await db.SaveChangesAsync();
+                }
             }
-
-            await db.SaveChangesAsync();
 
             return Results.Ok(ToInfo(discussion));
         });
