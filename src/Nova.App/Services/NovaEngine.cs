@@ -51,7 +51,7 @@ public class NovaEngine : IAsyncDisposable
         _redCompute.Dispose();
     }
 
-    public async Task<ClaudeResponse> InvokeForAutomationAsync(string name, string prompt, string? hint, string? userId, CancellationToken ct)
+    public async Task<ClaudeResponse> InvokeForAutomationAsync(string name, string prompt, string? hint, string? userId, CancellationToken ct, int? timeout = null)
     {
         _log.Info("engine", $"Automation [{name}]: invoking");
 
@@ -63,6 +63,7 @@ public class NovaEngine : IAsyncDisposable
             WorkingDirectory = _memory.WorkspacePath,
             AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "PowerShell", "WebFetch", "WebSearch", "TodoWrite"],
             MaxTurns = 50,
+            Timeout = timeout,
         };
 
         return await _redCompute.InvokeClaudeAsync(request, userId, ct);

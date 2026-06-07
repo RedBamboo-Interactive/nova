@@ -26,14 +26,14 @@ public class RedComputeClient : IDisposable
         _http = new HttpClient
         {
             BaseAddress = new Uri("http://localhost:18800"),
-            Timeout = TimeSpan.FromSeconds(1800)
+            Timeout = TimeSpan.FromSeconds(7200)
         };
         _http.DefaultRequestHeaders.Add("X-Caller-Info", "Nova");
     }
 
     public void SetAuthFactory(AuthenticatedHttpClientFactory factory)
     {
-        var newClient = factory.CreateClient("http://localhost:18800", TimeSpan.FromSeconds(1800));
+        var newClient = factory.CreateClient("http://localhost:18800", TimeSpan.FromSeconds(7200));
         newClient.DefaultRequestHeaders.Add("X-Caller-Info", "Nova");
         _http = newClient;
     }
@@ -52,7 +52,7 @@ public class RedComputeClient : IDisposable
             workingDir = request.WorkingDirectory,
             allowedTools = request.AllowedTools,
             maxTurns = request.MaxTurns,
-            timeout = 600,
+            timeout = request.Timeout,
         };
 
         var msg = new HttpRequestMessage(HttpMethod.Post, "/ai-session/execute")
@@ -132,6 +132,7 @@ public class ClaudeRequest
     public string? WorkingDirectory { get; set; }
     public List<string>? AllowedTools { get; set; }
     public int? MaxTurns { get; set; }
+    public int? Timeout { get; set; }
     public Dictionary<string, string>? Context { get; set; }
 }
 

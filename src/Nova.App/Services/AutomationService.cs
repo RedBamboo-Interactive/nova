@@ -222,7 +222,7 @@ public class AutomationService
         }
 
         var response = await _engine.InvokeForAutomationAsync(
-            automation.Name, prompt, config.SystemPromptHint, automation.OwnerId, ct);
+            automation.Name, prompt, config.SystemPromptHint, automation.OwnerId, ct, config.Timeout);
 
         return new AutomationResult
         {
@@ -491,6 +491,7 @@ public class AutomationService
                 {
                     Prompt = dreamingSkill,
                     SystemPromptHint = "dreaming",
+                    Timeout = 3600,
                 }, JsonOptions),
                 OwnerId = defaultOwner,
                 Enabled = true,
@@ -501,11 +502,22 @@ public class AutomationService
         else
         {
             var currentConfig = Deserialize<AiSessionConfig>(existingDreaming.ActionConfigJson);
+            var dreamingChanged = false;
             if (currentConfig.Prompt != dreamingSkill)
             {
                 currentConfig.Prompt = dreamingSkill;
-                existingDreaming.ActionConfigJson = JsonSerializer.Serialize(currentConfig, JsonOptions);
+                dreamingChanged = true;
                 _log.Info("automations", "Synced dreaming prompt from skill file");
+            }
+            if (currentConfig.Timeout != 3600)
+            {
+                currentConfig.Timeout = 3600;
+                dreamingChanged = true;
+                _log.Info("automations", "Synced dreaming timeout to 3600s");
+            }
+            if (dreamingChanged)
+            {
+                existingDreaming.ActionConfigJson = JsonSerializer.Serialize(currentConfig, JsonOptions);
                 changed = true;
             }
         }
@@ -616,6 +628,7 @@ public class AiSessionConfig
     public string Prompt { get; set; } = "";
     public string? SystemPromptHint { get; set; }
     public bool PreCreateDiscussion { get; set; }
+    public int? Timeout { get; set; }
 }
 
 public class HttpCheckConfig
