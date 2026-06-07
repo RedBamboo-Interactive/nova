@@ -3,6 +3,9 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cronos;
+using Microsoft.Extensions.DependencyInjection;
+using Nova.App.Data;
+using Nova.App.Data.Entities;
 using RedBamboo.AppHost.Logging;
 
 namespace Nova.App.Services;
@@ -12,6 +15,7 @@ public class AutomationService
     private readonly NovaEngine _engine;
     private readonly MemoryManager _memory;
     private readonly LogService _log;
+    private readonly IServiceScopeFactory? _scopeFactory;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly List<Automation> _automations = [];
     private Task? _loop;
@@ -25,11 +29,12 @@ public class AutomationService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    public AutomationService(NovaEngine engine, MemoryManager memory, LogService log)
+    public AutomationService(NovaEngine engine, MemoryManager memory, LogService log, IServiceScopeFactory? scopeFactory = null)
     {
         _engine = engine;
         _memory = memory;
         _log = log;
+        _scopeFactory = scopeFactory;
     }
 
     public Task StartAsync(CancellationToken ct)
@@ -200,8 +205,24 @@ public class AutomationService
         var config = Deserialize<AiSessionConfig>(automation.ActionConfigJson);
         _log.Info("automations", $"[{automation.Name}] Invoking AI session");
 
+        var prompt = config.Prompt;
+
+        if (config.PreCreateDiscussion)
+        {
+            var discussionId = await PreCreateDiscussionAsync(automation.OwnerId, ct);
+            if (discussionId != null)
+            {
+                automation.ReportToDiscussionId = discussionId;
+                prompt = $"<nova-context pre-created-discussion=\"{discussionId}\">\n"
+                    + $"A discussion has already been created for you with ID: {discussionId}.\n"
+                    + $"Post your content to it using: POST http://localhost:18803/api/discussions/{discussionId}/nova-message\n"
+                    + "Do NOT create a new discussion — use the one provided.\n"
+                    + "</nova-context>\n\n" + prompt;
+            }
+        }
+
         var response = await _engine.InvokeForAutomationAsync(
-            automation.Name, config.Prompt, config.SystemPromptHint, ct);
+            automation.Name, prompt, config.SystemPromptHint, automation.OwnerId, ct);
 
         return new AutomationResult
         {
@@ -209,6 +230,39 @@ public class AutomationService
             Summary = response.Text ?? "(no response)",
             SessionId = response.SessionId,
         };
+    }
+
+    private async Task<string?> PreCreateDiscussionAsync(string? ownerId, CancellationToken ct)
+    {
+        if (_scopeFactory == null)
+        {
+            _log.Error("automations", "Cannot pre-create discussion: no service scope factory");
+            return null;
+        }
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<NovaDbContext>();
+
+            var discussion = new Discussion
+            {
+                Id = Guid.NewGuid().ToString("N")[..8],
+                Status = "idle",
+                OwnerId = ownerId,
+            };
+
+            db.Discussions.Add(discussion);
+            await db.SaveChangesAsync(ct);
+
+            _log.Info("automations", $"Pre-created discussion {discussion.Id} (owner: {ownerId ?? "none"})");
+            return discussion.Id;
+        }
+        catch (Exception ex)
+        {
+            _log.Error("automations", $"Failed to pre-create discussion: {ex.Message}");
+        }
+        return null;
     }
 
     private async Task<AutomationResult> ExecuteHttpCheckAsync(Automation automation, CancellationToken ct)
@@ -494,6 +548,7 @@ public class AiSessionConfig
 {
     public string Prompt { get; set; } = "";
     public string? SystemPromptHint { get; set; }
+    public bool PreCreateDiscussion { get; set; }
 }
 
 public class HttpCheckConfig

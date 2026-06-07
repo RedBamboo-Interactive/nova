@@ -38,7 +38,7 @@ public class RedComputeClient : IDisposable
         _http = newClient;
     }
 
-    public async Task<ClaudeResponse> InvokeClaudeAsync(ClaudeRequest request, CancellationToken ct = default)
+    public async Task<ClaudeResponse> InvokeClaudeAsync(ClaudeRequest request, string? userId = null, CancellationToken ct = default)
     {
         var jobName = request.SystemPromptHint ?? "chat";
         _log.Info("redcompute", $"Invoking Claude: {jobName}");
@@ -60,6 +60,8 @@ public class RedComputeClient : IDisposable
             Content = JsonContent.Create(body, options: JsonOptions),
         };
         msg.Headers.Add("X-Job-Name", $"Nova: {jobName}");
+        if (userId != null)
+            msg.Headers.Add("X-User-Id", userId);
 
         var response = await _http.SendAsync(msg, ct);
         response.EnsureSuccessStatusCode();

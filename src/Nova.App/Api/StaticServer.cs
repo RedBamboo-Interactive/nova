@@ -66,6 +66,7 @@ public class StaticServer
 
         var authFactory = _app.Services.GetRequiredService<AuthenticatedHttpClientFactory>();
         _engine.RedCompute.SetAuthFactory(authFactory);
+        _engine.SetServiceScopeFactory(_app.Services.GetRequiredService<IServiceScopeFactory>());
         DiscussionEndpoints.Initialize(authFactory);
         DelegateEndpoints.Initialize(authFactory);
         ConversationExporter.Initialize(authFactory);

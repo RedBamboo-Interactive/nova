@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Nova.App.Configuration;
 using RedBamboo.AppHost.Logging;
 
@@ -11,6 +12,7 @@ public class NovaEngine : IAsyncDisposable
     private readonly RedComputeClient _redCompute;
 
     private AutomationService? _automations;
+    private IServiceScopeFactory? _scopeFactory;
     private CancellationTokenSource? _cts;
 
     public bool IsRunning => _cts is { IsCancellationRequested: false };
@@ -27,11 +29,13 @@ public class NovaEngine : IAsyncDisposable
         _redCompute = new RedComputeClient(config, log);
     }
 
+    public void SetServiceScopeFactory(IServiceScopeFactory factory) => _scopeFactory = factory;
+
     public async Task StartAsync(CancellationToken ct)
     {
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        _automations = new AutomationService(this, _memory, _log);
+        _automations = new AutomationService(this, _memory, _log, _scopeFactory);
         await _automations.StartAsync(_cts.Token);
 
         _log.Info("engine", "Nova engine started");
@@ -47,7 +51,7 @@ public class NovaEngine : IAsyncDisposable
         _redCompute.Dispose();
     }
 
-    public async Task<ClaudeResponse> InvokeForAutomationAsync(string name, string prompt, string? hint, CancellationToken ct)
+    public async Task<ClaudeResponse> InvokeForAutomationAsync(string name, string prompt, string? hint, string? userId, CancellationToken ct)
     {
         _log.Info("engine", $"Automation [{name}]: invoking");
 
@@ -61,7 +65,7 @@ public class NovaEngine : IAsyncDisposable
             MaxTurns = 50,
         };
 
-        return await _redCompute.InvokeClaudeAsync(request, ct);
+        return await _redCompute.InvokeClaudeAsync(request, userId, ct);
     }
 
     private string BuildAutomationPrompt(string name)

@@ -20,7 +20,7 @@ public static class AutomationEndpoints
             var automations = engine.Automations?.GetAll() ?? [];
             var userId = ctx.User.FindFirstValue("sub");
             if (userId != null && userId != "local-user")
-                automations = automations.Where(a => a.OwnerId == null || a.OwnerId == userId).ToList();
+                automations = automations.Where(a => a.OwnerId == null || a.OwnerId == "local-user" || a.OwnerId == userId).ToList();
 
             return Results.Ok(new
             {
@@ -81,7 +81,7 @@ public static class AutomationEndpoints
             if (a == null) return Results.NotFound(new { error = "Automation not found" });
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (a.OwnerId != null && userId != "local-user" && a.OwnerId != userId)
+            if (a.OwnerId != null && a.OwnerId != "local-user" && userId != "local-user" && a.OwnerId != userId)
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             return Results.Ok(new
@@ -114,7 +114,7 @@ public static class AutomationEndpoints
                 return Results.NotFound(new { error = "Automation not found" });
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (a.OwnerId != null && userId != "local-user" && a.OwnerId != userId)
+            if (a.OwnerId != null && a.OwnerId != "local-user" && userId != "local-user" && a.OwnerId != userId)
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             var result = await engine.Automations.TriggerAsync(name, ct);
@@ -130,7 +130,7 @@ public static class AutomationEndpoints
             if (a == null) return Results.Ok(new { success = false });
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (a.OwnerId != null && userId != "local-user" && a.OwnerId != userId)
+            if (a.OwnerId != null && a.OwnerId != "local-user" && userId != "local-user" && a.OwnerId != userId)
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             var removed = engine.Automations?.Remove(name) ?? false;
