@@ -48,6 +48,25 @@ public static class DelegateEndpoints
             if (isContinuation)
             {
                 sessionId = request.SessionId!;
+                try
+                {
+                    var infoResp = await RedCompute.GetAsync($"/ai-session/sessions/{sessionId}");
+                    if (!infoResp.IsSuccessStatusCode)
+                        return Results.Json(new { error = "session_not_found", message = $"Session '{sessionId}' not found on RedCompute" }, statusCode: 404);
+
+                    var info = await infoResp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+                    var status = info.GetProperty("session").GetProperty("status").GetString();
+                    if (status is "Stopped" or "Error")
+                    {
+                        var resumeResp = await RedCompute.PostAsync($"/ai-session/sessions/{sessionId}/resume", null);
+                        if (!resumeResp.IsSuccessStatusCode)
+                            return Results.Json(new { error = "resume_failed", message = $"Session '{sessionId}' could not be resumed" }, statusCode: 502);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return Results.Json(new { error = "redcompute_unavailable", message = ex.Message }, statusCode: 502);
+                }
             }
             else
             {
@@ -112,17 +131,22 @@ public static class DelegateEndpoints
 
             if (!promptSent)
             {
-                try
+                if (!isContinuation)
                 {
-                    await RedCompute.PostAsync($"/ai-session/sessions/{sessionId}/stop", null);
-                    await RedCompute.PostAsync($"/ai-session/sessions/{sessionId}/dismiss", null);
+                    try
+                    {
+                        await RedCompute.PostAsync($"/ai-session/sessions/{sessionId}/stop", null);
+                        await RedCompute.PostAsync($"/ai-session/sessions/{sessionId}/dismiss", null);
+                    }
+                    catch { }
                 }
-                catch { }
 
                 return Results.Json(new
                 {
                     error = "prompt_send_failed",
-                    message = $"Session created but prompt could not be delivered after 3 attempts. Session cleaned up.",
+                    message = isContinuation
+                        ? $"Prompt could not be delivered to session '{sessionId}' after 3 attempts."
+                        : $"Session created but prompt could not be delivered after 3 attempts. Session cleaned up.",
                 }, statusCode: 502);
             }
 

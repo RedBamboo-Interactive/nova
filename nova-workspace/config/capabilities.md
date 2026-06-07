@@ -39,6 +39,12 @@ Available skills:
   POST http://localhost:18803/api/delegate
   { "projectPath": "T:/Projects/target-repo", "prompt": "task description", "discussionId": "<current discussion id>", "navigate": true }
   ```
+  To continue an existing session (send feedback, iterate, multi-step tasks):
+  ```
+  POST http://localhost:18803/api/delegate
+  { "sessionId": "<existing session id>", "prompt": "follow-up or feedback", "discussionId": "<current discussion id>" }
+  ```
+  Continuation auto-resumes stopped sessions, registers a fresh callback, and preserves full session context. Use this to review delegated work and request changes without spawning a new session.
   You will receive a `<nova-event>` in the current discussion when the session completes. Do NOT manually create sessions, send prompts, or set up watchers yourself.
 - **Discussion events** — Automations can inject events into discussions via `POST /api/discussions/{id}/event`. Events arrive as `<nova-event>` tags and trigger you to respond with full conversation context.
 - **Memory** — Read/write markdown files for persistent context

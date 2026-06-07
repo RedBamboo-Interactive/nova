@@ -441,9 +441,26 @@ public class AutomationService
         EnsureBuiltIns();
     }
 
+    private string? ResolveDefaultOwner()
+    {
+        if (_scopeFactory == null) return null;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<NovaDbContext>();
+            return db.Discussions
+                .Where(d => d.OwnerId != null && d.OwnerId != "local-user")
+                .OrderByDescending(d => d.CreatedAt)
+                .Select(d => d.OwnerId)
+                .FirstOrDefault();
+        }
+        catch { return null; }
+    }
+
     private void EnsureBuiltIns()
     {
         var changed = false;
+        var defaultOwner = ResolveDefaultOwner();
 
         if (_automations.All(a => a.Name != "system:backup"))
         {
@@ -453,6 +470,7 @@ public class AutomationService
                 Description = "Daily memory backup",
                 Schedule = "0 3 * * *",
                 ActionType = "builtin:backup",
+                OwnerId = defaultOwner,
                 Enabled = true,
             });
             _log.Info("automations", "Added built-in backup automation");
@@ -474,6 +492,7 @@ public class AutomationService
                     Prompt = dreamingSkill,
                     SystemPromptHint = "dreaming",
                 }, JsonOptions),
+                OwnerId = defaultOwner,
                 Enabled = true,
             });
             _log.Info("automations", "Added built-in dreaming automation");
@@ -491,7 +510,55 @@ public class AutomationService
             }
         }
 
+        // Backfill OwnerId on any automations that lack one
+        if (defaultOwner != null)
+        {
+            foreach (var a in _automations.Where(a => a.OwnerId == null))
+            {
+                a.OwnerId = defaultOwner;
+                _log.Info("automations", $"Set default owner on {a.Name}");
+                changed = true;
+            }
+        }
+
+        // Ensure morning-greeting uses PreCreateDiscussion
+        var greeting = _automations.FirstOrDefault(a => a.Name == "morning-greeting");
+        if (greeting != null)
+        {
+            var greetingConfig = Deserialize<AiSessionConfig>(greeting.ActionConfigJson);
+            if (!greetingConfig.PreCreateDiscussion)
+            {
+                greetingConfig.PreCreateDiscussion = true;
+                greetingConfig.Prompt = SyncMorningGreetingPrompt(greetingConfig.Prompt);
+                greeting.ActionConfigJson = JsonSerializer.Serialize(greetingConfig, JsonOptions);
+                _log.Info("automations", "Enabled PreCreateDiscussion on morning-greeting");
+                changed = true;
+            }
+        }
+
         if (changed) Save();
+    }
+
+    private static string SyncMorningGreetingPrompt(string prompt)
+    {
+        const string oldStep3 = "## Step 3: Send it\n\nCreate the discussion:";
+        if (!prompt.Contains(oldStep3)) return prompt;
+
+        var idx = prompt.IndexOf(oldStep3, StringComparison.Ordinal);
+        var before = prompt[..idx];
+
+        return before + """
+            ## Step 3: Send it
+
+            A discussion has already been pre-created for you. Its ID is in the `<nova-context pre-created-discussion="...">` tag at the top of this prompt.
+
+            Inject your greeting using the pre-created discussion ID:
+            ```bash
+            curl -s -X POST http://localhost:18803/api/discussions/{id}/nova-message -H "Content-Type: application/json" -d '{"content": "your greeting here", "title": "A casual title for the discussion"}'
+            ```
+
+            The title should be creative and different each day. Something that hints at the vibe, not a label.
+            """;
     }
 
     private void Save()
