@@ -1,6 +1,10 @@
 import { useEffect, useCallback, useRef, createContext, useContext } from "react"
-import { createBrowserRouter, RouterProvider, Outlet } from "react-router-dom"
-import { WsEventProvider, useWsSubscribe, BreadcrumbLabelProvider, AuthProvider, useAuth } from "@redbamboo/utility"
+import { createBrowserRouter, RouterProvider, Outlet, useNavigate } from "react-router-dom"
+import {
+  WsEventProvider, useWsSubscribe, BreadcrumbLabelProvider, AuthProvider, useAuth,
+  useAskNovaReceiver, usePendingNovaContext,
+  type AskNovaContext, type PendingNovaContext,
+} from "@redbamboo/utility"
 import { AppShell } from "@/components/layout/app-shell"
 import { useLocalSettings } from "@/hooks/use-local-settings"
 import { useDiscussions } from "@/hooks/use-discussions"
@@ -9,10 +13,19 @@ import { routes } from "@/routes"
 
 type DiscussionsHook = ReturnType<typeof useDiscussions>
 
-const DiscussionsContext = createContext<DiscussionsHook>(null!)
+interface AppContext {
+  disc: DiscussionsHook
+  pendingContext: PendingNovaContext
+}
+
+const AppContextValue = createContext<AppContext>(null!)
 
 export function useDisc(): DiscussionsHook {
-  return useContext(DiscussionsContext)
+  return useContext(AppContextValue).disc
+}
+
+export function useNovaPendingContext(): PendingNovaContext {
+  return useContext(AppContextValue).pendingContext
 }
 
 function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<DiscussionsHook> }) {
@@ -22,12 +35,28 @@ function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<DiscussionsH
   return null
 }
 
+function AskNovaHandler({ discRef, pendingContext }: { discRef: React.RefObject<DiscussionsHook>; pendingContext: PendingNovaContext }) {
+  const navigate = useNavigate()
+
+  const onContext = useCallback(async (ctx: AskNovaContext) => {
+    const d = await discRef.current.createDiscussion()
+    if (d) {
+      pendingContext.set(ctx)
+      navigate(`/chat/${d.id}`)
+    }
+  }, [navigate, pendingContext])
+
+  useAskNovaReceiver({ onContext })
+  return null
+}
+
 function AppLayout() {
   const settings = useLocalSettings()
   const { isLoading, isAuthenticated } = useAuth()
   const disc = useDiscussions()
   const discRef = useRef(disc)
   discRef.current = disc
+  const pendingContext = usePendingNovaContext()
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -58,10 +87,13 @@ function AppLayout() {
 
   if (isLoading || !isAuthenticated) return null
 
+  const appCtx: AppContext = { disc, pendingContext }
+
   return (
     <WsEventProvider url={wsUrl} onReconnect={onReconnect} onVisibilityChange={onVisibilityChange}>
       <WsDiscussionBridge discRef={discRef} />
-      <DiscussionsContext.Provider value={disc}>
+      <AskNovaHandler discRef={discRef} pendingContext={pendingContext} />
+      <AppContextValue.Provider value={appCtx}>
         <BreadcrumbLabelProvider>
           <AppShell>
             <div className="h-full overflow-hidden">
@@ -69,7 +101,7 @@ function AppLayout() {
             </div>
           </AppShell>
         </BreadcrumbLabelProvider>
-      </DiscussionsContext.Provider>
+      </AppContextValue.Provider>
     </WsEventProvider>
   )
 }

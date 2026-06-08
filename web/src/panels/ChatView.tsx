@@ -1,13 +1,13 @@
 import { useState, useCallback, useEffect } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
-import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
+import { ChatPanel, ContextIndicator, PendingContextBanner, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
 import { useCommand, useBreadcrumbLabel } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
 import { NovaStatusLine } from "@/components/nova-status-line"
 import { createNovaSpeechBackend } from "@/lib/speech"
 import { useNovaEmotion } from "@/hooks/use-nova-emotion"
-import { useDisc } from "@/App"
+import { useDisc, useNovaPendingContext } from "@/App"
 import { useSessionStats } from "@/hooks/use-session-stats"
 
 const speechBackend = createNovaSpeechBackend()
@@ -87,13 +87,16 @@ export function ChatView() {
     activeDiscussion?.title || "New Discussion",
   )
 
+  const pendingContext = useNovaPendingContext()
   const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming)
   const [mobileTab, setMobileTab] = useState(0)
 
   const handleSend = useCallback((content: string, images?: ImageAttachment[], options?: SendOptions) => {
     if (!activeDiscussionId) return
-    sendMessage(activeDiscussionId, content, images, options?.inputMethod)
-  }, [activeDiscussionId, sendMessage])
+    const wrapped = pendingContext.wrapMessage(content, images)
+    sendMessage(activeDiscussionId, wrapped.text, wrapped.images, options?.inputMethod)
+    pendingContext.clear()
+  }, [activeDiscussionId, sendMessage, pendingContext])
 
   const handleInterrupt = useCallback(() => {
     if (!activeDiscussionId) return
@@ -178,6 +181,10 @@ export function ChatView() {
   const { hueRotation: eyeHueRotation, opacity: avatarOpacity } = useAvatarStyle()
   const showAvatar = activeDiscussion && activeMessages.some(m => m.role === "assistant")
 
+  const pendingBanner = pendingContext.context ? (
+    <PendingContextBanner context={pendingContext.context} onDismiss={pendingContext.clear} />
+  ) : null
+
   const chatArea = activeDiscussion ? (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
       <ChatPanel
@@ -191,8 +198,9 @@ export function ChatView() {
         pendingQuestion={pendingQuestion}
         onAnswerQuestion={handleAnswerQuestion}
         onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
-        placeholder="Talk to Nova..."
+        placeholder={pendingContext.context ? "Ask about this context..." : "Talk to Nova..."}
         header={chatHeader}
+        footer={pendingBanner}
         speechBackend={speechBackend}
         resolveImageSrc={resolveImageSrc}
         renderStatusLine={({ isStreaming, messages }) => (
