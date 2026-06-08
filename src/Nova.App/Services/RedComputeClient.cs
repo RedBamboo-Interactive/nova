@@ -1,4 +1,3 @@
-using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -70,44 +69,6 @@ public class RedComputeClient : IDisposable
         return result ?? throw new InvalidOperationException("Empty response from RedCompute");
     }
 
-    public async Task<string> TranscribeAsync(Stream audio, string fileName, string contentType, CancellationToken ct = default)
-    {
-        using var content = new MultipartFormDataContent();
-        var streamContent = new StreamContent(audio);
-        streamContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
-        content.Add(streamContent, "audio", fileName);
-
-        var response = await _http.PostAsync("/stt/transcribe", content, ct);
-        response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<SttResponse>(JsonOptions, ct);
-        return result?.Text ?? "";
-    }
-
-    public async Task<byte[]> SpeakAsync(string text, string? voice, string? instructions, CancellationToken ct = default)
-    {
-        var body = new { text, voice = voice ?? "Serena", instructions };
-        var response = await _http.PostAsJsonAsync("/tts/generate", body, JsonOptions, ct);
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsByteArrayAsync(ct);
-    }
-
-    public async Task<PromptResponse> PromptAsync(PromptRequest request, CancellationToken ct = default)
-    {
-        var body = new
-        {
-            mode = "oneshot",
-            request.Model,
-            request.System,
-            request.Messages,
-            request.MaxTokens,
-            rationale = "Voice prompt",
-        };
-        var response = await _http.PostAsJsonAsync("/ai-session/generate", body, JsonOptions, ct);
-        response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<PromptResponse>(JsonOptions, ct);
-        return result ?? throw new InvalidOperationException("Empty response from RedCompute");
-    }
-
     public async Task<bool> IsAvailableAsync(CancellationToken ct = default)
     {
         try
@@ -148,27 +109,3 @@ public class ClaudeResponse
     public decimal? CostUsd { get; set; }
 }
 
-public class SttResponse
-{
-    public string Text { get; set; } = "";
-    public string? Language { get; set; }
-}
-
-public class PromptRequest
-{
-    public string? Model { get; set; }
-    public string System { get; set; } = "";
-    public List<PromptMessage> Messages { get; set; } = [];
-    public int MaxTokens { get; set; }
-}
-
-public class PromptMessage
-{
-    public string Role { get; set; } = "";
-    public string Content { get; set; } = "";
-}
-
-public class PromptResponse
-{
-    public string Text { get; set; } = "";
-}
