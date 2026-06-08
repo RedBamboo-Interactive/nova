@@ -180,7 +180,11 @@ export function useDiscussions() {
     )
 
     if (!disc.title && disc.messageCount === 0) {
-      const title = content.length > 60 ? content.slice(0, 59) + "…" : content
+      const displayContent = content
+        .replace(/<nova-context[\s\S]*?<\/nova-context>\s*/g, "")
+        .replace(/<nova-prior-messages[\s\S]*?<\/nova-prior-messages>\s*/g, "")
+        .trim()
+      const title = displayContent.length > 60 ? displayContent.slice(0, 59) + "…" : displayContent
       setDiscussions((prev) =>
         prev.map((d) => d.id === discussionId ? { ...d, title } : d)
       )
