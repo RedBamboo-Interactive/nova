@@ -76,9 +76,10 @@ export function useDiscussions() {
           if (block.role !== "user" || block.parts[0]?.images?.length) return block
           const match = stored.find((s) => block.parts[0]?.content?.includes(s.content.slice(0, 50)))
           if (!match) return block
+          const part = block.parts[0]
           return {
             ...block,
-            parts: [{ ...block.parts[0], images: match.images as ImageAttachment[] }, ...block.parts.slice(1)],
+            parts: [{ type: part.type, content: part.content, images: match.images as ImageAttachment[] }, ...block.parts.slice(1)],
           }
         })
 
