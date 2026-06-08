@@ -215,6 +215,24 @@ public static class DiscussionEndpoints
             });
         });
 
+        registry.MapGet("/api/discussions/{id}/images", "Get stored images for a discussion", async (string id, NovaDbContext db) =>
+        {
+            var records = await db.Conversations
+                .Where(m => m.ContextId == id && m.PartsJson != null && m.Source == "user-message")
+                .OrderBy(m => m.Timestamp)
+                .Select(m => new { m.Content, m.PartsJson, m.Timestamp })
+                .ToListAsync();
+
+            var result = records.Select(r => new
+            {
+                content = r.Content,
+                images = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement[]>(r.PartsJson!, JsonOptions),
+                timestamp = r.Timestamp.ToString("o"),
+            });
+
+            return Results.Ok(result);
+        });
+
         registry.MapPut("/api/discussions/{id}/title", "Update discussion title", async (string id, DiscussionTitleRequest request, HttpContext ctx, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
@@ -559,8 +577,25 @@ public static class DiscussionEndpoints
                 if (injected != null)
                 {
                     discussion.InjectedContext = null;
-                    await db.SaveChangesAsync();
                 }
+
+                if (request.Images is { Length: > 0 })
+                {
+                    db.Conversations.Add(new ConversationRecord
+                    {
+                        ContextId = id,
+                        Role = "user",
+                        Content = request.Content,
+                        PartsJson = System.Text.Json.JsonSerializer.Serialize(
+                            request.Images.Select(img => new { type = "image", mediaType = img.MediaType, base64 = img.Base64 }),
+                            JsonOptions),
+                        Source = "user-message",
+                        Timestamp = now,
+                        UserId = userId,
+                    });
+                }
+
+                await db.SaveChangesAsync();
 
                 return Results.Ok(new { success = true, sessionId = discussion.SessionId });
             }

@@ -61,6 +61,32 @@ export function useDiscussions() {
     syncAndRefresh()
   }, [syncAndRefresh])
 
+  const hydrateImages = useCallback(async (discussionId: string) => {
+    try {
+      const stored = await api.get<{ content: string; images: { mediaType: string; base64: string }[]; timestamp: string }[]>(
+        `/api/discussions/${discussionId}/images`,
+      )
+      if (!stored?.length) return
+
+      setMessages((prev) => {
+        const blocks = prev[discussionId]
+        if (!blocks) return prev
+
+        const updated = blocks.map((block) => {
+          if (block.role !== "user" || block.parts[0]?.images?.length) return block
+          const match = stored.find((s) => block.parts[0]?.content?.includes(s.content.slice(0, 50)))
+          if (!match) return block
+          return {
+            ...block,
+            parts: [{ ...block.parts[0], images: match.images as ImageAttachment[] }, ...block.parts.slice(1)],
+          }
+        })
+
+        return { ...prev, [discussionId]: updated }
+      })
+    } catch { /* images endpoint may not exist yet */ }
+  }, [])
+
   const loadMessages = useCallback(async (id: string) => {
     if (loadedRef.current.has(id)) return
 
@@ -79,15 +105,16 @@ export function useDiscussions() {
         }
         if (data.messages?.length) {
           setMessages((prev) => ({ ...prev, [id]: rebuildBlocks(data.messages) }))
+          hydrateImages(id)
           return
         }
       } catch {
-        // Session may be dead — try to resume so it's ready for messages
         try {
           await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
           const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
           if (data.messages?.length) {
             setMessages((prev) => ({ ...prev, [id]: rebuildBlocks(data.messages) }))
+            hydrateImages(id)
             return
           }
         } catch {
@@ -102,7 +129,7 @@ export function useDiscussions() {
         setMessages((prev) => ({ ...prev, [id]: toChatMessages(data.messages) }))
       }
     } catch { /* discussion not found */ }
-  }, [discussions])
+  }, [discussions, hydrateImages])
 
   const reloadActiveMessages = useCallback((force?: boolean) => {
     const id = activeIdRef.current
