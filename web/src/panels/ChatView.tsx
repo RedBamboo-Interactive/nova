@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
-import { ChatPanel, ContextIndicator, PendingContextBanner, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
+import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
 import { useCommand, useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
 import { NovaStatusLine } from "@/components/nova-status-line"
@@ -191,10 +191,6 @@ export function ChatView() {
   const { hueRotation: eyeHueRotation, opacity: avatarOpacity } = useAvatarStyle()
   const showAvatar = activeDiscussion && activeMessages.some(m => m.role === "assistant")
 
-  const pendingBanner = pendingContext.context ? (
-    <PendingContextBanner context={pendingContext.context} onDismiss={pendingContext.clear} />
-  ) : null
-
   const chatArea = activeDiscussion ? (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
       <ChatPanel
@@ -208,9 +204,8 @@ export function ChatView() {
         pendingQuestion={pendingQuestion}
         onAnswerQuestion={handleAnswerQuestion}
         onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
-        placeholder={pendingContext.context ? "Ask about this context..." : "Talk to Nova..."}
+        placeholder="Talk to Nova..."
         header={chatHeader}
-        footer={pendingBanner}
         speechBackend={speechBackend}
         resolveImageSrc={resolveImageSrc}
         renderStatusLine={({ isStreaming, messages }) => (
