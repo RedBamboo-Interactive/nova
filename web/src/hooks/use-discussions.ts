@@ -161,7 +161,7 @@ export function useDiscussions() {
 
   const sendMessage = useCallback(async (discussionId: string, content: string, images?: ImageAttachment[], inputMethod?: string) => {
     const disc = discussions.find((d) => d.id === discussionId)
-    if (!disc?.sessionId) return
+    if (!disc) return
 
     const userMsg: MessageBlock = {
       id: crypto.randomUUID(),
@@ -194,11 +194,20 @@ export function useDiscussions() {
       )
     }
 
+    const updateSessionId = (res: { sessionId?: string }) => {
+      if (res.sessionId && res.sessionId !== disc.sessionId) {
+        setDiscussions((prev) =>
+          prev.map((d) => d.id === discussionId ? { ...d, sessionId: res.sessionId! } : d)
+        )
+      }
+    }
+
     try {
-      await api.post(`/api/discussions/${discussionId}/message`, { content, images, inputMethod })
+      const res = await api.post<{ success: boolean; sessionId?: string }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod })
+      updateSessionId(res)
       return
     } catch {
-      // Session may be dead after RedCompute restart — try to resume
+      if (!disc.sessionId) { fail(); return }
     }
 
     try {
@@ -210,7 +219,8 @@ export function useDiscussions() {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await api.post(`/api/discussions/${discussionId}/message`, { content, images, inputMethod })
+        const res = await api.post<{ success: boolean; sessionId?: string }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod })
+        updateSessionId(res)
         return
       } catch {
         if (attempt < 2) {
@@ -322,6 +332,19 @@ export function useDiscussions() {
         const newBlock: import("@redbamboo/chat").MessageBlock = {
           id: `event-${Date.now()}`,
           role: "user",
+          parts: [{ type: "text", content }],
+          timestamp: new Date().toISOString(),
+        }
+        return { ...prev, [discussionId]: [...current, newBlock] }
+      })
+    } else if (event.type === "discussion.nova-message") {
+      const { discussionId, content } = event.data as { discussionId: string; content: string }
+      if (!discussionId) return
+      setMessages((prev) => {
+        const current = prev[discussionId] ?? []
+        const newBlock: import("@redbamboo/chat").MessageBlock = {
+          id: `nova-msg-${Date.now()}`,
+          role: "assistant",
           parts: [{ type: "text", content }],
           timestamp: new Date().toISOString(),
         }

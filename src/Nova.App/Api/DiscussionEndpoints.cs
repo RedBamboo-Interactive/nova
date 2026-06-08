@@ -187,7 +187,7 @@ public static class DiscussionEndpoints
             return Results.Ok(ToInfo(discussion));
         });
 
-        registry.MapGet("/api/discussions/{id}", "Get discussion metadata", async (string id, HttpContext ctx, NovaDbContext db) =>
+        registry.MapGet("/api/discussions/{id}", "Get discussion metadata and local messages", async (string id, HttpContext ctx, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
@@ -197,7 +197,22 @@ public static class DiscussionEndpoints
             if (discussion.OwnerId != null && discussion.OwnerId != "local-user" && userId != "local-user" && discussion.OwnerId != userId)
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
-            return Results.Ok(new { discussion = ToInfo(discussion) });
+            var records = await db.Conversations
+                .Where(m => m.ContextId == id)
+                .OrderBy(m => m.Timestamp)
+                .ToListAsync();
+
+            return Results.Ok(new
+            {
+                discussion = ToInfo(discussion),
+                messages = records.Select(m => new
+                {
+                    id = m.Id.ToString(),
+                    role = m.Role,
+                    parts = new[] { new { type = "text", content = m.Content } },
+                    timestamp = m.Timestamp.ToString("o"),
+                }),
+            });
         });
 
         registry.MapPut("/api/discussions/{id}/title", "Update discussion title", async (string id, DiscussionTitleRequest request, HttpContext ctx, NovaDbContext db) =>
@@ -414,41 +429,47 @@ public static class DiscussionEndpoints
             if (discussion.OwnerId != null && discussion.OwnerId != "local-user" && userId != "local-user" && discussion.OwnerId != userId)
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
-            if (discussion.SessionId is null)
-                return Results.BadRequest(new { error = "Discussion has no active session" });
-
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });
 
-            try
+            if (discussion.SessionId is not null)
             {
-                var resp = await RedCompute.PostAsJsonAsync(
-                    $"/ai-session/sessions/{discussion.SessionId}/inject",
-                    new { role = "assistant", content = request.Content }, JsonOptions);
-                resp.EnsureSuccessStatusCode();
+                try
+                {
+                    var resp = await RedCompute.PostAsJsonAsync(
+                        $"/ai-session/sessions/{discussion.SessionId}/inject",
+                        new { role = "assistant", content = request.Content }, JsonOptions);
+                    resp.EnsureSuccessStatusCode();
+                }
+                catch
+                {
+                    return Results.StatusCode(502);
+                }
             }
-            catch
+
+            db.Conversations.Add(new ConversationRecord
             {
-                return Results.StatusCode(502);
-            }
+                ContextId = id,
+                Role = "assistant",
+                Content = request.Content,
+                Source = "nova-message",
+                UserId = userId,
+            });
 
             discussion.LastActivity = DateTime.UtcNow;
             discussion.MessageCount++;
             discussion.InjectedContext = request.Content;
+
+            if (!string.IsNullOrWhiteSpace(request.Title))
+                discussion.Title = request.Title;
+
             await db.SaveChangesAsync();
 
             broadcaster?.Broadcast("discussion.nova-message", new
             {
                 discussionId = id,
-                sessionId = discussion.SessionId,
                 content = request.Content,
             });
-
-            if (!string.IsNullOrWhiteSpace(request.Title))
-            {
-                discussion.Title = request.Title;
-                await db.SaveChangesAsync();
-            }
 
             return Results.Ok(new { success = true });
         });
@@ -463,11 +484,40 @@ public static class DiscussionEndpoints
             if (discussion.OwnerId != null && discussion.OwnerId != "local-user" && userId != "local-user" && discussion.OwnerId != userId)
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
-            if (discussion.SessionId is null)
-                return Results.BadRequest(new { error = "Discussion has no active session" });
-
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });
+
+            if (discussion.SessionId is null)
+            {
+                try
+                {
+                    memory.GenerateClaudeMd();
+
+                    var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
+                    {
+                        Content = JsonContent.Create(new { projectPath = memory.WorkspacePath }, options: JsonOptions),
+                    };
+                    req.Headers.Add("X-Caller-Info", "Nova");
+                    if (discussion.OwnerId != null)
+                        req.Headers.Add("X-User-Id", discussion.OwnerId);
+                    var resp = await RedCompute.SendAsync(req);
+                    resp.EnsureSuccessStatusCode();
+
+                    var session = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+                    if (session.TryGetProperty("id", out var idProp))
+                    {
+                        discussion.SessionId = idProp.GetString();
+                        await db.SaveChangesAsync();
+                    }
+                }
+                catch
+                {
+                    return Results.StatusCode(502);
+                }
+
+                if (discussion.SessionId is null)
+                    return Results.StatusCode(502);
+            }
 
             var now = DateTime.UtcNow;
             var cutoff = now.AddDays(-2);
@@ -512,7 +562,7 @@ public static class DiscussionEndpoints
                     await db.SaveChangesAsync();
                 }
 
-                return Results.Ok(new { success = true });
+                return Results.Ok(new { success = true, sessionId = discussion.SessionId });
             }
             catch
             {

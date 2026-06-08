@@ -187,7 +187,7 @@ export function ChatView() {
         onInterrupt={handleInterrupt}
         sessionId={activeDiscussionId}
         draftStorageKey="nova-drafts"
-        disabled={activeDiscussion.status === "archived" || activeDiscussion.status === "stopped" || !activeDiscussion.sessionId}
+        disabled={activeDiscussion.status === "archived" || activeDiscussion.status === "stopped"}
         pendingQuestion={pendingQuestion}
         onAnswerQuestion={handleAnswerQuestion}
         onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
