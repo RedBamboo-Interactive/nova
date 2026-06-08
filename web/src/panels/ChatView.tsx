@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
 import { ChatPanel, ContextIndicator, PendingContextBanner, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
-import { useCommand, useBreadcrumbLabel } from "@redbamboo/utility"
+import { useCommand, useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
 import { NovaStatusLine } from "@/components/nova-status-line"
 import { createNovaSpeechBackend } from "@/lib/speech"
@@ -98,6 +98,15 @@ export function ChatView() {
     sendMessage(activeDiscussionId, wrapped.text, wrapped.images, options?.inputMethod)
     clearContext()
   }, [activeDiscussionId, sendMessage, wrapMessage, clearContext])
+
+  useEffect(() => {
+    const ctx = pendingContext.context
+    if (!ctx?.question || !activeDiscussionId) return
+    const text = formatContextMessage(ctx, ctx.question)
+    const images = ctx.screenshot ? [ctx.screenshot] : undefined
+    sendMessage(activeDiscussionId, text, images)
+    clearContext()
+  }, [pendingContext.context, activeDiscussionId, sendMessage, clearContext])
 
   const handleInterrupt = useCallback(() => {
     if (!activeDiscussionId) return

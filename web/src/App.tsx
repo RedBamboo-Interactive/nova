@@ -2,7 +2,7 @@ import { useEffect, useCallback, useRef, createContext, useContext } from "react
 import { createBrowserRouter, RouterProvider, Outlet, useNavigate } from "react-router-dom"
 import {
   WsEventProvider, useWsSubscribe, BreadcrumbLabelProvider, AuthProvider, useAuth,
-  useAskNovaReceiver, usePendingNovaContext, formatContextMessage,
+  useAskNovaReceiver, usePendingNovaContext,
   type AskNovaContext, type PendingNovaContext,
 } from "@redbamboo/utility"
 import { AppShell } from "@/components/layout/app-shell"
@@ -41,14 +41,7 @@ function AskNovaHandler({ discRef, setPendingContext }: { discRef: React.RefObje
   const onContext = useCallback(async (ctx: AskNovaContext) => {
     const d = await discRef.current.createDiscussion()
     if (!d) return
-
-    if (ctx.question) {
-      const text = formatContextMessage(ctx, ctx.question)
-      const images = ctx.screenshot ? [ctx.screenshot] : undefined
-      discRef.current.sendMessage(d.id, text, images)
-    } else {
-      setPendingContext(ctx)
-    }
+    setPendingContext(ctx)
     navigate(`/chat/${d.id}`)
   }, [navigate, setPendingContext])
 
