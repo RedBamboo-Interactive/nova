@@ -91,12 +91,13 @@ export function ChatView() {
   const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming)
   const [mobileTab, setMobileTab] = useState(0)
 
+  const { wrapMessage, clear: clearContext } = pendingContext
   const handleSend = useCallback((content: string, images?: ImageAttachment[], options?: SendOptions) => {
     if (!activeDiscussionId) return
-    const wrapped = pendingContext.wrapMessage(content, images)
+    const wrapped = wrapMessage(content, images)
     sendMessage(activeDiscussionId, wrapped.text, wrapped.images, options?.inputMethod)
-    pendingContext.clear()
-  }, [activeDiscussionId, sendMessage, pendingContext])
+    clearContext()
+  }, [activeDiscussionId, sendMessage, wrapMessage, clearContext])
 
   const handleInterrupt = useCallback(() => {
     if (!activeDiscussionId) return

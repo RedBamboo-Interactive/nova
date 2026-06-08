@@ -35,16 +35,16 @@ function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<DiscussionsH
   return null
 }
 
-function AskNovaHandler({ discRef, pendingContext }: { discRef: React.RefObject<DiscussionsHook>; pendingContext: PendingNovaContext }) {
+function AskNovaHandler({ discRef, setPendingContext }: { discRef: React.RefObject<DiscussionsHook>; setPendingContext: (ctx: AskNovaContext) => void }) {
   const navigate = useNavigate()
 
   const onContext = useCallback(async (ctx: AskNovaContext) => {
     const d = await discRef.current.createDiscussion()
     if (d) {
-      pendingContext.set(ctx)
+      setPendingContext(ctx)
       navigate(`/chat/${d.id}`)
     }
-  }, [navigate, pendingContext])
+  }, [navigate, setPendingContext])
 
   useAskNovaReceiver({ onContext })
   return null
@@ -92,7 +92,7 @@ function AppLayout() {
   return (
     <WsEventProvider url={wsUrl} onReconnect={onReconnect} onVisibilityChange={onVisibilityChange}>
       <WsDiscussionBridge discRef={discRef} />
-      <AskNovaHandler discRef={discRef} pendingContext={pendingContext} />
+      <AskNovaHandler discRef={discRef} setPendingContext={pendingContext.set} />
       <AppContextValue.Provider value={appCtx}>
         <BreadcrumbLabelProvider>
           <AppShell>
