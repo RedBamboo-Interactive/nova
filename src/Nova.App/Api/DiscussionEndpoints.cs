@@ -535,6 +535,18 @@ public static class DiscussionEndpoints
 
                 if (discussion.SessionId is null)
                     return Results.StatusCode(502);
+
+                if (discussion.InjectedContext != null)
+                {
+                    try
+                    {
+                        var injectResp = await RedCompute.PostAsJsonAsync(
+                            $"/ai-session/sessions/{discussion.SessionId}/inject",
+                            new { role = "assistant", content = discussion.InjectedContext }, JsonOptions);
+                        injectResp.EnsureSuccessStatusCode();
+                    }
+                    catch { /* session exists but inject failed — continue, XML fallback below still works */ }
+                }
             }
 
             var now = DateTime.UtcNow;
@@ -557,15 +569,7 @@ public static class DiscussionEndpoints
             var input = request.InputMethod ?? "typed";
             var contextBlock = BuildNovaContext(allDiscussions, id, now, device, input);
 
-            var injected = discussion.InjectedContext;
-            var enrichedContent = contextBlock + "\n\n";
-            if (injected != null)
-            {
-                enrichedContent += "<nova-prior-messages hint=\"You said this earlier in the conversation. The user can see it but it was injected before your session started.\">\n"
-                    + injected
-                    + "\n</nova-prior-messages>\n\n";
-            }
-            enrichedContent += request.Content;
+            var enrichedContent = contextBlock + "\n\n" + request.Content;
 
             try
             {
@@ -574,7 +578,7 @@ public static class DiscussionEndpoints
                     new { content = enrichedContent, images = request.Images }, JsonOptions);
                 resp.EnsureSuccessStatusCode();
 
-                if (injected != null)
+                if (discussion.InjectedContext != null)
                 {
                     discussion.InjectedContext = null;
                 }
