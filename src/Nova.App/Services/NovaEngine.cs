@@ -61,7 +61,7 @@ public class NovaEngine : IAsyncDisposable
             SystemPrompt = BuildAutomationPrompt(name),
             SystemPromptHint = hint ?? name,
             WorkingDirectory = _memory.WorkspacePath,
-            AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "PowerShell", "WebFetch", "WebSearch", "TodoWrite"],
+            AllowedTools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebFetch", "WebSearch", "TodoWrite"],
             MaxTurns = 50,
             Timeout = timeout,
         };

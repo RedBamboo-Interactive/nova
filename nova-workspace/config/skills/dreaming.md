@@ -205,7 +205,7 @@ Source: memory/meta/user_profile.md
 
 ## Dreaming Artifacts
 
-{Harvest files, kept for 7 days}
+{Harvest files}
 - `memory/dreaming/harvest/{date}.md` — {description}
 ```
 
@@ -236,12 +236,6 @@ Update `memory/meta/dreaming-state.json`:
   "lastError": null
 }
 ```
-
-### Step 7: Cleanup
-
-Remove harvest files older than 7 days. These are working documents, not
-permanent records — the important information has already been promoted into
-topic and meta files.
 
 ## Error Handling
 
