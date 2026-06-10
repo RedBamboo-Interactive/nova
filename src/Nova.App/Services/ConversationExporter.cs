@@ -64,7 +64,11 @@ public static class ConversationExporter
         return sb.ToString();
     }
 
-    private static async Task<List<RawMessage>?> FetchSessionMessages(string sessionId)
+    /// <summary>
+    /// Fetch a RedCompute session's status and raw message list.
+    /// Returns null when RedCompute is unreachable or the session does not exist.
+    /// </summary>
+    public static async Task<SessionSnapshot?> FetchSessionAsync(string sessionId)
     {
         try
         {
@@ -72,21 +76,28 @@ public static class ConversationExporter
             if (!resp.IsSuccessStatusCode) return null;
 
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-            if (!doc.RootElement.TryGetProperty("messages", out var arr)) return null;
 
-            var messages = new List<RawMessage>();
-            foreach (var el in arr.EnumerateArray())
+            string? status = null;
+            if (doc.RootElement.TryGetProperty("session", out var session)
+                && session.TryGetProperty("status", out var st))
+                status = st.GetString();
+
+            var messages = new List<SessionMessage>();
+            if (doc.RootElement.TryGetProperty("messages", out var arr))
             {
-                messages.Add(new RawMessage
+                foreach (var el in arr.EnumerateArray())
                 {
-                    Role = el.GetProperty("role").GetString() ?? "unknown",
-                    EventType = el.TryGetProperty("eventType", out var et) ? et.GetString() ?? "text" : "text",
-                    Content = el.TryGetProperty("content", out var c) ? c.GetString() : null,
-                    Timestamp = el.TryGetProperty("timestamp", out var ts) ? ts.GetDateTime() : DateTime.MinValue,
-                });
+                    messages.Add(new SessionMessage
+                    {
+                        Role = el.GetProperty("role").GetString() ?? "unknown",
+                        EventType = el.TryGetProperty("eventType", out var et) ? et.GetString() ?? "text" : "text",
+                        Content = el.TryGetProperty("content", out var c) ? c.GetString() : null,
+                        Timestamp = el.TryGetProperty("timestamp", out var ts) ? ts.GetDateTime() : DateTime.MinValue,
+                    });
+                }
             }
 
-            return messages;
+            return new SessionSnapshot(status, messages);
         }
         catch
         {
@@ -94,7 +105,13 @@ public static class ConversationExporter
         }
     }
 
-    private static void AppendSessionExport(StringBuilder sb, Data.Entities.Discussion disc, List<RawMessage> raw)
+    private static async Task<List<SessionMessage>?> FetchSessionMessages(string sessionId)
+    {
+        var snapshot = await FetchSessionAsync(sessionId);
+        return snapshot is { Messages.Count: > 0 } ? snapshot.Messages : null;
+    }
+
+    private static void AppendSessionExport(StringBuilder sb, Data.Entities.Discussion disc, List<SessionMessage> raw)
     {
         var collapsed = CollapseMessages(raw);
         var textMessages = collapsed.Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content)).ToList();
@@ -112,7 +129,7 @@ public static class ConversationExporter
         }
     }
 
-    private static List<CollapsedMessage> CollapseMessages(List<RawMessage> raw)
+    private static List<CollapsedMessage> CollapseMessages(List<SessionMessage> raw)
     {
         var result = new List<CollapsedMessage>();
 
@@ -214,14 +231,6 @@ public static class ConversationExporter
     private static string? Truncate(string? s, int max) =>
         s is { Length: > 0 } && s.Length > max ? s[..max] + "..." : s;
 
-    private class RawMessage
-    {
-        public string Role { get; set; } = "";
-        public string EventType { get; set; } = "";
-        public string? Content { get; set; }
-        public DateTime Timestamp { get; set; }
-    }
-
     private class CollapsedMessage
     {
         public string Role { get; set; } = "";
@@ -230,3 +239,15 @@ public static class ConversationExporter
         public DateTime Timestamp { get; set; }
     }
 }
+
+/// <summary>A single raw message from a RedCompute session transcript.</summary>
+public class SessionMessage
+{
+    public string Role { get; set; } = "";
+    public string EventType { get; set; } = "";
+    public string? Content { get; set; }
+    public DateTime Timestamp { get; set; }
+}
+
+/// <summary>Point-in-time view of a RedCompute session: its status plus the raw message list.</summary>
+public record SessionSnapshot(string? Status, List<SessionMessage> Messages);

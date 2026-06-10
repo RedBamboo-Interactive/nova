@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using RedBamboo.AppHost;
 using RedBamboo.AppHost.Auth;
 using RedBamboo.AppHost.Discovery;
 using RedBamboo.AppHost.WebSockets;
@@ -155,23 +156,7 @@ public static class DiscussionEndpoints
 
             try
             {
-                memory.GenerateClaudeMd();
-
-                var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
-                {
-                    Content = JsonContent.Create(new { projectPath = memory.WorkspacePath }, options: JsonOptions),
-                };
-                req.Headers.Add("X-Caller-Info", "Nova");
-                if (discussion.OwnerId != null)
-                    req.Headers.Add("X-User-Id", discussion.OwnerId);
-                var resp = await RedCompute.SendAsync(req);
-
-                if (resp.IsSuccessStatusCode)
-                {
-                    var session = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
-                    if (session.TryGetProperty("id", out var idProp))
-                        discussion.SessionId = idProp.GetString();
-                }
+                discussion.SessionId = await TryCreateSessionAsync(memory, discussion.OwnerId);
             }
             catch
             {
@@ -509,108 +494,136 @@ public static class DiscussionEndpoints
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });
 
-            if (discussion.SessionId is null)
-            {
-                try
-                {
-                    memory.GenerateClaudeMd();
-
-                    var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
-                    {
-                        Content = JsonContent.Create(new { projectPath = memory.WorkspacePath }, options: JsonOptions),
-                    };
-                    req.Headers.Add("X-Caller-Info", "Nova");
-                    if (discussion.OwnerId != null)
-                        req.Headers.Add("X-User-Id", discussion.OwnerId);
-                    var resp = await RedCompute.SendAsync(req);
-                    resp.EnsureSuccessStatusCode();
-
-                    var session = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
-                    if (session.TryGetProperty("id", out var idProp))
-                    {
-                        discussion.SessionId = idProp.GetString();
-                        await db.SaveChangesAsync();
-                    }
-                }
-                catch
-                {
-                    return Results.StatusCode(502);
-                }
-
-                if (discussion.SessionId is null)
-                    return Results.StatusCode(502);
-
-                if (discussion.InjectedContext != null)
-                {
-                    try
-                    {
-                        var injectResp = await RedCompute.PostAsJsonAsync(
-                            $"/ai-session/sessions/{discussion.SessionId}/inject",
-                            new { role = "assistant", content = discussion.InjectedContext }, JsonOptions);
-                        injectResp.EnsureSuccessStatusCode();
-                    }
-                    catch { /* session exists but inject failed — continue, XML fallback below still works */ }
-                }
-            }
-
-            var now = DateTime.UtcNow;
-            var cutoff = now.AddDays(-2);
-
-            IQueryable<Discussion> contextQuery = db.Discussions
-                .Where(d => d.Status != "archived" || (d.Status == "archived" && d.LastActivity >= cutoff));
-
-            contextQuery = contextQuery.WhereCanAccess(userId);
-
-            var allDiscussions = await contextQuery
-                .OrderByDescending(d => d.LastActivity)
-                .ToListAsync();
-
             var ua = ctx.Request.Headers.UserAgent.ToString();
             var device = System.Text.RegularExpressions.Regex.IsMatch(ua, @"Mobile|Android|iPhone|iPad|iPod", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                 ? "mobile" : "desktop";
 
-            var input = request.InputMethod ?? "typed";
-            var contextBlock = BuildNovaContext(allDiscussions, id, now, device, input);
+            var outcome = await SendMessageCoreAsync(
+                db, memory, discussion, userId,
+                request.Content, request.Images, device, request.InputMethod ?? "typed");
 
-            var enrichedContent = contextBlock + "\n\n" + request.Content;
+            if (!outcome.Success)
+                return ApiError.BadGateway(outcome.ErrorCode!, outcome.ErrorMessage!);
 
+            return Results.Ok(new { success = true, sessionId = outcome.SessionId });
+        });
+    }
+
+    /// <summary>
+    /// Create a RedCompute session for Nova's workspace. Returns the session id, or null
+    /// when RedCompute refused. Throws when RedCompute is unreachable.
+    /// </summary>
+    internal static async Task<string?> TryCreateSessionAsync(MemoryManager memory, string? ownerId)
+    {
+        memory.GenerateClaudeMd();
+
+        var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
+        {
+            Content = JsonContent.Create(new { projectPath = memory.WorkspacePath }, options: JsonOptions),
+        };
+        req.Headers.Add("X-Caller-Info", "Nova");
+        if (ownerId != null)
+            req.Headers.Add("X-User-Id", ownerId);
+        var resp = await RedCompute.SendAsync(req);
+        if (!resp.IsSuccessStatusCode) return null;
+
+        var session = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+        return session.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+    }
+
+    internal sealed record SendMessageOutcome(bool Success, string? SessionId, string? ErrorCode, string? ErrorMessage);
+
+    /// <summary>
+    /// Shared message-send pipeline: lazily creates the RedCompute session, injects any
+    /// pending context, enriches the content with the cross-discussion nova-context block,
+    /// and delivers the message. Used by POST /api/discussions/{id}/message and POST /api/ask.
+    /// </summary>
+    internal static async Task<SendMessageOutcome> SendMessageCoreAsync(
+        NovaDbContext db, MemoryManager memory, Discussion discussion, string? userId,
+        string content, ImageAttachmentDto[]? images, string device, string input)
+    {
+        if (discussion.SessionId is null)
+        {
             try
             {
-                var resp = await RedCompute.PostAsJsonAsync(
-                    $"/ai-session/sessions/{discussion.SessionId}/message",
-                    new { content = enrichedContent, images = request.Images }, JsonOptions);
-                resp.EnsureSuccessStatusCode();
-
-                if (discussion.InjectedContext != null)
-                {
-                    discussion.InjectedContext = null;
-                }
-
-                if (request.Images is { Length: > 0 })
-                {
-                    db.Conversations.Add(new ConversationRecord
-                    {
-                        ContextId = id,
-                        Role = "user",
-                        Content = request.Content,
-                        PartsJson = System.Text.Json.JsonSerializer.Serialize(
-                            request.Images.Select(img => new { type = "image", mediaType = img.MediaType, base64 = img.Base64 }),
-                            JsonOptions),
-                        Source = "user-message",
-                        Timestamp = now,
-                        UserId = userId,
-                    });
-                }
-
-                await db.SaveChangesAsync();
-
-                return Results.Ok(new { success = true, sessionId = discussion.SessionId });
+                discussion.SessionId = await TryCreateSessionAsync(memory, discussion.OwnerId);
             }
             catch
             {
-                return Results.StatusCode(502);
+                return new(false, null, "redcompute_unavailable",
+                    "RedCompute could not be reached to start a session. Check that it is running on its configured port.");
             }
-        });
+
+            if (discussion.SessionId is null)
+                return new(false, null, "redcompute_unavailable", "RedCompute refused to create a session.");
+
+            await db.SaveChangesAsync();
+
+            if (discussion.InjectedContext != null)
+            {
+                try
+                {
+                    var injectResp = await RedCompute.PostAsJsonAsync(
+                        $"/ai-session/sessions/{discussion.SessionId}/inject",
+                        new { role = "assistant", content = discussion.InjectedContext }, JsonOptions);
+                    injectResp.EnsureSuccessStatusCode();
+                }
+                catch { /* session exists but inject failed — continue, XML fallback below still works */ }
+            }
+        }
+
+        var now = DateTime.UtcNow;
+        var cutoff = now.AddDays(-2);
+
+        IQueryable<Discussion> contextQuery = db.Discussions
+            .Where(d => d.Status != "archived" || (d.Status == "archived" && d.LastActivity >= cutoff));
+
+        contextQuery = contextQuery.WhereCanAccess(userId);
+
+        var allDiscussions = await contextQuery
+            .OrderByDescending(d => d.LastActivity)
+            .ToListAsync();
+
+        var contextBlock = BuildNovaContext(allDiscussions, discussion.Id, now, device, input);
+        var enrichedContent = contextBlock + "\n\n" + content;
+
+        try
+        {
+            var resp = await RedCompute.PostAsJsonAsync(
+                $"/ai-session/sessions/{discussion.SessionId}/message",
+                new { content = enrichedContent, images }, JsonOptions);
+            resp.EnsureSuccessStatusCode();
+        }
+        catch
+        {
+            return new(false, discussion.SessionId, "redcompute_unavailable",
+                "RedCompute could not deliver the message to the session.");
+        }
+
+        if (discussion.InjectedContext != null)
+        {
+            discussion.InjectedContext = null;
+        }
+
+        if (images is { Length: > 0 })
+        {
+            db.Conversations.Add(new ConversationRecord
+            {
+                ContextId = discussion.Id,
+                Role = "user",
+                Content = content,
+                PartsJson = System.Text.Json.JsonSerializer.Serialize(
+                    images.Select(img => new { type = "image", mediaType = img.MediaType, base64 = img.Base64 }),
+                    JsonOptions),
+                Source = "user-message",
+                Timestamp = now,
+                UserId = userId,
+            });
+        }
+
+        await db.SaveChangesAsync();
+
+        return new(true, discussion.SessionId, null, null);
     }
 
     private static string BuildNovaContext(List<Discussion> discussions, string currentId, DateTime now, string device, string input)

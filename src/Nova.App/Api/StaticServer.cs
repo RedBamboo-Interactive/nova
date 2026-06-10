@@ -135,6 +135,7 @@ public class StaticServer
             location: RedBamboo.AppHost.Discovery.ParamLocation.Query);
 
         registry.MapDiscussionEndpoints(_engine);
+        registry.MapAskEndpoints(_engine);
         registry.MapDiscussionExportEndpoints();
         registry.MapSettingsEndpoints(_memory);
         registry.MapMemoryEndpoints(_memory);
