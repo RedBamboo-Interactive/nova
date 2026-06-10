@@ -11,6 +11,7 @@ using RedBamboo.AppHost.Auth;
 using RedBamboo.AppHost.Discovery;
 using RedBamboo.AppHost.Extensions;
 using RedBamboo.AppHost.Logging;
+using RedBamboo.AppHost.WebSockets;
 using Nova.App.Data;
 using Nova.App.Services;
 
@@ -142,6 +143,19 @@ public class StaticServer
         registry.MapAutomationEndpoints(_engine);
         registry.MapDelegateEndpoints();
         registry.MapCallbackEndpoints();
+
+        var broadcaster = _app.Services.GetService<WebSocketBroadcaster>();
+        broadcaster?.RegisterEvent(new WsEventSchema(
+            "discussion.event",
+            "Fired when an automation or system event is injected into a discussion with a live session " +
+            "(POST /api/discussions/{id}/event). content carries the <nova-event> payload sent to the session.",
+            Fields: ["discussionId", "sessionId", "content", "source"]));
+        broadcaster?.RegisterEvent(new WsEventSchema(
+            "discussion.nova-message",
+            "Fired when a Nova-authored assistant message is injected into a discussion without triggering inference " +
+            "(POST /api/discussions/{id}/nova-message).",
+            Fields: ["discussionId", "content"]));
+
         var descriptor = new NovaServiceDescriptor(port, logService, _engine, registry);
 
         _app.MapAppHostEndpoints(
