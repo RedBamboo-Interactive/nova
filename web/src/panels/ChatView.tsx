@@ -53,10 +53,48 @@ function resolveImageSrc(src: string): string | undefined {
   return src
 }
 
+function resolveFileLink(filePath: string, opts?: { line?: number }): (() => void) | undefined {
+  const norm = filePath.replace(/\\/g, "/")
+  // Expect absolute paths like T:/Projects/repoName/some/file.ts
+  const match = norm.match(/^([A-Za-z]:\/[^/]+\/[^/]+)\/(.+)$/)
+  if (!match) return undefined
+  const project = match[1]!
+  const relPath = match[2]!
+  const line = opts?.line ? `?line=${opts.line}` : ""
+  const codePath = `/code/${encodeURIComponent(project)}/${encodeURIComponent(relPath)}${line}`
+  return () => navigateCodeRed(codePath)
+}
+
+function navigateCodeRed(path: string) {
+  fetch(`http://localhost:18801/api/navigate?path=${encodeURIComponent(path)}`, {
+    method: "POST",
+    credentials: "include",
+  }).catch(() => {})
+}
+
 export function ChatView() {
   const { discussionId: urlDiscussionId } = useParams()
   const navigate = useNavigate()
   const disc = useDisc()
+
+  // Intercept clicks on CodeRed links and navigate via API instead
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const anchor = (e.target as HTMLElement).closest("a")
+      if (!anchor) return
+      const href = anchor.getAttribute("href")
+      if (!href) return
+      try {
+        const url = new URL(href, window.location.origin)
+        if (url.hostname === "localhost" && url.port === "18801") {
+          e.preventDefault()
+          navigateCodeRed(url.pathname + url.search)
+        }
+      } catch {}
+    }
+    document.addEventListener("click", handler)
+    return () => document.removeEventListener("click", handler)
+  }, [])
 
   const {
     discussions,
@@ -208,6 +246,7 @@ export function ChatView() {
         header={chatHeader}
         speechBackend={speechBackend}
         resolveImageSrc={resolveImageSrc}
+        resolveFileLink={resolveFileLink}
         renderStatusLine={({ isStreaming, messages }) => (
           <NovaStatusLine isStreaming={isStreaming} messages={messages} />
         )}

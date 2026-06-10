@@ -35,7 +35,7 @@ public static class DelegateEndpoints
 
     public static void MapDelegateEndpoints(this EndpointRegistry registry)
     {
-        registry.MapPost("/api/delegate", "Delegate work to a CodeRed session: creates session on RedCompute, sends prompt, navigates CodeRed, registers completion callback that reports back to discussionId. Returns sessionId. Options: navigate (bool, default true), dockerImage (string, passed to session creation for containerized execution). To continue an existing session, provide sessionId instead of projectPath.", async (HttpContext ctx, DelegateRequest request) =>
+        registry.MapPost("/api/delegate", "Delegate work to a CodeRed session: creates session on RedCompute, sends prompt, navigates CodeRed, registers completion callback that reports back to discussionId. Returns sessionId. Options: navigate (bool, default true), dockerImage (string, passed to session creation for containerized execution), model (string, e.g. 'fable', 'opus', 'sonnet', 'haiku'). To continue an existing session, provide sessionId instead of projectPath.", async (HttpContext ctx, DelegateRequest request) =>
         {
             bool isContinuation = !string.IsNullOrWhiteSpace(request.SessionId);
             if (!isContinuation && string.IsNullOrWhiteSpace(request.ProjectPath))
@@ -73,9 +73,14 @@ public static class DelegateEndpoints
                 try
                 {
                     var dockerImage = request.DockerImage ?? App.Config.DockerImage;
-                    var createBody = dockerImage != null
-                        ? (object)new { projectPath = request.ProjectPath, dockerImage }
-                        : new { projectPath = request.ProjectPath };
+                    var model = request.Model;
+                    var createBody = (dockerImage, model) switch
+                    {
+                        (not null, not null) => (object)new { projectPath = request.ProjectPath, dockerImage, model },
+                        (not null, null) => new { projectPath = request.ProjectPath, dockerImage },
+                        (null, not null) => (object)new { projectPath = request.ProjectPath, model },
+                        _ => new { projectPath = request.ProjectPath },
+                    };
                     var createReq = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
                     {
                         Content = JsonContent.Create(createBody, options: JsonOptions),
@@ -191,4 +196,5 @@ public class DelegateRequest
     public string? DiscussionId { get; set; }
     public bool? Navigate { get; set; }
     public string? DockerImage { get; set; }
+    public string? Model { get; set; }
 }
