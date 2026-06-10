@@ -90,24 +90,72 @@ public class AutomationService
 
     public int ActiveCount => _automations.Count(a => a.Enabled);
 
+    /// <summary>
+    /// Apply a partial update — only non-null fields change. Returns the updated automation,
+    /// or null when not found. Throws ArgumentException on an invalid cron expression.
+    /// </summary>
+    public Automation? Update(string name, AutomationUpdate update)
+    {
+        var a = _automations.FirstOrDefault(x => x.Name == name);
+        if (a == null) return null;
+
+        if (update.Schedule != null)
+        {
+            if (!ValidateCron(update.Schedule))
+                throw new ArgumentException($"Invalid cron expression: {update.Schedule}");
+            a.Schedule = update.Schedule;
+        }
+
+        if (update.Description != null) a.Description = update.Description;
+        if (update.Enabled.HasValue) a.Enabled = update.Enabled.Value;
+        if (update.Icon != null) a.Icon = update.Icon;
+        if (update.ActionConfigJson != null) a.ActionConfigJson = update.ActionConfigJson;
+        if (update.ReportToDiscussionId != null) a.ReportToDiscussionId = update.ReportToDiscussionId;
+        if (update.RemoveOnTrigger.HasValue) a.RemoveOnTrigger = update.RemoveOnTrigger.Value;
+        if (update.ExpiresAt.HasValue) a.ExpiresAt = update.ExpiresAt.Value;
+        if (update.MaxFailures.HasValue) a.MaxFailures = update.MaxFailures.Value;
+
+        a.NextRun = CalculateNextRun(a);
+        Save();
+        _log.Info("automations", $"Updated: {name} next={a.NextRun:g}");
+        return a;
+    }
+
     public async Task<AutomationResult?> TriggerAsync(string name, CancellationToken ct)
     {
         var automation = _automations.FirstOrDefault(x => x.Name == name);
         if (automation == null) return null;
 
         _log.Info("automations", $"[{automation.Name}] Manual trigger");
-        var result = await ExecuteAsync(automation, ct);
-        automation.LastRun = DateTime.UtcNow;
-        automation.LastResultJson = result != null
-            ? JsonSerializer.Serialize(result, JsonOptions)
-            : null;
-        automation.NextRun = CalculateNextRun(automation);
-        Save();
+        try
+        {
+            var result = await ExecuteAsync(automation, ct);
+            automation.LastRun = DateTime.UtcNow;
+            automation.LastError = null;
+            automation.ConsecutiveFailures = 0;
+            automation.LastResultJson = result != null
+                ? JsonSerializer.Serialize(result, JsonOptions)
+                : null;
+            automation.NextRun = CalculateNextRun(automation);
+            Save();
 
-        if (result?.Triggered == true && automation.ReportToDiscussionId != null)
-            await ReportToDiscussionAsync(automation, result, ct);
+            if (result?.Triggered == true && automation.ReportToDiscussionId != null)
+                await ReportToDiscussionAsync(automation, result, ct);
 
-        return result;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            automation.ConsecutiveFailures++;
+            automation.LastError = ex.Message;
+            automation.LastRun = DateTime.UtcNow;
+            automation.LastResultJson = JsonSerializer.Serialize(
+                new AutomationResult { Triggered = false, Summary = $"Failed: {ex.Message}" }, JsonOptions);
+            automation.NextRun = CalculateNextRun(automation);
+            Save();
+            _log.Error("automations", $"[{automation.Name}] Manual trigger failed ({automation.ConsecutiveFailures}x): {ex.Message}");
+            return new AutomationResult { Triggered = false, Summary = $"Failed: {ex.Message}" };
+        }
     }
 
     private async Task RunAsync(CancellationToken ct)
@@ -613,6 +661,20 @@ public class Automation
     public DateTime? ExpiresAt { get; set; }
     public string? LastError { get; set; }
     public string? OwnerId { get; set; }
+}
+
+/// <summary>Partial update for an automation — null fields are left untouched.</summary>
+public class AutomationUpdate
+{
+    public string? Description { get; set; }
+    public string? Schedule { get; set; }
+    public bool? Enabled { get; set; }
+    public string? Icon { get; set; }
+    public string? ActionConfigJson { get; set; }
+    public string? ReportToDiscussionId { get; set; }
+    public bool? RemoveOnTrigger { get; set; }
+    public DateTime? ExpiresAt { get; set; }
+    public int? MaxFailures { get; set; }
 }
 
 public class AutomationResult
