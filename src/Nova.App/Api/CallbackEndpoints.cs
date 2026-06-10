@@ -28,17 +28,19 @@ public static class CallbackEndpoints
 
             var title = body.TryGetProperty("title", out var t) ? t.GetString() : null;
             var projectPath = body.TryGetProperty("projectPath", out var p) ? p.GetString() : null;
+            var stopReason = body.TryGetProperty("stopReason", out var sr) ? sr.GetString() : null;
 
-            var summary = status switch
+            var summary = (status, stopReason) switch
             {
-                "Idle" => $"Session {sessionId} completed{(title != null ? $": {title}" : "")}",
-                "Stopped" => $"Session {sessionId} was stopped",
-                "Error" or "Ended" => $"Session {sessionId} ended with status: {status}",
+                (_, "usage_limit") => $"Session {sessionId} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
+                ("Idle", _) => $"Session {sessionId} completed{(title != null ? $": {title}" : "")}",
+                ("Stopped", _) => $"Session {sessionId} was stopped",
+                ("Error" or "Ended", _) => $"Session {sessionId} ended with status: {status}",
                 _ => $"Session {sessionId} status: {status}",
             };
 
             var eventContent = $"""
-                <nova-event source="callback:session-complete" type="session-complete">
+                <nova-event source="callback:session-complete" type="session-complete" stopReason="{stopReason ?? "unknown"}">
                 {summary}
                 </nova-event>
                 """;
