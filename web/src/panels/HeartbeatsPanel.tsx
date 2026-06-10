@@ -161,13 +161,28 @@ function getIcon(a: Automation): string {
   return (actionMeta[a.actionType] ?? { icon: "fa-solid fa-gear" }).icon
 }
 
-function AutomationDetail({ automation, onDelete }: { automation: Automation; onDelete: () => void }) {
+function AutomationDetail({ automation, onDelete, onTrigger, triggering }: {
+  automation: Automation
+  onDelete: () => void
+  onTrigger: () => void
+  triggering: boolean
+}) {
   const meta = actionMeta[automation.actionType] ?? { icon: "fa-solid fa-gear", label: automation.actionType }
   const isSystem = automation.name.startsWith("system:")
 
   return (
     <div className="h-full flex flex-col">
       <PanelHeader title={isSystem ? automation.name.replace("system:", "") : automation.name}>
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={onTrigger}
+          disabled={triggering}
+          title="Run this automation now (runs in the background)"
+        >
+          <i className={`fa-solid ${triggering ? "fa-spinner fa-spin" : "fa-play"} text-xs mr-1`} />
+          {triggering ? "Started" : "Run now"}
+        </Button>
         {!isSystem && (
           <Button
             variant="ghost"
@@ -247,7 +262,7 @@ function AutomationDetail({ automation, onDelete }: { automation: Automation; on
                 </span>
                 {automation.lastResult.sessionId && (
                   <a
-                    href={`http://localhost:18800/ai-session/sessions/${automation.lastResult.sessionId}`}
+                    href={`/ai-session/sessions/${automation.lastResult.sessionId}`}
                     target="_blank"
                     rel="noreferrer"
                     className="ml-auto text-text-muted hover:text-primary transition-colors"
@@ -300,6 +315,18 @@ export function AutomationsPanel() {
     if (selectedName === name) navigate("/pulse")
     refresh()
   }, [selectedName, refresh, navigate])
+
+  const [triggering, setTriggering] = useState<string | null>(null)
+  const handleTrigger = useCallback(async (name: string) => {
+    setTriggering(name)
+    try {
+      await api.post(`/api/automations/${encodeURIComponent(name)}/trigger`)
+    } catch { /* best effort — outcome lands in lastResult */ }
+    setTimeout(() => {
+      setTriggering((prev) => (prev === name ? null : prev))
+      refresh()
+    }, 1500)
+  }, [refresh])
 
   const handleSelect = useCallback((name: string) => {
     navigate(`/pulse/${encodeURIComponent(name)}`)
@@ -390,6 +417,8 @@ export function AutomationsPanel() {
     <AutomationDetail
       automation={selected}
       onDelete={() => handleDelete(selected.name)}
+      onTrigger={() => handleTrigger(selected.name)}
+      triggering={triggering === selected.name}
     />
   ) : (
     <div className="h-full flex items-center justify-center text-text-muted">

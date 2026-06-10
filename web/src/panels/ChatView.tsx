@@ -2,8 +2,9 @@ import { useState, useCallback, useEffect } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
 import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
-import { useCommand, useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
+import { useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
+import { EditableTitle } from "@/components/discussion/editable-title"
 import { NovaStatusLine } from "@/components/nova-status-line"
 import { createNovaSpeechBackend } from "@/lib/speech"
 import { useNovaEmotion } from "@/hooks/use-nova-emotion"
@@ -111,6 +112,7 @@ export function ChatView() {
     answerQuestion,
     archiveDiscussion,
     dismissDiscussion,
+    renameDiscussion,
     resumeDiscussion,
   } = disc
 
@@ -172,42 +174,15 @@ export function ChatView() {
     setMobileTab(1)
   }, [createDiscussion, navigate])
 
-  useCommand("new-discussion", {
-    label: "New Discussion",
-    group: "Discussions",
-    shortcut: "Ctrl+N",
-    keywords: ["start", "create", "new", "chat"],
-    action: handleNewDiscussion,
-  })
-
-  useCommand("switch-discussion", {
-    label: "Next Discussion",
-    group: "Discussions",
-    shortcut: "Ctrl+Tab",
-    keywords: ["switch", "cycle", "tab"],
-    action: () => {
-      if (discussions.length === 0) return
-      const idx = discussions.findIndex((d) => d.id === activeDiscussionId)
-      const next = discussions[(idx + 1) % discussions.length]
-      if (next) navigate(`/chat/${next.id}`)
-    },
-  })
-
-  useCommand("close-discussion", {
-    label: "Archive Discussion",
-    group: "Discussions",
-    shortcut: "Ctrl+W",
-    keywords: ["close", "archive", "remove"],
-    action: () => {
-      if (activeDiscussionId) {
-        archiveDiscussion(activeDiscussionId)
-        navigate("/chat")
-      }
-    },
-  })
-
   const chatHeader = activeDiscussion && (
-    <PanelHeader title={activeDiscussion.title || "New discussion"}>
+    <PanelHeader
+      leading={
+        <EditableTitle
+          title={activeDiscussion.title || "New discussion"}
+          onRename={(title) => renameDiscussion(activeDiscussion.id, title)}
+        />
+      }
+    >
       <ContextIndicator stats={sessionStats} messages={activeMessages} />
     </PanelHeader>
   )
