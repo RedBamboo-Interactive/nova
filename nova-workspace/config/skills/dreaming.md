@@ -51,8 +51,8 @@ git -C /path/to/repo log --since="{since_date}" --oneline --stat
 
 ### RedBamboo Ecosystem
 The suite runs on localhost. Probe what's available and pull recent activity.
-- **RedCompute** (port 18800): AI compute engine. Check `/api/sessions` or
-  similar for recent inference activity, completed tasks.
+- **RedCompute** (port 18800): AI compute engine. Check `/ai-session/sessions`
+  for recent inference activity, completed tasks.
 - **CodeRed** (port 18801): Claude Code web UI. Check for recent sessions,
   work done, projects touched.
 - **RedMatter** (port 18802): Game engine / CMS. Check for content changes,

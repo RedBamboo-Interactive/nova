@@ -152,6 +152,8 @@ public class MemoryManager
             # Capabilities
             {capabilities}
 
+            Live suite API reference: config/runtime/suite-apis.md — regenerated at every Nova startup from each service's /discover. Trust it over memory.
+
             ---
 
             {memoryInstructions}

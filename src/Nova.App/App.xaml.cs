@@ -71,6 +71,9 @@ public partial class App : Application
             return;
         }
 
+        // Refresh the suite API reference in the background — feeds the AI prompt, tolerates offline services.
+        _ = Task.Run(() => SuiteDiscoveryService.RefreshAsync(Config, Memory, LogService));
+
         if (Config.Tunnel.Enabled)
         {
             await TunnelService.StartAsync(new TunnelConfig

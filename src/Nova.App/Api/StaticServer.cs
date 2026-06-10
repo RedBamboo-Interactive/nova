@@ -159,9 +159,9 @@ public class StaticServer
             logService,
             proxyRoutes: new Dictionary<string, string>
             {
-                ["/ai-session"] = "http://localhost:18800",
-                ["/tts"] = "http://localhost:18800",
-                ["/stt"] = "http://localhost:18800",
+                ["/ai-session"] = App.Config.Suite.RedCompute,
+                ["/tts"] = App.Config.Suite.RedCompute,
+                ["/stt"] = App.Config.Suite.RedCompute,
             });
 
         using (var scope = _app.Services.CreateScope())

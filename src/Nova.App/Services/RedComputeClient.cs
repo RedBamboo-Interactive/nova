@@ -19,12 +19,15 @@ public class RedComputeClient : IDisposable
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
+    private readonly string _baseUrl;
+
     public RedComputeClient(NovaConfig config, LogService log)
     {
         _log = log;
+        _baseUrl = config.Suite.RedCompute;
         _http = new HttpClient
         {
-            BaseAddress = new Uri("http://localhost:18800"),
+            BaseAddress = new Uri(_baseUrl),
             Timeout = TimeSpan.FromSeconds(7200)
         };
         _http.DefaultRequestHeaders.Add("X-Caller-Info", "Nova");
@@ -32,7 +35,7 @@ public class RedComputeClient : IDisposable
 
     public void SetAuthFactory(AuthenticatedHttpClientFactory factory)
     {
-        var newClient = factory.CreateClient("http://localhost:18800", TimeSpan.FromSeconds(7200));
+        var newClient = factory.CreateClient(_baseUrl, TimeSpan.FromSeconds(7200));
         newClient.DefaultRequestHeaders.Add("X-Caller-Info", "Nova");
         _http = newClient;
     }

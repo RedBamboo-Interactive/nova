@@ -17,20 +17,20 @@ public static class DelegateEndpoints
 
     private static HttpClient RedCompute = new()
     {
-        BaseAddress = new Uri("http://localhost:18800"),
+        BaseAddress = new Uri(App.Config.Suite.RedCompute),
         Timeout = TimeSpan.FromSeconds(30),
     };
 
     private static HttpClient CodeRed = new()
     {
-        BaseAddress = new Uri("http://localhost:18801"),
+        BaseAddress = new Uri(App.Config.Suite.CodeRed),
         Timeout = TimeSpan.FromSeconds(5),
     };
 
     public static void Initialize(AuthenticatedHttpClientFactory factory)
     {
-        RedCompute = factory.CreateClient("http://localhost:18800", TimeSpan.FromSeconds(30));
-        CodeRed = factory.CreateClient("http://localhost:18801", TimeSpan.FromSeconds(5));
+        RedCompute = factory.CreateClient(App.Config.Suite.RedCompute, TimeSpan.FromSeconds(30));
+        CodeRed = factory.CreateClient(App.Config.Suite.CodeRed, TimeSpan.FromSeconds(5));
     }
 
     public static void MapDelegateEndpoints(this EndpointRegistry registry)

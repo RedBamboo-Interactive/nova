@@ -26,13 +26,13 @@ public static class DiscussionEndpoints
 
     private static HttpClient RedCompute = new()
     {
-        BaseAddress = new Uri("http://localhost:18800"),
+        BaseAddress = new Uri(App.Config.Suite.RedCompute),
         Timeout = TimeSpan.FromSeconds(30),
     };
 
     public static void Initialize(AuthenticatedHttpClientFactory factory)
     {
-        RedCompute = factory.CreateClient("http://localhost:18800", TimeSpan.FromSeconds(30));
+        RedCompute = factory.CreateClient(App.Config.Suite.RedCompute, TimeSpan.FromSeconds(30));
     }
 
     public static void MapDiscussionEndpoints(this EndpointRegistry registry, NovaEngine engine)

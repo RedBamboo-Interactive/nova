@@ -19,6 +19,8 @@
 - **CodeRed** — Claude Code sessions for deep coding work
 - **RedMatter** — Game engine debug server, CMS content management
 
+The authoritative endpoint reference for all suite services is `config/runtime/suite-apis.md` — regenerated at every Nova startup from each service's `/discover`. Check it before calling a suite API.
+
 ## Skills
 
 Your skills live in `config/skills/`. Each skill is a markdown file containing domain knowledge, patterns, and expertise you can draw on. Read the relevant skill file when a conversation touches that domain.

@@ -6,6 +6,16 @@ public class NovaConfig
     public string WorkspacePath { get; set; } = "";
     public string? DockerImage { get; set; }
     public TunnelSettings Tunnel { get; set; } = new();
+    public SuiteSettings Suite { get; set; } = new();
+}
+
+/// <summary>Base URLs of the sibling Red Suite services.</summary>
+public class SuiteSettings
+{
+    public string RedCompute { get; set; } = "http://localhost:18800";
+    public string CodeRed { get; set; } = "http://localhost:18801";
+    public string RedMatter { get; set; } = "http://localhost:18802";
+    public string RedLeaf { get; set; } = "http://localhost:18804";
 }
 
 public class TunnelSettings
