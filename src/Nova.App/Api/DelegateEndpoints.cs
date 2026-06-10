@@ -184,7 +184,14 @@ public static class DelegateEndpoints
                 callbackRegistered,
                 continued = isContinuation,
             });
-        });
+        })
+        .WithParam("prompt", "string", required: true, description: "Task prompt delivered to the session", location: ParamLocation.Body)
+        .WithParam("projectPath", "string", description: "Project to open for a new session. Required unless sessionId is given", location: ParamLocation.Body)
+        .WithParam("sessionId", "string", description: "Existing session to continue — stopped sessions are auto-resumed", location: ParamLocation.Body)
+        .WithParam("discussionId", "string", description: "Nova discussion that receives a <nova-event> completion callback", location: ParamLocation.Body)
+        .WithParam("navigate", "boolean", description: "Navigate the CodeRed UI to the session", defaultValue: true, location: ParamLocation.Body)
+        .WithParam("dockerImage", "string", description: "Docker image for containerized execution (defaults to Nova's configured image)", location: ParamLocation.Body)
+        .WithParam("model", "string", description: "Model alias for the session, e.g. 'fable', 'opus', 'sonnet', 'haiku'", location: ParamLocation.Body);
     }
 }
 

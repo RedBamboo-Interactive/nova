@@ -13,7 +13,7 @@ public static class CallbackEndpoints
 
     public static void MapCallbackEndpoints(this EndpointRegistry registry)
     {
-        registry.MapPost("/api/callbacks/session-complete", "Callback from RedCompute when a delegated session finishes", async (HttpContext ctx) =>
+        registry.MapPost("/api/callbacks/session-complete", "Internal webhook — RedCompute calls this when a delegated session finishes; it injects a session-complete <nova-event> into the target discussion. Not intended for direct use.", async (HttpContext ctx) =>
         {
             JsonElement body;
             try { body = await ctx.Request.ReadFromJsonAsync<JsonElement>(ctx.RequestAborted); }
@@ -57,6 +57,16 @@ public static class CallbackEndpoints
 
             App.LogService.Info("callbacks", $"Session {sessionId} completed, notified discussion {discussionId}");
             return Results.Ok(new { handled = true, sessionId, discussionId, status });
-        });
+        })
+        .WithAuth("local")
+        .WithParam("discussionId", "string", required: true,
+            description: "Discussion that receives the session-complete event",
+            location: ParamLocation.Query)
+        .WithParam("sessionId", "string", required: true,
+            description: "The RedCompute session that finished",
+            location: ParamLocation.Body)
+        .WithParam("status", "string",
+            description: "Final session status (Idle, Stopped, Error, Ended)",
+            location: ParamLocation.Body);
     }
 }

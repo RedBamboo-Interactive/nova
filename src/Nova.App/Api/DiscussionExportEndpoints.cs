@@ -13,7 +13,7 @@ public static class DiscussionExportEndpoints
 {
     public static void MapDiscussionExportEndpoints(this EndpointRegistry registry)
     {
-        registry.MapGet("/api/discussions/export", "Export conversations as markdown (query: since, limit)", async (HttpContext ctx, NovaDbContext db, string? since, int? limit) =>
+        registry.MapGet("/api/discussions/export", "Export recent conversations as a single markdown document. Responds with text/markdown, not JSON.", async (HttpContext ctx, NovaDbContext db, string? since, int? limit) =>
         {
             var userId = ctx.User.FindFirstValue("sub");
             var sinceDate = since != null
@@ -22,6 +22,8 @@ public static class DiscussionExportEndpoints
 
             var markdown = await ConversationExporter.ExportAsync(db, sinceDate, limit ?? 50, userId);
             return Results.Text(markdown, "text/markdown");
-        });
+        })
+        .WithParam("since", "string", description: "ISO 8601 date/time — include discussions active since this moment. Default: 7 days ago", location: ParamLocation.Query)
+        .WithParam("limit", "integer", description: "Max discussions exported (clamped to 1-200)", defaultValue: 50, location: ParamLocation.Query);
     }
 }

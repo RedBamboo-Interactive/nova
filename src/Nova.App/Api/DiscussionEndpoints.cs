@@ -39,7 +39,7 @@ public static class DiscussionEndpoints
     {
         var memory = engine.Memory;
 
-        registry.MapGet("/api/discussions", "List discussions (filter: status, search)", async (HttpContext ctx, NovaDbContext db) =>
+        registry.MapGet("/api/discussions", "List discussions, newest activity first", async (HttpContext ctx, NovaDbContext db) =>
         {
             var status = ctx.Request.Query["status"].FirstOrDefault();
             var search = ctx.Request.Query["search"].FirstOrDefault();
@@ -59,9 +59,11 @@ public static class DiscussionEndpoints
 
             var discussions = await query.ToListAsync();
             return Results.Ok(discussions.Select(ToInfo));
-        });
+        })
+        .WithParam("status", "string", description: "Filter by status (idle, thinking, stopped, archived). Default: everything except archived", location: ParamLocation.Query)
+        .WithParam("search", "string", description: "Substring match on the discussion title", location: ParamLocation.Query);
 
-        registry.MapGet("/api/discussions/pending", "Count unread discussions", async (HttpContext ctx, NovaDbContext db) =>
+        registry.MapGet("/api/discussions/pending", "Count unread discussions. Side effect: refreshes cached message counts from RedCompute's session list before counting", async (HttpContext ctx, NovaDbContext db) =>
         {
             IQueryable<Discussion> pendingQuery = db.Discussions
                 .Where(d => d.Status != "archived" && d.SessionId != null);
@@ -288,7 +290,7 @@ public static class DiscussionEndpoints
             return Results.Ok(ToInfo(discussion));
         });
 
-        registry.MapDelete("/api/discussions/{id}", "Archive a discussion", async (string id, HttpContext ctx, NovaDbContext db) =>
+        registry.MapDelete("/api/discussions/{id}", "Archive a discussion and stop its remote RedCompute session (if it has one)", async (string id, HttpContext ctx, NovaDbContext db) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
@@ -317,7 +319,8 @@ public static class DiscussionEndpoints
 
             return Results.Ok(ToInfo(discussion));
         });
-        registry.MapGet("/api/discussions/search", "Search conversation content (query: q, limit)", async (HttpContext ctx, NovaDbContext db) =>
+
+        registry.MapGet("/api/discussions/search", "Full-text search across conversation content; returns matching discussions with highlighted snippets", async (HttpContext ctx, NovaDbContext db) =>
         {
             var q = ctx.Request.Query["q"].FirstOrDefault();
             if (string.IsNullOrWhiteSpace(q))
@@ -376,7 +379,9 @@ public static class DiscussionEndpoints
             });
 
             return Results.Ok(new { query = q, results });
-        });
+        })
+        .WithParam("q", "string", required: true, description: "Text to find in message content", location: ParamLocation.Query)
+        .WithParam("limit", "integer", description: "Max discussions returned (clamped to 1-100)", defaultValue: 20, location: ParamLocation.Query);
 
         registry.MapPost("/api/discussions/{id}/event", "Inject an automation event into a discussion", async (string id, DiscussionEventRequest request, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
         {
@@ -450,7 +455,8 @@ public static class DiscussionEndpoints
                 }
                 catch
                 {
-                    return Results.StatusCode(502);
+                    return ApiError.BadGateway("redcompute_unavailable",
+                        "RedCompute could not inject the message into the live session.");
                 }
             }
 
@@ -506,6 +512,30 @@ public static class DiscussionEndpoints
                 return ApiError.BadGateway(outcome.ErrorCode!, outcome.ErrorMessage!);
 
             return Results.Ok(new { success = true, sessionId = outcome.SessionId });
+        })
+        .WithRequestBody(new
+        {
+            type = "object",
+            required = new[] { "content" },
+            properties = new
+            {
+                content = new { type = "string", description = "Message text. Delivered to the session enriched with a cross-discussion <nova-context> block." },
+                images = new
+                {
+                    type = "array",
+                    description = "Optional image attachments.",
+                    items = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            mediaType = new { type = "string", description = "MIME type, e.g. image/png" },
+                            base64 = new { type = "string", description = "Base64-encoded image data (no data: prefix)" },
+                        },
+                    },
+                },
+                inputMethod = new { type = "string", description = "How the message was produced (e.g. 'typed', 'voice'); surfaced to Nova in the context block.", @default = "typed" },
+            },
         });
     }
 

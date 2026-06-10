@@ -44,7 +44,9 @@ public static class SettingsEndpoints
             memory.WriteIdentity(request.Content);
             memory.GenerateClaudeMd();
             return Results.Ok(new { success = true });
-        });
+        }).WithParam("content", "string", required: true,
+            description: "Full identity markdown (replaces config/runtime/identity.md and regenerates CLAUDE.md)",
+            location: ParamLocation.Body);
 
         registry.MapPut("/api/settings/docker", "Enable or disable Docker containerization for AI sessions. Set image to a Docker image name to enable, or null/empty to disable.", (DockerSettingsRequest request) =>
         {
@@ -56,7 +58,9 @@ public static class SettingsEndpoints
                 enabled = !string.IsNullOrEmpty(App.Config.DockerImage),
                 image = App.Config.DockerImage,
             });
-        });
+        }).WithParam("image", "string",
+            description: "Docker image name to run AI sessions in (e.g. 'redbamboo/sandbox'). Null or empty disables containerization",
+            location: ParamLocation.Body);
 
     }
 }
