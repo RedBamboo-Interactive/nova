@@ -31,9 +31,7 @@ public static class ConversationExporter
     {
         maxDiscussions = Math.Clamp(maxDiscussions, 1, 200);
 
-        var query = db.Discussions.Where(d => d.LastActivity >= since);
-        if (userId != null && userId != "local-user")
-            query = query.Where(d => d.OwnerId == null || d.OwnerId == "local-user" || d.OwnerId == userId);
+        var query = db.Discussions.Where(d => d.LastActivity >= since).WhereCanAccess(userId);
 
         var discussions = await query
             .OrderByDescending(d => d.LastActivity)

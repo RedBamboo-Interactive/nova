@@ -54,8 +54,7 @@ public static class DiscussionEndpoints
                 query = query.Where(d => d.Title != null && d.Title.Contains(search));
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (userId != null && userId != "local-user")
-                query = query.Where(d => d.OwnerId == null || d.OwnerId == "local-user" || d.OwnerId == userId);
+            query = query.WhereCanAccess(userId);
 
             var discussions = await query.ToListAsync();
             return Results.Ok(discussions.Select(ToInfo));
@@ -67,8 +66,7 @@ public static class DiscussionEndpoints
                 .Where(d => d.Status != "archived" && d.SessionId != null);
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (userId != null && userId != "local-user")
-                pendingQuery = pendingQuery.Where(d => d.OwnerId == null || d.OwnerId == "local-user" || d.OwnerId == userId);
+            pendingQuery = pendingQuery.WhereCanAccess(userId);
 
             var discussions = await pendingQuery.ToListAsync();
 
@@ -110,8 +108,7 @@ public static class DiscussionEndpoints
                 .Where(d => d.Status != "archived" && d.SessionId != null);
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (userId != null && userId != "local-user")
-                syncQuery = syncQuery.Where(d => d.OwnerId == null || d.OwnerId == "local-user" || d.OwnerId == userId);
+            syncQuery = syncQuery.WhereCanAccess(userId);
 
             var discussions = await syncQuery.ToListAsync();
 
@@ -194,7 +191,7 @@ public static class DiscussionEndpoints
                 return Results.NotFound(new { error = "Discussion not found" });
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (discussion.OwnerId != null && discussion.OwnerId != "local-user" && userId != "local-user" && discussion.OwnerId != userId)
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             var records = await db.Conversations
@@ -215,8 +212,16 @@ public static class DiscussionEndpoints
             });
         });
 
-        registry.MapGet("/api/discussions/{id}/images", "Get stored images for a discussion", async (string id, NovaDbContext db) =>
+        registry.MapGet("/api/discussions/{id}/images", "Get stored images for a discussion", async (string id, HttpContext ctx, NovaDbContext db) =>
         {
+            var discussion = await db.Discussions.FindAsync(id);
+            if (discussion is null)
+                return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
+
             var records = await db.Conversations
                 .Where(m => m.ContextId == id && m.PartsJson != null && m.Source == "user-message")
                 .OrderBy(m => m.Timestamp)
@@ -240,7 +245,7 @@ public static class DiscussionEndpoints
                 return Results.NotFound(new { error = "Discussion not found" });
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (discussion.OwnerId != null && discussion.OwnerId != "local-user" && userId != "local-user" && discussion.OwnerId != userId)
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             discussion.Title = request.Title;
@@ -256,7 +261,7 @@ public static class DiscussionEndpoints
                 return Results.NotFound(new { error = "Discussion not found" });
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (discussion.OwnerId != null && discussion.OwnerId != "local-user" && userId != "local-user" && discussion.OwnerId != userId)
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             discussion.LastReadAt = DateTime.UtcNow;
@@ -272,7 +277,7 @@ public static class DiscussionEndpoints
                 return Results.NotFound(new { error = "Discussion not found" });
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (discussion.OwnerId != null && discussion.OwnerId != "local-user" && userId != "local-user" && discussion.OwnerId != userId)
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             discussion.LastActivity = DateTime.UtcNow;
@@ -288,7 +293,7 @@ public static class DiscussionEndpoints
                 return Results.NotFound(new { error = "Discussion not found" });
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (discussion.OwnerId != null && discussion.OwnerId != "local-user" && userId != "local-user" && discussion.OwnerId != userId)
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             if (discussion.Status is not "archived")
@@ -305,7 +310,7 @@ public static class DiscussionEndpoints
                 return Results.NotFound(new { error = "Discussion not found" });
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (discussion.OwnerId != null && discussion.OwnerId != "local-user" && userId != "local-user" && discussion.OwnerId != userId)
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             discussion.Status = "archived";
@@ -355,8 +360,7 @@ public static class DiscussionEndpoints
                 .Where(d => discussionIds.Contains(d.Id));
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (userId != null && userId != "local-user")
-                searchDiscQuery = searchDiscQuery.Where(d => d.OwnerId == null || d.OwnerId == "local-user" || d.OwnerId == userId);
+            searchDiscQuery = searchDiscQuery.WhereCanAccess(userId);
 
             var discussions = await searchDiscQuery.ToDictionaryAsync(d => d.Id);
 
@@ -396,7 +400,7 @@ public static class DiscussionEndpoints
                 return Results.NotFound(new { error = "Discussion not found" });
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (discussion.OwnerId != null && discussion.OwnerId != "local-user" && userId != "local-user" && discussion.OwnerId != userId)
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             if (string.IsNullOrWhiteSpace(request.Content))
@@ -444,7 +448,7 @@ public static class DiscussionEndpoints
                 return Results.NotFound(new { error = "Discussion not found" });
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (discussion.OwnerId != null && discussion.OwnerId != "local-user" && userId != "local-user" && discussion.OwnerId != userId)
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             if (string.IsNullOrWhiteSpace(request.Content))
@@ -499,7 +503,7 @@ public static class DiscussionEndpoints
                 return Results.NotFound(new { error = "Discussion not found" });
 
             var userId = ctx.User.FindFirstValue("sub");
-            if (discussion.OwnerId != null && discussion.OwnerId != "local-user" && userId != "local-user" && discussion.OwnerId != userId)
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
             if (string.IsNullOrWhiteSpace(request.Content))
@@ -555,8 +559,7 @@ public static class DiscussionEndpoints
             IQueryable<Discussion> contextQuery = db.Discussions
                 .Where(d => d.Status != "archived" || (d.Status == "archived" && d.LastActivity >= cutoff));
 
-            if (userId != null && userId != "local-user")
-                contextQuery = contextQuery.Where(d => d.OwnerId == null || d.OwnerId == "local-user" || d.OwnerId == userId);
+            contextQuery = contextQuery.WhereCanAccess(userId);
 
             var allDiscussions = await contextQuery
                 .OrderByDescending(d => d.LastActivity)

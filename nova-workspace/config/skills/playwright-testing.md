@@ -123,11 +123,11 @@ await browser.close();
 
 ## Viewing Screenshots & Videos
 
-Use the Read tool to view `.png` files — they render inline. Save screenshots to the testing package directory for easy access.
+Use the Read tool to view `.png` files — they render inline. Save screenshots to the `screenshots/` directory in your workspace — Nova's chat can only display files that live inside the workspace.
 
-When showing screenshots to Laurent, use markdown image syntax:
+When showing screenshots to Laurent, use markdown image syntax with the absolute workspace path:
 ```
-![description](T:/Projects/redbamboo-packages/packages/testing/screenshot.png)
+![description](T:/Projects/nova/nova-workspace/screenshots/screenshot.png)
 ```
 
 For videos, provide the file path. Laurent can open `.webm` files directly.
