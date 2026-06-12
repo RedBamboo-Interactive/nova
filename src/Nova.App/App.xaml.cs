@@ -52,6 +52,12 @@ public partial class App : Application
 
         Memory = new MemoryManager(Config.WorkspacePath, LogService);
         Memory.EnsureDirectories();
+
+        // RedLeaf is the source of truth for identity/persona files — pull
+        // and materialize before generating CLAUDE.md (seeds upward on first
+        // run; tolerates RedLeaf being offline).
+        await AgentFileSync.PullOrSeedAsync(Memory, Config, LogService);
+
         Memory.GenerateClaudeMd();
 
         Engine = new NovaEngine(Config, Memory, LogService);

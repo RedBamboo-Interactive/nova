@@ -65,12 +65,32 @@ public class RedComputeClient : IDisposable
         if (userId != null)
             msg.Headers.Add("X-User-Id", userId);
 
-        var response = await _http.SendAsync(msg, ct);
-        response.EnsureSuccessStatusCode();
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var response = await _http.SendAsync(msg, ct);
+            response.EnsureSuccessStatusCode();
 
-        var result = await response.Content.ReadFromJsonAsync<ClaudeResponse>(JsonOptions, ct);
-        return result ?? throw new InvalidOperationException("Empty response from RedCompute");
+            var result = await response.Content.ReadFromJsonAsync<ClaudeResponse>(JsonOptions, ct);
+            if (result is null)
+                throw new InvalidOperationException("Empty response from RedCompute");
+
+            NovaMirror.PublishInvocation(jobName, contextId: null,
+                Snippet(request.Prompt), Snippet(result.Text),
+                stopwatch.ElapsedMilliseconds, result.Success, result.Model, userId);
+            return result;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            NovaMirror.PublishInvocation(jobName, contextId: null,
+                Snippet(request.Prompt), Snippet(ex.Message),
+                stopwatch.ElapsedMilliseconds, success: false, model: null, userId);
+            throw;
+        }
     }
+
+    private static string? Snippet(string? text) =>
+        text is null ? null : text.Length <= 300 ? text : text[..300];
 
     public async Task<bool> IsAvailableAsync(CancellationToken ct = default)
     {

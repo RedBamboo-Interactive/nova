@@ -12,6 +12,7 @@ using RedBamboo.AppHost.Auth;
 using RedBamboo.AppHost.Discovery;
 using RedBamboo.AppHost.Extensions;
 using RedBamboo.AppHost.Logging;
+using RedBamboo.AppHost.Streams;
 using RedBamboo.AppHost.WebSockets;
 using Nova.App.Data;
 using Nova.App.Services;
@@ -23,6 +24,7 @@ public class StaticServer
     private readonly NovaEngine _engine;
     private readonly MemoryManager _memory;
     private WebApplication? _app;
+    private RedLeafStreamClient? _streamClient;
 
     public StaticServer(NovaEngine engine, MemoryManager memory)
     {
@@ -71,6 +73,32 @@ public class StaticServer
         var authFactory = _app.Services.GetRequiredService<AuthenticatedHttpClientFactory>();
         _engine.RedCompute.SetAuthFactory(authFactory);
         _engine.SetServiceScopeFactory(_app.Services.GetRequiredService<IServiceScopeFactory>());
+
+        // Mirror discussions/messages/invocations to RedLeaf (dual-write;
+        // local SQLite stays the read path until reads cut over).
+        _streamClient = new RedLeafStreamClient(
+            App.Config.Suite.RedLeaf, "nova",
+            new JwtService(new JwtOptions { SigningKey = signingKey }),
+            App.LogService);
+        _streamClient.DefineEntityType(new EntityTypeDefinition(
+            "discussion", "Discussion",
+            "Nova chat discussion",
+            Icon: "fa-solid fa-comments", Color: "fuchsia", Versioning: false,
+            Fields:
+            [
+                new { name = "Status", fieldType = "string", description = "idle, thinking, stopped or archived" },
+                new { name = "Owner ID", fieldType = "string" },
+                new { name = "Session ID", fieldType = "string", description = "RedCompute AI session backing this discussion" },
+                new { name = "Message Count", fieldType = "number" },
+                new { name = "Last Activity", fieldType = "date" },
+            ]));
+        _streamClient.DefineStream(new StreamDefinition(
+            "nova-messages", "Nova Messages",
+            "Chat messages from Nova discussions", RetentionDays: null, ParentType: "discussion"));
+        _streamClient.DefineStream(new StreamDefinition(
+            "nova-invocations", "Nova Invocations",
+            "AI invocation audit records (purpose, snippets, duration, success)", RetentionDays: 90));
+        NovaMirror.Client = _streamClient;
 
         DiscussionEndpoints.Initialize(authFactory);
         DelegateEndpoints.Initialize(authFactory);
@@ -220,6 +248,13 @@ public class StaticServer
 
     public async Task StopAsync()
     {
+        NovaMirror.Client = null;
+        if (_streamClient != null)
+        {
+            await _streamClient.DisposeAsync();
+            _streamClient = null;
+        }
+
         if (_app != null)
         {
             await _app.StopAsync();

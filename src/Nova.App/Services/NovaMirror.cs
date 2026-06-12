@@ -1,0 +1,74 @@
+using Nova.App.Data.Entities;
+using RedBamboo.AppHost.Streams;
+
+namespace Nova.App.Services;
+
+/// <summary>
+/// Mirrors Nova's data to RedLeaf (Phase 3 of the suite storage
+/// consolidation): discussions as `discussion` entities (versioning off),
+/// chat messages as `nova-messages` records, AI invocations as
+/// `nova-invocations` records, and the identity/persona files as versioned
+/// `agent-file` entities. All publishing is fire-and-forget; a null Client
+/// (RedLeaf not configured yet) makes every call a no-op.
+/// </summary>
+public static class NovaMirror
+{
+    public static RedLeafStreamClient? Client { get; set; }
+
+    public static string DiscussionSlug(string discussionId)
+    {
+        var sanitized = new string(discussionId.ToLowerInvariant()
+            .Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray());
+        return $"discussion-nova-{sanitized}";
+    }
+
+    public static void PublishDiscussion(Discussion d) => Client?.UpsertEntity(
+        DiscussionSlug(d.Id), "discussion",
+        d.Title ?? $"Discussion {d.Id}",
+        new
+        {
+            discussion_id = d.Id,
+            status = d.Status,
+            owner_id = d.OwnerId,
+            session_id = d.SessionId,
+            message_count = d.MessageCount,
+            created_at = new DateTimeOffset(DateTime.SpecifyKind(d.CreatedAt, DateTimeKind.Utc)).ToString("O"),
+            last_activity = new DateTimeOffset(DateTime.SpecifyKind(d.LastActivity, DateTimeKind.Utc)).ToString("O"),
+            app = "nova",
+        });
+
+    public static void PublishMessages(IReadOnlyList<ConversationRecord> records)
+    {
+        if (Client is null) return;
+        foreach (var m in records)
+        {
+            Client.EnqueueForEntity("nova-messages", DiscussionSlug(m.ContextId), new
+            {
+                discussion_id = m.ContextId,
+                role = m.Role,
+                content = m.Content,
+                parts_json = m.PartsJson,
+                source = m.Source,
+                timestamp = new DateTimeOffset(DateTime.SpecifyKind(m.Timestamp, DateTimeKind.Utc)).ToString("O"),
+            }, userId: m.UserId);
+        }
+    }
+
+    public static void PublishInvocation(string purpose, string? contextId, string? promptSnippet,
+        string? responseSnippet, long durationMs, bool success, string? model, string? userId) =>
+        Client?.Enqueue("nova-invocations", new
+        {
+            purpose,
+            context_id = contextId,
+            prompt_snippet = promptSnippet,
+            response_snippet = responseSnippet,
+            duration_ms = durationMs,
+            success,
+            model,
+        }, userId: userId);
+
+    public static void PublishAgentFile(string fileKey, string content) => Client?.UpsertEntity(
+        $"nova-{fileKey}", "agent-file",
+        $"Nova {AgentFileSync.DisplayName(fileKey)}",
+        new { app = "nova", file_key = fileKey, content });
+}

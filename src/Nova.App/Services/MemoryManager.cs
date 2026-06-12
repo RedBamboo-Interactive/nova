@@ -57,6 +57,7 @@ public class MemoryManager
     {
         var path = Path.Combine(RuntimeConfigPath, "identity.md");
         File.WriteAllText(path, content);
+        NovaMirror.PublishAgentFile("identity", content);
         _log.Info("memory", "Identity updated");
     }
 
@@ -109,6 +110,11 @@ public class MemoryManager
 
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         File.WriteAllText(fullPath, content);
+
+        // Edits to tracked agent files (identity, memory instructions, …)
+        // push back to RedLeaf, the source of truth.
+        if (AgentFileSync.FileKeyForPath(relativePath) is { } fileKey)
+            NovaMirror.PublishAgentFile(fileKey, content);
     }
 
     public async Task BackupAsync()
