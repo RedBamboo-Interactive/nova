@@ -9,9 +9,6 @@ public class NovaConfig
     /// <summary>Quality tier sent to RedCompute when no tier is specified (e.g. new discussions).</summary>
     public string DefaultQualityMode { get; set; } = "standard";
 
-    /// <summary>Preferred inference provider when a tier has modes for several. Null = use the tier's default mode.</summary>
-    public string? PreferredProvider { get; set; }
-
     public TunnelSettings Tunnel { get; set; } = new();
     public SuiteSettings Suite { get; set; } = new();
 }
