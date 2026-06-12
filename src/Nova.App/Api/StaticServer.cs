@@ -1,4 +1,5 @@
 using System.IO;
+using System.Net.Http;
 using System.Net.NetworkInformation;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -54,6 +55,10 @@ public class StaticServer
         builder.Services.AddSingleton(_engine);
         builder.Services.AddSingleton(_memory);
 
+        builder.Services.AddHttpClient();
+        builder.Services.AddSingleton(sp => new QualityModeService(
+            App.Config, App.LogService, sp.GetRequiredService<IHttpClientFactory>()));
+
         var redSuiteDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RedSuite");
         var signingKey = SigningKeyPersistence.EnsureSigningKey(redSuiteDir);
         var googleAuth = SigningKeyPersistence.LoadGoogleOAuth(redSuiteDir);
@@ -69,7 +74,13 @@ public class StaticServer
         var authFactory = _app.Services.GetRequiredService<AuthenticatedHttpClientFactory>();
         _engine.RedCompute.SetAuthFactory(authFactory);
         _engine.SetServiceScopeFactory(_app.Services.GetRequiredService<IServiceScopeFactory>());
-        DiscussionEndpoints.Initialize(authFactory);
+
+        var qualityModes = _app.Services.GetRequiredService<QualityModeService>();
+        _engine.SetQualityModes(qualityModes);
+        // Pull the live quality modes from RedLeaf in the background — fallbacks cover the meantime.
+        _ = Task.Run(() => qualityModes.RefreshAsync());
+
+        DiscussionEndpoints.Initialize(authFactory, qualityModes);
         DelegateEndpoints.Initialize(authFactory);
         ConversationExporter.Initialize(authFactory);
 

@@ -5,6 +5,13 @@ public class NovaConfig
     public int Port { get; set; } = 18803;
     public string WorkspacePath { get; set; } = "";
     public string? DockerImage { get; set; }
+
+    /// <summary>Quality tier used when no mode is specified (e.g. new discussions). Resolved via QualityModeService.</summary>
+    public string DefaultQualityMode { get; set; } = "standard";
+
+    /// <summary>Preferred inference provider when a tier has modes for several. Null = use the tier's default mode.</summary>
+    public string? PreferredProvider { get; set; }
+
     public TunnelSettings Tunnel { get; set; } = new();
     public SuiteSettings Suite { get; set; } = new();
 }

@@ -30,9 +30,12 @@ public static class DiscussionEndpoints
         Timeout = TimeSpan.FromSeconds(30),
     };
 
-    public static void Initialize(AuthenticatedHttpClientFactory factory)
+    private static QualityModeService? _qualityModes;
+
+    public static void Initialize(AuthenticatedHttpClientFactory factory, QualityModeService? qualityModes = null)
     {
         RedCompute = factory.CreateClient(App.Config.Suite.RedCompute, TimeSpan.FromSeconds(30));
+        _qualityModes = qualityModes;
     }
 
     public static void MapDiscussionEndpoints(this EndpointRegistry registry, NovaEngine engine)
@@ -547,9 +550,19 @@ public static class DiscussionEndpoints
     {
         memory.GenerateClaudeMd();
 
+        // Resolve Nova's default quality tier to a concrete provider+model for the session.
+        var body = new Dictionary<string, object?> { ["projectPath"] = memory.WorkspacePath };
+        var resolved = _qualityModes?.Resolve(App.Config.DefaultQualityMode, App.Config.PreferredProvider);
+        if (resolved != null)
+        {
+            body["model"] = resolved.Model;
+            body["provider"] = resolved.Provider;
+            if (resolved.Effort != null) body["effort"] = resolved.Effort;
+        }
+
         var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
         {
-            Content = JsonContent.Create(new { projectPath = memory.WorkspacePath }, options: JsonOptions),
+            Content = JsonContent.Create(body, options: JsonOptions),
         };
         req.Headers.Add("X-Caller-Info", "Nova");
         if (ownerId != null)

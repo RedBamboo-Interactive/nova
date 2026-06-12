@@ -16,6 +16,7 @@ public class AutomationService
     private readonly MemoryManager _memory;
     private readonly LogService _log;
     private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly QualityModeService? _qualityModes;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly List<Automation> _automations = [];
     private Task? _loop;
@@ -29,12 +30,13 @@ public class AutomationService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    public AutomationService(NovaEngine engine, MemoryManager memory, LogService log, IServiceScopeFactory? scopeFactory = null)
+    public AutomationService(NovaEngine engine, MemoryManager memory, LogService log, IServiceScopeFactory? scopeFactory = null, QualityModeService? qualityModes = null)
     {
         _engine = engine;
         _memory = memory;
         _log = log;
         _scopeFactory = scopeFactory;
+        _qualityModes = qualityModes;
     }
 
     public Task StartAsync(CancellationToken ct)
@@ -269,8 +271,15 @@ public class AutomationService
             }
         }
 
+        ResolvedMode? mode = null;
+        if (!string.IsNullOrWhiteSpace(config.QualityMode) && _qualityModes != null)
+        {
+            mode = _qualityModes.Resolve(config.QualityMode);
+            _log.Info("automations", $"[{automation.Name}] Quality mode '{config.QualityMode}' -> {mode.Provider}/{mode.Model}");
+        }
+
         var response = await _engine.InvokeForAutomationAsync(
-            automation.Name, prompt, config.SystemPromptHint, automation.OwnerId, ct, config.Timeout);
+            automation.Name, prompt, config.SystemPromptHint, automation.OwnerId, ct, config.Timeout, mode);
 
         return new AutomationResult
         {
@@ -540,6 +549,7 @@ public class AutomationService
                     Prompt = dreamingSkill,
                     SystemPromptHint = "dreaming",
                     Timeout = 3600,
+                    QualityMode = "standard",
                 }, JsonOptions),
                 OwnerId = defaultOwner,
                 Enabled = true,
@@ -563,6 +573,12 @@ public class AutomationService
                 dreamingChanged = true;
                 _log.Info("automations", "Synced dreaming timeout to 3600s");
             }
+            if (currentConfig.QualityMode != "standard")
+            {
+                currentConfig.QualityMode = "standard";
+                dreamingChanged = true;
+                _log.Info("automations", "Synced dreaming quality mode to standard");
+            }
             if (dreamingChanged)
             {
                 existingDreaming.ActionConfigJson = JsonSerializer.Serialize(currentConfig, JsonOptions);
@@ -581,17 +597,42 @@ public class AutomationService
             }
         }
 
-        // Ensure morning-greeting uses PreCreateDiscussion
+        // Ensure morning-greeting uses PreCreateDiscussion and the fast quality mode
         var greeting = _automations.FirstOrDefault(a => a.Name == "morning-greeting");
         if (greeting != null)
         {
             var greetingConfig = Deserialize<AiSessionConfig>(greeting.ActionConfigJson);
+            var greetingChanged = false;
             if (!greetingConfig.PreCreateDiscussion)
             {
                 greetingConfig.PreCreateDiscussion = true;
                 greetingConfig.Prompt = SyncMorningGreetingPrompt(greetingConfig.Prompt);
-                greeting.ActionConfigJson = JsonSerializer.Serialize(greetingConfig, JsonOptions);
                 _log.Info("automations", "Enabled PreCreateDiscussion on morning-greeting");
+                greetingChanged = true;
+            }
+            if (greetingConfig.QualityMode != "fast")
+            {
+                greetingConfig.QualityMode = "fast";
+                _log.Info("automations", "Set morning-greeting quality mode to fast");
+                greetingChanged = true;
+            }
+            if (greetingChanged)
+            {
+                greeting.ActionConfigJson = JsonSerializer.Serialize(greetingConfig, JsonOptions);
+                changed = true;
+            }
+        }
+
+        // Ensure weekly-checkin uses the fast quality mode
+        var weekly = _automations.FirstOrDefault(a => a.Name == "weekly-checkin");
+        if (weekly != null && weekly.ActionType == "ai-session")
+        {
+            var weeklyConfig = Deserialize<AiSessionConfig>(weekly.ActionConfigJson);
+            if (weeklyConfig.QualityMode != "fast")
+            {
+                weeklyConfig.QualityMode = "fast";
+                weekly.ActionConfigJson = JsonSerializer.Serialize(weeklyConfig, JsonOptions);
+                _log.Info("automations", "Set weekly-checkin quality mode to fast");
                 changed = true;
             }
         }
@@ -691,6 +732,9 @@ public class AiSessionConfig
     public string? SystemPromptHint { get; set; }
     public bool PreCreateDiscussion { get; set; }
     public int? Timeout { get; set; }
+
+    /// <summary>Abstract quality tier (fast, standard, deep, research) resolved at run time. Null = backend default.</summary>
+    public string? QualityMode { get; set; }
 }
 
 public class HttpCheckConfig

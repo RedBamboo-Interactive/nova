@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using RedBamboo.AppHost.Auth;
 using RedBamboo.AppHost.Discovery;
+using Nova.App.Services;
 
 namespace Nova.App.Api;
 
@@ -35,7 +36,7 @@ public static class DelegateEndpoints
 
     public static void MapDelegateEndpoints(this EndpointRegistry registry)
     {
-        registry.MapPost("/api/delegate", "Delegate work to a CodeRed session: creates session on RedCompute, sends prompt, navigates CodeRed, registers completion callback that reports back to discussionId. Returns sessionId. Options: navigate (bool, default true), dockerImage (string, passed to session creation for containerized execution), model (string, e.g. 'fable', 'opus', 'sonnet', 'haiku'). To continue an existing session, provide sessionId instead of projectPath.", async (HttpContext ctx, DelegateRequest request) =>
+        registry.MapPost("/api/delegate", "Delegate work to a CodeRed session: creates session on RedCompute, sends prompt, navigates CodeRed, registers completion callback that reports back to discussionId. Returns sessionId. Options: navigate (bool, default true), dockerImage (string, passed to session creation for containerized execution), model (string, e.g. 'fable', 'opus', 'sonnet', 'haiku'), qualityMode (string tier: 'fast', 'standard', 'deep', 'research' — resolved to a provider+model when model is not set). To continue an existing session, provide sessionId instead of projectPath.", async (HttpContext ctx, DelegateRequest request, QualityModeService modes) =>
         {
             bool isContinuation = !string.IsNullOrWhiteSpace(request.SessionId);
             if (!isContinuation && string.IsNullOrWhiteSpace(request.ProjectPath))
@@ -73,14 +74,31 @@ public static class DelegateEndpoints
                 try
                 {
                     var dockerImage = request.DockerImage ?? App.Config.DockerImage;
-                    var model = request.Model;
-                    var createBody = (dockerImage, model) switch
+
+                    // Resolution priority:
+                    //  1. Explicit model -> direct override, pass it through unchanged (current behavior).
+                    //  2. Quality mode set -> resolve to provider+model+effort.
+                    //  3. Neither -> resolve the "standard" tier.
+                    string? model;
+                    string? provider = null;
+                    string? effort = null;
+                    if (!string.IsNullOrWhiteSpace(request.Model))
                     {
-                        (not null, not null) => (object)new { projectPath = request.ProjectPath, dockerImage, model },
-                        (not null, null) => new { projectPath = request.ProjectPath, dockerImage },
-                        (null, not null) => (object)new { projectPath = request.ProjectPath, model },
-                        _ => new { projectPath = request.ProjectPath },
-                    };
+                        model = request.Model;
+                    }
+                    else
+                    {
+                        var resolved = modes.Resolve(request.QualityMode, App.Config.PreferredProvider);
+                        model = resolved.Model;
+                        provider = resolved.Provider;
+                        effort = resolved.Effort;
+                    }
+
+                    var createBody = new Dictionary<string, object?> { ["projectPath"] = request.ProjectPath };
+                    if (dockerImage != null) createBody["dockerImage"] = dockerImage;
+                    if (model != null) createBody["model"] = model;
+                    if (provider != null) createBody["provider"] = provider;
+                    if (effort != null) createBody["effort"] = effort;
                     var createReq = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
                     {
                         Content = JsonContent.Create(createBody, options: JsonOptions),
@@ -191,7 +209,8 @@ public static class DelegateEndpoints
         .WithParam("discussionId", "string", description: "Nova discussion that receives a <nova-event> completion callback", location: ParamLocation.Body)
         .WithParam("navigate", "boolean", description: "Navigate the CodeRed UI to the session", defaultValue: true, location: ParamLocation.Body)
         .WithParam("dockerImage", "string", description: "Docker image for containerized execution (defaults to Nova's configured image)", location: ParamLocation.Body)
-        .WithParam("model", "string", description: "Model alias for the session, e.g. 'fable', 'opus', 'sonnet', 'haiku'", location: ParamLocation.Body);
+        .WithParam("model", "string", description: "Model alias for the session, e.g. 'fable', 'opus', 'sonnet', 'haiku'. Takes precedence over qualityMode", location: ParamLocation.Body)
+        .WithParam("qualityMode", "string", description: "Abstract quality tier ('fast', 'standard', 'deep', 'research') resolved to a provider+model. Ignored when model is set; defaults to 'standard' when neither is given", location: ParamLocation.Body);
     }
 }
 
@@ -204,4 +223,5 @@ public class DelegateRequest
     public bool? Navigate { get; set; }
     public string? DockerImage { get; set; }
     public string? Model { get; set; }
+    public string? QualityMode { get; set; }
 }
