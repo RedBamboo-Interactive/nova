@@ -98,6 +98,24 @@ public class StaticServer
         _streamClient.DefineStream(new StreamDefinition(
             "nova-invocations", "Nova Invocations",
             "AI invocation audit records (purpose, snippets, duration, success)", RetentionDays: 90));
+        // Versioned on purpose: schedule/config edits deserve history. Run
+        // state is excluded from the entity (see NovaMirror) so per-run
+        // saves don't produce version rows.
+        _streamClient.DefineEntityType(new EntityTypeDefinition(
+            "automation", "Automation",
+            "Nova automation definition (schedule + action)",
+            Icon: "fa-solid fa-robot", Color: "fuchsia", Versioning: true,
+            Fields:
+            [
+                new { name = "Schedule", fieldType = "string", description = "Cron expression" },
+                new { name = "Enabled", fieldType = "boolean" },
+                new { name = "Action Type", fieldType = "string", description = "ai-session, http-check or builtin:backup" },
+                new { name = "Owner ID", fieldType = "string" },
+                new { name = "Description", fieldType = "string" },
+            ]));
+        _streamClient.DefineStream(new StreamDefinition(
+            "automation-runs", "Automation Runs",
+            "Per-trigger automation results", RetentionDays: 90, ParentType: "automation"));
         NovaMirror.Client = _streamClient;
 
         DiscussionEndpoints.Initialize(authFactory);

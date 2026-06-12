@@ -138,6 +138,7 @@ public class AutomationService
                 : null;
             automation.NextRun = CalculateNextRun(automation);
             Save();
+            NovaMirror.PublishAutomationRun(automation.Name, result?.Triggered == true, result?.Summary, null);
 
             if (result?.Triggered == true && automation.ReportToDiscussionId != null)
                 await ReportToDiscussionAsync(automation, result, ct);
@@ -153,6 +154,7 @@ public class AutomationService
                 new AutomationResult { Triggered = false, Summary = $"Failed: {ex.Message}" }, JsonOptions);
             automation.NextRun = CalculateNextRun(automation);
             Save();
+            NovaMirror.PublishAutomationRun(automation.Name, false, null, ex.Message);
             _log.Error("automations", $"[{automation.Name}] Manual trigger failed ({automation.ConsecutiveFailures}x): {ex.Message}");
             return new AutomationResult { Triggered = false, Summary = $"Failed: {ex.Message}" };
         }
@@ -191,6 +193,7 @@ public class AutomationService
                         automation.LastResultJson = result != null
                             ? JsonSerializer.Serialize(result, JsonOptions)
                             : null;
+                        NovaMirror.PublishAutomationRun(automation.Name, result?.Triggered == true, result?.Summary, null);
 
                         if (result?.Triggered == true && automation.ReportToDiscussionId != null)
                         {
@@ -211,6 +214,7 @@ public class AutomationService
                     {
                         automation.ConsecutiveFailures++;
                         automation.LastError = ex.Message;
+                        NovaMirror.PublishAutomationRun(automation.Name, false, null, ex.Message);
                         _log.Error("automations", $"[{automation.Name}] failed ({automation.ConsecutiveFailures}x): {ex.Message}");
 
                         var max = automation.MaxFailures > 0 ? automation.MaxFailures : 20;
@@ -657,6 +661,7 @@ public class AutomationService
     {
         var json = JsonSerializer.Serialize(_automations, JsonOptions);
         _memory.WriteMemoryFile(StorePath, json);
+        NovaMirror.PublishAutomations(_automations);
     }
 
     private static T Deserialize<T>(string? json) where T : new()
