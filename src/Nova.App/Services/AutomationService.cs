@@ -16,7 +16,6 @@ public class AutomationService
     private readonly MemoryManager _memory;
     private readonly LogService _log;
     private readonly IServiceScopeFactory? _scopeFactory;
-    private readonly QualityModeService? _qualityModes;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly List<Automation> _automations = [];
     private Task? _loop;
@@ -30,13 +29,12 @@ public class AutomationService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    public AutomationService(NovaEngine engine, MemoryManager memory, LogService log, IServiceScopeFactory? scopeFactory = null, QualityModeService? qualityModes = null)
+    public AutomationService(NovaEngine engine, MemoryManager memory, LogService log, IServiceScopeFactory? scopeFactory = null)
     {
         _engine = engine;
         _memory = memory;
         _log = log;
         _scopeFactory = scopeFactory;
-        _qualityModes = qualityModes;
     }
 
     public Task StartAsync(CancellationToken ct)
@@ -271,15 +269,8 @@ public class AutomationService
             }
         }
 
-        ResolvedMode? mode = null;
-        if (!string.IsNullOrWhiteSpace(config.QualityMode) && _qualityModes != null)
-        {
-            mode = _qualityModes.Resolve(config.QualityMode);
-            _log.Info("automations", $"[{automation.Name}] Quality mode '{config.QualityMode}' -> {mode.Provider}/{mode.Model}");
-        }
-
         var response = await _engine.InvokeForAutomationAsync(
-            automation.Name, prompt, config.SystemPromptHint, automation.OwnerId, ct, config.Timeout, mode);
+            automation.Name, prompt, config.SystemPromptHint, automation.OwnerId, ct, config.Timeout, config.QualityMode);
 
         return new AutomationResult
         {

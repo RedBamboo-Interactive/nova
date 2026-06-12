@@ -36,7 +36,7 @@ public static class DelegateEndpoints
 
     public static void MapDelegateEndpoints(this EndpointRegistry registry)
     {
-        registry.MapPost("/api/delegate", "Delegate work to a CodeRed session: creates session on RedCompute, sends prompt, navigates CodeRed, registers completion callback that reports back to discussionId. Returns sessionId. Options: navigate (bool, default true), dockerImage (string, passed to session creation for containerized execution), model (string, e.g. 'fable', 'opus', 'sonnet', 'haiku'), qualityMode (string tier: 'fast', 'standard', 'deep', 'research' — resolved to a provider+model when model is not set). To continue an existing session, provide sessionId instead of projectPath.", async (HttpContext ctx, DelegateRequest request, QualityModeService modes) =>
+        registry.MapPost("/api/delegate", "Delegate work to a CodeRed session: creates session on RedCompute, sends prompt, navigates CodeRed, registers completion callback that reports back to discussionId. Returns sessionId. Options: navigate (bool, default true), dockerImage (string, passed to session creation for containerized execution), model (string, e.g. 'fable', 'opus', 'sonnet', 'haiku'), qualityMode (string tier: 'fast', 'standard', 'deep', 'research' — passed to RedCompute for resolution when model is not set). To continue an existing session, provide sessionId instead of projectPath.", async (HttpContext ctx, DelegateRequest request) =>
         {
             bool isContinuation = !string.IsNullOrWhiteSpace(request.SessionId);
             if (!isContinuation && string.IsNullOrWhiteSpace(request.ProjectPath))
@@ -75,30 +75,12 @@ public static class DelegateEndpoints
                 {
                     var dockerImage = request.DockerImage ?? App.Config.DockerImage;
 
-                    // Resolution priority:
-                    //  1. Explicit model -> direct override, pass it through unchanged (current behavior).
-                    //  2. Quality mode set -> resolve to provider+model+effort.
-                    //  3. Neither -> resolve the "standard" tier.
-                    string? model;
-                    string? provider = null;
-                    string? effort = null;
-                    if (!string.IsNullOrWhiteSpace(request.Model))
-                    {
-                        model = request.Model;
-                    }
-                    else
-                    {
-                        var resolved = modes.Resolve(request.QualityMode, App.Config.PreferredProvider);
-                        model = resolved.Model;
-                        provider = resolved.Provider;
-                        effort = resolved.Effort;
-                    }
-
                     var createBody = new Dictionary<string, object?> { ["projectPath"] = request.ProjectPath };
                     if (dockerImage != null) createBody["dockerImage"] = dockerImage;
-                    if (model != null) createBody["model"] = model;
-                    if (provider != null) createBody["provider"] = provider;
-                    if (effort != null) createBody["effort"] = effort;
+                    if (!string.IsNullOrWhiteSpace(request.Model))
+                        createBody["model"] = request.Model;
+                    else
+                        createBody["qualityTier"] = string.IsNullOrWhiteSpace(request.QualityMode) ? "standard" : request.QualityMode;
                     var createReq = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
                     {
                         Content = JsonContent.Create(createBody, options: JsonOptions),

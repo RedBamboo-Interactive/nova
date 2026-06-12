@@ -30,12 +30,9 @@ public static class DiscussionEndpoints
         Timeout = TimeSpan.FromSeconds(30),
     };
 
-    private static QualityModeService? _qualityModes;
-
-    public static void Initialize(AuthenticatedHttpClientFactory factory, QualityModeService? qualityModes = null)
+    public static void Initialize(AuthenticatedHttpClientFactory factory)
     {
         RedCompute = factory.CreateClient(App.Config.Suite.RedCompute, TimeSpan.FromSeconds(30));
-        _qualityModes = qualityModes;
     }
 
     public static void MapDiscussionEndpoints(this EndpointRegistry registry, NovaEngine engine)
@@ -550,15 +547,11 @@ public static class DiscussionEndpoints
     {
         memory.GenerateClaudeMd();
 
-        // Resolve Nova's default quality tier to a concrete provider+model for the session.
-        var body = new Dictionary<string, object?> { ["projectPath"] = memory.WorkspacePath };
-        var resolved = _qualityModes?.Resolve(App.Config.DefaultQualityMode, App.Config.PreferredProvider);
-        if (resolved != null)
+        var body = new Dictionary<string, object?>
         {
-            body["model"] = resolved.Model;
-            body["provider"] = resolved.Provider;
-            if (resolved.Effort != null) body["effort"] = resolved.Effort;
-        }
+            ["projectPath"] = memory.WorkspacePath,
+            ["qualityTier"] = App.Config.DefaultQualityMode ?? "standard",
+        };
 
         var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
         {

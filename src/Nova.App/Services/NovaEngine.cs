@@ -13,7 +13,6 @@ public class NovaEngine : IAsyncDisposable
 
     private AutomationService? _automations;
     private IServiceScopeFactory? _scopeFactory;
-    private QualityModeService? _qualityModes;
     private CancellationTokenSource? _cts;
 
     public bool IsRunning => _cts is { IsCancellationRequested: false };
@@ -21,7 +20,6 @@ public class NovaEngine : IAsyncDisposable
     public RedComputeClient RedCompute => _redCompute;
     public MemoryManager Memory => _memory;
     public AutomationService? Automations => _automations;
-    public QualityModeService? QualityModes => _qualityModes;
 
     public NovaEngine(NovaConfig config, MemoryManager memory, LogService log)
     {
@@ -32,13 +30,12 @@ public class NovaEngine : IAsyncDisposable
     }
 
     public void SetServiceScopeFactory(IServiceScopeFactory factory) => _scopeFactory = factory;
-    public void SetQualityModes(QualityModeService qualityModes) => _qualityModes = qualityModes;
 
     public async Task StartAsync(CancellationToken ct)
     {
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        _automations = new AutomationService(this, _memory, _log, _scopeFactory, _qualityModes);
+        _automations = new AutomationService(this, _memory, _log, _scopeFactory);
         await _automations.StartAsync(_cts.Token);
 
         _log.Info("engine", "Nova engine started");
@@ -54,7 +51,7 @@ public class NovaEngine : IAsyncDisposable
         _redCompute.Dispose();
     }
 
-    public async Task<ClaudeResponse> InvokeForAutomationAsync(string name, string prompt, string? hint, string? userId, CancellationToken ct, int? timeout = null, ResolvedMode? mode = null)
+    public async Task<ClaudeResponse> InvokeForAutomationAsync(string name, string prompt, string? hint, string? userId, CancellationToken ct, int? timeout = null, string? qualityTier = null)
     {
         _log.Info("engine", $"Automation [{name}]: invoking");
 
@@ -69,7 +66,7 @@ public class NovaEngine : IAsyncDisposable
             Timeout = timeout,
         };
 
-        return await _redCompute.InvokeAsync(request, userId, ct, mode);
+        return await _redCompute.InvokeAsync(request, userId, ct, qualityTier);
     }
 
     private string BuildAutomationPrompt(string name)

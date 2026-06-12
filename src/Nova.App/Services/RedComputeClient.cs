@@ -40,27 +40,21 @@ public class RedComputeClient : IDisposable
         _http = newClient;
     }
 
-    public async Task<ClaudeResponse> InvokeAsync(ClaudeRequest request, string? userId = null, CancellationToken ct = default, ResolvedMode? mode = null)
+    public async Task<ClaudeResponse> InvokeAsync(ClaudeRequest request, string? userId = null, CancellationToken ct = default, string? qualityTier = null)
     {
         var jobName = request.SystemPromptHint ?? "chat";
-        var provider = mode?.Provider ?? "claude-code";
-        _log.Info("redcompute", $"Invoking {provider}: {jobName}{(mode != null ? $" [{mode.Model}]" : "")}");
+        _log.Info("redcompute", $"Invoking: {jobName}{(qualityTier != null ? $" [{qualityTier}]" : "")}");
 
-        // Explicit request values win over the mode's defaults — automations (e.g. dreaming) set
-        // their own long timeout that must not be clobbered by a tier's shorter one. Null model/
-        // effort are dropped by JsonOptions, preserving the original provider-only request shape.
         var body = new
         {
             prompt = request.SystemPrompt != null
                 ? $"{request.SystemPrompt}\n\n---\n\n{request.Prompt}"
                 : request.Prompt,
-            provider,
+            qualityTier,
             workingDir = request.WorkingDirectory,
-            model = mode?.Model,
-            effort = mode?.Effort,
             allowedTools = request.AllowedTools,
-            maxTurns = request.MaxTurns ?? mode?.MaxTurns,
-            timeout = request.Timeout ?? mode?.Timeout,
+            maxTurns = request.MaxTurns,
+            timeout = request.Timeout,
         };
 
         var msg = new HttpRequestMessage(HttpMethod.Post, "/ai-session/execute")

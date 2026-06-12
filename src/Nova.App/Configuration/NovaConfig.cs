@@ -6,7 +6,7 @@ public class NovaConfig
     public string WorkspacePath { get; set; } = "";
     public string? DockerImage { get; set; }
 
-    /// <summary>Quality tier used when no mode is specified (e.g. new discussions). Resolved via QualityModeService.</summary>
+    /// <summary>Quality tier sent to RedCompute when no tier is specified (e.g. new discussions).</summary>
     public string DefaultQualityMode { get; set; } = "standard";
 
     /// <summary>Preferred inference provider when a tier has modes for several. Null = use the tier's default mode.</summary>
