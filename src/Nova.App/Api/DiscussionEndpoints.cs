@@ -30,35 +30,49 @@ public static class DiscussionEndpoints
         Timeout = TimeSpan.FromSeconds(30),
     };
 
-    public static void Initialize(AuthenticatedHttpClientFactory factory)
+    private static RedLeafDiscussionReader? _redLeaf;
+
+    public static void Initialize(AuthenticatedHttpClientFactory factory, RedLeafDiscussionReader redLeaf)
     {
         RedCompute = factory.CreateClient(App.Config.Suite.RedCompute, TimeSpan.FromSeconds(30));
+        _redLeaf = redLeaf;
     }
 
     public static void MapDiscussionEndpoints(this EndpointRegistry registry, NovaEngine engine)
     {
         var memory = engine.Memory;
 
-        registry.MapGet("/api/discussions", "List discussions, newest activity first", async (HttpContext ctx, NovaDbContext db) =>
+        registry.MapGet("/api/discussions", "List discussions, newest activity first", async (HttpContext ctx) =>
         {
             var status = ctx.Request.Query["status"].FirstOrDefault();
             var search = ctx.Request.Query["search"].FirstOrDefault();
 
-            IQueryable<Discussion> query = db.Discussions.OrderByDescending(d => d.LastActivity);
+            // Read-path cutover: RedLeaf is the source of truth for
+            // discussions. By decision it is a hard dependency — no local
+            // fallback. Writes stay on SQLite (NovaMirror dual-writes).
+            List<RedLeafDiscussionReader.DiscussionRead> discussions;
+            try
+            {
+                discussions = await _redLeaf!.GetDiscussionsAsync();
+            }
+            catch (Exception ex)
+            {
+                return ApiError.ServiceUnavailable("redleaf_unavailable", $"RedLeaf is required for discussion reads: {ex.Message}");
+            }
 
+            IEnumerable<RedLeafDiscussionReader.DiscussionRead> filtered = discussions;
             if (!string.IsNullOrEmpty(status))
-                query = query.Where(d => d.Status == status);
+                filtered = filtered.Where(d => d.Status == status);
             else
-                query = query.Where(d => d.Status != "archived");
+                filtered = filtered.Where(d => d.Status != "archived");
 
             if (!string.IsNullOrEmpty(search))
-                query = query.Where(d => d.Title != null && d.Title.Contains(search));
+                filtered = filtered.Where(d => d.Title != null && d.Title.Contains(search, StringComparison.OrdinalIgnoreCase));
 
             var userId = ctx.User.FindFirstValue("sub");
-            query = query.WhereCanAccess(userId);
+            filtered = filtered.Where(d => OwnerScope.CanAccess(d.OwnerId, userId));
 
-            var discussions = await query.ToListAsync();
-            return Results.Ok(discussions.Select(ToInfo));
+            return Results.Ok(filtered.Select(ToInfo));
         })
         .WithParam("status", "string", description: "Filter by status (idle, thinking, stopped, archived). Default: everything except archived", location: ParamLocation.Query)
         .WithParam("search", "string", description: "Substring match on the discussion title", location: ParamLocation.Query);
@@ -171,20 +185,26 @@ public static class DiscussionEndpoints
             return Results.Ok(ToInfo(discussion));
         });
 
-        registry.MapGet("/api/discussions/{id}", "Get discussion metadata and local messages", async (string id, HttpContext ctx, NovaDbContext db) =>
+        registry.MapGet("/api/discussions/{id}", "Get discussion metadata and local messages", async (string id, HttpContext ctx) =>
         {
-            var discussion = await db.Discussions.FindAsync(id);
+            RedLeafDiscussionReader.DiscussionRead? discussion;
+            List<RedLeafDiscussionReader.MessageRead> records;
+            try
+            {
+                discussion = await _redLeaf!.GetDiscussionAsync(id);
+                records = discussion is null ? [] : await _redLeaf.GetMessagesAsync(discussion.EntityId);
+            }
+            catch (Exception ex)
+            {
+                return ApiError.ServiceUnavailable("redleaf_unavailable", $"RedLeaf is required for discussion reads: {ex.Message}");
+            }
+
             if (discussion is null)
                 return Results.NotFound(new { error = "Discussion not found" });
 
             var userId = ctx.User.FindFirstValue("sub");
             if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
-
-            var records = await db.Conversations
-                .Where(m => m.ContextId == id)
-                .OrderBy(m => m.Timestamp)
-                .ToListAsync();
 
             return Results.Ok(new
             {
@@ -199,9 +219,20 @@ public static class DiscussionEndpoints
             });
         });
 
-        registry.MapGet("/api/discussions/{id}/images", "Get stored images for a discussion", async (string id, HttpContext ctx, NovaDbContext db) =>
+        registry.MapGet("/api/discussions/{id}/images", "Get stored images for a discussion", async (string id, HttpContext ctx) =>
         {
-            var discussion = await db.Discussions.FindAsync(id);
+            RedLeafDiscussionReader.DiscussionRead? discussion;
+            List<RedLeafDiscussionReader.MessageRead> records;
+            try
+            {
+                discussion = await _redLeaf!.GetDiscussionAsync(id);
+                records = discussion is null ? [] : await _redLeaf.GetMessagesAsync(discussion.EntityId);
+            }
+            catch (Exception ex)
+            {
+                return ApiError.ServiceUnavailable("redleaf_unavailable", $"RedLeaf is required for discussion reads: {ex.Message}");
+            }
+
             if (discussion is null)
                 return Results.NotFound(new { error = "Discussion not found" });
 
@@ -209,18 +240,14 @@ public static class DiscussionEndpoints
             if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
-            var records = await db.Conversations
-                .Where(m => m.ContextId == id && m.PartsJson != null && m.Source == "user-message")
-                .OrderBy(m => m.Timestamp)
-                .Select(m => new { m.Content, m.PartsJson, m.Timestamp })
-                .ToListAsync();
-
-            var result = records.Select(r => new
-            {
-                content = r.Content,
-                images = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement[]>(r.PartsJson!, JsonOptions),
-                timestamp = r.Timestamp.ToString("o"),
-            });
+            var result = records
+                .Where(m => m.PartsJson != null && m.Source == "user-message")
+                .Select(r => new
+                {
+                    content = r.Content,
+                    images = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement[]>(r.PartsJson!, JsonOptions),
+                    timestamp = r.Timestamp.ToString("o"),
+                });
 
             return Results.Ok(result);
         });
@@ -320,7 +347,7 @@ public static class DiscussionEndpoints
             return Results.Ok(ToInfo(discussion));
         });
 
-        registry.MapGet("/api/discussions/search", "Full-text search across conversation content; returns matching discussions with highlighted snippets", async (HttpContext ctx, NovaDbContext db) =>
+        registry.MapGet("/api/discussions/search", "Full-text search across conversation content; returns matching discussions with highlighted snippets", async (HttpContext ctx) =>
         {
             var q = ctx.Request.Query["q"].FirstOrDefault();
             if (string.IsNullOrWhiteSpace(q))
@@ -332,27 +359,31 @@ public static class DiscussionEndpoints
 
             var snippetLen = 120;
 
-            var matches = await db.Conversations
-                .Where(m => m.Content.Contains(q) || (m.PartsJson != null && m.PartsJson.Contains(q)))
-                .OrderByDescending(m => m.Timestamp)
-                .Select(m => new { m.ContextId, m.Role, m.Content, m.PartsJson, m.Timestamp })
-                .ToListAsync();
-
-            var grouped = matches
-                .GroupBy(m => m.ContextId)
-                .Take(limit)
-                .ToList();
-
-            var discussionIds = grouped.Select(g => g.Key).ToList();
-            IQueryable<Discussion> searchDiscQuery = db.Discussions
-                .Where(d => discussionIds.Contains(d.Id));
+            // Read-path cutover: server-side ILIKE over the nova-messages
+            // records (capped at 1000 — match counts approximate beyond
+            // that), discussion metadata from the entity list.
+            List<RedLeafDiscussionReader.MessageRead> matches;
+            List<RedLeafDiscussionReader.DiscussionRead> allDiscussions;
+            try
+            {
+                matches = await _redLeaf!.SearchMessagesAsync(q);
+                allDiscussions = await _redLeaf.GetDiscussionsAsync();
+            }
+            catch (Exception ex)
+            {
+                return ApiError.ServiceUnavailable("redleaf_unavailable", $"RedLeaf is required for discussion reads: {ex.Message}");
+            }
 
             var userId = ctx.User.FindFirstValue("sub");
-            searchDiscQuery = searchDiscQuery.WhereCanAccess(userId);
+            var discussions = allDiscussions
+                .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
+                .ToDictionary(d => d.Id);
 
-            var discussions = await searchDiscQuery.ToDictionaryAsync(d => d.Id);
-
-            grouped = grouped.Where(g => discussions.ContainsKey(g.Key)).ToList();
+            var grouped = matches
+                .Where(m => m.DiscussionId != null && discussions.ContainsKey(m.DiscussionId))
+                .GroupBy(m => m.DiscussionId!)
+                .Take(limit)
+                .ToList();
 
             var results = grouped.Select(g =>
             {
@@ -732,6 +763,21 @@ public static class DiscussionEndpoints
     }
 
     private static object ToInfo(Discussion d)
+    {
+        return new
+        {
+            d.Id,
+            d.Title,
+            d.SessionId,
+            d.Status,
+            d.CreatedAt,
+            d.LastActivity,
+            d.MessageCount,
+            d.LastReadAt,
+        };
+    }
+
+    private static object ToInfo(RedLeafDiscussionReader.DiscussionRead d)
     {
         return new
         {

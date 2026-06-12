@@ -118,7 +118,9 @@ public class StaticServer
             "Per-trigger automation results", RetentionDays: 90, ParentType: "automation"));
         NovaMirror.Client = _streamClient;
 
-        DiscussionEndpoints.Initialize(authFactory);
+        DiscussionEndpoints.Initialize(authFactory, new RedLeafDiscussionReader(
+            App.Config.Suite.RedLeaf,
+            new JwtService(new JwtOptions { SigningKey = signingKey })));
         DelegateEndpoints.Initialize(authFactory);
         ConversationExporter.Initialize(authFactory);
 

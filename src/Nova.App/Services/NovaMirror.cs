@@ -28,12 +28,17 @@ public static class NovaMirror
         new
         {
             discussion_id = d.Id,
+            // Nullable title mirrored verbatim — the entity name has a
+            // placeholder fallback, so reads can't recover null from it.
+            title = d.Title,
             status = d.Status,
             owner_id = d.OwnerId,
             session_id = d.SessionId,
             message_count = d.MessageCount,
             created_at = new DateTimeOffset(DateTime.SpecifyKind(d.CreatedAt, DateTimeKind.Utc)).ToString("O"),
             last_activity = new DateTimeOffset(DateTime.SpecifyKind(d.LastActivity, DateTimeKind.Utc)).ToString("O"),
+            last_read_at = d.LastReadAt is { } lr
+                ? new DateTimeOffset(DateTime.SpecifyKind(lr, DateTimeKind.Utc)).ToString("O") : null,
             app = "nova",
         });
 
