@@ -16,7 +16,9 @@ import sys
 import time
 import urllib.request
 
-REDLEAF = "http://localhost:18804"
+# 127.0.0.1, not localhost: Kestrel binds IPv4 only, and Windows' IPv6-first
+# localhost resolution costs ~1s of connect fallback per request.
+REDLEAF = "http://127.0.0.1:18804"
 BATCH = 500
 DB = os.path.join(os.environ["LOCALAPPDATA"], "Nova", "nova.db")
 
