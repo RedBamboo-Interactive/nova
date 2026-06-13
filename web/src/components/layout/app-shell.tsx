@@ -138,6 +138,20 @@ function DiscussionCommands({ navigate }: { navigate: (path: string) => void }) 
     },
   })
 
+  useCommand("switch-discussion-prev", {
+    label: "Previous Discussion",
+    description: "Cycle to the previous discussion in the sidebar",
+    group: "Discussions",
+    shortcut: "Alt+ArrowUp",
+    keywords: ["switch", "cycle", "previous", "prev", "tab"],
+    action: () => {
+      if (discussions.length === 0) return
+      const idx = discussions.findIndex((d) => d.id === activeDiscussionId)
+      const prev = discussions[(idx - 1 + discussions.length) % discussions.length]
+      if (prev) navigate(`/chat/${prev.id}`)
+    },
+  })
+
   useCommand("close-discussion", {
     label: "Archive Discussion",
     description: "Archive the active discussion and stop its session",
