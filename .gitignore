@@ -34,6 +34,7 @@ videos/
 # Temp files
 scripts/
 nova-workspace/temp/
+nova-workspace/.wrangler/
 *_raw.png
 
 # Secrets
