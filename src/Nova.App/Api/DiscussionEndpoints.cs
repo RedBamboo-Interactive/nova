@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Security.Claims;
@@ -29,6 +30,8 @@ public static class DiscussionEndpoints
         BaseAddress = new Uri(App.Config.Suite.RedCompute),
         Timeout = TimeSpan.FromSeconds(30),
     };
+
+    private static readonly ConcurrentDictionary<string, Task<string?>> _pendingSessions = new();
 
     private static RedLeafDiscussionReader? _redLeaf;
 
@@ -161,7 +164,7 @@ public static class DiscussionEndpoints
             return Results.Ok(discussions.Select(ToInfo));
         });
 
-        registry.MapPost("/api/discussions", "Create a new discussion (starts a session)", async (HttpContext ctx, NovaDbContext db) =>
+        registry.MapPost("/api/discussions", "Create a new discussion", async (HttpContext ctx, NovaDbContext db) =>
         {
             var discussion = new Discussion
             {
@@ -170,17 +173,28 @@ public static class DiscussionEndpoints
                 OwnerId = ctx.User.FindFirstValue("sub"),
             };
 
-            try
-            {
-                discussion.SessionId = await TryCreateSessionAsync(memory, discussion.OwnerId);
-            }
-            catch
-            {
-                // RedCompute unavailable — discussion created without session
-            }
-
             db.Discussions.Add(discussion);
             await db.SaveChangesAsync();
+
+            var scopeFactory = ctx.RequestServices.GetRequiredService<IServiceScopeFactory>();
+            var discId = discussion.Id;
+            var ownerId = discussion.OwnerId;
+            _pendingSessions[discId] = Task.Run(async () =>
+            {
+                try
+                {
+                    var sessionId = await TryCreateSessionAsync(memory, ownerId);
+                    if (sessionId is null) return null;
+                    using var scope = scopeFactory.CreateScope();
+                    var scopedDb = scope.ServiceProvider.GetRequiredService<NovaDbContext>();
+                    await scopedDb.Discussions
+                        .Where(d => d.Id == discId && d.SessionId == null)
+                        .ExecuteUpdateAsync(s => s.SetProperty(d => d.SessionId, sessionId));
+                    return sessionId;
+                }
+                catch { return null; }
+                finally { _pendingSessions.TryRemove(discId, out _); }
+            });
 
             return Results.Ok(ToInfo(discussion));
         });
@@ -609,6 +623,13 @@ public static class DiscussionEndpoints
         NovaDbContext db, MemoryManager memory, Discussion discussion, string? userId,
         string content, ImageAttachmentDto[]? images, string device, string input)
     {
+        if (discussion.SessionId is null && _pendingSessions.TryRemove(discussion.Id, out var pending))
+        {
+            discussion.SessionId = await pending;
+            if (discussion.SessionId != null)
+                await db.SaveChangesAsync();
+        }
+
         if (discussion.SessionId is null)
         {
             try
