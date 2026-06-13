@@ -30,7 +30,13 @@ export function useNovaPendingContext(): PendingNovaContext {
 
 function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<DiscussionsHook> }) {
   useWsSubscribe((event) => {
-    discRef.current.handleWsEvent(event as WsEvent)
+    if (event.type === "upstream.disconnected") {
+      discRef.current.handleUpstreamDisconnect()
+    } else if (event.type === "upstream.connected") {
+      discRef.current.handleUpstreamReconnect()
+    } else {
+      discRef.current.handleWsEvent(event as WsEvent)
+    }
   })
   return null
 }
@@ -75,8 +81,8 @@ function AppLayout() {
   }, [])
 
   const onReconnect = useCallback(() => {
-    discRef.current.refreshDiscussions()
-    discRef.current.reloadActiveMessages(true)
+    discRef.current.handleUpstreamDisconnect()
+    discRef.current.handleUpstreamReconnect()
   }, [])
 
   const onVisibilityChange = useCallback(() => {

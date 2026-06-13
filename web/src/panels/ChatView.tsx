@@ -114,6 +114,7 @@ export function ChatView() {
     dismissDiscussion,
     renameDiscussion,
     resumeDiscussion,
+    upstreamConnected,
   } = disc
 
   useEffect(() => {
@@ -174,6 +175,13 @@ export function ChatView() {
     setMobileTab(1)
   }, [createDiscussion, navigate])
 
+  const upstreamBanner = !upstreamConnected && (
+    <div className="flex items-center gap-2 px-4 py-2 bg-accent-teal-a15 border-b border-overlay-6 text-text-muted text-sm">
+      <i className="fa-solid fa-arrows-rotate fa-spin" />
+      <span>Reconnecting to AI service…</span>
+    </div>
+  )
+
   const chatHeader = activeDiscussion && (
     <PanelHeader
       leading={
@@ -218,7 +226,7 @@ export function ChatView() {
         onAnswerQuestion={handleAnswerQuestion}
         onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
         placeholder="Talk to Nova..."
-        header={chatHeader}
+        header={<>{chatHeader}{upstreamBanner}</>}
         speechBackend={speechBackend}
         resolveImageSrc={resolveImageSrc}
         resolveFileLink={resolveFileLink}
@@ -227,43 +235,21 @@ export function ChatView() {
         )}
       />
       {showAvatar && (
-        <>
-          {/* Desktop: left margin */}
+        /* Mobile only: top left under header */
+        <div
+          className="absolute top-16 left-3 w-[92px] h-[92px] z-10 pointer-events-none rounded-full overflow-hidden drop-shadow-md md:hidden"
+          style={{ backgroundColor: "var(--background)" }}
+        >
+          <img
+            src={avatarSrc}
+            alt=""
+            className="w-full h-full rounded-full object-cover object-top"
+            style={{ filter: `hue-rotate(${eyeHueRotation})`, opacity: avatarOpacity }}
+          />
           <div
-            className="absolute w-48 h-48 z-10 pointer-events-none rounded-full overflow-hidden drop-shadow-lg hidden md:block"
-            style={{
-              left: "calc((50% - 384px) / 2 - 96px)",
-              top: "50%",
-              transform: "translateY(-50%)",
-              opacity: avatarOpacity,
-            }}
-          >
-            <img
-              src={avatarSrc}
-              alt=""
-              className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
-              style={{ filter: `hue-rotate(${eyeHueRotation})` }}
-            />
-            <div
-              className="absolute inset-0 rounded-full border-[1.5px] border-surface-elevated"
-            />
-          </div>
-          {/* Mobile: top left under header */}
-          <div
-            className="absolute top-16 left-3 w-[92px] h-[92px] z-10 pointer-events-none rounded-full overflow-hidden drop-shadow-md md:hidden"
-            style={{ backgroundColor: "var(--background)" }}
-          >
-            <img
-              src={avatarSrc}
-              alt=""
-              className="w-full h-full rounded-full object-cover object-top"
-              style={{ filter: `hue-rotate(${eyeHueRotation})`, opacity: avatarOpacity }}
-            />
-            <div
-              className="absolute inset-0 rounded-full border border-surface-elevated"
-            />
-          </div>
-        </>
+            className="absolute inset-0 rounded-full border border-surface-elevated"
+          />
+        </div>
       )}
     </div>
   ) : (
@@ -307,6 +293,19 @@ export function ChatView() {
               onDismiss={dismissDiscussion}
             />
           </div>
+          {showAvatar && (
+            <div className="hidden md:flex justify-center px-3 pb-5 pt-2 pointer-events-none" style={{ opacity: avatarOpacity }}>
+              <div className="relative w-full max-w-[256px] aspect-square rounded-full overflow-hidden drop-shadow-md">
+                <img
+                  src={avatarSrc}
+                  alt=""
+                  className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
+                  style={{ filter: `hue-rotate(${eyeHueRotation})` }}
+                />
+                <div className="absolute inset-0 rounded-full border border-background" />
+              </div>
+            </div>
+          )}
         </>
       }
       detail={chatArea}

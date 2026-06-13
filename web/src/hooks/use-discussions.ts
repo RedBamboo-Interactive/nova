@@ -27,6 +27,7 @@ export function useDiscussions() {
   const [pendingQuestions, setPendingQuestions] = useState<Record<string, PendingQuestion | null>>({})
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
   const [isSpawning, setIsSpawning] = useState(false)
+  const [upstreamConnected, setUpstreamConnected] = useState(true)
   const loadedRef = useRef<Set<string>>(new Set())
 
   const activeDiscussion = discussions.find((d) => d.id === activeDiscussionId) ?? null
@@ -418,6 +419,18 @@ export function useDiscussions() {
     }
   }, [sessionToDiscussion])
 
+  const handleUpstreamDisconnect = useCallback(() => {
+    setUpstreamConnected(false)
+    setStreaming({})
+    setPendingQuestions({})
+  }, [])
+
+  const handleUpstreamReconnect = useCallback(() => {
+    setUpstreamConnected(true)
+    refreshDiscussions()
+    reloadActiveMessages(true)
+  }, [refreshDiscussions, reloadActiveMessages])
+
   const archiveDiscussion = useCallback((id: string) => {
     setDiscussions((prev) => prev.map((d) => d.id === id ? { ...d, status: "archived" as const } : d))
     if (activeDiscussionId === id) setActiveDiscussionId(null)
@@ -456,5 +469,8 @@ export function useDiscussions() {
     syncAndRefresh,
     reloadActiveMessages,
     handleWsEvent,
+    upstreamConnected,
+    handleUpstreamDisconnect,
+    handleUpstreamReconnect,
   }
 }
