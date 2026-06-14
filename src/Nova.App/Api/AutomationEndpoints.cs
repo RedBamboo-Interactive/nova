@@ -18,7 +18,8 @@ public static class AutomationEndpoints
     private const string ActionConfigDescription =
         "Shape depends on actionType. " +
         "ai-session: { prompt (string, required), systemPromptHint (string), preCreateDiscussion (bool — pre-creates a " +
-        "discussion and instructs the AI to post its output there), timeout (seconds) }. " +
+        "discussion and instructs the AI to post its output there), timeout (seconds), qualityMode (string — quality tier: " +
+        "'fast', 'standard', 'deep', 'research'; resolved by RedCompute to provider+model+effort; defaults to backend default when omitted) }. " +
         "http-check: { url (string, required), method ('GET'|'POST'|'PUT', default GET), condition: { field (dot-notation " +
         "JSON path, e.g. 'session.status'), equals (string) } } — without a condition any 2xx response counts as triggered. " +
         "builtin:backup: no config.";

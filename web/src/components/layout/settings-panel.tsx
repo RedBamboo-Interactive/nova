@@ -120,6 +120,12 @@ export function SettingsPanel({ onClose }: Props) {
                 }
               />
             </SettingRow>
+            <SettingRow label="Show avatar">
+              <Toggle
+                checked={localSettings.showAvatar}
+                onChange={(v) => setLocalSettings({ showAvatar: v })}
+              />
+            </SettingRow>
           </div>
 
           {/* System */}

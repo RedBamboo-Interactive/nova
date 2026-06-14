@@ -46,6 +46,10 @@ Available skills:
   POST http://localhost:18803/api/delegate
   { "sessionId": "<existing session id>", "prompt": "follow-up or feedback", "discussionId": "<current discussion id>" }
   ```
+  Optional fields for new sessions:
+  - `qualityMode` (string): quality tier (`"fast"`, `"standard"`, `"deep"`, `"research"`). Resolved by RedCompute to a provider+model+effort. Defaults to `"standard"` when omitted.
+  - `model` (string): explicit model alias (`"fable"`, `"opus"`, `"sonnet"`, `"haiku"`). Takes precedence over `qualityMode`. Use `qualityMode` unless you need a specific model override.
+  - `dockerImage` (string): Docker image for containerized execution.
   Continuation auto-resumes stopped sessions, registers a fresh callback, and preserves full session context. Use this to review delegated work and request changes without spawning a new session.
   You will receive a `<nova-event>` in the current discussion when the session completes. Do NOT manually create sessions, send prompts, or set up watchers yourself.
 - **Discussion events** — Automations can inject events into discussions via `POST /api/discussions/{id}/event`. Events arrive as `<nova-event>` tags and trigger you to respond with full conversation context.

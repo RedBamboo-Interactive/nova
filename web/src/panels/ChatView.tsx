@@ -8,6 +8,7 @@ import { EditableTitle } from "@/components/discussion/editable-title"
 import { NovaStatusLine } from "@/components/nova-status-line"
 import { createNovaSpeechBackend } from "@/lib/speech"
 import { useNovaEmotion } from "@/hooks/use-nova-emotion"
+import { useLocalSettings } from "@/hooks/use-local-settings"
 import { useDisc, useNovaPendingContext } from "@/App"
 import { useSessionStats } from "@/hooks/use-session-stats"
 
@@ -210,7 +211,8 @@ export function ChatView() {
 
   const { src: avatarSrc } = useNovaEmotion(activeMessages, isStreaming)
   const { hueRotation: eyeHueRotation, opacity: avatarOpacity } = useAvatarStyle()
-  const showAvatar = activeDiscussion && activeMessages.some(m => m.role === "assistant")
+  const { showAvatar: avatarEnabled } = useLocalSettings()
+  const showAvatar = avatarEnabled && activeDiscussion && activeMessages.some(m => m.role === "assistant")
 
   const chatArea = activeDiscussion ? (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
@@ -234,23 +236,6 @@ export function ChatView() {
           <NovaStatusLine isStreaming={isStreaming} messages={messages} />
         )}
       />
-      {showAvatar && (
-        /* Mobile only: top left under header */
-        <div
-          className="absolute top-16 left-3 w-[92px] h-[92px] z-10 pointer-events-none rounded-full overflow-hidden drop-shadow-md md:hidden"
-          style={{ backgroundColor: "var(--background)" }}
-        >
-          <img
-            src={avatarSrc}
-            alt=""
-            className="w-full h-full rounded-full object-cover object-top"
-            style={{ filter: `hue-rotate(${eyeHueRotation})`, opacity: avatarOpacity }}
-          />
-          <div
-            className="absolute inset-0 rounded-full border border-surface-elevated"
-          />
-        </div>
-      )}
     </div>
   ) : (
     <div className="flex-1 flex items-center justify-center text-text-muted">
@@ -276,12 +261,26 @@ export function ChatView() {
   )
 
   return (
-    <MasterDetailLayout
-      layoutKey="nova-discussions"
-      mobileLabels={["Discussions", "Chat"]}
-      mobileTab={mobileTab}
-      onMobileTabChange={setMobileTab}
-      sidebar={
+    <div className="relative h-full w-full">
+      {showAvatar && (
+        <div
+          className="absolute top-3 left-1/2 -translate-x-1/2 w-[88px] h-[88px] z-20 pointer-events-none rounded-full overflow-hidden md:hidden p-1.5"
+          style={{ backgroundColor: "var(--background)" }}
+        >
+          <img
+            src={avatarSrc}
+            alt=""
+            className="w-full h-full rounded-full object-cover object-top"
+            style={{ filter: `hue-rotate(${eyeHueRotation})`, opacity: avatarOpacity }}
+          />
+        </div>
+      )}
+      <MasterDetailLayout
+        layoutKey="nova-discussions"
+        mobileLabels={["Discussions", "Chat"]}
+        mobileTab={mobileTab}
+        onMobileTabChange={setMobileTab}
+        sidebar={
         <>
           {sidebarHeader}
           <div className="flex-1 overflow-hidden">
@@ -295,14 +294,13 @@ export function ChatView() {
           </div>
           {showAvatar && (
             <div className="hidden md:flex justify-center px-3 pb-5 pt-2 pointer-events-none" style={{ opacity: avatarOpacity }}>
-              <div className="relative w-full max-w-[256px] aspect-square rounded-full overflow-hidden drop-shadow-md">
+              <div className="relative w-full max-w-[256px] aspect-square rounded-full overflow-hidden" style={{ backgroundColor: "var(--background)" }}>
                 <img
                   src={avatarSrc}
                   alt=""
                   className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
                   style={{ filter: `hue-rotate(${eyeHueRotation})` }}
                 />
-                <div className="absolute inset-0 rounded-full border border-background" />
               </div>
             </div>
           )}
@@ -310,5 +308,6 @@ export function ChatView() {
       }
       detail={chatArea}
     />
+    </div>
   )
 }
