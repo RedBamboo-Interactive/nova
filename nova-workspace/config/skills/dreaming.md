@@ -49,12 +49,47 @@ you know about — look in your memory for project paths.
 git -C /path/to/repo log --since="{since_date}" --oneline --stat
 ```
 
+### CodeRed Sessions
+CodeRed sessions are where most actual coding happens. They contain debugging
+context, architectural decisions, approaches tried and rejected, and work that
+may not have resulted in commits. This is a critical data source.
+
+Session metadata and message history are available through RedCompute's session
+API (RedCompute manages all AI sessions for the suite).
+
+```bash
+# List recent sessions (all=true includes dismissed/stopped)
+curl -s "http://localhost:18800/ai-session/sessions?limit=50&all=true"
+# Returns: id, provider, projectName, projectPath, status, startedAt, model,
+#          title, messageCount, qualityTier, source
+
+# Get full message history for a session
+curl -s "http://localhost:18800/ai-session/sessions/{session_id}"
+# Returns: session metadata + messages[] (id, role, eventType, content, timestamp)
+```
+
+**Processing approach:**
+1. Pull the session list and filter by `startedAt` within the dream window
+2. Skip sessions with 0 messages or that are Nova's own dreaming/automation sessions
+3. For each substantive session, fetch message history
+4. Focus on human messages (prompts, feedback, corrections) and assistant text
+   responses. Skip raw tool call content (file reads, diffs) — the decisions and
+   context around them is what matters, not the tool output itself
+5. Group sessions by `projectName` in the harvest for readability
+6. Extract the same things you'd extract from Nova conversations: decisions,
+   bugs found, approaches rejected, user feedback, technical context
+
+**Large sessions (100+ messages):** Don't try to process every message. Focus on
+the first few (initial prompt, approach), the last few (outcome, final state),
+and any messages where the user gives feedback or redirects. The middle is
+usually tool calls and incremental progress.
+
 ### RedBamboo Ecosystem
 The suite runs on localhost. Probe what's available and pull recent activity.
-- **RedCompute** (port 18800): AI compute engine. Check `/ai-session/sessions`
-  for recent inference activity, completed tasks.
-- **CodeRed** (port 18801): Claude Code web UI. Check for recent sessions,
-  work done, projects touched.
+- **RedCompute** (port 18800): AI compute engine. Session management for all
+  suite apps. Check `/ai-session/sessions` for session list and message history.
+- **CodeRed** (port 18801): Claude Code web UI. Sessions are tracked via
+  RedCompute (see above). CodeRed's own APIs cover git, files, reviews, tests.
 - **RedMatter** (port 18802): Game engine / CMS. Check for content changes,
   builds, deployments.
 - **Nova** (port 18803): That's you. Persistent AI companion with conversations,
@@ -220,7 +255,8 @@ Append a new entry to `memory/meta/dreaming-log.md`:
 ## Dream #{n} — {yyyy-MM-dd}
 
 - Sources checked: {list of sources that were available}
-- Conversations processed: {x} ({y} messages)
+- Nova conversations processed: {x} ({y} messages)
+- CodeRed sessions processed: {x} across {projects} ({y} total messages)
 - Commits reviewed: {n} across {repos}
 - Files updated: {a}, created: {b}, merged: {c}
 - Key changes: {brief bullet list of what changed}
