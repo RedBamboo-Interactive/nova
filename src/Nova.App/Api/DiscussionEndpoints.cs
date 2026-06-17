@@ -542,8 +542,8 @@ public static class DiscussionEndpoints
             if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
-            if (string.IsNullOrWhiteSpace(request.Content))
-                return Results.BadRequest(new { error = "Content is required" });
+            if (string.IsNullOrWhiteSpace(request.Content) && (request.Images == null || request.Images.Length == 0))
+                return Results.BadRequest(new { error = "Content or at least one image is required" });
 
             var ua = ctx.Request.Headers.UserAgent.ToString();
             var device = System.Text.RegularExpressions.Regex.IsMatch(ua, @"Mobile|Android|iPhone|iPad|iPod", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
@@ -561,10 +561,10 @@ public static class DiscussionEndpoints
         .WithRequestBody(new
         {
             type = "object",
-            required = new[] { "content" },
+            description = "Either content or at least one image must be provided",
             properties = new
             {
-                content = new { type = "string", description = "Message text. Delivered to the session enriched with a cross-discussion <nova-context> block." },
+                content = new { type = "string", description = "Message text (optional when images are provided). Delivered to the session enriched with a cross-discussion <nova-context> block." },
                 images = new
                 {
                     type = "array",
@@ -646,19 +646,9 @@ public static class DiscussionEndpoints
                 return new(false, null, "redcompute_unavailable", "RedCompute refused to create a session.");
 
             await db.SaveChangesAsync();
-
-            if (discussion.InjectedContext != null)
-            {
-                try
-                {
-                    var injectResp = await RedCompute.PostAsJsonAsync(
-                        $"/ai-session/sessions/{discussion.SessionId}/inject",
-                        new { role = "assistant", content = discussion.InjectedContext }, JsonOptions);
-                    injectResp.EnsureSuccessStatusCode();
-                }
-                catch { /* session exists but inject failed — continue, XML fallback below still works */ }
-            }
         }
+
+        var priorMessage = discussion.InjectedContext;
 
         var now = DateTime.UtcNow;
         var cutoff = now.AddDays(-2);
@@ -673,7 +663,10 @@ public static class DiscussionEndpoints
             .ToListAsync();
 
         var contextBlock = BuildNovaContext(allDiscussions, discussion.Id, now, device, input);
-        var enrichedContent = contextBlock + "\n\n" + content;
+        var priorBlock = priorMessage != null
+            ? $"\n<nova-prior-message role=\"assistant\">\n{priorMessage}\n</nova-prior-message>\n"
+            : "";
+        var enrichedContent = contextBlock + priorBlock + "\n" + content;
 
         try
         {
