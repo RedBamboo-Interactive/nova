@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react"
+import { useToast } from "@redbamboo/ui"
 import { api } from "@/lib/api"
 import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent } from "@/lib/types"
 import type { MessageBlock, MessagePart, PendingQuestion, ChatEvent, ImageAttachment } from "@redbamboo/chat"
@@ -20,6 +21,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
 }
 
 export function useDiscussions() {
+  const { toast } = useToast()
   const [discussions, setDiscussions] = useState<DiscussionInfo[]>([])
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Record<string, MessageBlock[]>>({})
@@ -212,7 +214,7 @@ export function useDiscussions() {
     if (!disc.title && disc.messageCount === 0) {
       const displayContent = content
         .replace(/<nova-context[\s\S]*?<\/nova-context>\s*/g, "")
-        .replace(/<nova-prior-messages[\s\S]*?<\/nova-prior-messages>\s*/g, "")
+        .replace(/<nova-prior-messages?[\s\S]*?<\/nova-prior-messages?>\s*/g, "")
         .trim()
       const title = displayContent.length > 60 ? displayContent.slice(0, 59) + "…" : displayContent
       setDiscussions((prev) =>
@@ -431,11 +433,17 @@ export function useDiscussions() {
     reloadActiveMessages(true)
   }, [refreshDiscussions, reloadActiveMessages])
 
-  const archiveDiscussion = useCallback((id: string) => {
-    setDiscussions((prev) => prev.map((d) => d.id === id ? { ...d, status: "archived" as const } : d))
+  const archiveDiscussion = useCallback(async (id: string) => {
+    const prev = discussions.find((d) => d.id === id)
+    setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: "archived" as const } : d))
     if (activeDiscussionId === id) setActiveDiscussionId(null)
-    api.delete(`/api/discussions/${id}`).catch(() => {})
-  }, [activeDiscussionId])
+    try {
+      await api.delete(`/api/discussions/${id}`)
+    } catch (err) {
+      if (prev) setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: prev.status } : d))
+      toast({ variant: "error", title: "Failed to archive", description: err instanceof Error ? err.message : "Unknown error" })
+    }
+  }, [activeDiscussionId, discussions, toast])
 
   const dismissDiscussion = useCallback((id: string) => {
     setDismissedIds((prev) => new Set(prev).add(id))

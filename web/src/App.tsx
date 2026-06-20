@@ -5,6 +5,7 @@ import {
   useAskNovaReceiver, usePendingNovaContext,
   type AskNovaContext, type PendingNovaContext,
 } from "@redbamboo/utility"
+import { ToastProvider } from "@redbamboo/ui"
 import { AppShell } from "@/components/layout/app-shell"
 import { useLocalSettings } from "@/hooks/use-local-settings"
 import { useDiscussions } from "@/hooks/use-discussions"
@@ -121,7 +122,9 @@ const router = createBrowserRouter([
 export function App() {
   return (
     <AuthProvider>
-      <RouterProvider router={router} />
+      <ToastProvider>
+        <RouterProvider router={router} />
+      </ToastProvider>
     </AuthProvider>
   )
 }

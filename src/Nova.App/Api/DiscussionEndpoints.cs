@@ -341,23 +341,29 @@ public static class DiscussionEndpoints
             if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
-            discussion.Status = "archived";
-            await db.SaveChangesAsync();
-
             if (discussion.SessionId is not null)
             {
                 try
                 {
                     var resp = await RedCompute.PostAsync($"/ai-session/sessions/{discussion.SessionId}/stop", null);
-                    resp.EnsureSuccessStatusCode();
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        var body = await resp.Content.ReadAsStringAsync();
+                        var reason = $"Session stop failed (HTTP {(int)resp.StatusCode})";
+                        App.LogService.Warn("discussions", $"Archive blocked — {reason}: {body}");
+                        return Results.Json(new { error = reason }, statusCode: 502);
+                    }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    discussion.Status = "stopped";
-                    await db.SaveChangesAsync();
+                    var reason = $"Session stop failed ({ex.GetType().Name}: {ex.Message})";
+                    App.LogService.Warn("discussions", $"Archive blocked — {reason}");
+                    return Results.Json(new { error = reason }, statusCode: 502);
                 }
             }
 
+            discussion.Status = "archived";
+            await db.SaveChangesAsync();
             return Results.Ok(ToInfo(discussion));
         });
 
@@ -646,6 +652,25 @@ public static class DiscussionEndpoints
                 return new(false, null, "redcompute_unavailable", "RedCompute refused to create a session.");
 
             await db.SaveChangesAsync();
+
+            // Replay pending assistant messages (from nova-message on pre-created discussions)
+            // into the new session so they appear as visible chat bubbles.
+            var pendingMessages = await db.Conversations
+                .Where(c => c.ContextId == discussion.Id && c.Role == "assistant" && c.Source == "nova-message")
+                .OrderBy(c => c.Timestamp)
+                .ToListAsync();
+
+            foreach (var msg in pendingMessages)
+            {
+                try
+                {
+                    var resp = await RedCompute.PostAsJsonAsync(
+                        $"/ai-session/sessions/{discussion.SessionId}/inject",
+                        new { role = "assistant", content = msg.Content }, JsonOptions);
+                    resp.EnsureSuccessStatusCode();
+                }
+                catch { /* best-effort — don't block the user's message */ }
+            }
         }
 
         var priorMessage = discussion.InjectedContext;
