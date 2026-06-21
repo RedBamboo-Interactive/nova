@@ -5,11 +5,14 @@ import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions } f
 import { useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
 import { EditableTitle } from "@/components/discussion/editable-title"
+import { AgentPicker } from "@/components/agent-picker"
 import { NovaStatusLine } from "@/components/nova-status-line"
 import { createNovaSpeechBackend } from "@/lib/speech"
 import { useLocalSettings } from "@/hooks/use-local-settings"
+import { useAgents } from "@/hooks/use-agents"
 import { useDisc, useNovaPendingContext } from "@/App"
 import { useSessionStats } from "@/hooks/use-session-stats"
+import { setSettings } from "@/lib/settings-store"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -107,6 +110,15 @@ export function ChatView() {
     activeDiscussion?.title || "New Discussion",
   )
 
+  const { agents, getAgent, defaultAgentId } = useAgents()
+  const multiAgent = agents.length > 1
+  const settings = useLocalSettings()
+  const agentFilter = settings.agentFilter
+
+  const filteredDiscussions = agentFilter
+    ? discussions.filter((d) => d.agentId === agentFilter)
+    : discussions
+
   const pendingContext = useNovaPendingContext()
   const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming)
   const [mobileTab, setMobileTab] = useState(0)
@@ -148,11 +160,12 @@ export function ChatView() {
     setMobileTab(1)
   }, [navigate])
 
-  const handleNewDiscussion = useCallback(async () => {
-    const d = await createDiscussion()
+  const handleNewDiscussion = useCallback(async (agentId?: string) => {
+    const effectiveAgentId = agentId ?? agentFilter ?? defaultAgentId ?? undefined
+    const d = await createDiscussion(effectiveAgentId)
     if (d) navigate(`/chat/${d.id}`)
     setMobileTab(1)
-  }, [createDiscussion, navigate])
+  }, [createDiscussion, navigate, agentFilter, defaultAgentId])
 
   const upstreamBanner = !upstreamConnected && (
     <div className="flex items-center gap-2 px-4 py-2 bg-accent-teal-a15 border-b border-overlay-6 text-text-muted text-sm">
@@ -175,9 +188,17 @@ export function ChatView() {
   )
 
   const sidebarHeader = (
-    <PanelHeader title="Discussions">
+    <PanelHeader title={multiAgent ? undefined : "Discussions"}>
+      {multiAgent && (
+        <AgentPicker
+          agents={agents}
+          selectedId={agentFilter}
+          onSelect={(id) => setSettings({ agentFilter: id })}
+          showAll
+        />
+      )}
       <button
-        onClick={handleNewDiscussion}
+        onClick={() => handleNewDiscussion()}
         className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
         title="New discussion"
       >
@@ -187,7 +208,8 @@ export function ChatView() {
     </PanelHeader>
   )
 
-  const avatarSrc = "/api/avatar"
+  const activeAgent = activeDiscussion ? getAgent(activeDiscussion.agentId) : undefined
+  const avatarSrc = activeAgent ? activeAgent.avatarUrl : "/api/avatar"
   const { opacity: avatarOpacity } = useAvatarStyle()
   const { showAvatar: avatarEnabled } = useLocalSettings()
   const showAvatar = avatarEnabled && activeDiscussion && activeMessages.some(m => m.role === "assistant")
@@ -205,7 +227,7 @@ export function ChatView() {
         pendingQuestion={pendingQuestion}
         onAnswerQuestion={handleAnswerQuestion}
         onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
-        placeholder="Talk to Nova..."
+        placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}
         header={<>{chatHeader}{upstreamBanner}</>}
         speechBackend={speechBackend}
         resolveImageSrc={resolveImageSrc}
@@ -225,9 +247,9 @@ export function ChatView() {
       ) : (
         <div className="text-center">
           <i className="fa-solid fa-star text-3xl mx-auto mb-3 opacity-30" />
-          <p className="text-sm mb-4">Start a conversation with Nova</p>
+          <p className="text-sm mb-4">Start a conversation</p>
           <button
-            onClick={handleNewDiscussion}
+            onClick={() => handleNewDiscussion()}
             className="text-xs px-3 py-1.5 rounded bg-overlay-10 hover:bg-overlay-15 text-contrast transition-colors"
           >
             <i className="fa-solid fa-plus mr-1.5" />
@@ -263,11 +285,13 @@ export function ChatView() {
           {sidebarHeader}
           <div className="flex-1 overflow-hidden">
             <DiscussionSidebar
-              discussions={discussions}
+              discussions={filteredDiscussions}
               activeDiscussionId={activeDiscussionId}
               onSelect={handleSelectDiscussion}
               onArchive={archiveDiscussion}
               onDismiss={dismissDiscussion}
+              getAgent={getAgent}
+              multiAgent={multiAgent}
             />
           </div>
           {showAvatar && (

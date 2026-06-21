@@ -1,9 +1,13 @@
-import { useState, useEffect, useCallback, Fragment } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, ScrollArea, ItemListRow, Badge } from "@redbamboo/ui"
 import { MarkdownRenderer } from "@redbamboo/chat"
 import { useBreadcrumbLabel } from "@redbamboo/utility"
 import { api } from "@/lib/api"
+import { useLocalSettings } from "@/hooks/use-local-settings"
+import { useAgents } from "@/hooks/use-agents"
+import { AgentPicker } from "@/components/agent-picker"
+import { setSettings } from "@/lib/settings-store"
 
 export function MemoryPanel() {
   const { "*": splatPath } = useParams()
@@ -11,6 +15,11 @@ export function MemoryPanel() {
   const [files, setFiles] = useState<string[]>([])
   const [content, setContent] = useState("")
   const [mobileTab, setMobileTab] = useState(0)
+  const [openFolders, setOpenFolders] = useState<Set<string>>(new Set())
+  const { agents } = useAgents()
+  const settings = useLocalSettings()
+  const agentFilter = settings.agentFilter
+  const multiAgent = agents.length > 1
 
   const selectedFile = splatPath || null
 
@@ -19,10 +28,15 @@ export function MemoryPanel() {
     selectedFile?.split("/").pop(),
   )
 
+  const agentParam = agentFilter ? `&agent=${encodeURIComponent(agentFilter)}` : ""
+
   const refreshManifest = useCallback(async () => {
-    const data = await api.get<{ files: string[] }>("/api/memory/manifest")
+    const url = agentFilter
+      ? `/api/memory/manifest?agent=${encodeURIComponent(agentFilter)}`
+      : "/api/memory/manifest"
+    const data = await api.get<{ files: string[] }>(url)
     setFiles(data.files)
-  }, [])
+  }, [agentFilter])
 
   useEffect(() => {
     refreshManifest()
@@ -31,9 +45,9 @@ export function MemoryPanel() {
   useEffect(() => {
     if (!selectedFile) return
     api.get<{ content: string }>(
-      `/api/memory/file?path=${encodeURIComponent(selectedFile)}`,
+      `/api/memory/file?path=${encodeURIComponent(selectedFile)}${agentParam}`,
     ).then((data) => setContent(data.content))
-  }, [selectedFile])
+  }, [selectedFile, agentParam])
 
   const handleSelectFile = useCallback((path: string) => {
     navigate(`/journal/${path}`)
@@ -48,7 +62,16 @@ export function MemoryPanel() {
 
   const sidebar = (
     <>
-      <PanelHeader title="Journal" />
+      <PanelHeader title={multiAgent ? undefined : "Journal"}>
+        {multiAgent && (
+          <AgentPicker
+            agents={agents}
+            selectedId={agentFilter}
+            onSelect={(id) => setSettings({ agentFilter: id })}
+            showAll
+          />
+        )}
+      </PanelHeader>
       <ScrollArea className="flex-1">
         {files.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-text-muted">
@@ -62,27 +85,40 @@ export function MemoryPanel() {
           </div>
         ) : (
           <div className="flex flex-col">
-            {Object.entries(grouped).map(([dir, dirFiles]) => (
-              <Fragment key={dir}>
-                <div className="text-[10px] font-medium text-text-disabled uppercase tracking-wider px-4 pt-3 pb-1">
-                  {dir}
+            {Object.entries(grouped).map(([dir, dirFiles]) => {
+              const isOpen = openFolders.has(dir)
+              return (
+                <div key={dir}>
+                  <button
+                    className="w-full flex items-center gap-1.5 px-4 pt-3 pb-1 text-left hover:text-text-muted transition-colors"
+                    onClick={() => setOpenFolders(prev => {
+                      const next = new Set(prev)
+                      next.has(dir) ? next.delete(dir) : next.add(dir)
+                      return next
+                    })}
+                  >
+                    <i className={`fa-solid fa-chevron-right text-[9px] text-text-disabled transition-transform duration-150 ${isOpen ? "rotate-90" : ""}`} />
+                    <span className="text-[10px] font-medium text-text-disabled uppercase tracking-wider">
+                      {dir}
+                    </span>
+                  </button>
+                  {isOpen && dirFiles.map((file) => {
+                    const name = file.split("/").pop() ?? file
+                    return (
+                      <ItemListRow
+                        key={file}
+                        selected={selectedFile === file}
+                        onClick={() => handleSelectFile(file)}
+                        icon={
+                          <i className="fa-solid fa-file-lines text-xs text-text-muted" />
+                        }
+                        title={name}
+                      />
+                    )
+                  })}
                 </div>
-                {dirFiles.map((file) => {
-                  const name = file.split("/").pop() ?? file
-                  return (
-                    <ItemListRow
-                      key={file}
-                      selected={selectedFile === file}
-                      onClick={() => handleSelectFile(file)}
-                      icon={
-                        <i className="fa-solid fa-file-lines text-xs text-text-muted" />
-                      }
-                      title={name}
-                    />
-                  )
-                })}
-              </Fragment>
-            ))}
+              )
+            })}
           </div>
         )}
       </ScrollArea>

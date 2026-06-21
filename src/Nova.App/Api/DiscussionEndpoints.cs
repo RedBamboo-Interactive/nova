@@ -34,11 +34,13 @@ public static class DiscussionEndpoints
     private static readonly ConcurrentDictionary<string, Task<string?>> _pendingSessions = new();
 
     private static RedLeafDiscussionReader? _redLeaf;
+    private static AgentMemoryFactory? _agentMemoryFactory;
 
-    public static void Initialize(AuthenticatedHttpClientFactory factory, RedLeafDiscussionReader redLeaf)
+    public static void Initialize(AuthenticatedHttpClientFactory factory, RedLeafDiscussionReader redLeaf, AgentMemoryFactory agentMemoryFactory)
     {
         RedCompute = factory.CreateClient(App.Config.Suite.RedCompute, TimeSpan.FromSeconds(30));
         _redLeaf = redLeaf;
+        _agentMemoryFactory = agentMemoryFactory;
     }
 
     public static void MapDiscussionEndpoints(this EndpointRegistry registry, NovaEngine engine)
@@ -49,14 +51,12 @@ public static class DiscussionEndpoints
         {
             var status = ctx.Request.Query["status"].FirstOrDefault();
             var search = ctx.Request.Query["search"].FirstOrDefault();
+            var agentFilter = ctx.Request.Query["agent"].FirstOrDefault();
 
-            // Read-path cutover: RedLeaf is the source of truth for
-            // discussions. By decision it is a hard dependency — no local
-            // fallback. Writes stay on SQLite (NovaMirror dual-writes).
             List<RedLeafDiscussionReader.DiscussionRead> discussions;
             try
             {
-                discussions = await _redLeaf!.GetDiscussionsAsync();
+                discussions = await _redLeaf!.GetDiscussionsAsync(agentFilter);
             }
             catch (Exception ex)
             {
@@ -78,7 +78,8 @@ public static class DiscussionEndpoints
             return Results.Ok(filtered.Select(ToInfo));
         })
         .WithParam("status", "string", description: "Filter by status (idle, thinking, stopped, archived). Default: everything except archived", location: ParamLocation.Query)
-        .WithParam("search", "string", description: "Substring match on the discussion title", location: ParamLocation.Query);
+        .WithParam("search", "string", description: "Substring match on the discussion title", location: ParamLocation.Query)
+        .WithParam("agent", "string", description: "Filter by agent ID", location: ParamLocation.Query);
 
         registry.MapGet("/api/discussions/pending", "Count unread discussions. Side effect: refreshes cached message counts from RedCompute's session list before counting", async (HttpContext ctx, NovaDbContext db) =>
         {
@@ -166,11 +167,18 @@ public static class DiscussionEndpoints
 
         registry.MapPost("/api/discussions", "Create a new discussion", async (HttpContext ctx, NovaDbContext db) =>
         {
+            CreateDiscussionRequest? createReq = null;
+            try { createReq = await ctx.Request.ReadFromJsonAsync<CreateDiscussionRequest>(JsonOptions); }
+            catch { /* body is optional */ }
+
+            var agentId = createReq?.AgentId ?? NovaMirror.AgentId;
+
             var discussion = new Discussion
             {
                 Id = Guid.NewGuid().ToString("N")[..8],
                 Status = "idle",
                 OwnerId = ctx.User.FindFirstValue("sub"),
+                AgentId = agentId,
             };
 
             db.Discussions.Add(discussion);
@@ -179,11 +187,13 @@ public static class DiscussionEndpoints
             var scopeFactory = ctx.RequestServices.GetRequiredService<IServiceScopeFactory>();
             var discId = discussion.Id;
             var ownerId = discussion.OwnerId;
+            var discAgentId = discussion.AgentId;
             _pendingSessions[discId] = Task.Run(async () =>
             {
                 try
                 {
-                    var sessionId = await TryCreateSessionAsync(memory, ownerId);
+                    var agentMemory = await _agentMemoryFactory!.GetMemoryAsync(discAgentId);
+                    var sessionId = await TryCreateSessionAsync(agentMemory, discAgentId, ownerId);
                     if (sessionId is null) return null;
                     using var scope = scopeFactory.CreateScope();
                     var scopedDb = scope.ServiceProvider.GetRequiredService<NovaDbContext>();
@@ -590,11 +600,7 @@ public static class DiscussionEndpoints
         });
     }
 
-    /// <summary>
-    /// Create a RedCompute session for Nova's workspace. Returns the session id, or null
-    /// when RedCompute refused. Throws when RedCompute is unreachable.
-    /// </summary>
-    internal static async Task<string?> TryCreateSessionAsync(MemoryManager memory, string? ownerId)
+    internal static async Task<string?> TryCreateSessionAsync(MemoryManager memory, string? agentId, string? ownerId)
     {
         memory.GenerateClaudeMd();
 
@@ -640,7 +646,8 @@ public static class DiscussionEndpoints
         {
             try
             {
-                discussion.SessionId = await TryCreateSessionAsync(memory, discussion.OwnerId);
+                var agentMemory = await _agentMemoryFactory!.GetMemoryAsync(discussion.AgentId);
+                discussion.SessionId = await TryCreateSessionAsync(agentMemory, discussion.AgentId, discussion.OwnerId);
             }
             catch
             {
@@ -680,6 +687,9 @@ public static class DiscussionEndpoints
 
         IQueryable<Discussion> contextQuery = db.Discussions
             .Where(d => d.Status != "archived" || (d.Status == "archived" && d.LastActivity >= cutoff));
+
+        if (discussion.AgentId != null)
+            contextQuery = contextQuery.Where(d => d.AgentId == discussion.AgentId);
 
         contextQuery = contextQuery.WhereCanAccess(userId);
 
@@ -813,6 +823,7 @@ public static class DiscussionEndpoints
             d.LastActivity,
             d.MessageCount,
             d.LastReadAt,
+            d.AgentId,
         };
     }
 
@@ -828,6 +839,7 @@ public static class DiscussionEndpoints
             d.LastActivity,
             d.MessageCount,
             d.LastReadAt,
+            d.AgentId,
         };
     }
 
@@ -836,6 +848,11 @@ public static class DiscussionEndpoints
         if (value.Length <= maxLength) return value;
         return value[..(maxLength - 1)] + "…";
     }
+}
+
+public class CreateDiscussionRequest
+{
+    public string? AgentId { get; set; }
 }
 
 public class DiscussionTitleRequest

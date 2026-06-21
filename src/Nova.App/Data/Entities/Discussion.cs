@@ -12,4 +12,5 @@ public class Discussion
     public DateTime? LastReadAt { get; set; }
     public string? InjectedContext { get; set; }
     public string? OwnerId { get; set; }
+    public string? AgentId { get; set; }
 }

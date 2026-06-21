@@ -48,6 +48,7 @@ public static class AskEndpoints
                     Id = Guid.NewGuid().ToString("N")[..8],
                     Status = "idle",
                     OwnerId = userId,
+                    AgentId = NovaMirror.AgentId,
                     Title = TitleFrom(request.Content),
                 };
                 db.Discussions.Add(discussion);

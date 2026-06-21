@@ -1,6 +1,6 @@
 import { ItemList, ItemListRow } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
-import type { DiscussionInfo } from "@/lib/types"
+import type { DiscussionInfo, AgentInfo } from "@/lib/types"
 
 const statusColor: Record<string, string> = {
   thinking: "var(--color-accent-gold)",
@@ -15,6 +15,8 @@ interface Props {
   onSelect: (id: string) => void
   onArchive: (id: string) => void
   onDismiss: (id: string) => void
+  getAgent?: (id: string | null) => AgentInfo | undefined
+  multiAgent?: boolean
 }
 
 function isUnread(d: DiscussionInfo): boolean {
@@ -22,7 +24,7 @@ function isUnread(d: DiscussionInfo): boolean {
     && (!d.lastReadAt || d.lastActivity > d.lastReadAt)
 }
 
-export function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, onArchive, onDismiss }: Props) {
+export function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, onArchive, onDismiss, getAgent, multiAgent }: Props) {
   return (
     <ItemList
       items={discussions}
@@ -31,18 +33,36 @@ export function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, o
       renderItem={(discussion) => {
         const alive = discussion.status !== "archived" && discussion.status !== "stopped"
         const unread = alive && isUnread(discussion)
+        const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
         return (
           <ItemListRow
             selected={discussion.id === activeDiscussionId}
             onClick={() => onSelect(discussion.id)}
-            icon={<MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />}
-            title={discussion.title || "New discussion"}
-            subtitle={formatRelative(discussion.lastActivity)}
-            className={
+            icon={
+              agent ? (
+                <>
+                  <img
+                    src={agent.avatarUrl}
+                    alt={agent.name}
+                    className="absolute inset-0 w-full h-full rounded-lg object-cover"
+                    onError={(e) => { e.currentTarget.style.display = "none" }}
+                  />
+                  <div className="absolute -bottom-1 -right-1 scale-75 origin-bottom-right">
+                    <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
+                  </div>
+                </>
+              ) : (
+                <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
+              )
+            }
+            className={[
+              agent ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
               !alive ? "[&_[data-slot=item-list-title]]:opacity-50"
               : unread ? "[&_[data-slot=item-list-title]]:text-contrast [&_[data-slot=item-list-title]]:font-semibold"
-              : ""
-            }
+              : "",
+            ].filter(Boolean).join(" ")}
+            title={discussion.title || "New discussion"}
+            subtitle={formatRelative(discussion.lastActivity)}
             trailing={
               discussion.status !== "archived" ? (
                 <div className="flex items-center gap-1.5">

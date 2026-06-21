@@ -7,12 +7,14 @@ export type LocalSettings = {
   theme: Theme
   contrast: Contrast
   showAvatar: boolean
+  agentFilter: string | null
 }
 
 export const settingsStore = createLocalStore<LocalSettings>("nova_settings", {
   theme: "dark",
   contrast: "low",
   showAvatar: true,
+  agentFilter: null,
 })
 
 export const getSettings = settingsStore.get

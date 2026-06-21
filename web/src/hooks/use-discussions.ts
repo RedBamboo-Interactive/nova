@@ -177,10 +177,11 @@ export function useDiscussions() {
     }
   }, [visibleDiscussions, activeDiscussionId, selectDiscussion])
 
-  const createDiscussion = useCallback(async () => {
+  const createDiscussion = useCallback(async (agentId?: string) => {
     setIsSpawning(true)
     try {
-      const d = await api.post<DiscussionInfo>("/api/discussions")
+      const body = agentId ? { agentId } : undefined
+      const d = await api.post<DiscussionInfo>("/api/discussions", body)
       setDiscussions((prev) => [d, ...prev])
       setActiveDiscussionId(d.id)
       setMessages((prev) => ({ ...prev, [d.id]: [] }))

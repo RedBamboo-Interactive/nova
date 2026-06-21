@@ -9,27 +9,38 @@ namespace Nova.App.Api;
 
 public static class MemoryEndpoints
 {
-    public static void MapMemoryEndpoints(this EndpointRegistry registry, MemoryManager memory)
+    public static void MapMemoryEndpoints(this EndpointRegistry registry, MemoryManager memory, AgentMemoryFactory? agentMemoryFactory = null)
     {
-        registry.MapGet("/api/memory/manifest", "List all memory files", () =>
+        registry.MapGet("/api/memory/manifest", "List all memory files", async (HttpContext ctx) =>
         {
-            var files = memory.GetMemoryManifest();
+            var agentId = ctx.Request.Query["agent"].FirstOrDefault();
+            var effectiveMemory = agentId != null && agentMemoryFactory != null
+                ? await agentMemoryFactory.GetMemoryAsync(agentId)
+                : memory;
+            var files = effectiveMemory.GetMemoryManifest();
             return Results.Ok(new { files });
-        });
+        }).WithParam("agent", "string", description: "Agent ID to scope the memory manifest", location: ParamLocation.Query);
 
-        registry.MapGet("/api/memory/file", "Read a memory file", (string path) =>
+        registry.MapGet("/api/memory/file", "Read a memory file", async (HttpContext ctx) =>
         {
+            var path = ctx.Request.Query["path"].FirstOrDefault();
             if (string.IsNullOrWhiteSpace(path))
                 return Results.BadRequest(new { error = "Path is required" });
 
-            var content = memory.ReadMemoryFile(path);
+            var agentId = ctx.Request.Query["agent"].FirstOrDefault();
+            var effectiveMemory = agentId != null && agentMemoryFactory != null
+                ? await agentMemoryFactory.GetMemoryAsync(agentId)
+                : memory;
+
+            var content = effectiveMemory.ReadMemoryFile(path);
             if (content == null)
                 return Results.NotFound(new { error = "File not found" });
 
             return Results.Ok(new { path, content });
         }).WithParam("path", "string", required: true,
             description: "Workspace-relative path of the file (e.g. memory/index.md)",
-            location: ParamLocation.Query);
+            location: ParamLocation.Query)
+        .WithParam("agent", "string", description: "Agent ID to scope the memory read", location: ParamLocation.Query);
 
         registry.MapPut("/api/memory/file", "Write a memory file (creates parent directories as needed)", (MemoryFileRequest request) =>
         {

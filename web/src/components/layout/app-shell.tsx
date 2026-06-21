@@ -80,7 +80,7 @@ function TabCommands({ navigate }: { navigate: (path: string) => void }) {
   })
   useCommand("tab-journal", {
     label: "Go to Journal",
-    description: "Open the Journal panel to browse Nova's memory files",
+    description: "Open the Journal panel to browse memory files",
     group: "Navigation",
     shortcut: "F3",
     keywords: ["journal", "memory", "files"],
@@ -114,7 +114,7 @@ function DiscussionCommands({ navigate }: { navigate: (path: string) => void }) 
 
   useCommand("new-discussion", {
     label: "New Discussion",
-    description: "Start a new discussion with Nova and open it in the chat panel",
+    description: "Start a new discussion and open it in the chat panel",
     group: "Discussions",
     shortcut: "Ctrl+N",
     keywords: ["start", "create", "new", "chat"],
@@ -179,8 +179,8 @@ function DiscussionCommands({ navigate }: { navigate: (path: string) => void }) 
   })
 
   useCommand("interrupt-discussion", {
-    label: "Interrupt Nova",
-    description: "Stop Nova's current response in the active discussion (Escape in the chat composer does the same)",
+    label: "Interrupt Response",
+    description: "Stop the current response in the active discussion (Escape in the chat composer does the same)",
     group: "Discussions",
     keywords: ["stop", "cancel", "interrupt", "abort", "escape"],
     enabled: isStreaming,

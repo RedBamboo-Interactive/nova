@@ -7,6 +7,16 @@ export interface DiscussionInfo {
   lastActivity: string
   messageCount: number
   lastReadAt: string | null
+  agentId: string | null
+}
+
+export interface AgentInfo {
+  id: string
+  slug: string
+  name: string
+  description: string | null
+  status: string
+  avatarUrl: string
 }
 
 export interface DiscussionMessage {

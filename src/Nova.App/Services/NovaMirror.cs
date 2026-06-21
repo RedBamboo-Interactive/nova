@@ -31,7 +31,7 @@ public static class NovaMirror
         new
         {
             discussion_id = d.Id,
-            agent = AgentId,
+            agent = d.AgentId ?? AgentId,
             // Nullable title mirrored verbatim — the entity name has a
             // placeholder fallback, so reads can't recover null from it.
             title = d.Title,

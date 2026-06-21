@@ -66,8 +66,11 @@ public partial class App : Application
 
         Engine = new NovaEngine(Config, Memory, LogService);
 
+        var agentResolver = new AgentResolver(Config, LogService);
+        var agentMemoryFactory = new AgentMemoryFactory(Config, Memory, agentResolver, LogService);
+
         _serverCts = new CancellationTokenSource();
-        _server = new StaticServer(Engine, Memory);
+        _server = new StaticServer(Engine, Memory, agentResolver, agentMemoryFactory);
         try
         {
             await _server.StartAsync(Config.Port, _serverCts.Token);

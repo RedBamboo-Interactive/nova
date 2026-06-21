@@ -75,6 +75,7 @@ public class NovaDbContext : DbContext
             e.HasIndex(d => d.Status);
             e.HasIndex(d => d.LastActivity);
             e.HasIndex(d => d.OwnerId);
+            e.HasIndex(d => d.AgentId);
         });
 
         modelBuilder.Entity<ConversationRecord>(e =>
@@ -89,6 +90,7 @@ public class NovaDbContext : DbContext
             e.HasKey(l => l.Id);
             e.HasIndex(l => l.Timestamp);
             e.HasIndex(l => l.Purpose);
+            e.HasIndex(l => l.AgentId);
         });
     }
 }

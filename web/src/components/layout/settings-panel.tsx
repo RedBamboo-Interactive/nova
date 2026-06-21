@@ -207,7 +207,7 @@ export function SettingsPanel({ onClose }: Props) {
           <div className="py-4">
             <SectionHeader>Identity</SectionHeader>
             <p className="text-xs text-muted-a60 mb-3 leading-relaxed">
-              Nova's personality, tone, and behavioral guidelines.
+              Agent personality, tone, and behavioral guidelines.
             </p>
             <textarea
               className="w-full h-56 bg-overlay-6 border border-overlay-10 rounded px-3 py-2 text-xs font-mono text-contrast outline-none focus:border-overlay-20 resize-y"

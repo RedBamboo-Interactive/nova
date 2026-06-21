@@ -14,11 +14,9 @@ namespace Nova.App.Services;
 public sealed class RedLeafDiscussionReader
 {
     private readonly HttpClient _http;
-    private readonly string? _agentId;
 
-    public RedLeafDiscussionReader(string redLeafBaseUrl, JwtService jwtService, string? agentId = null)
+    public RedLeafDiscussionReader(string redLeafBaseUrl, JwtService jwtService)
     {
-        _agentId = agentId;
         var token = jwtService.GenerateAccessToken("system", "system@redsuite", "System", ["admin"]);
         _http = new HttpClient
         {
@@ -31,13 +29,14 @@ public sealed class RedLeafDiscussionReader
     public sealed record DiscussionRead(
         string Id, string? Title, string? SessionId, string Status,
         DateTime CreatedAt, DateTime LastActivity, int MessageCount,
-        DateTime? LastReadAt, string? OwnerId, Guid EntityId);
+        DateTime? LastReadAt, string? OwnerId, Guid EntityId,
+        string? AgentId);
 
     public sealed record MessageRead(
         long Id, string Role, string? Content, string? PartsJson, string? Source,
         string? DiscussionId, DateTime Timestamp);
 
-    public async Task<List<DiscussionRead>> GetDiscussionsAsync()
+    public async Task<List<DiscussionRead>> GetDiscussionsAsync(string? filterAgentId = null)
     {
         // Entities can't be server-sorted by a data key; recent activity is a
         // subset of recently-updated (upserts bump UpdatedAt), so fetch the
@@ -47,14 +46,10 @@ public sealed class RedLeafDiscussionReader
         var discussions = new List<DiscussionRead>();
         foreach (var item in doc.RootElement.GetProperty("items").EnumerateArray())
         {
-            if (_agentId != null)
-            {
-                var data = ParseData(item);
-                var agent = data != null ? Str(data.Value, "agent") : null;
-                if (agent != null && agent != _agentId) continue;
-            }
             var d = MapDiscussion(item);
-            if (d != null) discussions.Add(d);
+            if (d == null) continue;
+            if (filterAgentId != null && d.AgentId != null && d.AgentId != filterAgentId) continue;
+            discussions.Add(d);
         }
         discussions.Sort((a, b) => b.LastActivity.CompareTo(a.LastActivity));
         return discussions;
@@ -123,7 +118,8 @@ public sealed class RedLeafDiscussionReader
             Int(d, "message_count") ?? 0,
             ParseUtc(Str(d, "last_read_at")),
             Str(d, "owner_id"),
-            Guid.Parse(entity.GetProperty("id").GetString()!));
+            Guid.Parse(entity.GetProperty("id").GetString()!),
+            Str(d, "agent"));
     }
 
     private static MessageRead MapMessage(JsonElement rec)

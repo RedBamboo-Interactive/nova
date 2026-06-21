@@ -23,13 +23,17 @@ public class StaticServer
 {
     private readonly NovaEngine _engine;
     private readonly MemoryManager _memory;
+    private readonly AgentResolver _agentResolver;
+    private readonly AgentMemoryFactory _agentMemoryFactory;
     private WebApplication? _app;
     private RedLeafStreamClient? _streamClient;
 
-    public StaticServer(NovaEngine engine, MemoryManager memory)
+    public StaticServer(NovaEngine engine, MemoryManager memory, AgentResolver agentResolver, AgentMemoryFactory agentMemoryFactory)
     {
         _engine = engine;
         _memory = memory;
+        _agentResolver = agentResolver;
+        _agentMemoryFactory = agentMemoryFactory;
     }
 
     public async Task StartAsync(int port, CancellationToken ct)
@@ -56,6 +60,8 @@ public class StaticServer
 
         builder.Services.AddSingleton(_engine);
         builder.Services.AddSingleton(_memory);
+        builder.Services.AddSingleton(_agentResolver);
+        builder.Services.AddSingleton(_agentMemoryFactory);
 
 
         var redSuiteDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RedSuite");
@@ -121,8 +127,8 @@ public class StaticServer
 
         DiscussionEndpoints.Initialize(authFactory, new RedLeafDiscussionReader(
             App.Config.Suite.RedLeaf,
-            new JwtService(new JwtOptions { SigningKey = signingKey }),
-            NovaMirror.AgentId));
+            new JwtService(new JwtOptions { SigningKey = signingKey })),
+            _agentMemoryFactory);
         DelegateEndpoints.Initialize(authFactory);
         ConversationExporter.Initialize(authFactory);
 
@@ -235,11 +241,48 @@ public class StaticServer
             return Results.Redirect("/nova-avatar.png");
         });
 
+        registry.MapGet("/api/agents", "List all active RedLeaf agents", async () =>
+        {
+            var agents = await _agentResolver.GetAgentsAsync();
+            return Results.Ok(agents.Select(a => new
+            {
+                a.Id, a.Slug, a.Name, a.Description, a.Status,
+                avatarUrl = $"/api/agents/{a.Id}/avatar",
+            }));
+        });
+
+        registry.MapGet("/api/agents/{agentId}/avatar", "Proxy an agent's avatar from RedLeaf", async (string agentId, HttpContext ctx) =>
+        {
+            var agent = await _agentResolver.GetAgentAsync(agentId);
+            var avatarUrl = agent != null ? _agentResolver.BuildAvatarUrl(agent.AvatarFilename) : null;
+
+            if (!string.IsNullOrEmpty(avatarUrl))
+            {
+                try
+                {
+                    var jwt = new JwtService(new JwtOptions { SigningKey = signingKey });
+                    var token = jwt.GenerateAccessToken("system", "system@redsuite", "System", ["admin"]);
+                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                    http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+                    var response = await http.GetAsync(avatarUrl);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var contentType = response.Content.Headers.ContentType?.ToString() ?? "image/png";
+                        var bytes = await response.Content.ReadAsByteArrayAsync();
+                        ctx.Response.Headers["Cache-Control"] = "public, max-age=300";
+                        return Results.Bytes(bytes, contentType);
+                    }
+                }
+                catch (Exception ex) { logService.Warn("avatar", $"Agent avatar proxy error: {ex.Message}"); }
+            }
+            return Results.Redirect("/nova-avatar.png");
+        }).WithParam("agentId", "string", required: true, description: "RedLeaf agent entity ID");
+
         registry.MapDiscussionEndpoints(_engine);
         registry.MapAskEndpoints(_engine);
         registry.MapDiscussionExportEndpoints();
         registry.MapSettingsEndpoints(_memory);
-        registry.MapMemoryEndpoints(_memory);
+        registry.MapMemoryEndpoints(_memory, _agentMemoryFactory);
         registry.MapAutomationEndpoints(_engine);
         registry.MapDelegateEndpoints();
         registry.MapCallbackEndpoints();
@@ -384,6 +427,24 @@ public class StaticServer
             cmd.ExecuteNonQuery();
         }
 
+        if (!discColumns.Contains("AgentId"))
+        {
+            cmd.CommandText = "ALTER TABLE Discussions ADD COLUMN AgentId TEXT";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "CREATE INDEX IF NOT EXISTS IX_Discussions_AgentId ON Discussions(AgentId)";
+            cmd.ExecuteNonQuery();
+            if (NovaMirror.AgentId != null)
+            {
+                cmd.CommandText = $"UPDATE Discussions SET AgentId = @aid WHERE AgentId IS NULL";
+                var p = cmd.CreateParameter();
+                p.ParameterName = "@aid";
+                p.Value = NovaMirror.AgentId;
+                cmd.Parameters.Add(p);
+                cmd.ExecuteNonQuery();
+                cmd.Parameters.Clear();
+            }
+        }
+
         cmd.CommandText = "PRAGMA table_info(Conversations)";
         using var reader = cmd.ExecuteReader();
         var columns = new HashSet<string>();
@@ -407,6 +468,20 @@ public class StaticServer
             cmd.CommandText = "ALTER TABLE Conversations ADD COLUMN UserId TEXT";
             cmd.ExecuteNonQuery();
             cmd.CommandText = "CREATE INDEX IF NOT EXISTS IX_Conversations_UserId ON Conversations(UserId)";
+            cmd.ExecuteNonQuery();
+        }
+
+        cmd.CommandText = "PRAGMA table_info(InvocationLogs)";
+        using var invReader = cmd.ExecuteReader();
+        var invColumns = new HashSet<string>();
+        while (invReader.Read()) invColumns.Add(invReader.GetString(1));
+        invReader.Close();
+
+        if (!invColumns.Contains("AgentId"))
+        {
+            cmd.CommandText = "ALTER TABLE InvocationLogs ADD COLUMN AgentId TEXT";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "CREATE INDEX IF NOT EXISTS IX_InvocationLogs_AgentId ON InvocationLogs(AgentId)";
             cmd.ExecuteNonQuery();
         }
     }
