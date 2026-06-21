@@ -685,19 +685,29 @@ public static class DiscussionEndpoints
         var now = DateTime.UtcNow;
         var cutoff = now.AddDays(-2);
 
-        IQueryable<Discussion> contextQuery = db.Discussions
-            .Where(d => d.Status != "archived" || (d.Status == "archived" && d.LastActivity >= cutoff));
+        var baseQuery = db.Discussions
+            .Where(d => d.Status != "archived" || (d.Status == "archived" && d.LastActivity >= cutoff))
+            .WhereCanAccess(userId);
 
+        var ownDiscussions = discussion.AgentId != null
+            ? await baseQuery.Where(d => d.AgentId == discussion.AgentId).OrderByDescending(d => d.LastActivity).ToListAsync()
+            : await baseQuery.OrderByDescending(d => d.LastActivity).ToListAsync();
+
+        List<Discussion>? otherAgentDiscussions = null;
         if (discussion.AgentId != null)
-            contextQuery = contextQuery.Where(d => d.AgentId == discussion.AgentId);
+        {
+            otherAgentDiscussions = await baseQuery
+                .Where(d => d.AgentId != discussion.AgentId && d.Status != "archived")
+                .OrderByDescending(d => d.LastActivity)
+                .Take(5)
+                .ToListAsync();
+        }
 
-        contextQuery = contextQuery.WhereCanAccess(userId);
+        var agentName = discussion.AgentId != null
+            ? (await _agentMemoryFactory!.GetAgentNameAsync(discussion.AgentId))
+            : null;
 
-        var allDiscussions = await contextQuery
-            .OrderByDescending(d => d.LastActivity)
-            .ToListAsync();
-
-        var contextBlock = BuildNovaContext(allDiscussions, discussion.Id, now, device, input);
+        var contextBlock = BuildNovaContext(ownDiscussions, otherAgentDiscussions, currentId: discussion.Id, now, device, input, agentName);
         var priorBlock = priorMessage != null
             ? $"\n<nova-prior-message role=\"assistant\">\n{priorMessage}\n</nova-prior-message>\n"
             : "";
@@ -742,13 +752,16 @@ public static class DiscussionEndpoints
         return new(true, discussion.SessionId, null, null);
     }
 
-    private static string BuildNovaContext(List<Discussion> discussions, string currentId, DateTime now, string device, string input)
+    private static string BuildNovaContext(
+        List<Discussion> discussions, List<Discussion>? otherAgentDiscussions,
+        string currentId, DateTime now, string device, string input, string? agentName)
     {
         var active = discussions.Where(d => d.Status != "archived").ToList();
         var archived = discussions.Where(d => d.Status == "archived" && d.MessageCount > 0).Take(10).ToList();
 
         var sb = new System.Text.StringBuilder();
-        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device}\" input=\"{input}\" discussion=\"{currentId}\">");
+        var agentAttr = agentName != null ? $" agent=\"{agentName}\"" : "";
+        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}>");
 
         if (active.Count > 0)
         {
@@ -765,6 +778,13 @@ public static class DiscussionEndpoints
             sb.Append("\n\nRecently archived:");
             foreach (var d in archived)
                 sb.Append($"\n- [{d.Id}] \"{d.Title ?? "(untitled)"}\" . {d.MessageCount} msgs . archived {FormatRelativeTime(now - d.LastActivity)}");
+        }
+
+        if (otherAgentDiscussions is { Count: > 0 })
+        {
+            sb.Append("\n\nOther agents' active discussions:");
+            foreach (var d in otherAgentDiscussions)
+                sb.Append($"\n- [{d.Id}] \"{d.Title ?? "(untitled)"}\" . {d.MessageCount} msgs . {FormatRelativeTime(now - d.LastActivity)}");
         }
 
         sb.Append("\n</nova-context>");

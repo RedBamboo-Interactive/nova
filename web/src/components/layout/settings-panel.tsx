@@ -66,19 +66,11 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 
 export function SettingsPanel({ onClose }: Props) {
   const localSettings = useLocalSettings()
-  const { settings, saving, updateIdentity, updateDocker } = useSettings()
-  const [identityDraft, setIdentityDraft] = useState("")
-  const [identityDirty, setIdentityDirty] = useState(false)
+  const { settings, saving, updateDocker } = useSettings()
   const [autoStart, setAutoStart] = useState(false)
   const [dockerEnabled, setDockerEnabled] = useState(false)
   const [dockerImage, setDockerImage] = useState("")
   const [dockerDirty, setDockerDirty] = useState(false)
-
-  useEffect(() => {
-    if (settings?.identity && !identityDirty) {
-      setIdentityDraft(settings.identity)
-    }
-  }, [settings?.identity, identityDirty])
 
   useEffect(() => {
     if (settings?.docker && !dockerDirty) {
@@ -200,46 +192,6 @@ export function SettingsPanel({ onClose }: Props) {
                   </div>
                 )}
               </>
-            )}
-          </div>
-
-          {/* Identity */}
-          <div className="py-4">
-            <SectionHeader>Identity</SectionHeader>
-            <p className="text-xs text-muted-a60 mb-3 leading-relaxed">
-              Agent personality, tone, and behavioral guidelines.
-            </p>
-            <textarea
-              className="w-full h-56 bg-overlay-6 border border-overlay-10 rounded px-3 py-2 text-xs font-mono text-contrast outline-none focus:border-overlay-20 resize-y"
-              value={identityDraft}
-              onChange={(e) => {
-                setIdentityDraft(e.target.value)
-                setIdentityDirty(true)
-              }}
-            />
-            {identityDirty && (
-              <div className="flex items-center gap-2 mt-2">
-                <Button
-                  size="sm"
-                  disabled={saving}
-                  onClick={async () => {
-                    await updateIdentity(identityDraft)
-                    setIdentityDirty(false)
-                  }}
-                >
-                  {saving ? "Saving..." : "Save"}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    if (settings) setIdentityDraft(settings.identity)
-                    setIdentityDirty(false)
-                  }}
-                >
-                  Discard
-                </Button>
-              </div>
             )}
           </div>
 
