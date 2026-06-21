@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
+import { MasterDetailLayout, PanelHeader, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@redbamboo/ui"
 import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
 import { useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
@@ -197,14 +197,37 @@ export function ChatView() {
           showAll
         />
       )}
-      <button
-        onClick={() => handleNewDiscussion()}
-        className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
-        title="New discussion"
-      >
-        <i className="fa-solid fa-plus text-xs" />
-        <span>New</span>
-      </button>
+      {multiAgent ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10 cursor-pointer">
+            <i className="fa-solid fa-plus text-xs" />
+            <span>New</span>
+            <i className="fa-solid fa-chevron-down text-[8px] opacity-50" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" sideOffset={4}>
+            {agents.map((agent) => (
+              <DropdownMenuItem key={agent.id} onClick={() => handleNewDiscussion(agent.id)}>
+                <img
+                  src={agent.avatarUrl}
+                  alt={agent.name}
+                  className="w-4 h-4 rounded object-cover"
+                  onError={(e) => { e.currentTarget.style.display = "none" }}
+                />
+                {agent.name}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : (
+        <button
+          onClick={() => handleNewDiscussion()}
+          className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
+          title="New discussion"
+        >
+          <i className="fa-solid fa-plus text-xs" />
+          <span>New</span>
+        </button>
+      )}
     </PanelHeader>
   )
 

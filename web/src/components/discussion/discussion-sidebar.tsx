@@ -47,7 +47,7 @@ export function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, o
                     className="absolute inset-0 w-full h-full rounded-lg object-cover"
                     onError={(e) => { e.currentTarget.style.display = "none" }}
                   />
-                  <div className="absolute -bottom-1 -right-1 scale-75 origin-bottom-right">
+                  <div className="absolute -bottom-1 right-0 scale-75 origin-bottom-right">
                     <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
                   </div>
                 </>
