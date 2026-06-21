@@ -9,6 +9,9 @@ public class NovaConfig
     /// <summary>Quality tier sent to RedCompute when no tier is specified (e.g. new discussions).</summary>
     public string DefaultQualityMode { get; set; } = "standard";
 
+    /// <summary>RedLeaf agent entity ID that this Nova instance represents.</summary>
+    public string? AgentId { get; set; }
+
     public TunnelSettings Tunnel { get; set; } = new();
     public SuiteSettings Suite { get; set; } = new();
 }

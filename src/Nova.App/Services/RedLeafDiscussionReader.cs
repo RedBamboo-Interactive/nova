@@ -14,9 +14,11 @@ namespace Nova.App.Services;
 public sealed class RedLeafDiscussionReader
 {
     private readonly HttpClient _http;
+    private readonly string? _agentId;
 
-    public RedLeafDiscussionReader(string redLeafBaseUrl, JwtService jwtService)
+    public RedLeafDiscussionReader(string redLeafBaseUrl, JwtService jwtService, string? agentId = null)
     {
+        _agentId = agentId;
         var token = jwtService.GenerateAccessToken("system", "system@redsuite", "System", ["admin"]);
         _http = new HttpClient
         {
@@ -45,6 +47,12 @@ public sealed class RedLeafDiscussionReader
         var discussions = new List<DiscussionRead>();
         foreach (var item in doc.RootElement.GetProperty("items").EnumerateArray())
         {
+            if (_agentId != null)
+            {
+                var data = ParseData(item);
+                var agent = data != null ? Str(data.Value, "agent") : null;
+                if (agent != null && agent != _agentId) continue;
+            }
             var d = MapDiscussion(item);
             if (d != null) discussions.Add(d);
         }
@@ -141,6 +149,15 @@ public sealed class RedLeafDiscussionReader
 
     private static DateTime? ParseUtc(string? value) =>
         value != null && DateTimeOffset.TryParse(value, out var t) ? t.UtcDateTime : null;
+
+    private static JsonElement? ParseData(JsonElement entity)
+    {
+        if (!entity.TryGetProperty("data", out var dataEl)) return null;
+        if (dataEl.ValueKind == JsonValueKind.Object) return dataEl;
+        if (dataEl.ValueKind != JsonValueKind.String) return null;
+        using var parsed = JsonDocument.Parse(dataEl.GetString()!);
+        return parsed.RootElement.Clone();
+    }
 
     private static string? Str(JsonElement e, string key) =>
         e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;

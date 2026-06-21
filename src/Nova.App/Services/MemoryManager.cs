@@ -58,6 +58,7 @@ public class MemoryManager
         var path = Path.Combine(RuntimeConfigPath, "identity.md");
         File.WriteAllText(path, content);
         NovaMirror.PublishAgentFile("identity", content);
+        _ = AgentRegistration.UpdateFieldAsync("identity", content, _log);
         _log.Info("memory", "Identity updated");
     }
 
