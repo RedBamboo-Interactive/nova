@@ -117,10 +117,12 @@ public class StaticServer
             "automation-runs", "Automation Runs",
             "Per-trigger automation results", RetentionDays: 90, ParentType: "automation"));
         NovaMirror.Client = _streamClient;
+        NovaMirror.AgentId ??= App.Config.AgentId;
 
         DiscussionEndpoints.Initialize(authFactory, new RedLeafDiscussionReader(
             App.Config.Suite.RedLeaf,
-            new JwtService(new JwtOptions { SigningKey = signingKey })));
+            new JwtService(new JwtOptions { SigningKey = signingKey }),
+            NovaMirror.AgentId));
         DelegateEndpoints.Initialize(authFactory);
         ConversationExporter.Initialize(authFactory);
 
@@ -194,6 +196,44 @@ public class StaticServer
         }).WithParam("path", "string", required: true,
             description: "Absolute path to a local media file (images and videos)",
             location: RedBamboo.AppHost.Discovery.ParamLocation.Query);
+
+        registry.MapGet("/api/avatar", "Proxy the Nova agent avatar from RedLeaf", async (HttpContext ctx) =>
+        {
+            // Lazy-fetch if RedLeaf was down at startup
+            if (string.IsNullOrEmpty(NovaMirror.AvatarUrl))
+            {
+                var fetched = await AgentRegistration.FetchAvatarUrlAsync(App.Config);
+                if (fetched != null)
+                {
+                    NovaMirror.AvatarUrl = fetched;
+                    logService.Info("avatar", $"Lazy-fetched avatar URL: {fetched}");
+                }
+            }
+
+            var avatarUrl = NovaMirror.AvatarUrl;
+            if (!string.IsNullOrEmpty(avatarUrl))
+            {
+                try
+                {
+                    var jwt = new JwtService(new JwtOptions { SigningKey = signingKey });
+                    var token = jwt.GenerateAccessToken("system", "system@redsuite", "System", ["admin"]);
+                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                    http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+                    var response = await http.GetAsync(avatarUrl);
+                    logService.Info("avatar", $"Proxy {avatarUrl} → {(int)response.StatusCode}");
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var contentType = response.Content.Headers.ContentType?.ToString() ?? "image/png";
+                        var bytes = await response.Content.ReadAsByteArrayAsync();
+                        ctx.Response.Headers["Cache-Control"] = "public, max-age=300";
+                        return Results.Bytes(bytes, contentType);
+                    }
+                }
+                catch (Exception ex) { logService.Warn("avatar", $"Proxy error: {ex.Message}"); }
+            }
+            else { logService.Info("avatar", "No avatar on agent entity, using fallback"); }
+            return Results.Redirect("/nova-avatar.png");
+        });
 
         registry.MapDiscussionEndpoints(_engine);
         registry.MapAskEndpoints(_engine);

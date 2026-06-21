@@ -7,46 +7,24 @@ import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
 import { EditableTitle } from "@/components/discussion/editable-title"
 import { NovaStatusLine } from "@/components/nova-status-line"
 import { createNovaSpeechBackend } from "@/lib/speech"
-import { useNovaEmotion } from "@/hooks/use-nova-emotion"
 import { useLocalSettings } from "@/hooks/use-local-settings"
 import { useDisc, useNovaPendingContext } from "@/App"
 import { useSessionStats } from "@/hooks/use-session-stats"
 
 const speechBackend = createNovaSpeechBackend()
 
-const BASE_EYE_HUE = 300 // original magenta
-
-function hexToHue(hex: string): number {
-  const n = parseInt(hex.replace("#", ""), 16)
-  const r = ((n >> 16) & 255) / 255
-  const g = ((n >> 8) & 255) / 255
-  const b = (n & 255) / 255
-  const max = Math.max(r, g, b), min = Math.min(r, g, b)
-  if (max === min) return 0
-  const d = max - min
-  let h = 0
-  if (max === r) h = ((g - b) / d + 6) % 6
-  else if (max === g) h = (b - r) / d + 2
-  else h = (r - g) / d + 4
-  return h * 60
-}
-
 function useAvatarStyle() {
-  const [hueRotation, setHueRotation] = useState("0deg")
   const [opacity, setOpacity] = useState(0.9)
   useEffect(() => {
     const update = () => {
-      const root = document.documentElement
-      const brand = getComputedStyle(root).getPropertyValue("--brand").trim()
-      if (brand) setHueRotation(`${Math.round(hexToHue(brand) - BASE_EYE_HUE)}deg`)
-      setOpacity(root.dataset.contrast === "low" ? 0.7 : 0.9)
+      setOpacity(document.documentElement.dataset.contrast === "low" ? 0.7 : 0.9)
     }
     update()
     const observer = new MutationObserver(update)
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class", "data-contrast"] })
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-contrast"] })
     return () => observer.disconnect()
   }, [])
-  return { hueRotation, opacity }
+  return { opacity }
 }
 
 function resolveImageSrc(src: string): string | undefined {
@@ -209,8 +187,8 @@ export function ChatView() {
     </PanelHeader>
   )
 
-  const { src: avatarSrc } = useNovaEmotion(activeMessages, isStreaming)
-  const { hueRotation: eyeHueRotation, opacity: avatarOpacity } = useAvatarStyle()
+  const avatarSrc = "/api/avatar"
+  const { opacity: avatarOpacity } = useAvatarStyle()
   const { showAvatar: avatarEnabled } = useLocalSettings()
   const showAvatar = avatarEnabled && activeDiscussion && activeMessages.some(m => m.role === "assistant")
 
@@ -264,14 +242,14 @@ export function ChatView() {
     <div className="relative h-full w-full">
       {showAvatar && (
         <div
-          className="absolute top-3 left-1/2 -translate-x-1/2 w-[88px] h-[88px] z-20 pointer-events-none rounded-full overflow-hidden md:hidden p-1.5"
+          className="absolute top-4 left-1/2 -translate-x-1/2 w-[80px] h-[80px] z-20 pointer-events-none rounded-full overflow-hidden md:hidden p-1.5"
           style={{ backgroundColor: "var(--background)" }}
         >
           <img
             src={avatarSrc}
             alt=""
             className="w-full h-full rounded-full object-cover object-top"
-            style={{ filter: `hue-rotate(${eyeHueRotation})`, opacity: avatarOpacity }}
+            style={{ opacity: avatarOpacity }}
           />
         </div>
       )}
@@ -299,7 +277,6 @@ export function ChatView() {
                   src={avatarSrc}
                   alt=""
                   className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
-                  style={{ filter: `hue-rotate(${eyeHueRotation})` }}
                 />
               </div>
             </div>

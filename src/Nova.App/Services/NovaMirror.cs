@@ -14,6 +14,9 @@ namespace Nova.App.Services;
 public static class NovaMirror
 {
     public static RedLeafStreamClient? Client { get; set; }
+    public static string? AgentId { get; set; }
+    public static string? AvatarUrl { get; set; }
+    public static string? UserId { get; set; }
 
     public static string DiscussionSlug(string discussionId)
     {
@@ -28,10 +31,12 @@ public static class NovaMirror
         new
         {
             discussion_id = d.Id,
+            agent = AgentId,
             // Nullable title mirrored verbatim — the entity name has a
             // placeholder fallback, so reads can't recover null from it.
             title = d.Title,
             status = d.Status,
+            owner = UserId,
             owner_id = d.OwnerId,
             session_id = d.SessionId,
             message_count = d.MessageCount,
