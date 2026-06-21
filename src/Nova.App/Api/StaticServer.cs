@@ -144,20 +144,29 @@ public class StaticServer
 
         _app.UseWebSockets();
 
-        var workspaceRoot = Path.GetFullPath(_memory.WorkspacePath);
-        registry.MapGet("/api/file", "Serve an image or video file from Nova's workspace by absolute path", (HttpContext ctx) =>
+        registry.MapGet("/api/file", "Serve a local image or video file by absolute path", (HttpContext ctx) =>
         {
             var path = ctx.Request.Query["path"].ToString();
             if (string.IsNullOrEmpty(path))
                 return ApiError.BadRequest("missing_path", "Query parameter 'path' is required");
 
+            // Claude sometimes emits garbled paths like "C:/.../T:/real/path" —
+            // extract the last drive-letter root so we still resolve correctly.
+            var lastDrive = System.Text.RegularExpressions.Regex.Match(
+                path, @".*([A-Za-z]:[\\\/])", System.Text.RegularExpressions.RegexOptions.Singleline);
+            if (lastDrive.Success && lastDrive.Groups[1].Index > 0)
+                path = path[lastDrive.Groups[1].Index..];
+
             string fullPath;
             try { fullPath = Path.GetFullPath(path); }
             catch { return ApiError.BadRequest("invalid_path", "Path could not be resolved"); }
 
-            if (!IsUnderRoot(fullPath, workspaceRoot))
-                return ApiError.Forbidden("path_outside_workspace",
-                    $"Only files under the Nova workspace ({workspaceRoot}) can be served");
+            // Block UNC paths and system directories
+            if (fullPath.StartsWith(@"\\"))
+                return ApiError.Forbidden("unc_blocked", "UNC paths are not allowed");
+            var sysRoot = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            if (!string.IsNullOrEmpty(sysRoot) && fullPath.StartsWith(sysRoot, StringComparison.OrdinalIgnoreCase))
+                return ApiError.Forbidden("system_blocked", "System directory paths are not allowed");
 
             if (!File.Exists(fullPath))
                 return ApiError.NotFound("not_found", "File not found");
@@ -183,7 +192,7 @@ public class StaticServer
             ctx.Response.Headers["Cache-Control"] = "public, max-age=3600";
             return Results.File(fullPath, mime);
         }).WithParam("path", "string", required: true,
-            description: "Absolute path to an image/video file inside the Nova workspace",
+            description: "Absolute path to a local media file (images and videos)",
             location: RedBamboo.AppHost.Discovery.ParamLocation.Query);
 
         registry.MapDiscussionEndpoints(_engine);
@@ -360,15 +369,6 @@ public class StaticServer
             cmd.CommandText = "CREATE INDEX IF NOT EXISTS IX_Conversations_UserId ON Conversations(UserId)";
             cmd.ExecuteNonQuery();
         }
-    }
-
-    private static bool IsUnderRoot(string fullPath, string root)
-    {
-        var normalizedRoot = Path.TrimEndingDirectorySeparator(root);
-        if (string.Equals(fullPath, normalizedRoot, StringComparison.OrdinalIgnoreCase))
-            return false; // the root itself is a directory, not a servable file
-        return fullPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-            || fullPath.StartsWith(normalizedRoot + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task WaitForPortAsync(int port, CancellationToken ct)
