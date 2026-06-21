@@ -556,7 +556,7 @@ public class AutomationService
         {
             var currentConfig = Deserialize<AiSessionConfig>(existingDreaming.ActionConfigJson);
             var dreamingChanged = false;
-            if (currentConfig.Prompt != dreamingSkill)
+            if (!string.IsNullOrEmpty(dreamingSkill) && currentConfig.Prompt != dreamingSkill)
             {
                 currentConfig.Prompt = dreamingSkill;
                 dreamingChanged = true;
