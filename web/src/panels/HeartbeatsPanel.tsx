@@ -11,6 +11,10 @@ import {
 import { MarkdownRenderer } from "@redbamboo/chat"
 import { useBreadcrumbLabel } from "@redbamboo/utility"
 import { api } from "@/lib/api"
+import { useLocalSettings } from "@/hooks/use-local-settings"
+import { useAgents } from "@/hooks/use-agents"
+import { AgentPicker } from "@/components/agent-picker"
+import { setSettings } from "@/lib/settings-store"
 
 interface Automation {
   name: string
@@ -288,6 +292,11 @@ export function AutomationsPanel() {
   const navigate = useNavigate()
   const [automations, setAutomations] = useState<Automation[]>([])
   const [mobileTab, setMobileTab] = useState(0)
+  const { agents, defaultAgentId } = useAgents()
+  const settings = useLocalSettings()
+  const agentFilter = settings.agentFilter
+  const multiAgent = agents.length > 1
+  const isNovaSelected = !agentFilter || agentFilter === defaultAgentId
 
   const selectedName = urlAutomationName ?? null
 
@@ -371,38 +380,53 @@ export function AutomationsPanel() {
     )
   }
 
+  const visibleAutomations = isNovaSelected ? automations : []
+  const visibleUser = isNovaSelected ? userAutomations : []
+  const visibleSystem = isNovaSelected ? systemAutomations : []
+
   const sidebar = (
     <>
-      <PanelHeader title="Pulse" />
+      <PanelHeader title={multiAgent ? undefined : "Pulse"}>
+        {multiAgent && (
+          <AgentPicker
+            agents={agents}
+            selectedId={agentFilter}
+            onSelect={(id) => setSettings({ agentFilter: id })}
+            showAll
+          />
+        )}
+      </PanelHeader>
       <ScrollArea className="flex-1">
-        {automations.length === 0 ? (
+        {visibleAutomations.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-text-muted">
             <div className="text-center">
               <i className="fa-solid fa-heart-pulse text-2xl mb-3 opacity-30" />
-              <p className="text-sm">No routines yet</p>
-              <p className="text-xs text-text-disabled mt-1">
-                Ask Nova to set one up in chat
-              </p>
+              <p className="text-sm">No routines{!isNovaSelected ? " for this agent" : " yet"}</p>
+              {isNovaSelected && (
+                <p className="text-xs text-text-disabled mt-1">
+                  Ask Nova to set one up in chat
+                </p>
+              )}
             </div>
           </div>
         ) : (
           <div className="flex flex-col">
-            {userAutomations.length > 0 && (
+            {visibleUser.length > 0 && (
               <>
                 <div className="text-[10px] font-medium text-text-disabled uppercase tracking-wider px-4 pt-3 pb-1">
                   User
                 </div>
-                {userAutomations.map((a) => (
+                {visibleUser.map((a) => (
                   <Fragment key={a.name}>{renderRow(a)}</Fragment>
                 ))}
               </>
             )}
-            {systemAutomations.length > 0 && (
+            {visibleSystem.length > 0 && (
               <>
                 <div className="text-[10px] font-medium text-text-disabled uppercase tracking-wider px-4 pt-3 pb-1">
                   System
                 </div>
-                {systemAutomations.map((a) => (
+                {visibleSystem.map((a) => (
                   <Fragment key={a.name}>{renderRow(a, true)}</Fragment>
                 ))}
               </>
