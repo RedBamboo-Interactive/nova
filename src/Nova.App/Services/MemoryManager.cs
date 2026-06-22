@@ -10,8 +10,6 @@ public class MemoryManager
 
     public string WorkspacePath => _workspacePath;
     public string ConfigPath => Path.Combine(_workspacePath, "config");
-    public string RuntimeConfigPath => Path.Combine(_workspacePath, "config", "runtime");
-    public string SeedsPath => Path.Combine(_workspacePath, "config", "seeds");
     public string MemoryPath => Path.Combine(_workspacePath, "memory");
     public string ConversationsPath => Path.Combine(MemoryPath, "conversations");
     public string TopicsPath => Path.Combine(MemoryPath, "topics");
@@ -28,8 +26,7 @@ public class MemoryManager
 
     public void EnsureDirectories()
     {
-        Directory.CreateDirectory(RuntimeConfigPath);
-        Directory.CreateDirectory(SeedsPath);
+        Directory.CreateDirectory(ConfigPath);
         Directory.CreateDirectory(ConversationsPath);
         Directory.CreateDirectory(TopicsPath);
         Directory.CreateDirectory(MetaPath);
@@ -37,25 +34,20 @@ public class MemoryManager
         Directory.CreateDirectory(ProjectsPath);
         Directory.CreateDirectory(DreamingPath);
 
-        EnsureSeedsPopulated();
-        EnsureRuntimeConfig();
+        EnsureConfigFiles();
 
         _log.Info("memory", $"Workspace ready at {_workspacePath}");
     }
 
     public string ReadIdentity()
     {
-        var runtimeIdentity = Path.Combine(RuntimeConfigPath, "identity.md");
-        if (File.Exists(runtimeIdentity))
-            return File.ReadAllText(runtimeIdentity);
-
-        var seedIdentity = Path.Combine(SeedsPath, "identity.md");
-        return File.Exists(seedIdentity) ? File.ReadAllText(seedIdentity) : "";
+        var path = Path.Combine(ConfigPath, "identity.md");
+        return File.Exists(path) ? File.ReadAllText(path) : "";
     }
 
     public void WriteIdentity(string content)
     {
-        var path = Path.Combine(RuntimeConfigPath, "identity.md");
+        var path = Path.Combine(ConfigPath, "identity.md");
         File.WriteAllText(path, content);
         NovaMirror.PublishAgentFile("identity", content);
         _ = AgentRegistration.UpdateFieldAsync("identity", content, _log);
@@ -76,12 +68,8 @@ public class MemoryManager
 
     public string ReadMemoryInstructions()
     {
-        var runtimePath = Path.Combine(RuntimeConfigPath, "memory.md");
-        if (File.Exists(runtimePath))
-            return File.ReadAllText(runtimePath);
-
-        var seedPath = Path.Combine(SeedsPath, "memory.md");
-        return File.Exists(seedPath) ? File.ReadAllText(seedPath) : "";
+        var path = Path.Combine(ConfigPath, "memory.md");
+        return File.Exists(path) ? File.ReadAllText(path) : "";
     }
 
     public string[] GetMemoryManifest()
@@ -144,7 +132,7 @@ public class MemoryManager
 
         var content = $"""
             > **This file is generated. Do not edit it directly.**
-            > To change these instructions, edit the source files in `config/runtime/` or `config/seeds/`.
+            > To change these instructions, edit the source files in `config/`.
             > Sections: identity.md, output_protocol.md, capabilities.md, memory.md
 
             {identity}
@@ -159,7 +147,7 @@ public class MemoryManager
             # Capabilities
             {capabilities}
 
-            Live suite API reference: config/runtime/suite-apis.md — regenerated at every Nova startup from each service's /discover. Trust it over memory.
+            Live suite API reference: config/suite-apis.md — regenerated at every Nova startup from each service's /discover. Trust it over memory.
 
             ---
 
@@ -179,39 +167,26 @@ public class MemoryManager
 
     public string ReadHeartbeats()
     {
-        var path = Path.Combine(RuntimeConfigPath, "heartbeats.md");
+        var path = Path.Combine(ConfigPath, "heartbeats.md");
         return File.Exists(path) ? File.ReadAllText(path) : "";
     }
 
     public void WriteHeartbeats(string content)
     {
-        File.WriteAllText(Path.Combine(RuntimeConfigPath, "heartbeats.md"), content);
+        File.WriteAllText(Path.Combine(ConfigPath, "heartbeats.md"), content);
     }
 
-    private void EnsureSeedsPopulated()
+    private void EnsureConfigFiles()
     {
         foreach (var name in new[] { "identity.md", "memory.md" })
         {
-            var seedPath = Path.Combine(SeedsPath, name);
-            if (File.Exists(seedPath)) continue;
+            var configPath = Path.Combine(ConfigPath, name);
+            if (File.Exists(configPath)) continue;
 
-            var repoSeed = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "nova-workspace", "config", "seeds", name);
+            var repoSeed = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "nova-workspace", "config", name);
             repoSeed = Path.GetFullPath(repoSeed);
             if (File.Exists(repoSeed))
-                File.Copy(repoSeed, seedPath);
-        }
-    }
-
-    private void EnsureRuntimeConfig()
-    {
-        foreach (var name in new[] { "identity.md", "memory.md" })
-        {
-            var runtimePath = Path.Combine(RuntimeConfigPath, name);
-            if (File.Exists(runtimePath)) continue;
-
-            var seed = Path.Combine(SeedsPath, name);
-            if (File.Exists(seed))
-                File.Copy(seed, runtimePath);
+                File.Copy(repoSeed, configPath);
         }
     }
 

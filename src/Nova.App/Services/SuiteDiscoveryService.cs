@@ -13,7 +13,7 @@ namespace Nova.App.Services;
 /// </summary>
 public static class SuiteDiscoveryService
 {
-    private const string OutputPath = "config/runtime/suite-apis.md";
+    private const string OutputPath = "config/suite-apis.md";
 
     public static async Task RefreshAsync(NovaConfig config, MemoryManager memory, LogService log)
     {

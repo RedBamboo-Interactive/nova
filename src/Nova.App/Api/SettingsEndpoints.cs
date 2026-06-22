@@ -45,7 +45,7 @@ public static class SettingsEndpoints
             memory.GenerateClaudeMd();
             return Results.Ok(new { success = true });
         }).WithParam("content", "string", required: true,
-            description: "Full identity markdown (replaces config/runtime/identity.md and regenerates CLAUDE.md)",
+            description: "Full identity markdown (replaces config/identity.md and regenerates CLAUDE.md)",
             location: ParamLocation.Body);
 
         registry.MapPut("/api/settings/docker", "Enable or disable Docker containerization for AI sessions. Set image to a Docker image name to enable, or null/empty to disable.", (DockerSettingsRequest request) =>

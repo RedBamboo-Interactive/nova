@@ -50,7 +50,7 @@ public class AgentMemoryFactory
     {
         if (!string.IsNullOrEmpty(agent.Identity))
         {
-            var path = Path.Combine(memory.RuntimeConfigPath, "identity.md");
+            var path = Path.Combine(memory.ConfigPath, "identity.md");
             File.WriteAllText(path, agent.Identity);
         }
 
@@ -68,7 +68,7 @@ public class AgentMemoryFactory
 
         if (!string.IsNullOrEmpty(agent.MemoryInstructions))
         {
-            var path = Path.Combine(memory.RuntimeConfigPath, "memory.md");
+            var path = Path.Combine(memory.ConfigPath, "memory.md");
             File.WriteAllText(path, agent.MemoryInstructions);
         }
     }
