@@ -604,17 +604,22 @@ public static class DiscussionEndpoints
     {
         memory.GenerateClaudeMd();
 
+        var agentModel = agentId != null ? await _agentMemoryFactory!.GetAgentModelAsync(agentId) : null;
+
         var body = new Dictionary<string, object?>
         {
             ["projectPath"] = memory.WorkspacePath,
             ["qualityTier"] = App.Config.DefaultQualityMode ?? "standard",
         };
 
+        if (agentModel != null)
+            body["model"] = agentModel;
+
         var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
         {
             Content = JsonContent.Create(body, options: JsonOptions),
         };
-        req.Headers.Add("X-Caller-Info", "Nova");
+        req.Headers.Add("X-Caller-Info", "Nova:agent");
         if (ownerId != null)
             req.Headers.Add("X-User-Id", ownerId);
         var resp = await RedCompute.SendAsync(req);
@@ -786,6 +791,12 @@ public static class DiscussionEndpoints
             foreach (var d in otherAgentDiscussions)
                 sb.Append($"\n- [{d.Id}] \"{d.Title ?? "(untitled)"}\" . {d.MessageCount} msgs . {FormatRelativeTime(now - d.LastActivity)}");
         }
+
+        var totalArchived = discussions.Count(d => d.Status == "archived");
+        sb.Append($"\n\nRecall any discussion: curl -s http://localhost:18803/api/discussions/{{id}}/export");
+        sb.Append($"\nSearch all discussions: curl -s \"http://localhost:18803/api/discussions/search?q={{query}}\"");
+        if (totalArchived > archived.Count)
+            sb.Append($"\n({totalArchived} archived total in last 2 days — older ones available via search)");
 
         sb.Append("\n</nova-context>");
         return sb.ToString();

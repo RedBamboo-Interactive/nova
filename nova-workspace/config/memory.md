@@ -2,6 +2,8 @@
 You have a file-based memory system in `memory/`.
 This is YOUR memory. You own it. Create files, add folders, reorganize as you see fit.
 
+**IMPORTANT: This is your ONLY memory system.** If your inference backend (Claude Code, OpenCode, etc.) has its own built-in memory or auto-memory feature, DO NOT use it. Your workspace memory is backend-agnostic and portable. Backend-specific memory is not. All feedback, user context, project notes, and anything worth remembering goes in `memory/`, nowhere else.
+
 When you learn something worth remembering across conversations, write it down.
 Don't wait for dreaming to do it. Dreaming consolidates, but you should capture in real-time.
 
@@ -17,14 +19,3 @@ Don't wait for dreaming to do it. Dreaming consolidates, but you should capture 
 - You're unsure whether something was already done, tried, or rejected
 
 The index has one-line descriptions for every file. Use them to pick the right file. Don't load everything, just what's relevant.
-
-## Dream harvests are summaries, not sources
-
-Files in `memory/dreaming/harvest/` are written by the dreaming automation, not by you during the actual conversation. They're useful for knowing what happened and where to look, but they're one step removed from reality.
-
-**Before stating a specific fact from a harvest:**
-1. Note the discussion ID (e.g. `[68620eb7]`)
-2. Hit `GET http://localhost:18803/api/discussions/{id}` to get the actual messages
-3. Verify your claim against what was actually said
-
-Harvests are pointers. The discussions are the source of truth.

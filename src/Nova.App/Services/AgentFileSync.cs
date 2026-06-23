@@ -19,12 +19,11 @@ namespace Nova.App.Services;
 /// </summary>
 public static class AgentFileSync
 {
-    // file key → path relative to the workspace root (the effective file Nova
-    // reads; runtime overrides live under config/runtime)
+    // file key → path relative to the workspace root
     private static readonly (string Key, string Name, string RuntimePath)[] Files =
     [
-        ("identity", "Identity", "config/runtime/identity.md"),
-        ("memory", "Memory Instructions", "config/runtime/memory.md"),
+        ("identity", "Identity", "config/identity.md"),
+        ("memory", "Memory Instructions", "config/memory.md"),
         ("output-protocol", "Output Protocol", "config/output_protocol.md"),
         ("capabilities", "Capabilities", "config/capabilities.md"),
     ];

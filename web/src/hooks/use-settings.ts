@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect } from "react"
 import { api } from "@/lib/api"
 
 export interface NovaSettings {
-  identity: string
   general: {
     port: number
   }
@@ -30,19 +29,6 @@ export function useSettings() {
     refresh()
   }, [refresh])
 
-  const updateIdentity = useCallback(
-    async (content: string) => {
-      setSaving(true)
-      try {
-        await api.put("/api/settings/identity", { content })
-        await refresh()
-      } finally {
-        setSaving(false)
-      }
-    },
-    [refresh],
-  )
-
   const updateDocker = useCallback(
     async (image: string | null) => {
       setSaving(true)
@@ -56,5 +42,5 @@ export function useSettings() {
     [refresh],
   )
 
-  return { settings, saving, refresh, updateIdentity, updateDocker }
+  return { settings, saving, refresh, updateDocker }
 }

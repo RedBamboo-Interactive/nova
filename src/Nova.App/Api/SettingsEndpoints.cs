@@ -10,14 +10,12 @@ public static class SettingsEndpoints
 {
     public static void MapSettingsEndpoints(this EndpointRegistry registry, MemoryManager memory)
     {
-        registry.MapGet("/api/settings", "Get current settings including identity, docker, tunnel", () =>
+        registry.MapGet("/api/settings", "Get current settings: docker, tunnel", () =>
         {
-            var identity = memory.ReadIdentity();
             var config = App.Config;
 
             return Results.Ok(new
             {
-                identity,
                 general = new
                 {
                     config.Port,
@@ -36,18 +34,6 @@ public static class SettingsEndpoints
             });
         });
 
-        registry.MapPut("/api/settings/identity", "Update Nova's identity", (IdentityUpdateRequest request) =>
-        {
-            if (string.IsNullOrWhiteSpace(request.Content))
-                return Results.BadRequest(new { error = "Identity content is required" });
-
-            memory.WriteIdentity(request.Content);
-            memory.GenerateClaudeMd();
-            return Results.Ok(new { success = true });
-        }).WithParam("content", "string", required: true,
-            description: "Full identity markdown (replaces config/identity.md and regenerates CLAUDE.md)",
-            location: ParamLocation.Body);
-
         registry.MapPut("/api/settings/docker", "Enable or disable Docker containerization for AI sessions. Set image to a Docker image name to enable, or null/empty to disable.", (DockerSettingsRequest request) =>
         {
             App.Config.DockerImage = string.IsNullOrWhiteSpace(request.Image) ? null : request.Image.Trim();
@@ -63,11 +49,6 @@ public static class SettingsEndpoints
             location: ParamLocation.Body);
 
     }
-}
-
-public class IdentityUpdateRequest
-{
-    public string Content { get; set; } = "";
 }
 
 public class DockerSettingsRequest

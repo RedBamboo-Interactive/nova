@@ -159,6 +159,22 @@ Write the harvest to `memory/dreaming/harvest/{yyyy-MM-dd}.md`, grouped by
 source with traceability (discussion IDs, commit hashes, etc). Extract everything
 potentially useful — err on inclusion. You can always compress later.
 
+#### Discussion References
+
+For each substantive discussion processed, create or update a file in
+`memory/conversations/{discussion-id}.md` with:
+
+- Discussion ID and title
+- Date range of the conversation
+- Key topics discussed
+- Decisions made or actions taken
+- Open threads or follow-ups
+
+This creates a persistent, searchable index of past discussions in your memory.
+When you encounter a reference to a past discussion, check this directory first.
+The file gives you the summary; for full content use:
+`curl -s http://localhost:18803/api/discussions/{id}/export`
+
 ### Step 4: Consolidate — Cross-Reference with Existing Memory
 
 Read the memory manifest (Glob for `memory/**/*.md`). For each existing topic and

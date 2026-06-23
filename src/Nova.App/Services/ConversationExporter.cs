@@ -105,6 +105,22 @@ public static class ConversationExporter
         }
     }
 
+    public static async Task<string> ExportSingleAsync(NovaDbContext db, Data.Entities.Discussion disc)
+    {
+        var sb = new StringBuilder();
+
+        var sessionMessages = disc.SessionId is not null
+            ? await FetchSessionMessages(disc.SessionId)
+            : null;
+
+        if (sessionMessages is { Count: > 0 })
+            AppendSessionExport(sb, disc, sessionMessages);
+        else
+            await AppendLocalExport(sb, disc, db);
+
+        return sb.ToString();
+    }
+
     private static async Task<List<SessionMessage>?> FetchSessionMessages(string sessionId)
     {
         var snapshot = await FetchSessionAsync(sessionId);

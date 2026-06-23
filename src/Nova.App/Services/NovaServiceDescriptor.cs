@@ -37,6 +37,7 @@ public class NovaServiceDescriptor : RegistryServiceDescriptor
         "POST /api/discussions/{id}/message",
         "GET /api/discussions/search",
         "GET /api/discussions/export",
+        "GET /api/discussions/{id}/export",
         "POST /api/ask",
     ];
 

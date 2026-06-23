@@ -45,15 +45,6 @@ public class MemoryManager
         return File.Exists(path) ? File.ReadAllText(path) : "";
     }
 
-    public void WriteIdentity(string content)
-    {
-        var path = Path.Combine(ConfigPath, "identity.md");
-        File.WriteAllText(path, content);
-        NovaMirror.PublishAgentFile("identity", content);
-        _ = AgentRegistration.UpdateFieldAsync("identity", content, _log);
-        _log.Info("memory", "Identity updated");
-    }
-
     public string ReadOutputProtocol()
     {
         var path = Path.Combine(ConfigPath, "output_protocol.md");
