@@ -7,6 +7,7 @@ import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
 import { EditableTitle } from "@/components/discussion/editable-title"
 import { AgentPicker } from "@/components/agent-picker"
 import { NovaStatusLine } from "@/components/nova-status-line"
+import { OutfitBrowser } from "@/components/outfit-browser"
 import { createNovaSpeechBackend } from "@/lib/speech"
 import { useLocalSettings } from "@/hooks/use-local-settings"
 import { useAgents } from "@/hooks/use-agents"
@@ -232,10 +233,18 @@ export function ChatView() {
   )
 
   const activeAgent = activeDiscussion ? getAgent(activeDiscussion.agentId) : undefined
-  const avatarSrc = activeAgent ? activeAgent.avatarUrl : "/api/avatar"
   const { opacity: avatarOpacity } = useAvatarStyle()
   const { showAvatar: avatarEnabled } = useLocalSettings()
   const showAvatar = avatarEnabled && activeDiscussion && activeMessages.some(m => m.role === "assistant")
+  const [outfitBrowserOpen, setOutfitBrowserOpen] = useState(false)
+  const [avatarVersion, setAvatarVersion] = useState(0)
+  useEffect(() => {
+    const handler = () => setAvatarVersion(v => v + 1)
+    window.addEventListener("nova:avatar-changed", handler)
+    return () => window.removeEventListener("nova:avatar-changed", handler)
+  }, [])
+  const avatarBase = activeAgent ? activeAgent.avatarUrl : "/api/avatar"
+  const avatarSrc = avatarVersion ? `${avatarBase}?v=${avatarVersion}` : avatarBase
 
   const chatArea = activeDiscussion ? (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
@@ -255,6 +264,7 @@ export function ChatView() {
         speechBackend={speechBackend}
         resolveImageSrc={resolveImageSrc}
         resolveFileLink={resolveFileLink}
+        assistantAvatar={avatarSrc}
         renderStatusLine={({ isStreaming, messages }) => (
           <NovaStatusLine isStreaming={isStreaming} messages={messages} />
         )}
@@ -286,9 +296,11 @@ export function ChatView() {
   return (
     <div className="relative h-full w-full">
       {showAvatar && (
-        <div
-          className="absolute top-4 left-1/2 -translate-x-1/2 w-[80px] h-[80px] z-20 pointer-events-none rounded-full overflow-hidden md:hidden p-1.5"
+        <button
+          onClick={() => setOutfitBrowserOpen(true)}
+          className="absolute top-4 left-1/2 -translate-x-1/2 w-[80px] h-[80px] z-20 rounded-full overflow-hidden md:hidden p-1.5 cursor-pointer group"
           style={{ backgroundColor: "var(--background)" }}
+          title="Browse outfits"
         >
           <img
             src={avatarSrc}
@@ -296,7 +308,10 @@ export function ChatView() {
             className="w-full h-full rounded-full object-cover object-top"
             style={{ opacity: avatarOpacity }}
           />
-        </div>
+          <div className="absolute inset-1.5 rounded-full bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+            <i className="fa-solid fa-shirt text-white/0 group-hover:text-white/70 text-xs transition-colors" />
+          </div>
+        </button>
       )}
       <MasterDetailLayout
         layoutKey="nova-discussions"
@@ -318,20 +333,35 @@ export function ChatView() {
             />
           </div>
           {showAvatar && (
-            <div className="hidden md:flex justify-center px-3 pb-5 pt-2 pointer-events-none" style={{ opacity: avatarOpacity }}>
+            <button
+              onClick={() => setOutfitBrowserOpen(true)}
+              className="hidden md:flex justify-center px-3 pb-5 pt-2 w-full cursor-pointer group"
+              style={{ opacity: avatarOpacity }}
+              title="Browse outfits"
+            >
               <div className="relative w-full max-w-[256px] aspect-square rounded-full overflow-hidden" style={{ backgroundColor: "var(--background)" }}>
                 <img
                   src={avatarSrc}
                   alt=""
                   className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
                 />
+                <div className="absolute inset-0 rounded-full bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                  <i className="fa-solid fa-shirt text-white/0 group-hover:text-white/70 text-lg transition-colors" />
+                </div>
               </div>
-            </div>
+            </button>
           )}
         </>
       }
       detail={chatArea}
     />
+    {outfitBrowserOpen && (
+      <OutfitBrowser
+        onClose={() => setOutfitBrowserOpen(false)}
+        discussionId={activeDiscussionId}
+        agentId={activeDiscussion?.agentId}
+      />
+    )}
     </div>
   )
 }

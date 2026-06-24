@@ -36,6 +36,7 @@ function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<DiscussionsH
     } else if (event.type === "upstream.connected") {
       discRef.current.handleUpstreamReconnect()
     } else {
+      if (event.type === "agent.avatar-changed") window.dispatchEvent(new Event("nova:avatar-changed"))
       discRef.current.handleWsEvent(event as WsEvent)
     }
   })

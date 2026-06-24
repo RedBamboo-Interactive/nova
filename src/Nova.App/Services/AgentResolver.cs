@@ -19,7 +19,8 @@ public record AgentInfo(
     string? OutputProtocol,
     string? Capabilities,
     string? MemoryInstructions,
-    string Status);
+    string Status,
+    string? Provider = null);
 
 public class AgentResolver
 {
@@ -107,12 +108,13 @@ public class AgentResolver
                 var memoryInstructions = data != null ? GetStr(data.Value, "memory_instructions") : null;
                 var status = data != null ? GetStr(data.Value, "status") ?? "active" : "active";
                 var avatarFilename = data != null ? GetAvatarValue(data.Value) : null;
+                var provider = data != null ? GetStr(data.Value, "provider") : null;
 
                 var workspacePath = ResolveWorkspacePath(id, slug);
 
                 agents.Add(new AgentInfo(
                     id, slug, name, description, avatarFilename, workspacePath,
-                    identity, outputProtocol, capabilities, memoryInstructions, status));
+                    identity, outputProtocol, capabilities, memoryInstructions, status, provider));
             }
 
             if (agents.Count == 0)
@@ -189,6 +191,14 @@ public class AgentResolver
 
     private static string? GetAvatarValue(JsonElement data)
     {
+        // Prefer avatar_override (daily outfit changes) over base avatar
+        foreach (var key in new[] { "avatar_override", "avatar-override" })
+        {
+            if (data.TryGetProperty(key, out var ov) && ov.ValueKind == JsonValueKind.String
+                && !string.IsNullOrEmpty(ov.GetString()))
+                return ov.GetString();
+        }
+
         if (!data.TryGetProperty("avatar", out var av)) return null;
         if (av.ValueKind == JsonValueKind.String) return av.GetString();
         if (av.ValueKind == JsonValueKind.Object)

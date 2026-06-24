@@ -1,6 +1,7 @@
 using System.IO;
 using System.Net.Http;
 using System.Net.NetworkInformation;
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -205,18 +206,30 @@ public class StaticServer
 
         registry.MapGet("/api/avatar", "Proxy the Nova agent avatar from RedLeaf", async (HttpContext ctx) =>
         {
-            // Lazy-fetch if RedLeaf was down at startup
-            if (string.IsNullOrEmpty(NovaMirror.AvatarUrl))
+            // Use AgentResolver for fresh avatar (respects avatar_override)
+            string? avatarUrl = null;
+            if (NovaMirror.AgentId != null)
             {
-                var fetched = await AgentRegistration.FetchAvatarUrlAsync(App.Config);
-                if (fetched != null)
-                {
-                    NovaMirror.AvatarUrl = fetched;
-                    logService.Info("avatar", $"Lazy-fetched avatar URL: {fetched}");
-                }
+                var agent = await _agentResolver.GetAgentAsync(NovaMirror.AgentId);
+                if (agent?.AvatarFilename != null)
+                    avatarUrl = _agentResolver.BuildAvatarUrl(agent.AvatarFilename);
             }
 
-            var avatarUrl = NovaMirror.AvatarUrl;
+            // Fallback to cached NovaMirror value
+            if (string.IsNullOrEmpty(avatarUrl))
+            {
+                if (string.IsNullOrEmpty(NovaMirror.AvatarUrl))
+                {
+                    var fetched = await AgentRegistration.FetchAvatarUrlAsync(App.Config);
+                    if (fetched != null)
+                    {
+                        NovaMirror.AvatarUrl = fetched;
+                        logService.Info("avatar", $"Lazy-fetched avatar URL: {fetched}");
+                    }
+                }
+                avatarUrl = NovaMirror.AvatarUrl;
+            }
+
             if (!string.IsNullOrEmpty(avatarUrl))
             {
                 try
@@ -231,7 +244,7 @@ public class StaticServer
                     {
                         var contentType = response.Content.Headers.ContentType?.ToString() ?? "image/png";
                         var bytes = await response.Content.ReadAsByteArrayAsync();
-                        ctx.Response.Headers["Cache-Control"] = "public, max-age=300";
+                        ctx.Response.Headers["Cache-Control"] = "public, max-age=60";
                         return Results.Bytes(bytes, contentType);
                     }
                 }
@@ -269,7 +282,7 @@ public class StaticServer
                     {
                         var contentType = response.Content.Headers.ContentType?.ToString() ?? "image/png";
                         var bytes = await response.Content.ReadAsByteArrayAsync();
-                        ctx.Response.Headers["Cache-Control"] = "public, max-age=300";
+                        ctx.Response.Headers["Cache-Control"] = "public, max-age=60";
                         return Results.Bytes(bytes, contentType);
                     }
                 }
@@ -277,6 +290,204 @@ public class StaticServer
             }
             return Results.Redirect("/nova-avatar.png");
         }).WithParam("agentId", "string", required: true, description: "RedLeaf agent entity ID");
+
+        registry.MapGet("/api/redleaf-asset/{*path}", "Proxy a RedLeaf asset through Nova for tunnel access", async (string path, HttpContext ctx) =>
+        {
+            try
+            {
+                var jwt2 = new JwtService(new JwtOptions { SigningKey = signingKey });
+                var token = jwt2.GenerateAccessToken("system", "system@redsuite", "System", ["admin"]);
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+                var rlBase = App.Config.Suite.RedLeaf.TrimEnd('/');
+                var response = await http.GetAsync($"{rlBase}/api/assets/{path}");
+                if (response.IsSuccessStatusCode)
+                {
+                    var contentType = response.Content.Headers.ContentType?.ToString() ?? "image/png";
+                    var bytes = await response.Content.ReadAsByteArrayAsync();
+                    ctx.Response.Headers["Cache-Control"] = "public, max-age=3600";
+                    return Results.Bytes(bytes, contentType);
+                }
+                return Results.StatusCode((int)response.StatusCode);
+            }
+            catch { return Results.StatusCode(502); }
+        });
+
+        HttpClient BuildRedLeafClient()
+        {
+            var jwt2 = new JwtService(new JwtOptions { SigningKey = signingKey });
+            var token = jwt2.GenerateAccessToken("system", "system@redsuite", "System", ["admin"]);
+            var http = new HttpClient { BaseAddress = new Uri(App.Config.Suite.RedLeaf.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(10) };
+            http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+            return http;
+        }
+
+        JsonElement ParseEntityData(JsonElement entity)
+        {
+            var d = entity.GetProperty("data");
+            return d.ValueKind == JsonValueKind.String ? JsonDocument.Parse(d.GetString()!).RootElement.Clone() : d;
+        }
+
+        string? GetStr(JsonElement obj, string key) =>
+            obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+        registry.MapGet("/api/outfits", "List outfit entities for an agent", async (HttpContext ctx) =>
+        {
+            var agentId = ctx.Request.Query.TryGetValue("agentId", out var aid) && !string.IsNullOrEmpty(aid.ToString())
+                ? aid.ToString() : NovaMirror.AgentId;
+            if (agentId == null) return Results.Ok(new { baseAvatarUrl = "/nova-avatar.png", currentOverride = (string?)null, outfits = Array.Empty<object>() });
+
+            try
+            {
+                using var rl = BuildRedLeafClient();
+                var rlBase = App.Config.Suite.RedLeaf.TrimEnd('/');
+
+                // Fetch agent entity for base avatar + current override
+                var agentResp = await rl.GetStringAsync($"api/entities/{agentId}");
+                using var agentDoc = JsonDocument.Parse(agentResp);
+                var agentData = ParseEntityData(agentDoc.RootElement);
+                var baseAvRaw = GetStr(agentData, "avatar");
+                string baseAvatarUrl;
+                if (baseAvRaw != null)
+                {
+                    var filename = baseAvRaw.Contains('/') ? baseAvRaw.Split('/').Last() : baseAvRaw;
+                    baseAvatarUrl = $"/api/redleaf-asset/{filename}";
+                }
+                else baseAvatarUrl = "/nova-avatar.png";
+
+                string? currentOverride = null;
+                foreach (var key in new[] { "avatar_override", "avatar-override" })
+                    if ((currentOverride = GetStr(agentData, key)) is { Length: > 0 }) break;
+
+                // Fetch outfit entities for this agent, newest first
+                var outfitResp = await rl.GetStringAsync($"api/entities?type=outfit&data.agent={agentId}&sort_by=createdAt&sort_dir=desc&limit=30");
+                using var outfitDoc = JsonDocument.Parse(outfitResp);
+                var items = outfitDoc.RootElement.GetProperty("items");
+
+                var outfits = new List<object>();
+                foreach (var item in items.EnumerateArray())
+                {
+                    var data = ParseEntityData(item);
+                    outfits.Add(new
+                    {
+                        id = item.GetProperty("id").GetString(),
+                        name = item.TryGetProperty("name", out var n) ? n.GetString() : null,
+                        url = GetStr(data, "asset"),
+                        prompt = GetStr(data, "prompt"),
+                        date = item.TryGetProperty("createdAt", out var ca) ? ca.GetString() : null,
+                        active = data.TryGetProperty("active", out var act) && act.ValueKind == JsonValueKind.True,
+                    });
+                }
+
+                return Results.Ok(new { baseAvatarUrl, currentOverride, outfits });
+            }
+            catch (Exception ex)
+            {
+                logService.Warn("outfits", $"List failed: {ex.Message}");
+                return Results.Ok(new { baseAvatarUrl = "/nova-avatar.png", currentOverride = (string?)null, outfits = Array.Empty<object>() });
+            }
+        });
+
+        registry.MapPost("/api/outfits/select", "Select an outfit or reset to base avatar", async (HttpContext ctx) =>
+        {
+            using var reader = new StreamReader(ctx.Request.Body);
+            var body = await reader.ReadToEndAsync();
+            string? url = null;
+            string? outfitId = null;
+            string? discussionId = null;
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                url = doc.RootElement.TryGetProperty("url", out var u) ? u.GetString() : null;
+                outfitId = doc.RootElement.TryGetProperty("outfitId", out var oid) ? oid.GetString() : null;
+                discussionId = doc.RootElement.TryGetProperty("discussionId", out var d) ? d.GetString() : null;
+            }
+            catch { return Results.BadRequest(new { error = "Invalid JSON" }); }
+
+            if (NovaMirror.AgentId == null) return Results.BadRequest(new { error = "No agent configured" });
+
+            try
+            {
+                using var rl = BuildRedLeafClient();
+
+                // Update avatar_override on agent entity
+                var patchBody = new StringContent(
+                    JsonSerializer.Serialize(new { avatar_override = url ?? "" }),
+                    System.Text.Encoding.UTF8, "application/json");
+                var resp = await rl.PatchAsync($"api/entities/{NovaMirror.AgentId}/data", patchBody);
+                if (!resp.IsSuccessStatusCode) return Results.StatusCode(502);
+
+                // Mark the selected outfit as active, deactivate others
+                if (!string.IsNullOrEmpty(outfitId))
+                {
+                    var allResp = await rl.GetStringAsync($"api/entities?type=outfit&data.agent={NovaMirror.AgentId}&data.active=true&limit=50");
+                    using var allDoc = JsonDocument.Parse(allResp);
+                    foreach (var item in allDoc.RootElement.GetProperty("items").EnumerateArray())
+                    {
+                        var id = item.GetProperty("id").GetString();
+                        if (id == outfitId) continue;
+                        var deactivate = new StringContent("{\"active\":false}", System.Text.Encoding.UTF8, "application/json");
+                        await rl.PatchAsync($"api/entities/{id}/data", deactivate);
+                    }
+                    var activate = new StringContent("{\"active\":true}", System.Text.Encoding.UTF8, "application/json");
+                    await rl.PatchAsync($"api/entities/{outfitId}/data", activate);
+                }
+
+                await _agentResolver.GetAgentsAsync(forceRefresh: true);
+
+                // Broadcast avatar change to all connected frontends
+                _app.Services.GetService<WebSocketBroadcaster>()
+                    ?.Broadcast("agent.avatar-changed", new { agentId = NovaMirror.AgentId, url = url ?? "" });
+
+                // Notify Nova via discussion event
+                if (!string.IsNullOrEmpty(discussionId))
+                {
+                    var outfitLabel = string.IsNullOrEmpty(url) ? "base avatar" : "a new outfit";
+                    using var novaHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                    var eventBody = new StringContent(
+                        JsonSerializer.Serialize(new { type = "outfit-change", content = $"Laurent changed your outfit to {outfitLabel}." }),
+                        System.Text.Encoding.UTF8, "application/json");
+                    await novaHttp.PostAsync($"http://localhost:18803/api/discussions/{discussionId}/event", eventBody);
+                }
+
+                return Results.Ok(new { success = true, url = url ?? "" });
+            }
+            catch (Exception ex)
+            {
+                logService.Warn("outfits", $"Select failed: {ex.Message}");
+                return Results.StatusCode(502);
+            }
+        });
+
+        registry.MapPost("/api/outfits", "Create a new outfit entity", async (HttpContext ctx) =>
+        {
+            using var reader = new StreamReader(ctx.Request.Body);
+            var body = await reader.ReadToEndAsync();
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                var assetUrl = doc.RootElement.GetProperty("url").GetString();
+                var prompt = doc.RootElement.TryGetProperty("prompt", out var p) ? p.GetString() : null;
+                var name = doc.RootElement.TryGetProperty("name", out var n) ? n.GetString() : "Outfit";
+
+                using var rl = BuildRedLeafClient();
+                var createBody = new StringContent(JsonSerializer.Serialize(new
+                {
+                    name,
+                    type_slug = "outfit",
+                    data = new { agent = NovaMirror.AgentId, asset = assetUrl, prompt, active = false }
+                }), System.Text.Encoding.UTF8, "application/json");
+
+                var resp = await rl.PostAsync("api/entities", createBody);
+                var respBody = await resp.Content.ReadAsStringAsync();
+                using var respDoc = JsonDocument.Parse(respBody);
+                return Results.Ok(new { success = true, id = respDoc.RootElement.GetProperty("id").GetString() });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
 
         registry.MapDiscussionEndpoints(_engine);
         registry.MapAskEndpoints(_engine);
@@ -288,6 +499,10 @@ public class StaticServer
         registry.MapCallbackEndpoints();
 
         var broadcaster = _app.Services.GetService<WebSocketBroadcaster>();
+        broadcaster?.RegisterEvent(new WsEventSchema(
+            "agent.avatar-changed",
+            "Fired when an agent's avatar override is updated (outfit change).",
+            Fields: ["agentId", "url"]));
         broadcaster?.RegisterEvent(new WsEventSchema(
             "discussion.event",
             "Fired when an automation or system event is injected into a discussion with a live session " +
