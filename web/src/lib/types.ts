@@ -27,7 +27,7 @@ export interface DiscussionMessage {
 }
 
 export interface MessagePartDto {
-  type: "text" | "tool_use" | "tool_result"
+  type: "text" | "tool_use" | "tool_result" | "audio"
   content: string
   toolName?: string
   toolInput?: string

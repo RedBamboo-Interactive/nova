@@ -237,7 +237,15 @@ public static class DiscussionEndpoints
                 {
                     id = m.Id.ToString(),
                     role = m.Role,
-                    parts = new[] { new { type = "text", content = m.Content } },
+                    parts = !string.IsNullOrEmpty(m.PartsJson)
+                        ? System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement[]>(m.PartsJson)!
+                            .Select(p => new {
+                                type = p.TryGetProperty("type", out var t) ? t.GetString() : "text",
+                                content = p.TryGetProperty("content", out var c) ? c.GetString() : "",
+                                toolName = p.TryGetProperty("toolName", out var tn) ? tn.GetString() : (string?)null,
+                                toolInput = p.TryGetProperty("toolInput", out var ti) ? ti.GetString() : (string?)null,
+                            }).ToArray()
+                        : new[] { new { type = "text", content = m.Content, toolName = (string?)null, toolInput = (string?)null } },
                     timestamp = m.Timestamp.ToString("o"),
                 }),
             });
@@ -509,9 +517,12 @@ public static class DiscussionEndpoints
             {
                 try
                 {
+                    var injectBody = string.IsNullOrEmpty(request.AudioUrl)
+                        ? (object)new { role = "assistant", content = request.Content }
+                        : new { role = "assistant", content = request.Content, audioUrl = request.AudioUrl };
                     var resp = await RedCompute.PostAsJsonAsync(
                         $"/ai-session/sessions/{discussion.SessionId}/inject",
-                        new { role = "assistant", content = request.Content }, JsonOptions);
+                        injectBody, JsonOptions);
                     resp.EnsureSuccessStatusCode();
                 }
                 catch
@@ -521,11 +532,20 @@ public static class DiscussionEndpoints
                 }
             }
 
+            string? partsJson = null;
+            if (!string.IsNullOrEmpty(request.AudioUrl))
+            {
+                var parts = new List<object> { new { type = "text", content = request.Content } };
+                parts.Add(new { type = "audio", content = request.AudioUrl });
+                partsJson = System.Text.Json.JsonSerializer.Serialize(parts);
+            }
+
             db.Conversations.Add(new ConversationRecord
             {
                 ContextId = id,
                 Role = "assistant",
                 Content = request.Content,
+                PartsJson = partsJson,
                 Source = "nova-message",
                 UserId = userId,
             });
@@ -543,6 +563,7 @@ public static class DiscussionEndpoints
             {
                 discussionId = id,
                 content = request.Content,
+                audioUrl = request.AudioUrl,
             });
 
             return Results.Ok(new { success = true });
@@ -604,7 +625,7 @@ public static class DiscussionEndpoints
     {
         memory.GenerateClaudeMd();
 
-        var agentModel = agentId != null ? await _agentMemoryFactory!.GetAgentModelAsync(agentId) : null;
+        var agentProvider = agentId != null ? await _agentMemoryFactory!.GetAgentProviderAsync(agentId) : null;
 
         var body = new Dictionary<string, object?>
         {
@@ -612,8 +633,8 @@ public static class DiscussionEndpoints
             ["qualityTier"] = App.Config.DefaultQualityMode ?? "standard",
         };
 
-        if (agentModel != null)
-            body["model"] = agentModel;
+        if (agentProvider != null)
+            body["provider"] = agentProvider;
 
         var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
         {
@@ -901,6 +922,7 @@ public class NovaMessageRequest
 {
     public string Content { get; set; } = "";
     public string? Title { get; set; }
+    public string? AudioUrl { get; set; }
 }
 
 public class DiscussionMessageRequest

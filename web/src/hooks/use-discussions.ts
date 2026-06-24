@@ -11,7 +11,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
     id: m.id,
     role: m.role,
     parts: m.parts.map((p): MessagePart => ({
-      type: p.type === "tool_use" || p.type === "tool_result" ? p.type : "text",
+      type: p.type === "tool_use" || p.type === "tool_result" ? p.type : p.type === "audio" ? "audio" : "text",
       content: p.content,
       toolName: p.toolName,
       toolInput: p.toolInput,
@@ -92,6 +92,28 @@ export function useDiscussions() {
     } catch { /* images endpoint may not exist yet */ }
   }, [])
 
+  const hydrateAudio = useCallback(async (discussionId: string) => {
+    try {
+      const data = await api.get<{ messages: DiscussionMessage[] }>(`/api/discussions/${discussionId}`)
+      const audioMessages = data.messages?.filter(m => m.parts.some(p => p.type === "audio")) ?? []
+      if (!audioMessages.length) return
+
+      setMessages((prev) => {
+        const blocks = prev[discussionId]
+        if (!blocks) return prev
+        const updated = blocks.map((block) => {
+          if (block.role !== "assistant" || block.parts.some(p => p.type === "audio")) return block
+          const match = audioMessages.find(m => block.parts[0]?.content && m.parts[0]?.content === block.parts[0].content)
+          if (!match) return block
+          const audioPart = match.parts.find(p => p.type === "audio")
+          if (!audioPart) return block
+          return { ...block, parts: [...block.parts, { type: "audio" as const, content: audioPart.content }] }
+        })
+        return { ...prev, [discussionId]: updated }
+      })
+    } catch { /* discussion endpoint may not exist */ }
+  }, [])
+
   const loadMessages = useCallback(async (id: string) => {
     if (loadedRef.current.has(id)) return
 
@@ -111,6 +133,7 @@ export function useDiscussions() {
         if (data.messages?.length) {
           setMessages((prev) => ({ ...prev, [id]: rebuildBlocks(data.messages) }))
           hydrateImages(id)
+          hydrateAudio(id)
           return
         }
       } catch {
@@ -375,14 +398,16 @@ export function useDiscussions() {
         return { ...prev, [discussionId]: [...current, newBlock] }
       })
     } else if (event.type === "discussion.nova-message") {
-      const { discussionId, content } = event.data as { discussionId: string; content: string }
+      const { discussionId, content, audioUrl } = event.data as { discussionId: string; content: string; audioUrl?: string }
       if (!discussionId) return
       setMessages((prev) => {
         const current = prev[discussionId] ?? []
+        const parts: import("@redbamboo/chat").MessagePart[] = [{ type: "text", content }]
+        if (audioUrl) parts.push({ type: "audio", content: audioUrl })
         const newBlock: import("@redbamboo/chat").MessageBlock = {
           id: `nova-msg-${Date.now()}`,
           role: "assistant",
-          parts: [{ type: "text", content }],
+          parts,
           timestamp: new Date().toISOString(),
         }
         return { ...prev, [discussionId]: [...current, newBlock] }
