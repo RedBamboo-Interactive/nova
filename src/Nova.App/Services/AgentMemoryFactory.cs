@@ -79,6 +79,12 @@ public class AgentMemoryFactory
         return agent?.Name;
     }
 
+    public async Task<string?> GetAgentProviderAsync(string agentId)
+    {
+        var agent = await _resolver.GetAgentAsync(agentId);
+        return agent?.Provider;
+    }
+
     public void InvalidateCache(string? agentId = null)
     {
         if (agentId != null)

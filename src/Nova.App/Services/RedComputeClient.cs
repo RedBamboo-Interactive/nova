@@ -30,13 +30,13 @@ public class RedComputeClient : IDisposable
             BaseAddress = new Uri(_baseUrl),
             Timeout = TimeSpan.FromSeconds(7200)
         };
-        _http.DefaultRequestHeaders.Add("X-Caller-Info", "Nova");
+        _http.DefaultRequestHeaders.Add("X-Caller-Info", "Nova:agent");
     }
 
     public void SetAuthFactory(AuthenticatedHttpClientFactory factory)
     {
         var newClient = factory.CreateClient(_baseUrl, TimeSpan.FromSeconds(7200));
-        newClient.DefaultRequestHeaders.Add("X-Caller-Info", "Nova");
+        newClient.DefaultRequestHeaders.Add("X-Caller-Info", "Nova:agent");
         _http = newClient;
     }
 

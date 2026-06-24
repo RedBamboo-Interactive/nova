@@ -126,34 +126,23 @@ public static class AgentRegistration
             _log?.Info("agent-reg", "No avatar field on agent entity");
         }
 
-        if (remoteIdentity == localIdentity &&
-            remoteProtocol == localProtocol &&
-            remoteCapabilities == localCapabilities)
-            return;
+        var patch = new Dictionary<string, object?>();
+        if (remoteIdentity != localIdentity) patch["identity"] = localIdentity;
+        if (remoteProtocol != localProtocol) patch["output_protocol"] = localProtocol;
+        if (remoteCapabilities != localCapabilities) patch["capabilities"] = localCapabilities;
 
-        // Rebuild data with updated fields, preserving other keys
-        var updated = new Dictionary<string, object?>();
-        foreach (var prop in data.Value.EnumerateObject())
-        {
-            updated[prop.Name] = prop.Name switch
-            {
-                "identity" => localIdentity,
-                "output_protocol" => localProtocol,
-                "capabilities" => localCapabilities,
-                _ => prop.Value.Clone(),
-            };
-        }
-        if (!updated.ContainsKey("identity")) updated["identity"] = localIdentity;
-        if (!updated.ContainsKey("output_protocol")) updated["output_protocol"] = localProtocol;
-        if (!updated.ContainsKey("capabilities")) updated["capabilities"] = localCapabilities;
+        if (patch.Count == 0) return;
 
-        var body = JsonSerializer.Serialize(new { name = "Nova", type_slug = "agent", data = updated });
+        var entityId = root.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
+        if (entityId == null) return;
+
+        var body = JsonSerializer.Serialize(patch);
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
-        var putResp = await _http.PutAsync($"api/entities/by-slug/{AgentSlug}", content);
-        if (putResp.IsSuccessStatusCode)
-            _log?.Info("agent-reg", "Synced identity fields to agent entity");
+        var patchResp = await _http.PatchAsync($"api/entities/{entityId}/data", content);
+        if (patchResp.IsSuccessStatusCode)
+            _log?.Info("agent-reg", $"Synced {patch.Count} field(s) to agent entity");
         else
-            _log?.Warn("agent-reg", $"Failed to sync identity fields: {(int)putResp.StatusCode}");
+            _log?.Warn("agent-reg", $"Failed to sync identity fields: {(int)patchResp.StatusCode}");
     }
 
     /// <summary>
@@ -199,26 +188,19 @@ public static class AgentRegistration
     {
         try
         {
-            var redSuiteDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RedSuite");
-            var signingKey = SigningKeyPersistence.EnsureSigningKey(redSuiteDir);
             using var http = BuildClient(new NovaConfig { Suite = { RedLeaf = "http://localhost:18804" } });
 
             var resp = await http.GetAsync($"api/entities/{AgentSlug}");
             if (!resp.IsSuccessStatusCode) return;
 
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-            var data = ParseData(doc.RootElement);
-            if (data == null) return;
+            var entityId = doc.RootElement.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
+            if (entityId == null) return;
 
-            var updated = new Dictionary<string, object?>();
-            foreach (var prop in data.Value.EnumerateObject())
-                updated[prop.Name] = prop.Name == fieldName ? value : (object)prop.Value.Clone();
-            updated[fieldName] = value;
-
-            var body = JsonSerializer.Serialize(new { name = "Nova", type_slug = "agent", data = updated });
+            var patch = new Dictionary<string, object?> { [fieldName] = value };
+            var body = JsonSerializer.Serialize(patch);
             using var content = new StringContent(body, Encoding.UTF8, "application/json");
-            await http.PutAsync($"api/entities/by-slug/{AgentSlug}", content);
+            await http.PatchAsync($"api/entities/{entityId}/data", content);
         }
         catch (Exception ex)
         {
