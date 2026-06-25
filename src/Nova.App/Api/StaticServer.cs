@@ -28,6 +28,7 @@ public class StaticServer
     private readonly AgentMemoryFactory _agentMemoryFactory;
     private WebApplication? _app;
     private RedLeafStreamClient? _streamClient;
+    private AvatarWatcher? _avatarWatcher;
 
     public StaticServer(NovaEngine engine, MemoryManager memory, AgentResolver agentResolver, AgentMemoryFactory agentMemoryFactory)
     {
@@ -192,11 +193,13 @@ public class StaticServer
                 ".webm" => "video/webm",
                 ".mp4" => "video/mp4",
                 ".mov" => "video/quicktime",
-                ".ogg" => "video/ogg",
+                ".ogg" => "audio/ogg",
+                ".mp3" => "audio/mpeg",
+                ".wav" => "audio/wav",
                 _ => (string?)null
             };
             if (mime == null)
-                return ApiError.Forbidden("unsupported_type", "Only image and video files can be served");
+                return ApiError.Forbidden("unsupported_type", "Only media files can be served");
 
             ctx.Response.Headers["Cache-Control"] = "public, max-age=3600";
             return Results.File(fullPath, mime);
@@ -447,7 +450,7 @@ public class StaticServer
                     var eventBody = new StringContent(
                         JsonSerializer.Serialize(new { type = "outfit-change", content = $"Laurent changed your outfit to {outfitLabel}." }),
                         System.Text.Encoding.UTF8, "application/json");
-                    await novaHttp.PostAsync($"http://localhost:18803/api/discussions/{discussionId}/event", eventBody);
+                    await novaHttp.PostAsync($"http://127.0.0.1:18803/api/discussions/{discussionId}/event", eventBody);
                 }
 
                 return Results.Ok(new { success = true, url = url ?? "" });
@@ -571,10 +574,23 @@ public class StaticServer
         }
 
         await _app.StartAsync(ct);
+
+        var wsBroadcaster = _app.Services.GetService<WebSocketBroadcaster>();
+        if (wsBroadcaster != null)
+        {
+            _avatarWatcher = new AvatarWatcher(App.Config, _agentResolver, wsBroadcaster, App.LogService);
+            _avatarWatcher.Start(ct);
+        }
     }
 
     public async Task StopAsync()
     {
+        if (_avatarWatcher != null)
+        {
+            await _avatarWatcher.StopAsync();
+            _avatarWatcher = null;
+        }
+
         NovaMirror.Client = null;
         if (_streamClient != null)
         {

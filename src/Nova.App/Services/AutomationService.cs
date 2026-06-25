@@ -267,7 +267,7 @@ public class AutomationService
                 automation.ReportToDiscussionId = discussionId;
                 prompt = $"<nova-context pre-created-discussion=\"{discussionId}\">\n"
                     + $"A discussion has already been created for you with ID: {discussionId}.\n"
-                    + $"Post your content to it using: POST http://localhost:18803/api/discussions/{discussionId}/nova-message\n"
+                    + $"Post your content to it using: POST http://127.0.0.1:18803/api/discussions/{discussionId}/nova-message\n"
                     + "Do NOT create a new discussion — use the one provided.\n"
                     + "</nova-context>\n\n" + prompt;
             }
@@ -399,7 +399,7 @@ public class AutomationService
                 """;
 
             await _http.PostAsJsonAsync(
-                $"http://localhost:18803/api/discussions/{discussionId}/event",
+                $"http://127.0.0.1:18803/api/discussions/{discussionId}/event",
                 new { content = eventContent, source = automation.Name }, ct);
         }
         catch (Exception ex)
@@ -422,7 +422,7 @@ public class AutomationService
                 """;
 
             await _http.PostAsJsonAsync(
-                $"http://localhost:18803/api/discussions/{discussionId}/event",
+                $"http://127.0.0.1:18803/api/discussions/{discussionId}/event",
                 new { content = eventContent, source = automation.Name }, ct);
         }
         catch (Exception ex)
@@ -436,7 +436,7 @@ public class AutomationService
         try
         {
             var response = await _http.GetAsync(
-                $"http://localhost:18803/api/discussions/{discussionId}", ct);
+                $"http://127.0.0.1:18803/api/discussions/{discussionId}", ct);
             if (!response.IsSuccessStatusCode) return null;
 
             using var doc = await JsonDocument.ParseAsync(
@@ -650,7 +650,7 @@ public class AutomationService
 
             Inject your greeting using the pre-created discussion ID:
             ```bash
-            curl -s -X POST http://localhost:18803/api/discussions/{id}/nova-message -H "Content-Type: application/json" -d '{"content": "your greeting here", "title": "A casual title for the discussion"}'
+            curl -s -X POST http://127.0.0.1:18803/api/discussions/{id}/nova-message -H "Content-Type: application/json" -d '{"content": "your greeting here", "title": "A casual title for the discussion"}'
             ```
 
             The title should be creative and different each day. Something that hints at the vibe, not a label.

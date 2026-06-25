@@ -814,8 +814,8 @@ public static class DiscussionEndpoints
         }
 
         var totalArchived = discussions.Count(d => d.Status == "archived");
-        sb.Append($"\n\nRecall any discussion: curl -s http://localhost:18803/api/discussions/{{id}}/export");
-        sb.Append($"\nSearch all discussions: curl -s \"http://localhost:18803/api/discussions/search?q={{query}}\"");
+        sb.Append($"\n\nRecall any discussion: curl -s http://127.0.0.1:18803/api/discussions/{{id}}/export");
+        sb.Append($"\nSearch all discussions: curl -s \"http://127.0.0.1:18803/api/discussions/search?q={{query}}\"");
         if (totalArchived > archived.Count)
             sb.Append($"\n({totalArchived} archived total in last 2 days — older ones available via search)");
 

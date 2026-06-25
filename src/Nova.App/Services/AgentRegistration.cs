@@ -117,7 +117,7 @@ public static class AgentRegistration
         _log?.Info("agent-reg", $"Avatar field raw: {(data.Value.TryGetProperty("avatar", out var rawAv) ? rawAv.ToString() : "(missing)")}");
         if (!string.IsNullOrEmpty(avatarValue))
         {
-            var redLeafBase = _http?.BaseAddress?.ToString() ?? "http://localhost:18804/";
+            var redLeafBase = _http?.BaseAddress?.ToString() ?? "http://127.0.0.1:18804/";
             NovaMirror.AvatarUrl = BuildAvatarUrl(avatarValue, redLeafBase);
             _log?.Info("agent-reg", $"Avatar URL set: {NovaMirror.AvatarUrl}");
         }
@@ -188,7 +188,7 @@ public static class AgentRegistration
     {
         try
         {
-            using var http = BuildClient(new NovaConfig { Suite = { RedLeaf = "http://localhost:18804" } });
+            using var http = BuildClient(new NovaConfig { Suite = { RedLeaf = "http://127.0.0.1:18804" } });
 
             var resp = await http.GetAsync($"api/entities/{AgentSlug}");
             if (!resp.IsSuccessStatusCode) return;

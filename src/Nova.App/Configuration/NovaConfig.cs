@@ -19,10 +19,10 @@ public class NovaConfig
 /// <summary>Base URLs of the sibling Red Suite services.</summary>
 public class SuiteSettings
 {
-    public string RedCompute { get; set; } = "http://localhost:18800";
-    public string CodeRed { get; set; } = "http://localhost:18801";
-    public string RedMatter { get; set; } = "http://localhost:18802";
-    public string RedLeaf { get; set; } = "http://localhost:18804";
+    public string RedCompute { get; set; } = "http://127.0.0.1:18800";
+    public string CodeRed { get; set; } = "http://127.0.0.1:18801";
+    public string RedMatter { get; set; } = "http://127.0.0.1:18802";
+    public string RedLeaf { get; set; } = "http://127.0.0.1:18804";
 }
 
 public class TunnelSettings

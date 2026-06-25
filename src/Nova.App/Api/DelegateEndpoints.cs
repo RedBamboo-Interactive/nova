@@ -168,7 +168,7 @@ public static class DelegateEndpoints
             {
                 try
                 {
-                    var callbackUrl = $"http://localhost:18803/api/callbacks/session-complete?discussionId={request.DiscussionId}";
+                    var callbackUrl = $"http://127.0.0.1:18803/api/callbacks/session-complete?discussionId={request.DiscussionId}";
                     var cbResp = await RedCompute.PostAsJsonAsync(
                         $"/ai-session/sessions/{sessionId}/callback",
                         new { url = callbackUrl }, JsonOptions);

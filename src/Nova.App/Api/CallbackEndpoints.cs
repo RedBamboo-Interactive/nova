@@ -48,7 +48,7 @@ public static class CallbackEndpoints
             try
             {
                 await Http.PostAsJsonAsync(
-                    $"http://localhost:18803/api/discussions/{discussionId}/event",
+                    $"http://127.0.0.1:18803/api/discussions/{discussionId}/event",
                     new { content = eventContent, source = $"delegate:{sessionId}" });
             }
             catch (Exception ex)
