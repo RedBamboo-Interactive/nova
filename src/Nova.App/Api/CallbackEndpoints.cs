@@ -96,16 +96,21 @@ public static class CallbackEndpoints
                 return Results.BadRequest(new { error = "sessionId and replyTo are required" });
 
             // Fetch the session history to extract the actual response
+            // Small delay to ensure messages are persisted before we read them
+            await Task.Delay(1000);
+
             string responseContent;
             try
             {
                 var resp = await RedCompute.GetAsync($"/ai-session/sessions/{sessionId}");
                 resp.EnsureSuccessStatusCode();
-                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+                var rawJson = await resp.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(rawJson);
                 var messages = doc.RootElement.GetProperty("messages");
 
-                // Find the last user message index, then collect all assistant text after it
                 var allMessages = messages.EnumerateArray().ToList();
+                App.LogService.Info("callbacks", $"Agent response: session {sessionId} has {allMessages.Count} messages");
+
                 var lastUserIdx = -1;
                 for (int i = allMessages.Count - 1; i >= 0; i--)
                 {
@@ -128,6 +133,7 @@ public static class CallbackEndpoints
                 }
 
                 responseContent = string.Join("", responseParts);
+                App.LogService.Info("callbacks", $"Agent response: extracted {responseParts.Count} parts, content='{responseContent}'");
                 if (string.IsNullOrWhiteSpace(responseContent))
                     responseContent = "(no response)";
             }

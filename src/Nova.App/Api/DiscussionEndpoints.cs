@@ -491,6 +491,18 @@ public static class DiscussionEndpoints
                     senderAgentId = request.SenderAgentId,
                 });
 
+                if (request.SenderAgentId is not null && request.ReplyToDiscussionId is not null)
+                {
+                    try
+                    {
+                        var callbackUrl = $"http://127.0.0.1:18803/api/callbacks/agent-response?replyTo={request.ReplyToDiscussionId}&agentId={discussion.AgentId}";
+                        await RedCompute.PostAsJsonAsync(
+                            $"/ai-session/sessions/{discussion.SessionId}/callback",
+                            new { url = callbackUrl, force = true }, JsonOptions);
+                    }
+                    catch { }
+                }
+
                 try
                 {
                     object messageBody = request.SenderAgentId is not null
@@ -501,18 +513,6 @@ public static class DiscussionEndpoints
                         messageBody, JsonOptions);
                 }
                 catch { }
-
-                if (request.SenderAgentId is not null && request.ReplyToDiscussionId is not null)
-                {
-                    try
-                    {
-                        var callbackUrl = $"http://127.0.0.1:18803/api/callbacks/agent-response?replyTo={request.ReplyToDiscussionId}&agentId={discussion.AgentId}";
-                        await RedCompute.PostAsJsonAsync(
-                            $"/ai-session/sessions/{discussion.SessionId}/callback",
-                            new { url = callbackUrl }, JsonOptions);
-                    }
-                    catch { }
-                }
             }
 
             return Results.Ok(new { success = true });
