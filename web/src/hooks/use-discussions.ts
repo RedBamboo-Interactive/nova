@@ -17,6 +17,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
       toolInput: p.toolInput,
     })),
     timestamp: m.timestamp,
+    senderAgentId: m.senderAgentId,
   }))
 }
 
@@ -385,7 +386,7 @@ export function useDiscussions() {
       )
       if (!wasArchived) api.put(`/api/discussions/${discId}/stopped`).catch(() => {})
     } else if (event.type === "discussion.event") {
-      const { discussionId, content } = event.data as { discussionId: string; sessionId: string; content: string; source: string }
+      const { discussionId, content, senderAgentId } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string }
       if (!discussionId) return
       setMessages((prev) => {
         const current = prev[discussionId] ?? []
@@ -394,11 +395,12 @@ export function useDiscussions() {
           role: "user",
           parts: [{ type: "text", content }],
           timestamp: new Date().toISOString(),
+          senderAgentId,
         }
         return { ...prev, [discussionId]: [...current, newBlock] }
       })
     } else if (event.type === "discussion.nova-message") {
-      const { discussionId, content, audioUrl } = event.data as { discussionId: string; content: string; audioUrl?: string }
+      const { discussionId, content, audioUrl, senderAgentId } = event.data as { discussionId: string; content: string; audioUrl?: string; senderAgentId?: string }
       if (!discussionId) return
       setMessages((prev) => {
         const current = prev[discussionId] ?? []
@@ -409,6 +411,7 @@ export function useDiscussions() {
           role: "assistant",
           parts,
           timestamp: new Date().toISOString(),
+          senderAgentId,
         }
         return { ...prev, [discussionId]: [...current, newBlock] }
       })

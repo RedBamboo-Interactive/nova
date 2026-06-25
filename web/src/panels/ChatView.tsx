@@ -232,6 +232,12 @@ export function ChatView() {
     </PanelHeader>
   )
 
+  const resolveAgentInfo = useCallback((agentId: string) => {
+    const agent = getAgent(agentId)
+    if (!agent) return undefined
+    return { name: agent.name, avatarUrl: agent.avatarUrl }
+  }, [getAgent])
+
   const activeAgent = activeDiscussion ? getAgent(activeDiscussion.agentId) : undefined
   const { opacity: avatarOpacity } = useAvatarStyle()
   const { showAvatar: avatarEnabled } = useLocalSettings()
@@ -265,6 +271,7 @@ export function ChatView() {
         resolveImageSrc={resolveImageSrc}
         resolveFileLink={resolveFileLink}
         assistantAvatar={avatarSrc}
+        resolveAgentInfo={resolveAgentInfo}
         renderStatusLine={({ isStreaming, messages }) => (
           <NovaStatusLine isStreaming={isStreaming} messages={messages} />
         )}

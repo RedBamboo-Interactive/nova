@@ -73,7 +73,7 @@ public static class AutomationEndpoints
             });
         });
 
-        registry.MapPost("/api/automations", "Create an automation (recurring task, watcher, or AI session on a cron schedule)", (AutomationCreateRequest request, HttpContext ctx) =>
+        registry.MapPost("/api/automations", "Create an automation (recurring task, watcher, or AI session on a cron schedule)", async (AutomationCreateRequest request, HttpContext ctx) =>
         {
             if (string.IsNullOrWhiteSpace(request.Name))
                 return Results.BadRequest(new { error = "Name is required" });
@@ -81,6 +81,10 @@ public static class AutomationEndpoints
                 return Results.BadRequest(new { error = "Schedule (cron expression) is required" });
             if (string.IsNullOrWhiteSpace(request.ActionType))
                 return Results.BadRequest(new { error = "ActionType is required" });
+
+            var automations = engine.Automations;
+            if (automations == null)
+                return ApiError.ServiceUnavailable("automations_unavailable", "The automation service has not started yet");
 
             var automation = new Automation
             {
@@ -100,7 +104,14 @@ public static class AutomationEndpoints
                 OwnerId = ctx.User.FindFirstValue("sub"),
             };
 
-            engine.Automations?.Add(automation);
+            try
+            {
+                await automations.AddAsync(automation);
+            }
+            catch (ArgumentException ex)
+            {
+                return ApiError.BadRequest("invalid_schedule", ex.Message);
+            }
             return Results.Ok(new { success = true, name = automation.Name, nextRun = automation.NextRun });
         }).WithRequestBody(new
         {
@@ -109,7 +120,7 @@ public static class AutomationEndpoints
             properties = AutomationProperties(forCreate: true),
         });
 
-        registry.MapPut("/api/automations/{name}", "Update an automation. Partial update: only the provided fields change. Changing schedule revalidates the cron expression and recomputes nextRun.", (string name, AutomationUpdateRequest request, HttpContext ctx) =>
+        registry.MapPut("/api/automations/{name}", "Update an automation. Partial update: only the provided fields change. Changing schedule revalidates the cron expression and recomputes nextRun.", async (string name, AutomationUpdateRequest request, HttpContext ctx) =>
         {
             var automations = engine.Automations;
             if (automations == null)
@@ -125,7 +136,7 @@ public static class AutomationEndpoints
 
             try
             {
-                var updated = automations.Update(name, new AutomationUpdate
+                var updated = await automations.UpdateAsync(name, new AutomationUpdate
                 {
                     Description = request.Description,
                     Schedule = request.Schedule,
@@ -204,9 +215,13 @@ public static class AutomationEndpoints
             return Results.Accepted(value: new { ok = true, status = "started", name });
         });
 
-        registry.MapDelete("/api/automations/{name}", "Remove an automation", (string name, HttpContext ctx) =>
+        registry.MapDelete("/api/automations/{name}", "Remove an automation", async (string name, HttpContext ctx) =>
         {
-            var a = engine.Automations?.GetAll().FirstOrDefault(x => x.Name == name);
+            var automations = engine.Automations;
+            if (automations == null)
+                return ApiError.ServiceUnavailable("automations_unavailable", "The automation service has not started yet");
+
+            var a = automations.GetAll().FirstOrDefault(x => x.Name == name);
             if (a == null)
                 return ApiError.NotFound("automation_not_found", $"No automation named '{name}'");
 
@@ -214,7 +229,7 @@ public static class AutomationEndpoints
             if (!OwnerScope.CanAccess(a.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
-            var removed = engine.Automations?.Remove(name) ?? false;
+            var removed = await automations.RemoveAsync(name);
             return Results.Ok(new { success = removed });
         });
     }

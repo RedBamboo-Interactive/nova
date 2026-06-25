@@ -24,6 +24,7 @@ export interface DiscussionMessage {
   role: "user" | "assistant"
   parts: MessagePartDto[]
   timestamp: string
+  senderAgentId?: string
 }
 
 export interface MessagePartDto {

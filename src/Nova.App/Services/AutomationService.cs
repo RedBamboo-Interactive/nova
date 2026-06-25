@@ -1,11 +1,15 @@
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cronos;
 using Microsoft.Extensions.DependencyInjection;
+using Nova.App.Configuration;
 using Nova.App.Data;
 using Nova.App.Data.Entities;
+using RedBamboo.AppHost.Auth;
 using RedBamboo.AppHost.Logging;
 
 namespace Nova.App.Services;
@@ -15,13 +19,14 @@ public class AutomationService
     private readonly NovaEngine _engine;
     private readonly MemoryManager _memory;
     private readonly LogService _log;
+    private readonly NovaConfig _config;
     private readonly IServiceScopeFactory? _scopeFactory;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly List<Automation> _automations = [];
+    private readonly Dictionary<string, Guid> _entityIds = [];
     private Task? _loop;
     private CancellationTokenSource? _cts;
 
-    private static readonly string StorePath = "memory/meta/automations.json";
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -29,21 +34,27 @@ public class AutomationService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    public AutomationService(NovaEngine engine, MemoryManager memory, LogService log, IServiceScopeFactory? scopeFactory = null)
+    private static readonly JsonSerializerOptions HttpJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    public AutomationService(NovaEngine engine, MemoryManager memory, LogService log, NovaConfig config, IServiceScopeFactory? scopeFactory = null)
     {
         _engine = engine;
         _memory = memory;
         _log = log;
+        _config = config;
         _scopeFactory = scopeFactory;
     }
 
-    public Task StartAsync(CancellationToken ct)
+    public async Task StartAsync(CancellationToken ct)
     {
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        Load();
+        await LoadAsync();
         _loop = RunAsync(_cts.Token);
         _log.Info("automations", $"Started with {_automations.Count} automation(s)");
-        return Task.CompletedTask;
     }
 
     public async Task StopAsync()
@@ -52,7 +63,7 @@ public class AutomationService
         if (_loop != null) await _loop;
     }
 
-    public void Add(Automation automation)
+    public async Task AddAsync(Automation automation)
     {
         if (!ValidateCron(automation.Schedule))
         {
@@ -62,7 +73,11 @@ public class AutomationService
 
         automation.NextRun = CalculateNextRun(automation);
         _automations.Add(automation);
-        Save();
+
+        var entityId = await UpsertToRedLeafAsync(automation);
+        if (entityId.HasValue)
+            _entityIds[automation.Name] = entityId.Value;
+
         _log.Info("automations", $"Added: {automation.Name} [{automation.ActionType}] next={automation.NextRun:g}");
     }
 
@@ -76,12 +91,12 @@ public class AutomationService
         }
     }
 
-    public bool Remove(string name)
+    public async Task<bool> RemoveAsync(string name)
     {
         var a = _automations.FirstOrDefault(x => x.Name == name);
         if (a == null) return false;
         _automations.Remove(a);
-        Save();
+        await DeleteFromRedLeafAsync(name);
         _log.Info("automations", $"Removed: {name}");
         return true;
     }
@@ -94,7 +109,7 @@ public class AutomationService
     /// Apply a partial update — only non-null fields change. Returns the updated automation,
     /// or null when not found. Throws ArgumentException on an invalid cron expression.
     /// </summary>
-    public Automation? Update(string name, AutomationUpdate update)
+    public async Task<Automation?> UpdateAsync(string name, AutomationUpdate update)
     {
         var a = _automations.FirstOrDefault(x => x.Name == name);
         if (a == null) return null;
@@ -116,9 +131,51 @@ public class AutomationService
         if (update.MaxFailures.HasValue) a.MaxFailures = update.MaxFailures.Value;
 
         a.NextRun = CalculateNextRun(a);
-        Save();
+        await PatchRedLeafDataAsync(name, a);
         _log.Info("automations", $"Updated: {name} next={a.NextRun:g}");
         return a;
+    }
+
+    /// <summary>Refreshes a single automation from RedLeaf after a WS entity.updated event.</summary>
+    public async Task RefreshAutomationAsync(Guid entityId)
+    {
+        var name = _entityIds.FirstOrDefault(kv => kv.Value == entityId).Key;
+        if (name == null) return;
+
+        try
+        {
+            using var http = BuildRedLeafClient();
+            var resp = await http.GetAsync($"api/entities/{entityId}");
+            if (!resp.IsSuccessStatusCode) return;
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var updated = MapEntity(doc.RootElement);
+            if (updated == null) return;
+
+            var existing = _automations.FirstOrDefault(a => a.Name == name);
+            if (existing == null) return;
+
+            existing.Description = updated.Description;
+            existing.Schedule = updated.Schedule;
+            existing.Enabled = updated.Enabled;
+            existing.RemoveOnTrigger = updated.RemoveOnTrigger;
+            existing.Icon = updated.Icon;
+            existing.ActionType = updated.ActionType;
+            existing.ActionConfigJson = updated.ActionConfigJson;
+            existing.ReportToDiscussionId = updated.ReportToDiscussionId;
+            existing.MaxFailures = updated.MaxFailures;
+            existing.ExpiresAt = updated.ExpiresAt;
+            existing.OwnerId = updated.OwnerId;
+
+            if (existing.Enabled)
+                existing.NextRun = CalculateNextRun(existing);
+
+            _log.Info("automations", $"Refreshed {name} from RedLeaf WS event");
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("automations", $"RefreshAutomation failed for {entityId}: {ex.Message}");
+        }
     }
 
     public async Task<AutomationResult?> TriggerAsync(string name, CancellationToken ct)
@@ -137,7 +194,6 @@ public class AutomationService
                 ? JsonSerializer.Serialize(result, JsonOptions)
                 : null;
             automation.NextRun = CalculateNextRun(automation);
-            Save();
             NovaMirror.PublishAutomationRun(automation.Name, result?.Triggered == true, result?.Summary, null);
 
             if (result?.Triggered == true && automation.ReportToDiscussionId != null)
@@ -153,7 +209,6 @@ public class AutomationService
             automation.LastResultJson = JsonSerializer.Serialize(
                 new AutomationResult { Triggered = false, Summary = $"Failed: {ex.Message}" }, JsonOptions);
             automation.NextRun = CalculateNextRun(automation);
-            Save();
             NovaMirror.PublishAutomationRun(automation.Name, false, null, ex.Message);
             _log.Error("automations", $"[{automation.Name}] Manual trigger failed ({automation.ConsecutiveFailures}x): {ex.Message}");
             return new AutomationResult { Triggered = false, Summary = $"Failed: {ex.Message}" };
@@ -179,8 +234,15 @@ public class AutomationService
                         _log.Warn("automations", $"[{automation.Name}] Expired, disabling");
                         if (automation.ReportToDiscussionId != null)
                             await ReportFailureAsync(automation, "Watcher expired without triggering", ct);
-                        if (automation.RemoveOnTrigger) _automations.Remove(automation);
-                        Save();
+                        if (automation.RemoveOnTrigger)
+                        {
+                            _ = DeleteFromRedLeafAsync(automation.Name);
+                            _automations.Remove(automation);
+                        }
+                        else
+                        {
+                            _ = PatchRedLeafDataAsync(automation.Name, automation);
+                        }
                         continue;
                     }
 
@@ -196,12 +258,11 @@ public class AutomationService
                         NovaMirror.PublishAutomationRun(automation.Name, result?.Triggered == true, result?.Summary, null);
 
                         if (result?.Triggered == true && automation.ReportToDiscussionId != null)
-                        {
                             await ReportToDiscussionAsync(automation, result, ct);
-                        }
 
                         if (result?.Triggered == true && automation.RemoveOnTrigger)
                         {
+                            _ = DeleteFromRedLeafAsync(automation.Name);
                             _automations.Remove(automation);
                             _log.Info("automations", $"Auto-removed after trigger: {automation.Name}");
                         }
@@ -224,16 +285,20 @@ public class AutomationService
                             _log.Error("automations", $"[{automation.Name}] Hit {max} consecutive failures, disabling");
                             if (automation.ReportToDiscussionId != null)
                                 await ReportFailureAsync(automation, $"Failed {max} times consecutively: {ex.Message}", ct);
-                            if (automation.RemoveOnTrigger) _automations.Remove(automation);
+                            if (automation.RemoveOnTrigger)
+                            {
+                                _ = DeleteFromRedLeafAsync(automation.Name);
+                                _automations.Remove(automation);
+                            }
+                            else
+                            {
+                                _ = PatchRedLeafDataAsync(automation.Name, automation);
+                            }
                         }
                         else
                         {
                             automation.NextRun = CalculateNextRun(automation);
                         }
-                    }
-                    finally
-                    {
-                        Save();
                     }
                 }
             }
@@ -431,24 +496,6 @@ public class AutomationService
         }
     }
 
-    private async Task<string?> GetSessionIdForDiscussion(string discussionId, CancellationToken ct)
-    {
-        try
-        {
-            var response = await _http.GetAsync(
-                $"http://127.0.0.1:18803/api/discussions/{discussionId}", ct);
-            if (!response.IsSuccessStatusCode) return null;
-
-            using var doc = await JsonDocument.ParseAsync(
-                await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-            if (doc.RootElement.TryGetProperty("discussion", out var disc)
-                && disc.TryGetProperty("sessionId", out var sid))
-                return sid.GetString();
-        }
-        catch { }
-        return null;
-    }
-
     private static DateTime CalculateNextRun(Automation automation)
     {
         if (!automation.Enabled) return DateTime.MaxValue;
@@ -469,29 +516,287 @@ public class AutomationService
         return DateTime.MaxValue;
     }
 
-    private void Load()
+    // ── RedLeaf persistence ─────────────────────────────────────────────────
+
+    private static string AutomationSlug(string name)
     {
-        var json = _memory.ReadMemoryFile(StorePath);
-        if (!string.IsNullOrWhiteSpace(json))
+        var sanitized = new string(name.ToLowerInvariant()
+            .Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray());
+        return $"automation-nova-{sanitized}";
+    }
+
+    private HttpClient BuildRedLeafClient()
+    {
+        var redSuiteDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RedSuite");
+        var signingKey = SigningKeyPersistence.EnsureSigningKey(redSuiteDir);
+        var jwt = new JwtService(new JwtOptions { SigningKey = signingKey });
+        var token = jwt.GenerateAccessToken("system", "system@redsuite", "System", ["admin"]);
+        var http = new HttpClient
         {
+            BaseAddress = new Uri(_config.Suite.RedLeaf.TrimEnd('/') + "/"),
+            Timeout = TimeSpan.FromSeconds(15),
+        };
+        http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+        return http;
+    }
+
+    private static object BuildEntityData(Automation a) => new
+    {
+        automation_name = a.Name,
+        description = a.Description,
+        schedule = a.Schedule,
+        enabled = a.Enabled,
+        action_type = a.ActionType,
+        action_config_json = a.ActionConfigJson,
+        report_to_discussion_id = a.ReportToDiscussionId,
+        remove_on_trigger = a.RemoveOnTrigger,
+        expires_at = a.ExpiresAt is { } exp
+            ? new DateTimeOffset(DateTime.SpecifyKind(exp, DateTimeKind.Utc)).ToString("O")
+            : (string?)null,
+        max_failures = a.MaxFailures,
+        owner_id = a.OwnerId,
+        icon = a.Icon,
+        app = "nova",
+    };
+
+    /// <summary>Creates or replaces the automation entity in RedLeaf. Returns the entity ID on success.</summary>
+    private async Task<Guid?> UpsertToRedLeafAsync(Automation a)
+    {
+        var slug = AutomationSlug(a.Name);
+        try
+        {
+            using var http = BuildRedLeafClient();
+            var body = JsonSerializer.Serialize(new
+            {
+                name = a.Name,
+                type_slug = "automation",
+                data = BuildEntityData(a),
+            }, HttpJsonOptions);
+            var content = new StringContent(body, Encoding.UTF8, "application/json");
+            var resp = await http.PutAsync($"api/entities/by-slug/{Uri.EscapeDataString(slug)}", content);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _log.Warn("automations", $"RedLeaf upsert failed for {a.Name}: {(int)resp.StatusCode}");
+                return null;
+            }
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var idStr = doc.RootElement.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
+            return idStr != null && Guid.TryParse(idStr, out var id) ? id : (Guid?)null;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("automations", $"RedLeaf upsert error for {a.Name}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>Patches the entity data fields in RedLeaf. Falls back to upsert if entity ID is unknown.</summary>
+    private async Task PatchRedLeafDataAsync(string name, Automation a)
+    {
+        if (!_entityIds.TryGetValue(name, out var entityId))
+        {
+            var newId = await UpsertToRedLeafAsync(a);
+            if (newId.HasValue) _entityIds[name] = newId.Value;
+            return;
+        }
+
+        try
+        {
+            using var http = BuildRedLeafClient();
+            var body = JsonSerializer.Serialize(BuildEntityData(a), HttpJsonOptions);
+            var content = new StringContent(body, Encoding.UTF8, "application/json");
+            var resp = await http.PatchAsync($"api/entities/{entityId}/data", content);
+            if (!resp.IsSuccessStatusCode)
+                _log.Warn("automations", $"RedLeaf patch failed for {name}: {(int)resp.StatusCode}");
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("automations", $"RedLeaf patch error for {name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>Deletes the automation entity from RedLeaf. Looks up by slug if entity ID is unknown.</summary>
+    private async Task DeleteFromRedLeafAsync(string name)
+    {
+        if (!_entityIds.TryGetValue(name, out var entityId))
+        {
+            // Fall back to slug lookup
             try
             {
-                var items = JsonSerializer.Deserialize<List<Automation>>(json, JsonOptions);
-                if (items != null)
+                using var lookupHttp = BuildRedLeafClient();
+                var slug = AutomationSlug(name);
+                var lookupResp = await lookupHttp.GetAsync($"api/entities/{Uri.EscapeDataString(slug)}");
+                if (!lookupResp.IsSuccessStatusCode)
                 {
-                    _automations.AddRange(items);
-                    foreach (var a in _automations.Where(a => a.Enabled))
-                        a.NextRun = CalculateNextRun(a);
+                    _log.Warn("automations", $"Cannot delete {name}: entity not found in RedLeaf");
+                    return;
                 }
+                using var doc = JsonDocument.Parse(await lookupResp.Content.ReadAsStringAsync());
+                var idStr = doc.RootElement.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
+                if (idStr == null || !Guid.TryParse(idStr, out entityId))
+                {
+                    _log.Warn("automations", $"Cannot delete {name}: entity ID not parseable");
+                    return;
+                }
+                _entityIds[name] = entityId;
             }
             catch (Exception ex)
             {
-                _log.Warn("automations", $"Failed to load: {ex.Message}");
+                _log.Warn("automations", $"RedLeaf lookup error for {name}: {ex.Message}");
+                return;
             }
         }
 
-        EnsureBuiltIns();
+        try
+        {
+            using var http = BuildRedLeafClient();
+            var resp = await http.DeleteAsync($"api/entities/{entityId}");
+            if (!resp.IsSuccessStatusCode)
+                _log.Warn("automations", $"RedLeaf delete failed for {name}: {(int)resp.StatusCode}");
+            else
+                _entityIds.Remove(name);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("automations", $"RedLeaf delete error for {name}: {ex.Message}");
+        }
     }
+
+    // ── Load ────────────────────────────────────────────────────────────────
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            using var http = BuildRedLeafClient();
+            var resp = await http.GetAsync("api/entities?type=automation&data.app=nova&limit=100");
+            if (resp.IsSuccessStatusCode)
+            {
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+                var items = doc.RootElement.GetProperty("items");
+
+                if (items.GetArrayLength() == 0)
+                {
+                    await SeedFromFileAsync();
+                }
+                else
+                {
+                    foreach (var item in items.EnumerateArray())
+                    {
+                        var a = MapEntity(item);
+                        if (a == null) continue;
+
+                        if (item.TryGetProperty("id", out var idEl)
+                            && Guid.TryParse(idEl.GetString(), out var id))
+                            _entityIds[a.Name] = id;
+
+                        _automations.Add(a);
+                    }
+                    _log.Info("automations", $"Loaded {_automations.Count} automation(s) from RedLeaf");
+                }
+            }
+            else
+            {
+                _log.Warn("automations", $"Failed to load from RedLeaf ({(int)resp.StatusCode}), falling back to local file");
+                LoadFromFile();
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("automations", $"RedLeaf load failed: {ex.Message}, falling back to local file");
+            LoadFromFile();
+        }
+
+        foreach (var a in _automations.Where(a => a.Enabled))
+            a.NextRun = CalculateNextRun(a);
+
+        await EnsureBuiltInsAsync();
+    }
+
+    private void LoadFromFile()
+    {
+        var json = _memory.ReadMemoryFile("memory/meta/automations.json");
+        if (string.IsNullOrWhiteSpace(json)) return;
+        try
+        {
+            var items = JsonSerializer.Deserialize<List<Automation>>(json, JsonOptions);
+            if (items != null) _automations.AddRange(items);
+            _log.Info("automations", $"Loaded {_automations.Count} automation(s) from local file");
+        }
+        catch (Exception ex) { _log.Warn("automations", $"Failed to load from file: {ex.Message}"); }
+    }
+
+    private async Task SeedFromFileAsync()
+    {
+        _log.Info("automations", "No automations in RedLeaf — seeding from local JSON file");
+        LoadFromFile();
+
+        foreach (var a in _automations.ToList())
+        {
+            var entityId = await UpsertToRedLeafAsync(a);
+            if (entityId.HasValue)
+                _entityIds[a.Name] = entityId.Value;
+        }
+        _log.Info("automations", $"Seeded {_automations.Count} automation(s) to RedLeaf");
+    }
+
+    private static Automation? MapEntity(JsonElement item)
+    {
+        if (!item.TryGetProperty("data", out var dataEl)) return null;
+
+        JsonElement d;
+        if (dataEl.ValueKind == JsonValueKind.String)
+        {
+            using var parsed = JsonDocument.Parse(dataEl.GetString()!);
+            d = parsed.RootElement.Clone();
+        }
+        else if (dataEl.ValueKind == JsonValueKind.Object)
+            d = dataEl;
+        else return null;
+
+        var name = GetStr(d, "automation_name");
+        if (string.IsNullOrEmpty(name)) return null;
+
+        // Skip tombstoned entities
+        if (d.TryGetProperty("removed", out var removedEl) && removedEl.GetBoolean())
+            return null;
+
+        return new Automation
+        {
+            Name = name,
+            Description = GetStr(d, "description") ?? "",
+            Schedule = GetStr(d, "schedule") ?? "",
+            Enabled = GetBool(d, "enabled") ?? true,
+            RemoveOnTrigger = GetBool(d, "remove_on_trigger") ?? false,
+            Icon = GetStr(d, "icon"),
+            ActionType = GetStr(d, "action_type") ?? "",
+            ActionConfigJson = GetStr(d, "action_config_json"),
+            ReportToDiscussionId = GetStr(d, "report_to_discussion_id"),
+            MaxFailures = GetInt(d, "max_failures") ?? 0,
+            OwnerId = GetStr(d, "owner_id"),
+            ExpiresAt = ParseUtcDateTime(GetStr(d, "expires_at")),
+        };
+    }
+
+    private static string? GetStr(JsonElement e, string key) =>
+        e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static bool? GetBool(JsonElement e, string key)
+    {
+        if (!e.TryGetProperty(key, out var v)) return null;
+        return v.ValueKind == JsonValueKind.True ? true
+             : v.ValueKind == JsonValueKind.False ? false
+             : (bool?)null;
+    }
+
+    private static int? GetInt(JsonElement e, string key) =>
+        e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : (int?)null;
+
+    private static DateTime? ParseUtcDateTime(string? value) =>
+        value != null && DateTimeOffset.TryParse(value, out var t) ? t.UtcDateTime : null;
+
+    // ── Built-ins ───────────────────────────────────────────────────────────
 
     private string? ResolveDefaultOwner()
     {
@@ -509,14 +814,13 @@ public class AutomationService
         catch { return null; }
     }
 
-    private void EnsureBuiltIns()
+    private async Task EnsureBuiltInsAsync()
     {
-        var changed = false;
         var defaultOwner = ResolveDefaultOwner();
 
         if (_automations.All(a => a.Name != "system:backup"))
         {
-            _automations.Add(new Automation
+            var backup = new Automation
             {
                 Name = "system:backup",
                 Description = "Daily memory backup",
@@ -524,16 +828,19 @@ public class AutomationService
                 ActionType = "builtin:backup",
                 OwnerId = defaultOwner,
                 Enabled = true,
-            });
+            };
+            _automations.Add(backup);
+            backup.NextRun = CalculateNextRun(backup);
+            var id = await UpsertToRedLeafAsync(backup);
+            if (id.HasValue) _entityIds[backup.Name] = id.Value;
             _log.Info("automations", "Added built-in backup automation");
-            changed = true;
         }
 
         var dreamingSkill = _memory.ReadMemoryFile("config/skills/dreaming.md") ?? "";
         var existingDreaming = _automations.FirstOrDefault(a => a.Name == "system:dreaming");
         if (existingDreaming == null)
         {
-            _automations.Add(new Automation
+            var dreaming = new Automation
             {
                 Name = "system:dreaming",
                 Description = "Nightly memory consolidation",
@@ -548,120 +855,35 @@ public class AutomationService
                 }, JsonOptions),
                 OwnerId = defaultOwner,
                 Enabled = true,
-            });
+            };
+            _automations.Add(dreaming);
+            dreaming.NextRun = CalculateNextRun(dreaming);
+            var id = await UpsertToRedLeafAsync(dreaming);
+            if (id.HasValue) _entityIds[dreaming.Name] = id.Value;
             _log.Info("automations", "Added built-in dreaming automation");
-            changed = true;
         }
-        else
+        else if (!string.IsNullOrEmpty(dreamingSkill))
         {
             var currentConfig = Deserialize<AiSessionConfig>(existingDreaming.ActionConfigJson);
-            var dreamingChanged = false;
-            if (!string.IsNullOrEmpty(dreamingSkill) && currentConfig.Prompt != dreamingSkill)
+            if (currentConfig.Prompt != dreamingSkill)
             {
                 currentConfig.Prompt = dreamingSkill;
-                dreamingChanged = true;
-                _log.Info("automations", "Synced dreaming prompt from skill file");
-            }
-            if (currentConfig.Timeout != 3600)
-            {
-                currentConfig.Timeout = 3600;
-                dreamingChanged = true;
-                _log.Info("automations", "Synced dreaming timeout to 3600s");
-            }
-            if (currentConfig.QualityMode != "standard")
-            {
-                currentConfig.QualityMode = "standard";
-                dreamingChanged = true;
-                _log.Info("automations", "Synced dreaming quality mode to standard");
-            }
-            if (dreamingChanged)
-            {
                 existingDreaming.ActionConfigJson = JsonSerializer.Serialize(currentConfig, JsonOptions);
-                changed = true;
+                await PatchRedLeafDataAsync(existingDreaming.Name, existingDreaming);
+                _log.Info("automations", "Synced dreaming prompt from skill file");
             }
         }
 
         // Backfill OwnerId on any automations that lack one
         if (defaultOwner != null)
         {
-            foreach (var a in _automations.Where(a => a.OwnerId == null))
+            foreach (var a in _automations.Where(a => a.OwnerId == null).ToList())
             {
                 a.OwnerId = defaultOwner;
+                await PatchRedLeafDataAsync(a.Name, a);
                 _log.Info("automations", $"Set default owner on {a.Name}");
-                changed = true;
             }
         }
-
-        // Ensure morning-greeting uses PreCreateDiscussion and the fast quality mode
-        var greeting = _automations.FirstOrDefault(a => a.Name == "morning-greeting");
-        if (greeting != null)
-        {
-            var greetingConfig = Deserialize<AiSessionConfig>(greeting.ActionConfigJson);
-            var greetingChanged = false;
-            if (!greetingConfig.PreCreateDiscussion)
-            {
-                greetingConfig.PreCreateDiscussion = true;
-                greetingConfig.Prompt = SyncMorningGreetingPrompt(greetingConfig.Prompt);
-                _log.Info("automations", "Enabled PreCreateDiscussion on morning-greeting");
-                greetingChanged = true;
-            }
-            if (greetingConfig.QualityMode != "fast")
-            {
-                greetingConfig.QualityMode = "fast";
-                _log.Info("automations", "Set morning-greeting quality mode to fast");
-                greetingChanged = true;
-            }
-            if (greetingChanged)
-            {
-                greeting.ActionConfigJson = JsonSerializer.Serialize(greetingConfig, JsonOptions);
-                changed = true;
-            }
-        }
-
-        // Ensure weekly-checkin uses the fast quality mode
-        var weekly = _automations.FirstOrDefault(a => a.Name == "weekly-checkin");
-        if (weekly != null && weekly.ActionType == "ai-session")
-        {
-            var weeklyConfig = Deserialize<AiSessionConfig>(weekly.ActionConfigJson);
-            if (weeklyConfig.QualityMode != "fast")
-            {
-                weeklyConfig.QualityMode = "fast";
-                weekly.ActionConfigJson = JsonSerializer.Serialize(weeklyConfig, JsonOptions);
-                _log.Info("automations", "Set weekly-checkin quality mode to fast");
-                changed = true;
-            }
-        }
-
-        if (changed) Save();
-    }
-
-    private static string SyncMorningGreetingPrompt(string prompt)
-    {
-        const string oldStep3 = "## Step 3: Send it\n\nCreate the discussion:";
-        if (!prompt.Contains(oldStep3)) return prompt;
-
-        var idx = prompt.IndexOf(oldStep3, StringComparison.Ordinal);
-        var before = prompt[..idx];
-
-        return before + """
-            ## Step 3: Send it
-
-            A discussion has already been pre-created for you. Its ID is in the `<nova-context pre-created-discussion="...">` tag at the top of this prompt.
-
-            Inject your greeting using the pre-created discussion ID:
-            ```bash
-            curl -s -X POST http://127.0.0.1:18803/api/discussions/{id}/nova-message -H "Content-Type: application/json" -d '{"content": "your greeting here", "title": "A casual title for the discussion"}'
-            ```
-
-            The title should be creative and different each day. Something that hints at the vibe, not a label.
-            """;
-    }
-
-    private void Save()
-    {
-        var json = JsonSerializer.Serialize(_automations, JsonOptions);
-        _memory.WriteMemoryFile(StorePath, json);
-        NovaMirror.PublishAutomations(_automations);
     }
 
     private static T Deserialize<T>(string? json) where T : new()
@@ -745,4 +967,3 @@ public class HttpCheckCondition
     public string Field { get; set; } = "";
     public new string Equals { get; set; } = "";
 }
-

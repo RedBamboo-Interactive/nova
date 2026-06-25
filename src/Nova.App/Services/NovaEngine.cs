@@ -35,7 +35,7 @@ public class NovaEngine : IAsyncDisposable
     {
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        _automations = new AutomationService(this, _memory, _log, _scopeFactory);
+        _automations = new AutomationService(this, _memory, _log, _config, _scopeFactory);
         await _automations.StartAsync(_cts.Token);
 
         _log.Info("engine", "Nova engine started");

@@ -247,6 +247,7 @@ public static class DiscussionEndpoints
                             }).ToArray()
                         : new[] { new { type = "text", content = m.Content, toolName = (string?)null, toolInput = (string?)null } },
                     timestamp = m.Timestamp.ToString("o"),
+                    senderAgentId = m.SenderAgentId,
                 }),
             });
         });
@@ -472,6 +473,7 @@ public static class DiscussionEndpoints
                 Content = request.Content,
                 Source = $"event:{request.Source ?? "automation"}",
                 UserId = userId,
+                SenderAgentId = request.SenderAgentId,
             });
 
             discussion.LastActivity = DateTime.UtcNow;
@@ -486,15 +488,31 @@ public static class DiscussionEndpoints
                     sessionId = discussion.SessionId,
                     content = request.Content,
                     source = request.Source ?? "automation",
+                    senderAgentId = request.SenderAgentId,
                 });
 
                 try
                 {
+                    object messageBody = request.SenderAgentId is not null
+                        ? new { content = request.Content, metadata = new { senderAgentId = request.SenderAgentId, senderName = await _agentMemoryFactory!.GetAgentNameAsync(request.SenderAgentId) } }
+                        : new { content = request.Content };
                     await RedCompute.PostAsJsonAsync(
                         $"/ai-session/sessions/{discussion.SessionId}/message",
-                        new { content = request.Content }, JsonOptions);
+                        messageBody, JsonOptions);
                 }
                 catch { }
+
+                if (request.SenderAgentId is not null && request.ReplyToDiscussionId is not null)
+                {
+                    try
+                    {
+                        var callbackUrl = $"http://127.0.0.1:18803/api/callbacks/agent-response?replyTo={request.ReplyToDiscussionId}&agentId={discussion.AgentId}";
+                        await RedCompute.PostAsJsonAsync(
+                            $"/ai-session/sessions/{discussion.SessionId}/callback",
+                            new { url = callbackUrl }, JsonOptions);
+                    }
+                    catch { }
+                }
             }
 
             return Results.Ok(new { success = true });
@@ -517,9 +535,16 @@ public static class DiscussionEndpoints
             {
                 try
                 {
-                    var injectBody = string.IsNullOrEmpty(request.AudioUrl)
-                        ? (object)new { role = "assistant", content = request.Content }
-                        : new { role = "assistant", content = request.Content, audioUrl = request.AudioUrl };
+                    object? metadata = request.SenderAgentId is not null
+                        ? new { senderAgentId = request.SenderAgentId }
+                        : null;
+                    var injectBody = new
+                    {
+                        role = "assistant",
+                        content = request.Content,
+                        audioUrl = string.IsNullOrEmpty(request.AudioUrl) ? null : request.AudioUrl,
+                        metadata,
+                    };
                     var resp = await RedCompute.PostAsJsonAsync(
                         $"/ai-session/sessions/{discussion.SessionId}/inject",
                         injectBody, JsonOptions);
@@ -548,6 +573,7 @@ public static class DiscussionEndpoints
                 PartsJson = partsJson,
                 Source = "nova-message",
                 UserId = userId,
+                SenderAgentId = request.SenderAgentId,
             });
 
             discussion.LastActivity = DateTime.UtcNow;
@@ -564,6 +590,7 @@ public static class DiscussionEndpoints
                 discussionId = id,
                 content = request.Content,
                 audioUrl = request.AudioUrl,
+                senderAgentId = request.SenderAgentId,
             });
 
             return Results.Ok(new { success = true });
@@ -916,6 +943,8 @@ public class DiscussionEventRequest
 {
     public string Content { get; set; } = "";
     public string? Source { get; set; }
+    public string? SenderAgentId { get; set; }
+    public string? ReplyToDiscussionId { get; set; }
 }
 
 public class NovaMessageRequest
@@ -923,6 +952,7 @@ public class NovaMessageRequest
     public string Content { get; set; } = "";
     public string? Title { get; set; }
     public string? AudioUrl { get; set; }
+    public string? SenderAgentId { get; set; }
 }
 
 public class DiscussionMessageRequest

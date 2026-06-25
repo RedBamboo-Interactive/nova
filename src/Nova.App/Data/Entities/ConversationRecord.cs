@@ -10,4 +10,5 @@ public class ConversationRecord
     public string Source { get; set; } = "user";
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     public string? UserId { get; set; }
+    public string? SenderAgentId { get; set; }
 }

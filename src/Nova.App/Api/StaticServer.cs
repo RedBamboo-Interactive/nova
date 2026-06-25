@@ -14,6 +14,7 @@ using RedBamboo.AppHost.Discovery;
 using RedBamboo.AppHost.Extensions;
 using RedBamboo.AppHost.Logging;
 using RedBamboo.AppHost.Streams;
+using RedBamboo.AppHost.Watchers;
 using RedBamboo.AppHost.WebSockets;
 using Nova.App.Data;
 using Nova.App.Services;
@@ -28,7 +29,7 @@ public class StaticServer
     private readonly AgentMemoryFactory _agentMemoryFactory;
     private WebApplication? _app;
     private RedLeafStreamClient? _streamClient;
-    private AvatarWatcher? _avatarWatcher;
+    private RedLeafEntityWatcher? _entityWatcher;
 
     public StaticServer(NovaEngine engine, MemoryManager memory, AgentResolver agentResolver, AgentMemoryFactory agentMemoryFactory)
     {
@@ -576,19 +577,42 @@ public class StaticServer
         await _app.StartAsync(ct);
 
         var wsBroadcaster = _app.Services.GetService<WebSocketBroadcaster>();
-        if (wsBroadcaster != null)
+        var jwtService = _app.Services.GetRequiredService<JwtService>();
+
+        _entityWatcher = new RedLeafEntityWatcher(
+            App.Config.Suite.RedLeaf,
+            jwtService,
+            App.LogService);
+
+        _entityWatcher.On("agent", async (change, ct) =>
         {
-            _avatarWatcher = new AvatarWatcher(App.Config, _agentResolver, wsBroadcaster, App.LogService);
-            _avatarWatcher.Start(ct);
-        }
+            var agents = await _agentResolver.GetAgentsAsync(forceRefresh: true);
+            var nova = agents.FirstOrDefault(a => a.Slug == "nova");
+            var url = nova != null ? _agentResolver.BuildAvatarUrl(nova.AvatarFilename) : null;
+            if (url != null) NovaMirror.AvatarUrl = url;
+            wsBroadcaster?.Broadcast("agent.avatar-changed", new
+            {
+                agentId = NovaMirror.AgentId,
+                url = url ?? "",
+            });
+        });
+
+        _entityWatcher.On("automation", async (change, ct) =>
+        {
+            if (_engine?.Automations != null && Guid.TryParse(change.Id, out var entityId))
+                await _engine.Automations.RefreshAutomationAsync(entityId);
+        });
+
+        _entityWatcher.Start(ct);
     }
 
     public async Task StopAsync()
     {
-        if (_avatarWatcher != null)
+        if (_entityWatcher != null)
         {
-            await _avatarWatcher.StopAsync();
-            _avatarWatcher = null;
+            await _entityWatcher.StopAsync();
+            await _entityWatcher.DisposeAsync();
+            _entityWatcher = null;
         }
 
         NovaMirror.Client = null;
@@ -699,6 +723,12 @@ public class StaticServer
             cmd.CommandText = "ALTER TABLE Conversations ADD COLUMN UserId TEXT";
             cmd.ExecuteNonQuery();
             cmd.CommandText = "CREATE INDEX IF NOT EXISTS IX_Conversations_UserId ON Conversations(UserId)";
+            cmd.ExecuteNonQuery();
+        }
+
+        if (!columns.Contains("SenderAgentId"))
+        {
+            cmd.CommandText = "ALTER TABLE Conversations ADD COLUMN SenderAgentId TEXT";
             cmd.ExecuteNonQuery();
         }
 

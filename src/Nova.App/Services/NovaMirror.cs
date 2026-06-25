@@ -59,6 +59,7 @@ public static class NovaMirror
                 content = m.Content,
                 parts_json = m.PartsJson,
                 source = m.Source,
+                sender_agent_id = m.SenderAgentId,
                 timestamp = new DateTimeOffset(DateTime.SpecifyKind(m.Timestamp, DateTimeKind.Utc)).ToString("O"),
             }, userId: m.UserId);
         }
@@ -82,60 +83,17 @@ public static class NovaMirror
         $"Nova {AgentFileSync.DisplayName(fileKey)}",
         new { app = "nova", file_key = fileKey, content });
 
-    public static string AutomationSlug(string name)
-    {
-        var sanitized = new string(name.ToLowerInvariant()
-            .Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray());
-        return $"automation-nova-{sanitized}";
-    }
-
-    private static HashSet<string> _knownAutomations = [];
-
-    /// <summary>
-    /// Publishes the full automation list. Run state (last_run, next_run,
-    /// errors) is deliberately excluded — `automation` is a versioned type
-    /// and only definition edits should produce version rows; per-run results
-    /// go to the automation-runs stream instead. Automations that vanished
-    /// since the last publish get a tombstone upsert.
-    /// </summary>
-    public static void PublishAutomations(IReadOnlyList<Automation> automations)
+    public static void PublishAutomationRun(string name, bool triggered, string? summary, string? error)
     {
         if (Client is null) return;
-
-        var current = new HashSet<string>(automations.Select(a => a.Name));
-        foreach (var a in automations)
-        {
-            Client.UpsertEntity(AutomationSlug(a.Name), "automation", a.Name, new
-            {
-                automation_name = a.Name,
-                description = a.Description,
-                schedule = a.Schedule,
-                enabled = a.Enabled,
-                action_type = a.ActionType,
-                action_config_json = a.ActionConfigJson,
-                report_to_discussion_id = a.ReportToDiscussionId,
-                remove_on_trigger = a.RemoveOnTrigger,
-                expires_at = a.ExpiresAt is { } exp ? new DateTimeOffset(DateTime.SpecifyKind(exp, DateTimeKind.Utc)).ToString("O") : null,
-                max_failures = a.MaxFailures,
-                owner_id = a.OwnerId,
-                icon = a.Icon,
-                app = "nova",
-            });
-        }
-
-        foreach (var gone in _knownAutomations.Except(current))
-            Client.UpsertEntity(AutomationSlug(gone), "automation", gone,
-                new { automation_name = gone, removed = true, app = "nova" });
-
-        _knownAutomations = current;
-    }
-
-    public static void PublishAutomationRun(string name, bool triggered, string? summary, string? error) =>
-        Client?.EnqueueForEntity("automation-runs", AutomationSlug(name), new
+        var sanitized = new string(name.ToLowerInvariant()
+            .Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray());
+        Client.EnqueueForEntity("automation-runs", $"automation-nova-{sanitized}", new
         {
             automation = name,
             triggered,
             summary,
             error,
         });
+    }
 }

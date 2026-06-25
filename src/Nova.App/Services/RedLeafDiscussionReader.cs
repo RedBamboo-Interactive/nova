@@ -34,7 +34,7 @@ public sealed class RedLeafDiscussionReader
 
     public sealed record MessageRead(
         long Id, string Role, string? Content, string? PartsJson, string? Source,
-        string? DiscussionId, DateTime Timestamp);
+        string? DiscussionId, DateTime Timestamp, string? SenderAgentId);
 
     public async Task<List<DiscussionRead>> GetDiscussionsAsync(string? filterAgentId = null)
     {
@@ -133,7 +133,8 @@ public sealed class RedLeafDiscussionReader
             Str(d, "parts_json"),
             Str(d, "source"),
             Str(d, "discussion_id"),
-            ParseUtc(Str(d, "timestamp")) ?? default);
+            ParseUtc(Str(d, "timestamp")) ?? default,
+            Str(d, "sender_agent_id"));
     }
 
     private async Task<JsonDocument> GetJsonAsync(string url)
