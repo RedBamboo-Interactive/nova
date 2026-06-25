@@ -332,6 +332,24 @@ export function useDiscussions() {
         })
       )
       if (!wasArchived) api.put(`/api/discussions/${discId}/stopped`).catch(() => {})
+    } else if (event.type === "discussion.created") {
+      const { discussionId, agentId, status } = event.data as { discussionId: string; agentId?: string; status?: string }
+      if (!discussionId) return
+      setDiscussions((prev) => {
+        if (prev.some((d) => d.id === discussionId)) return prev
+        const newDisc = {
+          id: discussionId,
+          title: null as string | null,
+          sessionId: null as string | null,
+          status: (status ?? "idle") as "idle" | "thinking" | "stopped" | "archived",
+          createdAt: new Date().toISOString(),
+          lastActivity: new Date().toISOString(),
+          messageCount: 0,
+          lastReadAt: null as string | null,
+          agentId: agentId ?? null,
+        }
+        return [newDisc, ...prev]
+      })
     } else if (event.type === "discussion.event") {
       const { discussionId, content, senderAgentId } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string }
       if (!discussionId) return

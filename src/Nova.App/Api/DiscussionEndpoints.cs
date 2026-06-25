@@ -31,6 +31,12 @@ public static class DiscussionEndpoints
         Timeout = TimeSpan.FromSeconds(30),
     };
 
+    private static HttpClient RedLeaf = new()
+    {
+        BaseAddress = new Uri(App.Config.Suite.RedLeaf),
+        Timeout = TimeSpan.FromSeconds(10),
+    };
+
     private static readonly ConcurrentDictionary<string, Task<string?>> _pendingSessions = new();
 
     private static RedLeafDiscussionReader? _redLeaf;
@@ -39,6 +45,7 @@ public static class DiscussionEndpoints
     public static void Initialize(AuthenticatedHttpClientFactory factory, RedLeafDiscussionReader redLeaf, AgentMemoryFactory agentMemoryFactory)
     {
         RedCompute = factory.CreateClient(App.Config.Suite.RedCompute, TimeSpan.FromSeconds(30));
+        RedLeaf = factory.CreateClient(App.Config.Suite.RedLeaf, TimeSpan.FromSeconds(10));
         _redLeaf = redLeaf;
         _agentMemoryFactory = agentMemoryFactory;
     }
@@ -183,6 +190,14 @@ public static class DiscussionEndpoints
 
             db.Discussions.Add(discussion);
             await db.SaveChangesAsync();
+
+            var broadcaster = ctx.RequestServices.GetService<WebSocketBroadcaster>();
+            broadcaster?.Broadcast("discussion.created", new
+            {
+                discussionId = discussion.Id,
+                agentId = discussion.AgentId,
+                status = discussion.Status,
+            });
 
             var scopeFactory = ctx.RequestServices.GetRequiredService<IServiceScopeFactory>();
             var discId = discussion.Id;
@@ -466,10 +481,12 @@ public static class DiscussionEndpoints
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });
 
+            var role = request.Type is "assistant" or "system" ? request.Type : "user";
+
             db.Conversations.Add(new ConversationRecord
             {
                 ContextId = id,
-                Role = "user",
+                Role = role,
                 Content = request.Content,
                 Source = $"event:{request.Source ?? "automation"}",
                 UserId = userId,
@@ -760,7 +777,31 @@ public static class DiscussionEndpoints
             ? (await _agentMemoryFactory!.GetAgentNameAsync(discussion.AgentId))
             : null;
 
-        var contextBlock = BuildNovaContext(ownDiscussions, otherAgentDiscussions, currentId: discussion.Id, now, device, input, agentName);
+        string? currentOutfit = null;
+        if (discussion.AgentId != null)
+        {
+            try
+            {
+                var outfitJson = await RedLeaf.GetStringAsync(
+                    $"api/entities?type=outfit&data.agent={discussion.AgentId}&data.active=true&limit=1");
+                using var outfitDoc = JsonDocument.Parse(outfitJson);
+                var items = outfitDoc.RootElement.GetProperty("items");
+                if (items.GetArrayLength() > 0)
+                {
+                    var outfit = items[0];
+                    var name = outfit.GetProperty("name").GetString();
+                    using var od = JsonDocument.Parse(outfit.GetProperty("data").GetString()!);
+                    var prompt = od.RootElement.TryGetProperty("prompt", out var p) ? p.GetString() : null;
+                    var asset = od.RootElement.TryGetProperty("asset", out var a) ? a.GetString() : null;
+                    currentOutfit = $"\"{name}\" — {prompt}";
+                    if (asset != null)
+                        currentOutfit += $"\nSee it: {App.Config.Suite.RedLeaf.TrimEnd('/')}{asset}";
+                }
+            }
+            catch { }
+        }
+
+        var contextBlock = BuildNovaContext(ownDiscussions, otherAgentDiscussions, currentId: discussion.Id, now, device, input, agentName, currentOutfit);
         var priorBlock = priorMessage != null
             ? $"\n<nova-prior-message role=\"assistant\">\n{priorMessage}\n</nova-prior-message>\n"
             : "";
@@ -807,7 +848,8 @@ public static class DiscussionEndpoints
 
     private static string BuildNovaContext(
         List<Discussion> discussions, List<Discussion>? otherAgentDiscussions,
-        string currentId, DateTime now, string device, string input, string? agentName)
+        string currentId, DateTime now, string device, string input, string? agentName,
+        string? currentOutfit = null)
     {
         var active = discussions.Where(d => d.Status != "archived").ToList();
         var archived = discussions.Where(d => d.Status == "archived" && d.MessageCount > 0).Take(10).ToList();
@@ -845,6 +887,9 @@ public static class DiscussionEndpoints
         sb.Append($"\nSearch all discussions: curl -s \"http://127.0.0.1:18803/api/discussions/search?q={{query}}\"");
         if (totalArchived > archived.Count)
             sb.Append($"\n({totalArchived} archived total in last 2 days — older ones available via search)");
+
+        if (currentOutfit != null)
+            sb.Append($"\n\nYour current outfit: {currentOutfit}");
 
         sb.Append("\n</nova-context>");
         return sb.ToString();
@@ -942,6 +987,7 @@ public class DiscussionTitleRequest
 public class DiscussionEventRequest
 {
     public string Content { get; set; } = "";
+    public string? Type { get; set; }
     public string? Source { get; set; }
     public string? SenderAgentId { get; set; }
     public string? ReplyToDiscussionId { get; set; }
