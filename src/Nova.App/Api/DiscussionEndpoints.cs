@@ -38,6 +38,7 @@ public static class DiscussionEndpoints
     };
 
     private static readonly ConcurrentDictionary<string, Task<string?>> _pendingSessions = new();
+    private static readonly ConcurrentDictionary<string, string> _lastOutfitSent = new();
 
     private static RedLeafDiscussionReader? _redLeaf;
     private static AgentMemoryFactory? _agentMemoryFactory;
@@ -801,7 +802,19 @@ public static class DiscussionEndpoints
             catch { }
         }
 
-        var contextBlock = BuildNovaContext(ownDiscussions, otherAgentDiscussions, currentId: discussion.Id, now, device, input, agentName, currentOutfit);
+        string? outfitToSend = null;
+        if (currentOutfit != null)
+        {
+            var isFirst = discussion.MessageCount == 0;
+            var changed = !_lastOutfitSent.TryGetValue(discussion.Id, out var prev) || prev != currentOutfit;
+            if (isFirst || changed)
+            {
+                outfitToSend = currentOutfit;
+                _lastOutfitSent[discussion.Id] = currentOutfit;
+            }
+        }
+
+        var contextBlock = BuildNovaContext(ownDiscussions, otherAgentDiscussions, currentId: discussion.Id, now, device, input, agentName, outfitToSend);
         var priorBlock = priorMessage != null
             ? $"\n<nova-prior-message role=\"assistant\">\n{priorMessage}\n</nova-prior-message>\n"
             : "";
