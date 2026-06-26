@@ -342,11 +342,10 @@ public static class DiscussionEndpoints
                     var agentDataEl = agentEntityDoc.RootElement.GetProperty("data");
                     var agentData = agentDataEl.ValueKind == JsonValueKind.String
                         ? JsonDocument.Parse(agentDataEl.GetString()!).RootElement : agentDataEl;
-                    string? activeOutfitId = null;
-                    foreach (var ovKey in new[] { "avatar_override", "avatar-override" })
-                        if (agentData.TryGetProperty(ovKey, out var ov) && ov.ValueKind == JsonValueKind.String
-                            && ov.GetString() is { Length: > 0 } ovStr && !ovStr.StartsWith('/'))
-                        { activeOutfitId = ovStr; break; }
+                    string? activeOutfitId = agentData.TryGetProperty("outfit", out var outfitRef)
+                        && outfitRef.ValueKind == JsonValueKind.String
+                        && outfitRef.GetString() is { Length: > 0 } ovStr && !ovStr.StartsWith('/')
+                        ? ovStr : null;
                     if (!string.IsNullOrEmpty(activeOutfitId))
                     {
                         var outfitJson = await RedLeaf.GetStringAsync($"api/entities/{activeOutfitId}");
@@ -854,11 +853,10 @@ public static class DiscussionEndpoints
                 var agentDataEl = agentEntityDoc.RootElement.GetProperty("data");
                 var agentData = agentDataEl.ValueKind == JsonValueKind.String
                     ? JsonDocument.Parse(agentDataEl.GetString()!).RootElement : agentDataEl;
-                string? activeOutfitId = null;
-                foreach (var ovKey in new[] { "avatar_override", "avatar-override" })
-                    if (agentData.TryGetProperty(ovKey, out var ov) && ov.ValueKind == JsonValueKind.String
-                        && ov.GetString() is { Length: > 0 } ovStr && !ovStr.StartsWith('/'))
-                    { activeOutfitId = ovStr; break; }
+                string? activeOutfitId = agentData.TryGetProperty("outfit", out var outfitRef)
+                    && outfitRef.ValueKind == JsonValueKind.String
+                    && outfitRef.GetString() is { Length: > 0 } ovStr && !ovStr.StartsWith('/')
+                    ? ovStr : null;
                 if (!string.IsNullOrEmpty(activeOutfitId))
                 {
                     var outfitJson = await RedLeaf.GetStringAsync($"api/entities/{activeOutfitId}");

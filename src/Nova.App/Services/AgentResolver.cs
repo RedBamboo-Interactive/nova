@@ -108,7 +108,7 @@ public class AgentResolver
                 var memoryInstructions = data != null ? GetStr(data.Value, "memory_instructions") : null;
                 var status = data != null ? GetStr(data.Value, "status") ?? "active" : "active";
                 var avatarFilename = data != null ? GetAvatarValue(data.Value) : null;
-                // If avatar_override stored an outfit entity ID (not a URL path), resolve its asset
+                // If outfit stored an outfit entity ID (not a URL path), resolve its asset
                 if (avatarFilename != null && !avatarFilename.StartsWith('/') && !avatarFilename.Contains("://"))
                 {
                     try
@@ -203,13 +203,10 @@ public class AgentResolver
 
     private static string? GetAvatarValue(JsonElement data)
     {
-        // Prefer avatar_override (daily outfit changes) over base avatar
-        foreach (var key in new[] { "avatar_override", "avatar-override" })
-        {
-            if (data.TryGetProperty(key, out var ov) && ov.ValueKind == JsonValueKind.String
-                && !string.IsNullOrEmpty(ov.GetString()))
-                return ov.GetString();
-        }
+        // Prefer outfit (active outfit entity) over base avatar
+        if (data.TryGetProperty("outfit", out var ov) && ov.ValueKind == JsonValueKind.String
+            && !string.IsNullOrEmpty(ov.GetString()))
+            return ov.GetString();
 
         if (!data.TryGetProperty("avatar", out var av)) return null;
         if (av.ValueKind == JsonValueKind.String) return av.GetString();

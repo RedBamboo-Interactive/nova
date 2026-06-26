@@ -63,13 +63,13 @@ curl -s -X POST "http://localhost:18804/api/assets/upload" -F "file=@outfit.png"
 curl -s -X POST "http://localhost:18803/api/outfits" -H "Content-Type: application/json" -d '{"url": "/api/assets/<filename>", "prompt": "<the prompt>", "name": "<short outfit name>"}'
 # Returns {"success": true, "id": "<entity id>"}
 
-# Set as active outfit (updates avatar_override on agent entity)
+# Set as active outfit (updates outfit on agent entity)
 curl -s -X POST "http://localhost:18803/api/outfits/select" -H "Content-Type: application/json" -d '{"url": "/api/assets/<filename>", "outfitId": "<entity id>"}'
 
 rm outfit.png
 ```
 
-Outfits are RedLeaf entities (type: `outfit`). Each has: asset URL, prompt, name, active flag. The Nova backend handles the avatar_override field on your agent entity. Laurent can browse and switch outfits by clicking your avatar in the UI.
+Outfits are RedLeaf entities (type: `outfit`). Each has: asset URL, prompt, name, active flag. The Nova backend handles the outfit field on your agent entity. Laurent can browse and switch outfits by clicking your avatar in the UI.
 
 ## Prompt crafting
 

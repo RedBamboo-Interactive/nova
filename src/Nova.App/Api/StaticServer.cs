@@ -210,7 +210,7 @@ public class StaticServer
 
         registry.MapGet("/api/avatar", "Proxy the Nova agent avatar from RedLeaf", async (HttpContext ctx) =>
         {
-            // Use AgentResolver for fresh avatar (respects avatar_override)
+            // Use AgentResolver for fresh avatar (respects outfit)
             string? avatarUrl = null;
             if (NovaMirror.AgentId != null)
             {
@@ -359,9 +359,7 @@ public class StaticServer
                 }
                 else baseAvatarUrl = "/nova-avatar.png";
 
-                string? currentOverride = null;
-                foreach (var key in new[] { "avatar_override", "avatar-override" })
-                    if ((currentOverride = GetStr(agentData, key)) is { Length: > 0 }) break;
+                string? currentOverride = GetStr(agentData, "outfit");
 
                 // Fetch outfit entities for this agent, newest first
                 var outfitResp = await rl.GetStringAsync($"api/entities?type=outfit&data.agent={agentId}&sort_by=createdAt&sort_dir=desc&limit=30");
@@ -415,14 +413,14 @@ public class StaticServer
             {
                 using var rl = BuildRedLeafClient();
 
-                // Update avatar_override on agent entity (stores outfit ID, or empty for base avatar)
+                // Update outfit on agent entity (stores outfit ID, or empty for base avatar)
                 var patchBody = new StringContent(
-                    JsonSerializer.Serialize(new { avatar_override = outfitId ?? "" }),
+                    JsonSerializer.Serialize(new { outfit = outfitId ?? "" }),
                     System.Text.Encoding.UTF8, "application/json");
                 var resp = await rl.PatchAsync($"api/entities/{NovaMirror.AgentId}/data", patchBody);
                 if (!resp.IsSuccessStatusCode) return Results.StatusCode(502);
 
-                // Resolve asset URL from outfit entity (avatar_override stores ID, not URL)
+                // Resolve asset URL from outfit entity (outfit stores ID, not URL)
                 string resolvedUrl = "";
                 if (!string.IsNullOrEmpty(outfitId))
                 {
