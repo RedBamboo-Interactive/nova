@@ -4,12 +4,10 @@ using RedBamboo.AppHost.Streams;
 namespace Nova.App.Services;
 
 /// <summary>
-/// Mirrors Nova's data to RedLeaf (Phase 3 of the suite storage
-/// consolidation): discussions as `discussion` entities (versioning off),
+/// Mirrors Nova's data to RedLeaf: discussions as `discussion` entities,
 /// chat messages as `nova-messages` records, AI invocations as
-/// `nova-invocations` records, and the identity/persona files as versioned
-/// `agent-file` entities. All publishing is fire-and-forget; a null Client
-/// (RedLeaf not configured yet) makes every call a no-op.
+/// `nova-invocations` records, automation runs as `automation-runs` records.
+/// All publishing is fire-and-forget; a null Client makes every call a no-op.
 /// </summary>
 public static class NovaMirror
 {
@@ -77,11 +75,6 @@ public static class NovaMirror
             success,
             model,
         }, userId: userId);
-
-    public static void PublishAgentFile(string fileKey, string content) => Client?.UpsertEntity(
-        $"nova-{fileKey}", "agent-file",
-        $"Nova {AgentFileSync.DisplayName(fileKey)}",
-        new { app = "nova", file_key = fileKey, content });
 
     public static void PublishAutomationRun(string name, bool triggered, string? summary, string? error)
     {

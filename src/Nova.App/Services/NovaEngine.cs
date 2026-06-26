@@ -87,6 +87,13 @@ public class NovaEngine : IAsyncDisposable
             You are running an automated task. Be concise.
             If there is nothing to do, say so briefly.
             If you need to notify the user, write to memory/meta/notifications.md.
+
+            # curl on Windows
+            The Bash tool runs Git Bash. curl pitfalls you MUST avoid:
+            - NEVER use absolute Windows paths with @ (e.g. -d @C:\Users\...). Backslashes are escape chars in Bash. Use RELATIVE paths only: -d @filename.json
+            - Use 127.0.0.1, not localhost.
+            - Single line only. No backslash line continuations.
+            - Always check the exit code. If curl fails, read the error and retry. Do NOT claim success without confirmation.
             """;
     }
 

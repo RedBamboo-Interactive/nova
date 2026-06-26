@@ -53,11 +53,6 @@ public partial class App : Application
         Memory = new MemoryManager(Config.WorkspacePath, LogService);
         Memory.EnsureDirectories();
 
-        // RedLeaf is the source of truth for identity/persona files — pull
-        // and materialize before generating CLAUDE.md (seeds upward on first
-        // run; tolerates RedLeaf being offline).
-        await AgentFileSync.PullOrSeedAsync(Memory, Config, LogService);
-
         var agentId = await AgentRegistration.RegisterAsync(Memory, Config, LogService);
         NovaMirror.AgentId = agentId;
         NovaMirror.UserId = await AgentRegistration.ResolveUserIdAsync(Config, LogService);

@@ -90,11 +90,6 @@ public class MemoryManager
 
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         File.WriteAllText(fullPath, content);
-
-        // Edits to tracked agent files (identity, memory instructions, …)
-        // push back to RedLeaf, the source of truth.
-        if (AgentFileSync.FileKeyForPath(relativePath) is { } fileKey)
-            NovaMirror.PublishAgentFile(fileKey, content);
     }
 
     public async Task BackupAsync()

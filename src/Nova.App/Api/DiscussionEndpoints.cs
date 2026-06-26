@@ -337,14 +337,22 @@ public static class DiscussionEndpoints
             {
                 try
                 {
-                    var outfitJson = await RedLeaf.GetStringAsync(
-                        $"api/entities?type=outfit&data.agent={discussion.AgentId}&data.active=true&limit=1");
-                    using var outfitDoc = JsonDocument.Parse(outfitJson);
-                    var items = outfitDoc.RootElement.GetProperty("items");
-                    if (items.GetArrayLength() > 0)
+                    var agentJson = await RedLeaf.GetStringAsync($"api/entities/{discussion.AgentId}");
+                    using var agentEntityDoc = JsonDocument.Parse(agentJson);
+                    var agentDataEl = agentEntityDoc.RootElement.GetProperty("data");
+                    var agentData = agentDataEl.ValueKind == JsonValueKind.String
+                        ? JsonDocument.Parse(agentDataEl.GetString()!).RootElement : agentDataEl;
+                    string? activeOutfitId = null;
+                    foreach (var ovKey in new[] { "avatar_override", "avatar-override" })
+                        if (agentData.TryGetProperty(ovKey, out var ov) && ov.ValueKind == JsonValueKind.String
+                            && ov.GetString() is { Length: > 0 } ovStr && !ovStr.StartsWith('/'))
+                        { activeOutfitId = ovStr; break; }
+                    if (!string.IsNullOrEmpty(activeOutfitId))
                     {
-                        var outfit = items[0];
-                        var name = outfit.GetProperty("name").GetString();
+                        var outfitJson = await RedLeaf.GetStringAsync($"api/entities/{activeOutfitId}");
+                        using var outfitDoc = JsonDocument.Parse(outfitJson);
+                        var outfit = outfitDoc.RootElement;
+                        var name = outfit.TryGetProperty("name", out var nm) ? nm.GetString() : null;
                         using var od = JsonDocument.Parse(outfit.GetProperty("data").GetString()!);
                         var prompt = od.RootElement.TryGetProperty("prompt", out var p) ? p.GetString() : null;
                         var asset = od.RootElement.TryGetProperty("asset", out var a) ? a.GetString() : null;
@@ -841,14 +849,22 @@ public static class DiscussionEndpoints
         {
             try
             {
-                var outfitJson = await RedLeaf.GetStringAsync(
-                    $"api/entities?type=outfit&data.agent={discussion.AgentId}&data.active=true&limit=1");
-                using var outfitDoc = JsonDocument.Parse(outfitJson);
-                var items = outfitDoc.RootElement.GetProperty("items");
-                if (items.GetArrayLength() > 0)
+                var agentJson = await RedLeaf.GetStringAsync($"api/entities/{discussion.AgentId}");
+                using var agentEntityDoc = JsonDocument.Parse(agentJson);
+                var agentDataEl = agentEntityDoc.RootElement.GetProperty("data");
+                var agentData = agentDataEl.ValueKind == JsonValueKind.String
+                    ? JsonDocument.Parse(agentDataEl.GetString()!).RootElement : agentDataEl;
+                string? activeOutfitId = null;
+                foreach (var ovKey in new[] { "avatar_override", "avatar-override" })
+                    if (agentData.TryGetProperty(ovKey, out var ov) && ov.ValueKind == JsonValueKind.String
+                        && ov.GetString() is { Length: > 0 } ovStr && !ovStr.StartsWith('/'))
+                    { activeOutfitId = ovStr; break; }
+                if (!string.IsNullOrEmpty(activeOutfitId))
                 {
-                    var outfit = items[0];
-                    var name = outfit.GetProperty("name").GetString();
+                    var outfitJson = await RedLeaf.GetStringAsync($"api/entities/{activeOutfitId}");
+                    using var outfitDoc = JsonDocument.Parse(outfitJson);
+                    var outfit = outfitDoc.RootElement;
+                    var name = outfit.TryGetProperty("name", out var nm) ? nm.GetString() : null;
                     using var od = JsonDocument.Parse(outfit.GetProperty("data").GetString()!);
                     var prompt = od.RootElement.TryGetProperty("prompt", out var p) ? p.GetString() : null;
                     var asset = od.RootElement.TryGetProperty("asset", out var a) ? a.GetString() : null;
