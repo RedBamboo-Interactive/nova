@@ -382,18 +382,11 @@ public static class DiscussionEndpoints
                 {
                     var resp = await RedCompute.PostAsync($"/ai-session/sessions/{discussion.SessionId}/stop", null);
                     if (!resp.IsSuccessStatusCode)
-                    {
-                        var body = await resp.Content.ReadAsStringAsync();
-                        var reason = $"Session stop failed (HTTP {(int)resp.StatusCode})";
-                        App.LogService.Warn("discussions", $"Archive blocked — {reason}: {body}");
-                        return Results.Json(new { error = reason }, statusCode: 502);
-                    }
+                        App.LogService.Info("discussions", $"Session stop returned {(int)resp.StatusCode} during archive — proceeding");
                 }
                 catch (Exception ex)
                 {
-                    var reason = $"Session stop failed ({ex.GetType().Name}: {ex.Message})";
-                    App.LogService.Warn("discussions", $"Archive blocked — {reason}");
-                    return Results.Json(new { error = reason }, statusCode: 502);
+                    App.LogService.Info("discussions", $"Session stop failed during archive ({ex.GetType().Name}) — proceeding");
                 }
             }
 
