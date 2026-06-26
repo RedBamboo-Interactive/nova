@@ -153,7 +153,7 @@ export function useDiscussions() {
     try {
       const body = agentId ? { agentId } : undefined
       const d = await api.post<DiscussionInfo>("/api/discussions", body)
-      setDiscussions((prev) => [d, ...prev])
+      setDiscussions((prev) => prev.some((x) => x.id === d.id) ? prev : [d, ...prev])
       setActiveDiscussionId(d.id)
       setMessages((prev) => ({ ...prev, [d.id]: [] }))
       loadedRef.current.add(d.id)
