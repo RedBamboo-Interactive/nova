@@ -38,8 +38,27 @@ Not all may be available or relevant every night — check what's there and adap
 
 ### Nova Conversations
 Your own discussions with the user. This is your primary source.
+
+Fetch discussions one at a time -- every discussion gets its full content, nothing
+gets truncated or randomly cut off mid-message.
+
 ```bash
-curl "http://localhost:18803/api/discussions/export?since={since_date}"
+# Step 1: List all discussions with IDs, titles, and message counts
+curl -s "http://127.0.0.1:18803/api/discussions?limit=100"
+# Filter the results by lastActivityAt or createdAt within the dream window
+
+# Step 2: For each discussion in the window, fetch it individually
+curl -s "http://127.0.0.1:18803/api/discussions/{id}/export"
+# Returns: clean markdown -- user/assistant turns with timestamps, no tool noise
+# Example output:
+# ## Discussion title [id]
+# Created: date -- N message(s)
+#
+# **user** (HH:MM):
+# Message text here
+#
+# **nova** (HH:MM):
+# Response text here
 ```
 
 ### Git Activity
@@ -59,12 +78,12 @@ API (RedCompute manages all AI sessions for the suite).
 
 ```bash
 # List recent sessions (all=true includes dismissed/stopped)
-curl -s "http://localhost:18800/ai-session/sessions?limit=50&all=true"
+curl -s "http://127.0.0.1:18800/ai-session/sessions?limit=50&all=true"
 # Returns: id, provider, projectName, projectPath, status, startedAt, model,
 #          title, messageCount, qualityTier, source
 
 # Get full message history for a session
-curl -s "http://localhost:18800/ai-session/sessions/{session_id}"
+curl -s "http://127.0.0.1:18800/ai-session/sessions/{session_id}"
 # Returns: session metadata + messages[] (id, role, eventType, content, timestamp)
 ```
 
@@ -85,7 +104,7 @@ and any messages where the user gives feedback or redirects. The middle is
 usually tool calls and incremental progress.
 
 ### RedBamboo Ecosystem
-The suite runs on localhost. Probe what's available and pull recent activity.
+The suite runs on 127.0.0.1. Probe what's available and pull recent activity.
 - **RedCompute** (port 18800): AI compute engine. Session management for all
   suite apps. Check `/ai-session/sessions` for session list and message history.
 - **CodeRed** (port 18801): Claude Code web UI. Sessions are tracked via
@@ -93,14 +112,14 @@ The suite runs on localhost. Probe what's available and pull recent activity.
 - **RedMatter** (port 18802): Game engine / CMS. Check for content changes,
   builds, deployments.
 - **Nova** (port 18803): That's you. Persistent AI companion with conversations,
-  memory, and automations. The discussions export API (`/api/discussions/export`)
-  is your primary source for conversation history.
+  memory, and automations. Use the per-discussion export (`/api/discussions/{id}/export`)
+  to fetch each conversation in full.
 
 ```bash
-curl -s "http://localhost:18800/ping" && echo "RedCompute is up"
-curl -s "http://localhost:18801/ping" && echo "CodeRed is up"
-curl -s "http://localhost:18802/ping" && echo "RedMatter is up"
-curl -s "http://localhost:18803/ping" && echo "Nova is up"
+curl -s "http://127.0.0.1:18800/ping" && echo "RedCompute is up"
+curl -s "http://127.0.0.1:18801/ping" && echo "CodeRed is up"
+curl -s "http://127.0.0.1:18802/ping" && echo "RedMatter is up"
+curl -s "http://127.0.0.1:18803/ping" && echo "Nova is up"
 ```
 
 Discover available endpoints and pull what's useful. These services evolve —
@@ -146,13 +165,21 @@ Read through everything you gathered and extract:
 - **Technical context**: architecture decisions, stack changes, dependency updates,
   infrastructure changes
 
-**IMPORTANT: Every discussion deserves attention, not just code-heavy ones.**
-Don't skip or skim discussions based on their title. A conversation called
-"non-work topics" might contain hours of creative world-building for a tracked
-project. A "casual chat" might surface important user context or decisions.
-Cross-reference discussion content against existing memory topics — if a
+**IMPORTANT: Fetch and process EVERY discussion individually. Do not skip any
+discussion regardless of its title or apparent importance.** A "casual chat"
+often contains the most critical personal and emotional content -- what feels
+trivial from the title can hold key preferences, relationship context, or
+decisions that never made it into code or commits.
+
+When you read through a discussion and flag something as significant or worth
+investigating further, you MUST actually fetch and process that content before
+moving to the harvest writing phase. Do not start writing the harvest if you
+still have items on your mental "should check" list. Investigation first, then
+write.
+
+Cross-reference discussion content against existing memory topics -- if a
 discussion touches a tracked project (even a personal one like a TTRPG scenario),
-it's substantive content that belongs in the harvest. Judge by what was actually
+it is substantive content that belongs in the harvest. Judge by what was actually
 said, not by the title or the session cost.
 
 Write the harvest to `memory/dreaming/harvest/{yyyy-MM-dd}.md`, grouped by
@@ -173,7 +200,7 @@ For each substantive discussion processed, create or update a file in
 This creates a persistent, searchable index of past discussions in your memory.
 When you encounter a reference to a past discussion, check this directory first.
 The file gives you the summary; for full content use:
-`curl -s http://localhost:18803/api/discussions/{id}/export`
+`curl -s http://127.0.0.1:18803/api/discussions/{id}/export`
 
 ### Step 4: Consolidate — Cross-Reference with Existing Memory
 
