@@ -13,4 +13,5 @@ public class Discussion
     public string? InjectedContext { get; set; }
     public string? OwnerId { get; set; }
     public string? AgentId { get; set; }
+    public string? LastContextJson { get; set; }
 }

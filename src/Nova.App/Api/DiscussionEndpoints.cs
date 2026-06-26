@@ -38,7 +38,6 @@ public static class DiscussionEndpoints
     };
 
     private static readonly ConcurrentDictionary<string, Task<string?>> _pendingSessions = new();
-    private static readonly ConcurrentDictionary<string, string> _lastOutfitSent = new();
 
     private static RedLeafDiscussionReader? _redLeaf;
     private static AgentMemoryFactory? _agentMemoryFactory;
@@ -299,6 +298,71 @@ public static class DiscussionEndpoints
                 });
 
             return Results.Ok(result);
+        });
+
+        registry.MapGet("/api/discussions/{id}/context", "Get full context snapshot for a discussion (for AI self-query)", async (string id, HttpContext ctx, NovaDbContext db) =>
+        {
+            var discussion = await db.Discussions.FindAsync(id);
+            if (discussion is null)
+                return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
+
+            var now = DateTime.UtcNow;
+            var cutoff = now.AddDays(-2);
+
+            var baseQuery = db.Discussions
+                .Where(d => d.Status != "archived" || (d.Status == "archived" && d.LastActivity >= cutoff))
+                .WhereCanAccess(userId);
+
+            var ownDiscussions = discussion.AgentId != null
+                ? await baseQuery.Where(d => d.AgentId == discussion.AgentId).OrderByDescending(d => d.LastActivity).ToListAsync()
+                : await baseQuery.OrderByDescending(d => d.LastActivity).ToListAsync();
+
+            List<Discussion>? otherAgentDiscussions = null;
+            if (discussion.AgentId != null)
+            {
+                otherAgentDiscussions = await baseQuery
+                    .Where(d => d.AgentId != discussion.AgentId && d.Status != "archived")
+                    .OrderByDescending(d => d.LastActivity)
+                    .Take(5)
+                    .ToListAsync();
+            }
+
+            string? currentOutfit = null;
+            string? outfitAsset = null;
+            if (discussion.AgentId != null)
+            {
+                try
+                {
+                    var outfitJson = await RedLeaf.GetStringAsync(
+                        $"api/entities?type=outfit&data.agent={discussion.AgentId}&data.active=true&limit=1");
+                    using var outfitDoc = JsonDocument.Parse(outfitJson);
+                    var items = outfitDoc.RootElement.GetProperty("items");
+                    if (items.GetArrayLength() > 0)
+                    {
+                        var outfit = items[0];
+                        var name = outfit.GetProperty("name").GetString();
+                        using var od = JsonDocument.Parse(outfit.GetProperty("data").GetString()!);
+                        var prompt = od.RootElement.TryGetProperty("prompt", out var p) ? p.GetString() : null;
+                        var asset = od.RootElement.TryGetProperty("asset", out var a) ? a.GetString() : null;
+                        var reasoning = od.RootElement.TryGetProperty("reasoning", out var r) ? r.GetString() : null;
+                        currentOutfit = $"You're wearing \"{name}\" today ({prompt}).";
+                        if (reasoning != null) currentOutfit += $" You chose it because: {reasoning}";
+                        if (asset != null)
+                        {
+                            outfitAsset = $"{App.Config.Suite.RedLeaf.TrimEnd('/')}{asset}";
+                            currentOutfit += $"\nSee it: {outfitAsset}";
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            var snapshot = NovaContextBuilder.BuildSnapshot(ownDiscussions, otherAgentDiscussions, currentOutfit, outfitAsset);
+            return Results.Ok(snapshot);
         });
 
         registry.MapPut("/api/discussions/{id}/title", "Update discussion title", async (string id, DiscussionTitleRequest request, HttpContext ctx, NovaDbContext db) =>
@@ -631,7 +695,7 @@ public static class DiscussionEndpoints
             if (!outcome.Success)
                 return ApiError.BadGateway(outcome.ErrorCode!, outcome.ErrorMessage!);
 
-            return Results.Ok(new { success = true, sessionId = outcome.SessionId });
+            return Results.Ok(new { success = true, sessionId = outcome.SessionId, metadata = outcome.Metadata });
         })
         .WithRequestBody(new
         {
@@ -688,7 +752,7 @@ public static class DiscussionEndpoints
         return session.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
     }
 
-    internal sealed record SendMessageOutcome(bool Success, string? SessionId, string? ErrorCode, string? ErrorMessage);
+    internal sealed record SendMessageOutcome(bool Success, string? SessionId, string? ErrorCode, string? ErrorMessage, Dictionary<string, object?>? Metadata = null);
 
     /// <summary>
     /// Shared message-send pipeline: lazily creates the RedCompute session, injects any
@@ -772,6 +836,7 @@ public static class DiscussionEndpoints
             : null;
 
         string? currentOutfit = null;
+        string? currentOutfitAsset = null;
         if (discussion.AgentId != null)
         {
             try
@@ -787,27 +852,34 @@ public static class DiscussionEndpoints
                     using var od = JsonDocument.Parse(outfit.GetProperty("data").GetString()!);
                     var prompt = od.RootElement.TryGetProperty("prompt", out var p) ? p.GetString() : null;
                     var asset = od.RootElement.TryGetProperty("asset", out var a) ? a.GetString() : null;
-                    currentOutfit = $"\"{name}\" — {prompt}";
+                    var reasoning = od.RootElement.TryGetProperty("reasoning", out var r) ? r.GetString() : null;
+                    currentOutfit = $"You're wearing \"{name}\" today ({prompt}).";
+                    if (reasoning != null)
+                        currentOutfit += $" You chose it because: {reasoning}";
                     if (asset != null)
-                        currentOutfit += $"\nSee it: {App.Config.Suite.RedLeaf.TrimEnd('/')}{asset}";
+                    {
+                        currentOutfitAsset = $"{App.Config.Suite.RedLeaf.TrimEnd('/')}{asset}";
+                        currentOutfit += $"\nSee it: {currentOutfitAsset}";
+                    }
                 }
             }
             catch { }
         }
 
-        string? outfitToSend = null;
-        if (currentOutfit != null)
-        {
-            var isFirst = discussion.MessageCount == 0;
-            var changed = !_lastOutfitSent.TryGetValue(discussion.Id, out var prev) || prev != currentOutfit;
-            if (isFirst || changed)
-            {
-                outfitToSend = currentOutfit;
-                _lastOutfitSent[discussion.Id] = currentOutfit;
-            }
-        }
+        var currentSnapshot = NovaContextBuilder.BuildSnapshot(
+            ownDiscussions, otherAgentDiscussions, currentOutfit, currentOutfitAsset);
+        var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
 
-        var contextBlock = BuildNovaContext(ownDiscussions, otherAgentDiscussions, currentId: discussion.Id, now, device, input, agentName, outfitToSend);
+        string contextBlock;
+        if (previousSnapshot == null || discussion.MessageCount == 0)
+            contextBlock = NovaContextBuilder.BuildFullContext(currentSnapshot, discussion.Id, now, device, input, agentName);
+        else
+            contextBlock = NovaContextBuilder.BuildDeltaContext(currentSnapshot, previousSnapshot, discussion.Id, now, device, input, agentName);
+
+        discussion.LastContextJson = NovaContextBuilder.SerializeSnapshot(currentSnapshot);
+
+        var metadata = NovaContextBuilder.BuildMetadata(currentSnapshot, now, device, input, discussion.Id, agentName);
+
         var priorBlock = priorMessage != null
             ? $"\n<nova-prior-message role=\"assistant\">\n{priorMessage}\n</nova-prior-message>\n"
             : "";
@@ -825,6 +897,9 @@ public static class DiscussionEndpoints
             return new(false, discussion.SessionId, "redcompute_unavailable",
                 "RedCompute could not deliver the message to the session.");
         }
+
+        discussion.MessageCount++;
+        discussion.LastActivity = now;
 
         if (discussion.InjectedContext != null)
         {
@@ -849,57 +924,9 @@ public static class DiscussionEndpoints
 
         await db.SaveChangesAsync();
 
-        return new(true, discussion.SessionId, null, null);
+        return new(true, discussion.SessionId, null, null, metadata);
     }
 
-    private static string BuildNovaContext(
-        List<Discussion> discussions, List<Discussion>? otherAgentDiscussions,
-        string currentId, DateTime now, string device, string input, string? agentName,
-        string? currentOutfit = null)
-    {
-        var active = discussions.Where(d => d.Status != "archived").ToList();
-        var archived = discussions.Where(d => d.Status == "archived" && d.MessageCount > 0).Take(10).ToList();
-
-        var sb = new System.Text.StringBuilder();
-        var agentAttr = agentName != null ? $" agent=\"{agentName}\"" : "";
-        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}>");
-
-        if (active.Count > 0)
-        {
-            sb.Append("\nActive discussions:");
-            foreach (var d in active)
-            {
-                var marker = d.Id == currentId ? " <- you are here" : "";
-                sb.Append($"\n- [{d.Id}] \"{d.Title ?? "(untitled)"}\" . {d.MessageCount} msgs . {FormatRelativeTime(now - d.LastActivity)}{marker}");
-            }
-        }
-
-        if (archived.Count > 0)
-        {
-            sb.Append("\n\nRecently archived:");
-            foreach (var d in archived)
-                sb.Append($"\n- [{d.Id}] \"{d.Title ?? "(untitled)"}\" . {d.MessageCount} msgs . archived {FormatRelativeTime(now - d.LastActivity)}");
-        }
-
-        if (otherAgentDiscussions is { Count: > 0 })
-        {
-            sb.Append("\n\nOther agents' active discussions:");
-            foreach (var d in otherAgentDiscussions)
-                sb.Append($"\n- [{d.Id}] \"{d.Title ?? "(untitled)"}\" . {d.MessageCount} msgs . {FormatRelativeTime(now - d.LastActivity)}");
-        }
-
-        var totalArchived = discussions.Count(d => d.Status == "archived");
-        sb.Append($"\n\nRecall any discussion: curl -s http://127.0.0.1:18803/api/discussions/{{id}}/export");
-        sb.Append($"\nSearch all discussions: curl -s \"http://127.0.0.1:18803/api/discussions/search?q={{query}}\"");
-        if (totalArchived > archived.Count)
-            sb.Append($"\n({totalArchived} archived total in last 2 days — older ones available via search)");
-
-        if (currentOutfit != null)
-            sb.Append($"\n\nYour current outfit: {currentOutfit}");
-
-        sb.Append("\n</nova-context>");
-        return sb.ToString();
-    }
 
     private static string FormatRelativeTime(TimeSpan elapsed)
     {

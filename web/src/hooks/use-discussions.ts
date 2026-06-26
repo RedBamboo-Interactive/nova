@@ -210,9 +210,20 @@ export function useDiscussions() {
       }
     }
 
+    const backfillMetadata = (meta?: Record<string, unknown>) => {
+      if (!meta) return
+      setMessages((prev) => ({
+        ...prev,
+        [discussionId]: (prev[discussionId] ?? []).map((m) =>
+          m.id === userMsg.id ? { ...m, metadata: meta } : m
+        ),
+      }))
+    }
+
     try {
-      const res = await api.post<{ success: boolean; sessionId?: string }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod })
+      const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown> }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod })
       updateSessionId(res)
+      backfillMetadata(res.metadata)
       return
     } catch {
       if (!disc.sessionId) { fail(); return }
@@ -227,8 +238,9 @@ export function useDiscussions() {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const res = await api.post<{ success: boolean; sessionId?: string }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod })
+        const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown> }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod })
         updateSessionId(res)
+        backfillMetadata(res.metadata)
         return
       } catch {
         if (attempt < 2) {
