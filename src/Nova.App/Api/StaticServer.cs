@@ -378,8 +378,9 @@ public class StaticServer
                         name = item.TryGetProperty("name", out var n) ? n.GetString() : null,
                         url = GetStr(data, "asset"),
                         prompt = GetStr(data, "prompt"),
+                        reasoning = GetStr(data, "reasoning"),
                         date = item.TryGetProperty("createdAt", out var ca) ? ca.GetString() : null,
-                        active = data.TryGetProperty("active", out var act) && act.ValueKind == JsonValueKind.True,
+                        active = item.GetProperty("id").GetString() == currentOverride,
                     });
                 }
 
@@ -414,39 +415,38 @@ public class StaticServer
             {
                 using var rl = BuildRedLeafClient();
 
-                // Update avatar_override on agent entity
+                // Update avatar_override on agent entity (stores outfit ID, or empty for base avatar)
                 var patchBody = new StringContent(
-                    JsonSerializer.Serialize(new { avatar_override = url ?? "" }),
+                    JsonSerializer.Serialize(new { avatar_override = outfitId ?? "" }),
                     System.Text.Encoding.UTF8, "application/json");
                 var resp = await rl.PatchAsync($"api/entities/{NovaMirror.AgentId}/data", patchBody);
                 if (!resp.IsSuccessStatusCode) return Results.StatusCode(502);
 
-                // Mark the selected outfit as active, deactivate others
+                // Resolve asset URL from outfit entity (avatar_override stores ID, not URL)
+                string resolvedUrl = "";
                 if (!string.IsNullOrEmpty(outfitId))
                 {
-                    var allResp = await rl.GetStringAsync($"api/entities?type=outfit&data.agent={NovaMirror.AgentId}&data.active=true&limit=50");
-                    using var allDoc = JsonDocument.Parse(allResp);
-                    foreach (var item in allDoc.RootElement.GetProperty("items").EnumerateArray())
+                    try
                     {
-                        var id = item.GetProperty("id").GetString();
-                        if (id == outfitId) continue;
-                        var deactivate = new StringContent("{\"active\":false}", System.Text.Encoding.UTF8, "application/json");
-                        await rl.PatchAsync($"api/entities/{id}/data", deactivate);
+                        var outfitEntityResp = await rl.GetStringAsync($"api/entities/{outfitId}");
+                        using var outfitEntityDoc = JsonDocument.Parse(outfitEntityResp);
+                        var outfitEntityData = ParseEntityData(outfitEntityDoc.RootElement);
+                        var asset = GetStr(outfitEntityData, "asset");
+                        if (asset != null) resolvedUrl = asset;
                     }
-                    var activate = new StringContent("{\"active\":true}", System.Text.Encoding.UTF8, "application/json");
-                    await rl.PatchAsync($"api/entities/{outfitId}/data", activate);
+                    catch { }
                 }
 
                 await _agentResolver.GetAgentsAsync(forceRefresh: true);
 
                 // Broadcast avatar change to all connected frontends
                 _app.Services.GetService<WebSocketBroadcaster>()
-                    ?.Broadcast("agent.avatar-changed", new { agentId = NovaMirror.AgentId, url = url ?? "" });
+                    ?.Broadcast("agent.avatar-changed", new { agentId = NovaMirror.AgentId, url = resolvedUrl });
 
                 // Notify Nova via discussion event
                 if (!string.IsNullOrEmpty(discussionId))
                 {
-                    var outfitLabel = string.IsNullOrEmpty(url) ? "base avatar" : "a new outfit";
+                    var outfitLabel = string.IsNullOrEmpty(resolvedUrl) ? "base avatar" : "a new outfit";
                     using var novaHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
                     var eventBody = new StringContent(
                         JsonSerializer.Serialize(new { type = "outfit-change", content = $"Laurent changed your outfit to {outfitLabel}." }),
@@ -454,7 +454,7 @@ public class StaticServer
                     await novaHttp.PostAsync($"http://127.0.0.1:18803/api/discussions/{discussionId}/event", eventBody);
                 }
 
-                return Results.Ok(new { success = true, url = url ?? "" });
+                return Results.Ok(new { success = true, url = resolvedUrl });
             }
             catch (Exception ex)
             {
@@ -473,13 +473,20 @@ public class StaticServer
                 var assetUrl = doc.RootElement.GetProperty("url").GetString();
                 var prompt = doc.RootElement.TryGetProperty("prompt", out var p) ? p.GetString() : null;
                 var name = doc.RootElement.TryGetProperty("name", out var n) ? n.GetString() : "Outfit";
+                var reasoning = doc.RootElement.TryGetProperty("reasoning", out var r) ? r.GetString() : null;
 
                 using var rl = BuildRedLeafClient();
+                var dataObj = new Dictionary<string, object?>
+                {
+                    ["agent"] = NovaMirror.AgentId, ["asset"] = assetUrl,
+                    ["prompt"] = prompt,
+                };
+                if (reasoning != null) dataObj["reasoning"] = reasoning;
                 var createBody = new StringContent(JsonSerializer.Serialize(new
                 {
                     name,
                     type_slug = "outfit",
-                    data = new { agent = NovaMirror.AgentId, asset = assetUrl, prompt, active = false }
+                    data = dataObj
                 }), System.Text.Encoding.UTF8, "application/json");
 
                 var resp = await rl.PostAsync("api/entities", createBody);
@@ -698,6 +705,12 @@ public class StaticServer
                 cmd.ExecuteNonQuery();
                 cmd.Parameters.Clear();
             }
+        }
+
+        if (!discColumns.Contains("LastContextJson"))
+        {
+            cmd.CommandText = "ALTER TABLE Discussions ADD COLUMN LastContextJson TEXT";
+            cmd.ExecuteNonQuery();
         }
 
         cmd.CommandText = "PRAGMA table_info(Conversations)";

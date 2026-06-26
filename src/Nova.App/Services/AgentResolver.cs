@@ -108,6 +108,18 @@ public class AgentResolver
                 var memoryInstructions = data != null ? GetStr(data.Value, "memory_instructions") : null;
                 var status = data != null ? GetStr(data.Value, "status") ?? "active" : "active";
                 var avatarFilename = data != null ? GetAvatarValue(data.Value) : null;
+                // If avatar_override stored an outfit entity ID (not a URL path), resolve its asset
+                if (avatarFilename != null && !avatarFilename.StartsWith('/') && !avatarFilename.Contains("://"))
+                {
+                    try
+                    {
+                        var outfitResp = await http.GetStringAsync($"api/entities/{avatarFilename}");
+                        using var outfitDoc = JsonDocument.Parse(outfitResp);
+                        var outfitData = ParseData(outfitDoc.RootElement);
+                        avatarFilename = outfitData != null ? GetStr(outfitData.Value, "asset") : null;
+                    }
+                    catch { avatarFilename = null; }
+                }
                 var provider = data != null ? GetStr(data.Value, "provider") : null;
 
                 var workspacePath = ResolveWorkspacePath(id, slug);
