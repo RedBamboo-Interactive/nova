@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Security.Claims;
@@ -41,13 +42,15 @@ public static class DiscussionEndpoints
 
     private static RedLeafDiscussionReader? _redLeaf;
     private static AgentMemoryFactory? _agentMemoryFactory;
+    private static GeoLocationService? _geo;
 
-    public static void Initialize(AuthenticatedHttpClientFactory factory, RedLeafDiscussionReader redLeaf, AgentMemoryFactory agentMemoryFactory)
+    public static void Initialize(AuthenticatedHttpClientFactory factory, RedLeafDiscussionReader redLeaf, AgentMemoryFactory agentMemoryFactory, GeoLocationService? geo = null)
     {
         RedCompute = factory.CreateClient(App.Config.Suite.RedCompute, TimeSpan.FromSeconds(30));
         RedLeaf = factory.CreateClient(App.Config.Suite.RedLeaf, TimeSpan.FromSeconds(10));
         _redLeaf = redLeaf;
         _agentMemoryFactory = agentMemoryFactory;
+        _geo = geo;
     }
 
     public static void MapDiscussionEndpoints(this EndpointRegistry registry, NovaEngine engine)
@@ -368,7 +371,7 @@ public static class DiscussionEndpoints
                 catch { }
             }
 
-            var snapshot = NovaContextBuilder.BuildSnapshot(ownDiscussions, otherAgentDiscussions, currentOutfit, outfitAsset);
+            var snapshot = NovaContextBuilder.BuildSnapshot(ownDiscussions, otherAgentDiscussions, currentOutfit, outfitAsset, _geo?.Location);
             return Results.Ok(snapshot);
         });
 
@@ -613,32 +616,6 @@ public static class DiscussionEndpoints
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });
 
-            if (discussion.SessionId is not null)
-            {
-                try
-                {
-                    object? metadata = request.SenderAgentId is not null
-                        ? new { senderAgentId = request.SenderAgentId }
-                        : null;
-                    var injectBody = new
-                    {
-                        role = "assistant",
-                        content = request.Content,
-                        audioUrl = string.IsNullOrEmpty(request.AudioUrl) ? null : request.AudioUrl,
-                        metadata,
-                    };
-                    var resp = await RedCompute.PostAsJsonAsync(
-                        $"/ai-session/sessions/{discussion.SessionId}/inject",
-                        injectBody, JsonOptions);
-                    resp.EnsureSuccessStatusCode();
-                }
-                catch
-                {
-                    return ApiError.BadGateway("redcompute_unavailable",
-                        "RedCompute could not inject the message into the live session.");
-                }
-            }
-
             string? partsJson = null;
             if (!string.IsNullOrEmpty(request.AudioUrl))
             {
@@ -666,6 +643,30 @@ public static class DiscussionEndpoints
                 discussion.Title = request.Title;
 
             await db.SaveChangesAsync();
+
+            // Best-effort inject into live session (message is already persisted above).
+            // If the session isn't ready or RedCompute is down, the message will be
+            // replayed by SendMessageCoreAsync when the user first messages the discussion.
+            if (discussion.SessionId is not null)
+            {
+                try
+                {
+                    object? metadata = request.SenderAgentId is not null
+                        ? new { senderAgentId = request.SenderAgentId }
+                        : null;
+                    var resp = await RedCompute.PostAsJsonAsync(
+                        $"/ai-session/sessions/{discussion.SessionId}/inject",
+                        new
+                        {
+                            role = "assistant",
+                            content = request.Content,
+                            audioUrl = string.IsNullOrEmpty(request.AudioUrl) ? null : request.AudioUrl,
+                            metadata,
+                        }, JsonOptions);
+                    resp.EnsureSuccessStatusCode();
+                }
+                catch { /* best-effort — message is already in the DB */ }
+            }
 
             broadcaster?.Broadcast("discussion.nova-message", new
             {
@@ -880,8 +881,28 @@ public static class DiscussionEndpoints
             catch { }
         }
 
+        string? moodSummary = null;
+        if (discussion.AgentId != null)
+        {
+            try
+            {
+                var agentMemory = await _agentMemoryFactory!.GetMemoryAsync(discussion.AgentId);
+                var moodPath = Path.Combine(agentMemory.MemoryPath, "dreaming", "mood.md");
+                if (File.Exists(moodPath))
+                {
+                    var lines = File.ReadAllLines(moodPath);
+                    var energy = lines.FirstOrDefault(l => l.StartsWith("Energy:"))?.Trim();
+                    var vibe = lines.FirstOrDefault(l => l.StartsWith("Vibe:"))?.Trim();
+                    if (energy != null || vibe != null)
+                        moodSummary = string.Join(", ", new[] { energy, vibe }.Where(s => s != null));
+                }
+            }
+            catch { }
+        }
+
         var currentSnapshot = NovaContextBuilder.BuildSnapshot(
-            ownDiscussions, otherAgentDiscussions, currentOutfit, currentOutfitAsset);
+            ownDiscussions, otherAgentDiscussions, currentOutfit, currentOutfitAsset,
+            _geo?.Location, moodSummary);
         var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
 
         string contextBlock;

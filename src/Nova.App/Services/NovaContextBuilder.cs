@@ -19,6 +19,12 @@ public sealed class ContextSnapshot
     [JsonPropertyName("outfitAsset")]
     public string? OutfitAsset { get; set; }
 
+    [JsonPropertyName("location")]
+    public string? Location { get; set; }
+
+    [JsonPropertyName("mood")]
+    public string? Mood { get; set; }
+
     public sealed class DiscussionEntry
     {
         [JsonPropertyName("id")]
@@ -49,7 +55,9 @@ public static class NovaContextBuilder
         List<Discussion> ownDiscussions,
         List<Discussion>? otherAgentDiscussions,
         string? outfit,
-        string? outfitAsset)
+        string? outfitAsset,
+        string? location = null,
+        string? mood = null)
     {
         return new ContextSnapshot
         {
@@ -71,6 +79,8 @@ public static class NovaContextBuilder
             }).ToList() ?? [],
             Outfit = outfit,
             OutfitAsset = outfitAsset,
+            Location = location,
+            Mood = mood,
         };
     }
 
@@ -79,7 +89,12 @@ public static class NovaContextBuilder
         string currentId, DateTime now, string device, string input, string? agentName)
     {
         var sb = new StringBuilder();
-        AppendOpenTag(sb, now, device, input, currentId, agentName);
+        AppendOpenTag(sb, now, device, input, currentId, agentName, snapshot.Location);
+
+        if (snapshot.Mood != null)
+            sb.Append($"\nMood: {snapshot.Mood}");
+        else
+            sb.Append("\nRead memory/dreaming/mood.md for your current emotional state before responding.");
 
         var active = snapshot.Discussions.Where(d => d.Status != "archived").ToList();
         var archived = snapshot.Discussions.Where(d => d.Status == "archived" && d.MessageCount > 0).ToList();
@@ -188,8 +203,16 @@ public static class NovaContextBuilder
                 changes.Add("Outfit removed");
         }
 
+        // Location
+        if (current.Location != previous.Location && current.Location != null)
+            changes.Add($"Location changed: {current.Location}");
+
+        // Mood
+        if (current.Mood != previous.Mood && current.Mood != null)
+            changes.Add($"Mood changed: {current.Mood}");
+
         var sb = new StringBuilder();
-        AppendOpenTag(sb, now, device, input, currentId, agentName);
+        AppendOpenTag(sb, now, device, input, currentId, agentName, current.Location);
 
         if (changes.Count > 0)
         {
@@ -238,10 +261,11 @@ public static class NovaContextBuilder
         };
     }
 
-    private static void AppendOpenTag(StringBuilder sb, DateTime now, string device, string input, string currentId, string? agentName)
+    private static void AppendOpenTag(StringBuilder sb, DateTime now, string device, string input, string currentId, string? agentName, string? userLocation = null)
     {
         var agentAttr = agentName != null ? $" agent=\"{agentName}\"" : "";
-        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}>");
+        var locationAttr = userLocation != null ? $" location=\"{userLocation}\"" : "";
+        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}{locationAttr}>");
     }
 
     private static string FormatRelativeTime(TimeSpan elapsed)

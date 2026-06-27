@@ -61,10 +61,14 @@ public class StaticServer
         var dbPath = Path.Combine(dbDir, "nova.db");
         builder.Services.AddDbContext<NovaDbContext>(o => o.UseSqlite($"Data Source={dbPath}"));
 
+        var geo = new GeoLocationService();
+        _ = geo.ResolveAsync();
+
         builder.Services.AddSingleton(_engine);
         builder.Services.AddSingleton(_memory);
         builder.Services.AddSingleton(_agentResolver);
         builder.Services.AddSingleton(_agentMemoryFactory);
+        builder.Services.AddSingleton(geo);
 
 
         var redSuiteDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RedSuite");
@@ -131,7 +135,7 @@ public class StaticServer
         DiscussionEndpoints.Initialize(authFactory, new RedLeafDiscussionReader(
             App.Config.Suite.RedLeaf,
             new JwtService(new JwtOptions { SigningKey = signingKey })),
-            _agentMemoryFactory);
+            _agentMemoryFactory, geo);
         DelegateEndpoints.Initialize(authFactory);
         ConversationExporter.Initialize(authFactory);
 
