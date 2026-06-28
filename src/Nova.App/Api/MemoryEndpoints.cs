@@ -11,13 +11,13 @@ public static class MemoryEndpoints
 {
     public static void MapMemoryEndpoints(this EndpointRegistry registry, MemoryManager memory, AgentMemoryFactory? agentMemoryFactory = null)
     {
-        registry.MapGet("/api/memory/manifest", "List all memory files", async (HttpContext ctx) =>
+        registry.MapGet("/api/workspace/manifest", "List all workspace files", async (HttpContext ctx) =>
         {
             var agentId = ctx.Request.Query["agent"].FirstOrDefault();
             var effectiveMemory = agentId != null && agentMemoryFactory != null
                 ? await agentMemoryFactory.GetMemoryAsync(agentId)
                 : memory;
-            var files = effectiveMemory.GetMemoryManifest();
+            var files = effectiveMemory.GetWorkspaceManifest();
             return Results.Ok(new { files });
         }).WithParam("agent", "string", description: "Agent ID to scope the memory manifest", location: ParamLocation.Query);
 

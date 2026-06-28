@@ -63,13 +63,17 @@ public class MemoryManager
         return File.Exists(path) ? File.ReadAllText(path) : "";
     }
 
-    public string[] GetMemoryManifest()
+    public string[] GetWorkspaceManifest()
     {
-        if (!Directory.Exists(MemoryPath)) return [];
+        if (!Directory.Exists(_workspacePath)) return [];
 
-        return Directory.GetFiles(MemoryPath, "*.md", SearchOption.AllDirectories)
-            .Where(p => !p.StartsWith(BackupPath, StringComparison.OrdinalIgnoreCase))
+        var excludes = new[] { BackupPath };
+        var rootExcludes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "CLAUDE.md", "AGENTS.md" };
+
+        return Directory.GetFiles(_workspacePath, "*.md", SearchOption.AllDirectories)
+            .Where(p => !excludes.Any(ex => p.StartsWith(ex, StringComparison.OrdinalIgnoreCase)))
             .Select(p => Path.GetRelativePath(_workspacePath, p).Replace('\\', '/'))
+            .Where(p => !rootExcludes.Contains(p))
             .OrderBy(p => p)
             .ToArray();
     }
@@ -113,7 +117,7 @@ public class MemoryManager
         var protocol = ReadOutputProtocol();
         var capabilities = ReadCapabilities();
         var memoryInstructions = ReadMemoryInstructions();
-        var manifest = GetMemoryManifest();
+        var manifest = GetWorkspaceManifest();
         var manifestList = string.Join("\n", manifest.Select(p => $"- {p}"));
 
         var content = $"""

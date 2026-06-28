@@ -32,8 +32,8 @@ export function MemoryPanel() {
 
   const refreshManifest = useCallback(async () => {
     const url = agentFilter
-      ? `/api/memory/manifest?agent=${encodeURIComponent(agentFilter)}`
-      : "/api/memory/manifest"
+      ? `/api/workspace/manifest?agent=${encodeURIComponent(agentFilter)}`
+      : "/api/workspace/manifest"
     const data = await api.get<{ files: string[] }>(url)
     setFiles(data.files)
   }, [agentFilter])
@@ -77,10 +77,7 @@ export function MemoryPanel() {
           <div className="flex items-center justify-center py-12 text-text-muted">
             <div className="text-center">
               <i className="fa-solid fa-book text-2xl mb-3 opacity-30" />
-              <p className="text-sm">No journal entries yet</p>
-              <p className="text-xs text-text-disabled mt-1">
-                Nova will create them as you chat
-              </p>
+              <p className="text-sm">No files in workspace</p>
             </div>
           </div>
         ) : (
