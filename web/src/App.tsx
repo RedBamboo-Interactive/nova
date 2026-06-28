@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, createContext, useContext } from "react"
+import { useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react"
 import { createBrowserRouter, RouterProvider, Outlet, useNavigate } from "react-router-dom"
 import {
   WsEventProvider, useWsSubscribe, BreadcrumbLabelProvider, AuthProvider, useAuth,
@@ -92,9 +92,9 @@ function AppLayout() {
     discRef.current.reloadActiveMessages()
   }, [])
 
-  if (isLoading || !isAuthenticated) return null
+  const appCtx = useMemo<AppContext>(() => ({ disc, pendingContext }), [disc, pendingContext])
 
-  const appCtx: AppContext = { disc, pendingContext }
+  if (isLoading || !isAuthenticated) return null
 
   return (
     <WsEventProvider url={wsUrl} onReconnect={onReconnect} onVisibilityChange={onVisibilityChange}>

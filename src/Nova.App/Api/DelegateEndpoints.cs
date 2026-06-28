@@ -77,6 +77,8 @@ public static class DelegateEndpoints
 
                     var createBody = new Dictionary<string, object?> { ["projectPath"] = request.ProjectPath };
                     if (dockerImage != null) createBody["dockerImage"] = dockerImage;
+                    if (!string.IsNullOrWhiteSpace(request.Provider))
+                        createBody["provider"] = request.Provider;
                     if (!string.IsNullOrWhiteSpace(request.Model))
                         createBody["model"] = request.Model;
                     else
@@ -206,4 +208,5 @@ public class DelegateRequest
     public string? DockerImage { get; set; }
     public string? Model { get; set; }
     public string? QualityMode { get; set; }
+    public string? Provider { get; set; }
 }

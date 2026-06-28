@@ -136,12 +136,9 @@ public class AutomationService
         return a;
     }
 
-    /// <summary>Refreshes a single automation from RedLeaf after a WS entity.updated event.</summary>
+    /// <summary>Refreshes or adds an automation from RedLeaf after a WS entity.updated/created event.</summary>
     public async Task RefreshAutomationAsync(Guid entityId)
     {
-        var name = _entityIds.FirstOrDefault(kv => kv.Value == entityId).Key;
-        if (name == null) return;
-
         try
         {
             using var http = BuildRedLeafClient();
@@ -149,28 +146,45 @@ public class AutomationService
             if (!resp.IsSuccessStatusCode) return;
 
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+
+            if (doc.RootElement.TryGetProperty("typeSlug", out var typeEl)
+                && typeEl.GetString() != "automation") return;
+
             var updated = MapEntity(doc.RootElement);
             if (updated == null) return;
 
-            var existing = _automations.FirstOrDefault(a => a.Name == name);
-            if (existing == null) return;
+            var name = _entityIds.FirstOrDefault(kv => kv.Value == entityId).Key;
+            var existing = name != null
+                ? _automations.FirstOrDefault(a => a.Name == name)
+                : _automations.FirstOrDefault(a => a.Name == updated.Name);
 
-            existing.Description = updated.Description;
-            existing.Schedule = updated.Schedule;
-            existing.Enabled = updated.Enabled;
-            existing.RemoveOnTrigger = updated.RemoveOnTrigger;
-            existing.Icon = updated.Icon;
-            existing.ActionType = updated.ActionType;
-            existing.ActionConfigJson = updated.ActionConfigJson;
-            existing.ReportToDiscussionId = updated.ReportToDiscussionId;
-            existing.MaxFailures = updated.MaxFailures;
-            existing.ExpiresAt = updated.ExpiresAt;
-            existing.OwnerId = updated.OwnerId;
+            if (existing != null)
+            {
+                existing.Description = updated.Description;
+                existing.Schedule = updated.Schedule;
+                existing.Enabled = updated.Enabled;
+                existing.RemoveOnTrigger = updated.RemoveOnTrigger;
+                existing.Icon = updated.Icon;
+                existing.ActionType = updated.ActionType;
+                existing.ActionConfigJson = updated.ActionConfigJson;
+                existing.ReportToDiscussionId = updated.ReportToDiscussionId;
+                existing.MaxFailures = updated.MaxFailures;
+                existing.ExpiresAt = updated.ExpiresAt;
+                existing.OwnerId = updated.OwnerId;
 
-            if (existing.Enabled)
-                existing.NextRun = CalculateNextRun(existing);
+                if (existing.Enabled)
+                    existing.NextRun = CalculateNextRun(existing);
 
-            _log.Info("automations", $"Refreshed {name} from RedLeaf WS event");
+                _entityIds[existing.Name] = entityId;
+                _log.Info("automations", $"Refreshed {existing.Name} from RedLeaf WS event");
+            }
+            else
+            {
+                updated.NextRun = CalculateNextRun(updated);
+                _automations.Add(updated);
+                _entityIds[updated.Name] = entityId;
+                _log.Info("automations", $"Added new automation {updated.Name} from RedLeaf WS event");
+            }
         }
         catch (Exception ex)
         {

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useDeferredValue } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@redbamboo/ui"
 import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
@@ -97,8 +97,11 @@ export function ChatView() {
     dismissDiscussion,
     renameDiscussion,
     resumeDiscussion,
+    isLoadingMessages,
     upstreamConnected,
   } = disc
+
+  const deferredMessages = useDeferredValue(activeMessages)
 
   useEffect(() => {
     if (urlDiscussionId && urlDiscussionId !== activeDiscussionId) {
@@ -232,6 +235,10 @@ export function ChatView() {
     </PanelHeader>
   )
 
+  const renderStatusLine = useCallback(({ isStreaming, messages }: { isStreaming: boolean; messages: import("@redbamboo/chat").MessageBlock[] }) => (
+    <NovaStatusLine isStreaming={isStreaming} messages={messages} />
+  ), [])
+
   const resolveAgentInfo = useCallback((agentId: string) => {
     const agent = getAgent(agentId)
     if (!agent) return undefined
@@ -254,8 +261,13 @@ export function ChatView() {
 
   const chatArea = activeDiscussion ? (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
+      {isLoadingMessages && activeMessages.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center z-10">
+          <i className="fa-solid fa-spinner fa-spin text-2xl opacity-40" />
+        </div>
+      )}
       <ChatPanel
-        messages={activeMessages}
+        messages={deferredMessages}
         isStreaming={isStreaming}
         onSend={handleSend}
         onInterrupt={handleInterrupt}
@@ -272,9 +284,7 @@ export function ChatView() {
         resolveFileLink={resolveFileLink}
         assistantAvatar={avatarSrc}
         resolveAgentInfo={resolveAgentInfo}
-        renderStatusLine={({ isStreaming, messages }) => (
-          <NovaStatusLine isStreaming={isStreaming} messages={messages} />
-        )}
+        renderStatusLine={renderStatusLine}
       />
     </div>
   ) : (
@@ -331,7 +341,7 @@ export function ChatView() {
           <div className="flex-1 overflow-hidden">
             <DiscussionSidebar
               discussions={filteredDiscussions}
-              activeDiscussionId={activeDiscussionId}
+              activeDiscussionId={urlDiscussionId ?? activeDiscussionId}
               onSelect={handleSelectDiscussion}
               onArchive={archiveDiscussion}
               onDismiss={dismissDiscussion}

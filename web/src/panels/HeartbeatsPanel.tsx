@@ -342,7 +342,7 @@ export function AutomationsPanel() {
     setMobileTab(1)
   }, [navigate])
 
-  const renderRow = (a: Automation, isSystem = false) => {
+  const renderRow = useCallback((a: Automation, isSystem = false) => {
     const meta = actionMeta[a.actionType] ?? { icon: "fa-solid fa-gear", label: a.actionType }
     return (
       <ItemListRow
@@ -378,7 +378,7 @@ export function AutomationsPanel() {
         }
       />
     )
-  }
+  }, [selectedName, handleSelect, handleDelete])
 
   const visibleAutomations = isNovaSelected ? automations : []
   const visibleUser = isNovaSelected ? userAutomations : []

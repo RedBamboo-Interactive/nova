@@ -1,3 +1,4 @@
+import { memo, useCallback } from "react"
 import { ItemList, ItemListRow } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
 import type { DiscussionInfo, AgentInfo } from "@/lib/types"
@@ -24,75 +25,77 @@ function isUnread(d: DiscussionInfo): boolean {
     && (!d.lastReadAt || d.lastActivity > d.lastReadAt)
 }
 
-export function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, onArchive, onDismiss, getAgent, multiAgent }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, onArchive, onDismiss, getAgent, multiAgent }: Props) {
+  const renderItem = useCallback((discussion: DiscussionInfo) => {
+    const alive = discussion.status !== "archived" && discussion.status !== "stopped"
+    const unread = alive && isUnread(discussion)
+    const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
+    return (
+      <ItemListRow
+        selected={discussion.id === activeDiscussionId}
+        onClick={() => onSelect(discussion.id)}
+        icon={
+          agent ? (
+            <>
+              <img
+                src={agent.avatarUrl}
+                alt={agent.name}
+                className="absolute inset-0 w-full h-full rounded-lg object-cover"
+                onError={(e) => { e.currentTarget.style.display = "none" }}
+              />
+              <div className="absolute -bottom-1 right-0 scale-75 origin-bottom-right">
+                <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
+              </div>
+            </>
+          ) : (
+            <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
+          )
+        }
+        className={[
+          agent ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
+          !alive ? "[&_[data-slot=item-list-title]]:opacity-50"
+          : unread ? "[&_[data-slot=item-list-title]]:text-contrast [&_[data-slot=item-list-title]]:font-semibold"
+          : "",
+        ].filter(Boolean).join(" ")}
+        title={discussion.title || "New discussion"}
+        subtitle={formatRelative(discussion.lastActivity)}
+        trailing={
+          discussion.status !== "archived" ? (
+            <div className="flex items-center gap-1.5">
+              {unread && (
+                <span className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
+              )}
+              <button
+                onClick={(e) => { e.stopPropagation(); onArchive(discussion.id) }}
+                className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-red-400 transition-all"
+                title="Archive discussion"
+              >
+                <i className="fa-solid fa-box-archive text-xs" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={(e) => { e.stopPropagation(); onDismiss(discussion.id) }}
+              className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-contrast transition-all"
+              title="Remove from list"
+            >
+              <i className="fa-solid fa-xmark text-xs" />
+            </button>
+          )
+        }
+      />
+    )
+  }, [activeDiscussionId, onSelect, onArchive, onDismiss, getAgent, multiAgent])
+
   return (
     <ItemList
       items={discussions}
       keyFn={(d) => d.id}
       emptyMessage="No discussions yet"
-      renderItem={(discussion) => {
-        const alive = discussion.status !== "archived" && discussion.status !== "stopped"
-        const unread = alive && isUnread(discussion)
-        const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
-        return (
-          <ItemListRow
-            selected={discussion.id === activeDiscussionId}
-            onClick={() => onSelect(discussion.id)}
-            icon={
-              agent ? (
-                <>
-                  <img
-                    src={agent.avatarUrl}
-                    alt={agent.name}
-                    className="absolute inset-0 w-full h-full rounded-lg object-cover"
-                    onError={(e) => { e.currentTarget.style.display = "none" }}
-                  />
-                  <div className="absolute -bottom-1 right-0 scale-75 origin-bottom-right">
-                    <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
-                  </div>
-                </>
-              ) : (
-                <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
-              )
-            }
-            className={[
-              agent ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
-              !alive ? "[&_[data-slot=item-list-title]]:opacity-50"
-              : unread ? "[&_[data-slot=item-list-title]]:text-contrast [&_[data-slot=item-list-title]]:font-semibold"
-              : "",
-            ].filter(Boolean).join(" ")}
-            title={discussion.title || "New discussion"}
-            subtitle={formatRelative(discussion.lastActivity)}
-            trailing={
-              discussion.status !== "archived" ? (
-                <div className="flex items-center gap-1.5">
-                  {unread && (
-                    <span className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
-                  )}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onArchive(discussion.id) }}
-                    className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-red-400 transition-all"
-                    title="Archive discussion"
-                  >
-                    <i className="fa-solid fa-box-archive text-xs" />
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onDismiss(discussion.id) }}
-                  className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-contrast transition-all"
-                  title="Remove from list"
-                >
-                  <i className="fa-solid fa-xmark text-xs" />
-                </button>
-              )
-            }
-          />
-        )
-      }}
+      renderItem={renderItem}
     />
   )
-}
+})
 
 function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime()

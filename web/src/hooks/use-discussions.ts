@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from "react"
+import { useState, useCallback, useEffect, useRef, useMemo, startTransition } from "react"
 import { useToast } from "@redbamboo/ui"
 import { api } from "@/lib/api"
 import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent } from "@/lib/types"
@@ -31,6 +31,7 @@ export function useDiscussions() {
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
   const [isSpawning, setIsSpawning] = useState(false)
   const [upstreamConnected, setUpstreamConnected] = useState(true)
+  const [loadingDiscussionId, setLoadingDiscussionId] = useState<string | null>(null)
   const loadedRef = useRef<Set<string>>(new Set())
 
   const activeDiscussion = discussions.find((d) => d.id === activeDiscussionId) ?? null
@@ -71,40 +72,45 @@ export function useDiscussions() {
     const disc = discussions.find((d) => d.id === id)
     if (!disc) return
 
+    setLoadingDiscussionId(id)
     loadedRef.current.add(id)
-    if (disc?.sessionId) {
-      try {
-        const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
-        if (data.session?.title && data.session.title !== disc.title) {
-          setDiscussions((prev) =>
-            prev.map((d) => d.id === id ? { ...d, title: data.session.title! } : d)
-          )
-          api.put(`/api/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
-        }
-        if (data.messages?.length) {
-          setMessages((prev) => ({ ...prev, [id]: rebuildBlocks(data.messages) }))
-          return
-        }
-      } catch {
+    try {
+      if (disc?.sessionId) {
         try {
-          await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
           const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
+          if (data.session?.title && data.session.title !== disc.title) {
+            setDiscussions((prev) =>
+              prev.map((d) => d.id === id ? { ...d, title: data.session.title! } : d)
+            )
+            api.put(`/api/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
+          }
           if (data.messages?.length) {
             setMessages((prev) => ({ ...prev, [id]: rebuildBlocks(data.messages) }))
             return
           }
         } catch {
-          // Resume failed — fall through to legacy load
+          try {
+            await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
+            const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
+            if (data.messages?.length) {
+              setMessages((prev) => ({ ...prev, [id]: rebuildBlocks(data.messages) }))
+              return
+            }
+          } catch {
+            // Resume failed — fall through to legacy load
+          }
         }
       }
-    }
 
-    try {
-      const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/discussions/${id}`)
-      if (data.messages?.length) {
-        setMessages((prev) => ({ ...prev, [id]: toChatMessages(data.messages) }))
-      }
-    } catch { /* discussion not found */ }
+      try {
+        const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/discussions/${id}`)
+        if (data.messages?.length) {
+          setMessages((prev) => ({ ...prev, [id]: toChatMessages(data.messages) }))
+        }
+      } catch { /* discussion not found */ }
+    } finally {
+      setLoadingDiscussionId((cur) => cur === id ? null : cur)
+    }
   }, [discussions])
 
   const reloadActiveMessages = useCallback((force?: boolean) => {
@@ -121,11 +127,13 @@ export function useDiscussions() {
 
   const selectDiscussion = useCallback((id: string) => {
     setActiveDiscussionId(id)
-    loadMessages(id)
-    api.put(`/api/discussions/${id}/read`).catch(() => {})
-    setDiscussions((prev) =>
-      prev.map((d) => d.id === id ? { ...d, lastReadAt: new Date().toISOString() } : d)
-    )
+    startTransition(() => {
+      loadMessages(id)
+      api.put(`/api/discussions/${id}/read`).catch(() => {})
+      setDiscussions((prev) =>
+        prev.map((d) => d.id === id ? { ...d, lastReadAt: new Date().toISOString() } : d)
+      )
+    })
   }, [loadMessages])
 
   const visibleDiscussions = useMemo(
@@ -483,6 +491,7 @@ export function useDiscussions() {
     syncAndRefresh,
     reloadActiveMessages,
     handleWsEvent,
+    isLoadingMessages: loadingDiscussionId === activeDiscussionId && loadingDiscussionId !== null,
     upstreamConnected,
     handleUpstreamDisconnect,
     handleUpstreamReconnect,
