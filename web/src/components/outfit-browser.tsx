@@ -7,6 +7,7 @@ interface OutfitEntry {
   name: string | null
   url: string
   prompt: string | null
+  nsfw: boolean
   date: string | null
   active: boolean
 }
@@ -46,6 +47,7 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
   const [data, setData] = useState<OutfitData | null>(null)
   const [loading, setLoading] = useState(true)
   const [selecting, setSelecting] = useState<string | null>(null)
+  const [showNsfw, setShowNsfw] = useState(false)
 
   useEffect(() => {
     const qs = agentId ? `?agentId=${agentId}` : ""
@@ -75,6 +77,9 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
     return overrideFile === urlFile
   }
 
+  const filteredOutfits = data?.outfits.filter(o => showNsfw || !o.nsfw) ?? []
+  const nsfwCount = data?.outfits.filter(o => o.nsfw).length ?? 0
+
   return (
     <ModalBase dataModal="outfit-browser" ariaLabel="Browse outfits" onClose={onClose} size="lg">
       <ModalHeader
@@ -88,75 +93,100 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
             <i className="fa-solid fa-spinner fa-spin mr-2" /> Loading...
           </div>
         ) : (
-          <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
-            {/* Base avatar — reset option */}
-            <button
-              onClick={() => selectOutfit(null)}
-              className={`group relative aspect-[3/4] rounded-lg overflow-hidden border-2 transition-all ${
-                isActive(null) ? "border-primary ring-2 ring-primary/30" : "border-overlay-6 hover:border-overlay-10"
-              }`}
-            >
-              <img
-                src={data?.baseAvatarUrl ?? "/nova-avatar.png"}
-                alt="Base"
-                className="w-full h-full object-cover object-top"
-              />
-              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-2">
-                <span className="text-[10px] text-white font-medium">Base</span>
-              </div>
-              {selecting === "__base__" && (
-                <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                  <i className="fa-solid fa-spinner fa-spin text-white" />
-                </div>
-              )}
-              {isActive(null) && (
-                <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
-                  <i className="fa-solid fa-check text-[10px] text-white" />
-                </div>
-              )}
-            </button>
-
-            {/* Outfit history */}
-            {data?.outfits.map((outfit) => {
-              return (
+          <>
+            {nsfwCount > 0 && (
+              <div className="flex items-center gap-2 mb-3">
                 <button
-                  key={outfit.id}
-                  onClick={() => selectOutfit(outfit)}
-                  className={`group relative aspect-[3/4] rounded-lg overflow-hidden border-2 transition-all ${
-                    isActive(outfit.url) ? "border-primary ring-2 ring-primary/30" : "border-overlay-6 hover:border-overlay-10"
+                  onClick={() => setShowNsfw(v => !v)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                    showNsfw
+                      ? "bg-rose-500/20 text-rose-400 hover:bg-rose-500/30"
+                      : "bg-overlay-6 text-text-muted hover:bg-overlay-10"
                   }`}
-                  title={outfit.prompt ?? undefined}
                 >
-                  <img
-                    src={assetSrc(outfit.url)}
-                    alt={outfit.prompt ?? "Outfit"}
-                    className="w-full h-full object-cover object-top"
-                    onError={e => { (e.target as HTMLImageElement).src = "/nova-avatar.png" }}
-                  />
-                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-2">
-                    <div className="text-[10px] text-white font-medium truncate">{outfit.name ?? "Outfit"}</div>
-                    <div className="text-[9px] text-white/60">{relativeDate(outfit.date)}</div>
-                  </div>
-                  {selecting === outfit.url && (
-                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                      <i className="fa-solid fa-spinner fa-spin text-white" />
-                    </div>
-                  )}
-                  {isActive(outfit.url) && (
-                    <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
-                      <i className="fa-solid fa-check text-[10px] text-white" />
-                    </div>
-                  )}
+                  <i className={`fa-solid ${showNsfw ? "fa-eye" : "fa-eye-slash"} text-[10px]`} />
+                  Show NSFW
+                  <span className="text-[10px] opacity-60">({nsfwCount})</span>
                 </button>
-              )
-            })}
-
-            {(!data?.outfits.length) && (
-              <div className="col-span-2 sm:col-span-3 flex items-center justify-center py-8 text-text-muted text-xs">
-                No outfit changes yet. Nova will start generating them daily.
               </div>
             )}
-          </div>
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+              {/* Base avatar — reset option */}
+              <button
+                onClick={() => selectOutfit(null)}
+                className={`group relative aspect-[3/4] rounded-lg overflow-hidden border-2 transition-all ${
+                  isActive(null) ? "border-primary ring-2 ring-primary/30" : "border-overlay-6 hover:border-overlay-10"
+                }`}
+              >
+                <img
+                  src={data?.baseAvatarUrl ?? "/nova-avatar.png"}
+                  alt="Base"
+                  className="w-full h-full object-cover object-top"
+                />
+                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-2">
+                  <span className="text-[10px] text-white font-medium">Base</span>
+                </div>
+                {selecting === "__base__" && (
+                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                    <i className="fa-solid fa-spinner fa-spin text-white" />
+                  </div>
+                )}
+                {isActive(null) && (
+                  <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                    <i className="fa-solid fa-check text-[10px] text-white" />
+                  </div>
+                )}
+              </button>
+
+              {/* Outfit history */}
+              {filteredOutfits.map((outfit) => {
+                return (
+                  <button
+                    key={outfit.id}
+                    onClick={() => selectOutfit(outfit)}
+                    className={`group relative aspect-[3/4] rounded-lg overflow-hidden border-2 transition-all ${
+                      isActive(outfit.url) ? "border-primary ring-2 ring-primary/30" : "border-overlay-6 hover:border-overlay-10"
+                    }`}
+                    title={outfit.prompt ?? undefined}
+                  >
+                    <img
+                      src={assetSrc(outfit.url)}
+                      alt={outfit.prompt ?? "Outfit"}
+                      className="w-full h-full object-cover object-top"
+                      onError={e => { (e.target as HTMLImageElement).src = "/nova-avatar.png" }}
+                    />
+                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-2">
+                      <div className="text-[10px] text-white font-medium truncate">{outfit.name ?? "Outfit"}</div>
+                      <div className="text-[9px] text-white/60">{relativeDate(outfit.date)}</div>
+                    </div>
+                    {outfit.nsfw && (
+                      <div className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-rose-500/80 text-[8px] text-white font-bold">
+                        NSFW
+                      </div>
+                    )}
+                    {selecting === outfit.url && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                        <i className="fa-solid fa-spinner fa-spin text-white" />
+                      </div>
+                    )}
+                    {isActive(outfit.url) && (
+                      <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                        <i className="fa-solid fa-check text-[10px] text-white" />
+                      </div>
+                    )}
+                  </button>
+                )
+              })}
+
+              {(!filteredOutfits.length) && (
+                <div className="col-span-2 sm:col-span-3 flex items-center justify-center py-8 text-text-muted text-xs">
+                  {nsfwCount > 0 && !showNsfw
+                    ? "All outfits are NSFW. Toggle the filter to see them."
+                    : "No outfit changes yet. Nova will start generating them daily."}
+                </div>
+              )}
+            </div>
+          </>
         )}
       </div>
     </ModalBase>

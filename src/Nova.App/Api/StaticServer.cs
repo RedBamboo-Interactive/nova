@@ -381,6 +381,7 @@ public class StaticServer
                         url = GetStr(data, "asset"),
                         prompt = GetStr(data, "prompt"),
                         reasoning = GetStr(data, "reasoning"),
+                        nsfw = GetStr(data, "nsfw") == "true",
                         date = item.TryGetProperty("createdAt", out var ca) ? ca.GetString() : null,
                         active = item.GetProperty("id").GetString() == currentOverride,
                     });
@@ -476,12 +477,13 @@ public class StaticServer
                 var prompt = doc.RootElement.TryGetProperty("prompt", out var p) ? p.GetString() : null;
                 var name = doc.RootElement.TryGetProperty("name", out var n) ? n.GetString() : "Outfit";
                 var reasoning = doc.RootElement.TryGetProperty("reasoning", out var r) ? r.GetString() : null;
+                var nsfw = doc.RootElement.TryGetProperty("nsfw", out var nsfwVal) && nsfwVal.ValueKind == JsonValueKind.True;
 
                 using var rl = BuildRedLeafClient();
                 var dataObj = new Dictionary<string, object?>
                 {
                     ["agent"] = NovaMirror.AgentId, ["asset"] = assetUrl,
-                    ["prompt"] = prompt,
+                    ["prompt"] = prompt, ["nsfw"] = nsfw ? "true" : "false",
                 };
                 if (reasoning != null) dataObj["reasoning"] = reasoning;
                 var createBody = new StringContent(JsonSerializer.Serialize(new
