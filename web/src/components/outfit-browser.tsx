@@ -63,21 +63,22 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
         outfitId: outfit?.id ?? null,
         discussionId,
       })
-      setData(prev => prev ? { ...prev, currentOverride: outfit?.url ?? null } : prev)
+      setData(prev => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          currentOverride: outfit?.id ?? null,
+          outfits: prev.outfits.map(o => ({ ...o, active: o.id === outfit?.id })),
+        }
+      })
       window.dispatchEvent(new Event("nova:avatar-changed"))
     } catch { /* ignore */ }
     finally { setSelecting(null) }
   }
 
-  const isActive = (url: string | null) => {
-    if (!url) return !data?.currentOverride
-    if (!data?.currentOverride) return false
-    const overrideFile = data.currentOverride.split("/").pop()
-    const urlFile = url.split("/").pop()
-    return overrideFile === urlFile
-  }
+  const isBaseActive = !data?.outfits.some(o => o.active)
 
-  const filteredOutfits = data?.outfits.filter(o => showNsfw || !o.nsfw) ?? []
+  const filteredOutfits = data?.outfits.filter(o => o.active || showNsfw || !o.nsfw) ?? []
   const nsfwCount = data?.outfits.filter(o => o.nsfw).length ?? 0
 
   return (
@@ -115,7 +116,7 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
               <button
                 onClick={() => selectOutfit(null)}
                 className={`group relative aspect-[3/4] rounded-lg overflow-hidden border-2 transition-all ${
-                  isActive(null) ? "border-primary ring-2 ring-primary/30" : "border-overlay-6 hover:border-overlay-10"
+                  isBaseActive ? "border-primary ring-2 ring-primary/30" : "border-overlay-6 hover:border-overlay-10"
                 }`}
               >
                 <img
@@ -131,7 +132,7 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
                     <i className="fa-solid fa-spinner fa-spin text-white" />
                   </div>
                 )}
-                {isActive(null) && (
+                {isBaseActive && (
                   <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
                     <i className="fa-solid fa-check text-[10px] text-white" />
                   </div>
@@ -145,7 +146,7 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
                     key={outfit.id}
                     onClick={() => selectOutfit(outfit)}
                     className={`group relative aspect-[3/4] rounded-lg overflow-hidden border-2 transition-all ${
-                      isActive(outfit.url) ? "border-primary ring-2 ring-primary/30" : "border-overlay-6 hover:border-overlay-10"
+                      outfit.active ? "border-primary ring-2 ring-primary/30" : "border-overlay-6 hover:border-overlay-10"
                     }`}
                     title={outfit.prompt ?? undefined}
                   >
@@ -169,7 +170,7 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
                         <i className="fa-solid fa-spinner fa-spin text-white" />
                       </div>
                     )}
-                    {isActive(outfit.url) && (
+                    {outfit.active && (
                       <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
                         <i className="fa-solid fa-check text-[10px] text-white" />
                       </div>
