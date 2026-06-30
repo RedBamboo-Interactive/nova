@@ -43,6 +43,7 @@ public static class DiscussionEndpoints
     private static RedLeafDiscussionReader? _redLeaf;
     private static AgentMemoryFactory? _agentMemoryFactory;
     private static GeoLocationService? _geo;
+    private static DeviceResolver? _deviceResolver;
 
     public static void Initialize(AuthenticatedHttpClientFactory factory, RedLeafDiscussionReader redLeaf, AgentMemoryFactory agentMemoryFactory, GeoLocationService? geo = null)
     {
@@ -51,6 +52,7 @@ public static class DiscussionEndpoints
         _redLeaf = redLeaf;
         _agentMemoryFactory = agentMemoryFactory;
         _geo = geo;
+        _deviceResolver = new DeviceResolver(RedLeaf);
     }
 
     public static void MapDiscussionEndpoints(this EndpointRegistry registry, NovaEngine engine)
@@ -693,12 +695,14 @@ public static class DiscussionEndpoints
                 return Results.BadRequest(new { error = "Content or at least one image is required" });
 
             var ua = ctx.Request.Headers.UserAgent.ToString();
-            var device = System.Text.RegularExpressions.Regex.IsMatch(ua, @"Mobile|Android|iPhone|iPad|iPod", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
-                ? "mobile" : "desktop";
+            var browserId = ctx.Request.Headers.TryGetValue("X-Device-Id", out var did) ? did.ToString() : null;
+            var resolved = _deviceResolver != null
+                ? await _deviceResolver.ResolveAsync(ua, browserId)
+                : new ResolvedDevice { Name = "unknown", Type = "unknown", Platform = "unknown" };
 
             var outcome = await SendMessageCoreAsync(
                 db, memory, discussion, userId,
-                request.Content, request.Images, device, request.InputMethod ?? "typed");
+                request.Content, request.Images, resolved, request.InputMethod ?? "typed");
 
             if (!outcome.Success)
                 return ApiError.BadGateway(outcome.ErrorCode!, outcome.ErrorMessage!);
@@ -769,7 +773,7 @@ public static class DiscussionEndpoints
     /// </summary>
     internal static async Task<SendMessageOutcome> SendMessageCoreAsync(
         NovaDbContext db, MemoryManager memory, Discussion discussion, string? userId,
-        string content, ImageAttachmentDto[]? images, string device, string input)
+        string content, ImageAttachmentDto[]? images, ResolvedDevice device, string input)
     {
         if (discussion.SessionId is null && _pendingSessions.TryRemove(discussion.Id, out var pending))
         {

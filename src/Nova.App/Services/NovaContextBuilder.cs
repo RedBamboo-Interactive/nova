@@ -86,7 +86,7 @@ public static class NovaContextBuilder
 
     public static string BuildFullContext(
         ContextSnapshot snapshot,
-        string currentId, DateTime now, string device, string input, string? agentName)
+        string currentId, DateTime now, ResolvedDevice device, string input, string? agentName)
     {
         var sb = new StringBuilder();
         AppendOpenTag(sb, now, device, input, currentId, agentName, snapshot.Location);
@@ -136,7 +136,7 @@ public static class NovaContextBuilder
 
     public static string BuildDeltaContext(
         ContextSnapshot current, ContextSnapshot previous,
-        string currentId, DateTime now, string device, string input, string? agentName)
+        string currentId, DateTime now, ResolvedDevice device, string input, string? agentName)
     {
         var changes = new List<string>();
 
@@ -240,7 +240,7 @@ public static class NovaContextBuilder
     }
 
     public static Dictionary<string, object?> BuildMetadata(
-        ContextSnapshot snapshot, DateTime now, string device, string input,
+        ContextSnapshot snapshot, DateTime now, ResolvedDevice device, string input,
         string currentId, string? agentName)
     {
         var active = snapshot.Discussions.Where(d => d.Status != "archived").ToList();
@@ -250,7 +250,10 @@ public static class NovaContextBuilder
         {
             ["timestamp"] = now.ToString("o"),
             ["day"] = now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture),
-            ["device"] = device,
+            ["device"] = device.ShortLabel,
+            ["deviceType"] = device.Type,
+            ["devicePlatform"] = device.Platform,
+            ["deviceRoom"] = device.Room,
             ["input"] = input,
             ["discussion"] = currentId,
             ["agent"] = agentName,
@@ -261,11 +264,12 @@ public static class NovaContextBuilder
         };
     }
 
-    private static void AppendOpenTag(StringBuilder sb, DateTime now, string device, string input, string currentId, string? agentName, string? userLocation = null)
+    private static void AppendOpenTag(StringBuilder sb, DateTime now, ResolvedDevice device, string input, string currentId, string? agentName, string? userLocation = null)
     {
         var agentAttr = agentName != null ? $" agent=\"{agentName}\"" : "";
         var locationAttr = userLocation != null ? $" location=\"{userLocation}\"" : "";
-        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}{locationAttr}>");
+        var roomAttr = device.Room != null ? $" room=\"{device.Room}\"" : "";
+        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device.ShortLabel}\" device_type=\"{device.Type}\" platform=\"{device.Platform}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}{locationAttr}{roomAttr}>");
     }
 
     private static string FormatRelativeTime(TimeSpan elapsed)

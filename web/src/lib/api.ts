@@ -1,10 +1,25 @@
 const BASE = ""
 
+function getDeviceId(): string {
+  const key = "nova-device-id"
+  let id = localStorage.getItem(key)
+  if (!id) {
+    id = crypto.randomUUID()
+    localStorage.setItem(key, id)
+  }
+  return id
+}
+
+const _deviceId = typeof localStorage !== "undefined" ? getDeviceId() : null
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {}
+  if (body) headers["Content-Type"] = "application/json"
+  if (_deviceId) headers["X-Device-Id"] = _deviceId
   const res = await fetch(`${BASE}${path}`, {
     method,
     credentials: "include",
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers: Object.keys(headers).length ? headers : undefined,
     body: body ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) {

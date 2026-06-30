@@ -64,7 +64,8 @@ public static class AskEndpoints
             }
 
             var outcome = await DiscussionEndpoints.SendMessageCoreAsync(
-                db, memory, discussion, userId, request.Content, images: null, device: "api", input: "api");
+                db, memory, discussion, userId, request.Content, images: null,
+                device: new ResolvedDevice { Name = "API", Type = "api", Platform = "api" }, input: "api");
 
             if (!outcome.Success)
                 return ApiError.BadGateway(
