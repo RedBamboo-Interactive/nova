@@ -41,6 +41,9 @@ public sealed class ContextSnapshot
 
         [JsonPropertyName("status")]
         public string Status { get; set; } = "idle";
+
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "chat";
     }
 }
 
@@ -68,6 +71,7 @@ public static class NovaContextBuilder
                 MessageCount = d.MessageCount,
                 Status = d.Status,
                 LastActivity = d.LastActivity,
+                Type = d.Type,
             }).ToList(),
             OtherAgentDiscussions = otherAgentDiscussions?.Select(d => new ContextSnapshot.DiscussionEntry
             {
@@ -76,6 +80,7 @@ public static class NovaContextBuilder
                 MessageCount = d.MessageCount,
                 Status = d.Status,
                 LastActivity = d.LastActivity,
+                Type = d.Type,
             }).ToList() ?? [],
             Outfit = outfit,
             OutfitAsset = outfitAsset,
@@ -105,7 +110,8 @@ public static class NovaContextBuilder
             foreach (var d in active)
             {
                 var marker = d.Id == currentId ? " <- you are here" : "";
-                sb.Append($"\n- [{d.Id}] \"{d.Title ?? "(untitled)"}\" . {d.MessageCount} msgs . {FormatRelativeTime(now - d.LastActivity)}{marker}");
+                var liveTag = d.Type == "live" ? "[LIVE]" : "";
+                sb.Append($"\n- {liveTag}[{d.Id}] \"{d.Title ?? "(untitled)"}\" . {d.MessageCount} msgs . {FormatRelativeTime(now - d.LastActivity)}{marker}");
             }
         }
 
@@ -126,6 +132,10 @@ public static class NovaContextBuilder
         sb.Append("\n\nRecall any discussion: curl -s http://127.0.0.1:18803/api/discussions/{id}/export");
         sb.Append("\nSearch all discussions: curl -s \"http://127.0.0.1:18803/api/discussions/search?q={query}\"");
         sb.Append("\nGet full context snapshot: curl -s http://127.0.0.1:18803/api/discussions/{id}/context");
+
+        var liveDisc = active.FirstOrDefault(d => d.Type == "live");
+        if (liveDisc != null)
+            sb.Append($"\nPost to LIVE timeline: curl -s -X POST http://127.0.0.1:18803/api/discussions/{liveDisc.Id}/event -H \"Content-Type: application/json\" -d '{{\"content\":\"...\",\"source\":\"...\"}}'");
 
         if (snapshot.Outfit != null)
             sb.Append($"\n\n{snapshot.Outfit}");

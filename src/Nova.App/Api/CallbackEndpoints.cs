@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using RedBamboo.AppHost.Discovery;
 using RedBamboo.AppHost.Logging;
+using Nova.App.Services;
 
 namespace Nova.App.Api;
 
@@ -69,6 +70,7 @@ public static class CallbackEndpoints
             }
 
             App.LogService.Info("callbacks", $"Session {sessionId} completed, notified discussion {discussionId}");
+            _ = LiveEventService.Instance?.PostAsync("callback", $"Delegated session completed{(title != null ? $": {title}" : "")}");
             return Results.Ok(new { handled = true, sessionId, discussionId, status });
         })
         .WithAuth("local")

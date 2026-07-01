@@ -44,6 +44,7 @@ public static class DiscussionEndpoints
     private static AgentMemoryFactory? _agentMemoryFactory;
     private static GeoLocationService? _geo;
     private static DeviceResolver? _deviceResolver;
+    private static string? _lastDeviceName;
 
     public static void Initialize(AuthenticatedHttpClientFactory factory, RedLeafDiscussionReader redLeaf, AgentMemoryFactory agentMemoryFactory, GeoLocationService? geo = null)
     {
@@ -184,11 +185,20 @@ public static class DiscussionEndpoints
             catch { /* body is optional */ }
 
             var agentId = createReq?.AgentId ?? NovaMirror.AgentId;
+            var type = createReq?.Type ?? "chat";
+
+            if (type == "live")
+            {
+                var existing = await db.Discussions.AnyAsync(d => d.Type == "live" && d.AgentId == agentId && d.Status != "archived");
+                if (existing)
+                    return Results.Json(new { error = "A LIVE discussion already exists for this agent" }, statusCode: 409);
+            }
 
             var discussion = new Discussion
             {
                 Id = Guid.NewGuid().ToString("N")[..8],
                 Status = "idle",
+                Type = type,
                 OwnerId = ctx.User.FindFirstValue("sub"),
                 AgentId = agentId,
             };
@@ -202,7 +212,11 @@ public static class DiscussionEndpoints
                 discussionId = discussion.Id,
                 agentId = discussion.AgentId,
                 status = discussion.Status,
+                type = discussion.Type,
             });
+
+            if (discussion.Type != "live")
+                _ = LiveEventService.Instance?.PostAsync("discussion", $"New discussion: \"{discussion.Title ?? "untitled"}\"");
 
             var scopeFactory = ctx.RequestServices.GetRequiredService<IServiceScopeFactory>();
             var discId = discussion.Id;
@@ -268,6 +282,7 @@ public static class DiscussionEndpoints
                         : new[] { new { type = "text", content = m.Content, toolName = (string?)null, toolInput = (string?)null } },
                     timestamp = m.Timestamp.ToString("o"),
                     senderAgentId = m.SenderAgentId,
+                    source = m.Source,
                 }),
             });
         });
@@ -452,6 +467,9 @@ public static class DiscussionEndpoints
             if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
+            if (discussion.Type == "live")
+                return Results.Json(new { error = "Live discussions cannot be archived" }, statusCode: 400);
+
             if (discussion.SessionId is not null)
             {
                 try
@@ -468,6 +486,7 @@ public static class DiscussionEndpoints
 
             discussion.Status = "archived";
             await db.SaveChangesAsync();
+            _ = LiveEventService.Instance?.PostAsync("discussion", $"Archived: \"{discussion.Title ?? "untitled"}\"");
             return Results.Ok(ToInfo(discussion));
         });
 
@@ -538,6 +557,117 @@ public static class DiscussionEndpoints
         .WithParam("q", "string", required: true, description: "Text to find in message content", location: ParamLocation.Query)
         .WithParam("limit", "integer", description: "Max discussions returned (clamped to 1-100)", defaultValue: 20, location: ParamLocation.Query);
 
+        registry.MapGet("/api/event-types", "Get event types for timeline rendering (from RedLeaf entities)", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var response = await RedLeaf.GetStringAsync("api/entities?type=event-type&limit=100");
+                using var doc = JsonDocument.Parse(response);
+                var types = doc.RootElement.GetProperty("items").EnumerateArray().Select(item =>
+                {
+                    var dataEl = item.GetProperty("data");
+                    var data = dataEl.ValueKind == JsonValueKind.String
+                        ? JsonDocument.Parse(dataEl.GetString()!).RootElement
+                        : dataEl;
+                    return new
+                    {
+                        key = data.TryGetProperty("key", out var k) ? k.GetString() : null,
+                        name = item.GetProperty("name").GetString(),
+                        icon = data.TryGetProperty("icon", out var i) ? i.GetString() : null,
+                        color = data.TryGetProperty("color", out var c) ? c.GetString() : null,
+                        description = data.TryGetProperty("description", out var d) ? d.GetString() : null,
+                    };
+                }).Where(t => t.key != null).ToList();
+                return Results.Ok(types);
+            }
+            catch (Exception ex)
+            {
+                return ApiError.ServiceUnavailable("redleaf_unavailable", $"RedLeaf is required for event types: {ex.Message}");
+            }
+        });
+
+        registry.MapGet("/api/discussions/live", "Get LIVE discussion(s), optionally filtered by agent", async (HttpContext ctx) =>
+        {
+            var agentFilter = ctx.Request.Query["agent"].FirstOrDefault();
+
+            List<RedLeafDiscussionReader.DiscussionRead> discussions;
+            try { discussions = await _redLeaf!.GetDiscussionsAsync(agentFilter); }
+            catch (Exception ex)
+            {
+                return ApiError.ServiceUnavailable("redleaf_unavailable", $"RedLeaf is required for discussion reads: {ex.Message}");
+            }
+
+            var userId = ctx.User.FindFirstValue("sub");
+            var live = discussions
+                .Where(d => d.Type == "live" && d.Status != "archived" && OwnerScope.CanAccess(d.OwnerId, userId))
+                .Select(ToInfo);
+            return Results.Ok(live);
+        })
+        .WithParam("agent", "string", description: "Filter by agent ID", location: ParamLocation.Query);
+
+        registry.MapPost("/api/discussions/{id}/clear", "Clear all messages from a LIVE discussion (daily reset)", async (string id, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
+        {
+            var discussion = await db.Discussions.FindAsync(id);
+            if (discussion is null)
+                return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
+
+            if (discussion.Type != "live")
+                return Results.Json(new { error = "Only LIVE discussions can be cleared" }, statusCode: 400);
+
+            if (discussion.SessionId is not null)
+            {
+                try { await RedCompute.PostAsync($"/ai-session/sessions/{discussion.SessionId}/stop", null); }
+                catch { }
+                discussion.SessionId = null;
+            }
+
+            var deleted = await db.Conversations.Where(c => c.ContextId == id).ExecuteDeleteAsync();
+            discussion.MessageCount = 0;
+            discussion.LastContextJson = null;
+            discussion.LastActivity = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+
+            try
+            {
+                var disc = await _redLeaf!.GetDiscussionAsync(id);
+                if (disc != null)
+                {
+                    var deleteResp = await RedLeaf.DeleteAsync($"api/streams/nova-messages/records?entity_id={disc.EntityId}");
+                    deleteResp.EnsureSuccessStatusCode();
+                }
+            }
+            catch (Exception ex)
+            {
+                App.LogService.Warn("discussions", $"RedLeaf stream clear failed for {id}: {ex.Message}");
+            }
+
+            var marker = new ConversationRecord
+            {
+                ContextId = id,
+                Role = "assistant",
+                Content = "New day. Timeline cleared.",
+                Source = "event:system",
+                Timestamp = DateTime.UtcNow,
+            };
+            db.Conversations.Add(marker);
+            discussion.MessageCount = 1;
+            await db.SaveChangesAsync();
+
+            NovaMirror.PublishDiscussion(discussion);
+            NovaMirror.PublishMessages([marker]);
+
+            broadcaster?.Broadcast("discussion.cleared", new
+            {
+                discussionId = id,
+            });
+
+            return Results.Ok(new { cleared = deleted, discussion = ToInfo(discussion) });
+        });
+
         registry.MapPost("/api/discussions/{id}/event", "Inject an automation event into a discussion", async (string id, DiscussionEventRequest request, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
@@ -552,32 +682,74 @@ public static class DiscussionEndpoints
                 return Results.BadRequest(new { error = "Content is required" });
 
             var role = request.Type is "assistant" or "system" ? request.Type : "user";
+            var source = $"event:{request.Source ?? "automation"}";
 
-            db.Conversations.Add(new ConversationRecord
+            string? partsJson = null;
+            if (request.Metadata is { } meta)
+            {
+                var parts = new object[]
+                {
+                    new { type = "text", content = request.Content },
+                    new { type = "event_data", source = request.Source, data = meta },
+                };
+                partsJson = JsonSerializer.Serialize(parts, JsonOptions);
+            }
+
+            var record = new ConversationRecord
             {
                 ContextId = id,
                 Role = role,
                 Content = request.Content,
-                Source = $"event:{request.Source ?? "automation"}",
+                PartsJson = partsJson,
+                Source = source,
                 UserId = userId,
                 SenderAgentId = request.SenderAgentId,
-            });
+            };
+            db.Conversations.Add(record);
 
             discussion.LastActivity = DateTime.UtcNow;
             discussion.MessageCount++;
             await db.SaveChangesAsync();
+            NovaMirror.PublishDiscussion(discussion);
 
-            if (discussion.SessionId is not null)
+            try
             {
-                broadcaster?.Broadcast("discussion.event", new
+                var disc = await _redLeaf!.GetDiscussionAsync(id);
+                if (disc != null)
                 {
-                    discussionId = id,
-                    sessionId = discussion.SessionId,
-                    content = request.Content,
-                    source = request.Source ?? "automation",
-                    senderAgentId = request.SenderAgentId,
-                });
+                    var streamRecord = new
+                    {
+                        data = new
+                        {
+                            discussion_id = id,
+                            role,
+                            content = request.Content,
+                            parts_json = partsJson,
+                            source,
+                            sender_agent_id = request.SenderAgentId,
+                            timestamp = record.Timestamp.ToString("O"),
+                        },
+                        entity_id = disc.EntityId,
+                    };
+                    await RedLeaf.PostAsJsonAsync("api/streams/nova-messages/records", streamRecord, JsonOptions);
+                }
+            }
+            catch (Exception ex)
+            {
+                App.LogService.Warn("discussions", $"Direct RedLeaf write failed for event in {id}: {ex.Message}");
+            }
 
+            broadcaster?.Broadcast("discussion.event", new
+            {
+                discussionId = id,
+                sessionId = discussion.SessionId,
+                content = request.Content,
+                source = request.Source ?? "automation",
+                senderAgentId = request.SenderAgentId,
+            });
+
+            if (discussion.SessionId is not null && role != "system")
+            {
                 if (request.SenderAgentId is not null && request.ReplyToDiscussionId is not null)
                 {
                     try
@@ -626,7 +798,7 @@ public static class DiscussionEndpoints
                 partsJson = System.Text.Json.JsonSerializer.Serialize(parts);
             }
 
-            db.Conversations.Add(new ConversationRecord
+            var record = new ConversationRecord
             {
                 ContextId = id,
                 Role = "assistant",
@@ -635,7 +807,8 @@ public static class DiscussionEndpoints
                 Source = "nova-message",
                 UserId = userId,
                 SenderAgentId = request.SenderAgentId,
-            });
+            };
+            db.Conversations.Add(record);
 
             discussion.LastActivity = DateTime.UtcNow;
             discussion.MessageCount++;
@@ -645,6 +818,8 @@ public static class DiscussionEndpoints
                 discussion.Title = request.Title;
 
             await db.SaveChangesAsync();
+            NovaMirror.PublishDiscussion(discussion);
+            NovaMirror.PublishMessages([record]);
 
             // Best-effort inject into live session (message is already persisted above).
             // If the session isn't ready or RedCompute is down, the message will be
@@ -699,6 +874,13 @@ public static class DiscussionEndpoints
             var resolved = _deviceResolver != null
                 ? await _deviceResolver.ResolveAsync(ua, browserId)
                 : new ResolvedDevice { Name = "unknown", Type = "unknown", Platform = "unknown" };
+
+            if (resolved.Name != "unknown" && resolved.Name != _lastDeviceName)
+            {
+                if (_lastDeviceName != null)
+                    _ = LiveEventService.Instance?.PostAsync("device", $"Switched to {resolved.Name}");
+                _lastDeviceName = resolved.Name;
+            }
 
             var outcome = await SendMessageCoreAsync(
                 db, memory, discussion, userId,
@@ -1015,6 +1197,7 @@ public static class DiscussionEndpoints
             d.Title,
             d.SessionId,
             d.Status,
+            d.Type,
             d.CreatedAt,
             d.LastActivity,
             d.MessageCount,
@@ -1031,6 +1214,7 @@ public static class DiscussionEndpoints
             d.Title,
             d.SessionId,
             d.Status,
+            d.Type,
             d.CreatedAt,
             d.LastActivity,
             d.MessageCount,
@@ -1049,6 +1233,7 @@ public static class DiscussionEndpoints
 public class CreateDiscussionRequest
 {
     public string? AgentId { get; set; }
+    public string? Type { get; set; }
 }
 
 public class DiscussionTitleRequest
@@ -1063,6 +1248,7 @@ public class DiscussionEventRequest
     public string? Source { get; set; }
     public string? SenderAgentId { get; set; }
     public string? ReplyToDiscussionId { get; set; }
+    public JsonElement? Metadata { get; set; }
 }
 
 public class NovaMessageRequest

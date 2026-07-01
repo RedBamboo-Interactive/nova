@@ -52,8 +52,10 @@ public static class ConversationExporter
                 ? await FetchSessionMessages(disc.SessionId)
                 : null;
 
+            var localEvents = await FetchLocalEvents(db, disc.Id);
+
             if (sessionMessages is { Count: > 0 })
-                AppendSessionExport(sb, disc, sessionMessages);
+                AppendSessionExport(sb, disc, sessionMessages, localEvents);
             else
                 await AppendLocalExport(sb, disc, db);
 
@@ -113,8 +115,10 @@ public static class ConversationExporter
             ? await FetchSessionMessages(disc.SessionId)
             : null;
 
+        var localEvents = await FetchLocalEvents(db, disc.Id);
+
         if (sessionMessages is { Count: > 0 })
-            AppendSessionExport(sb, disc, sessionMessages);
+            AppendSessionExport(sb, disc, sessionMessages, localEvents);
         else
             await AppendLocalExport(sb, disc, db);
 
@@ -127,20 +131,46 @@ public static class ConversationExporter
         return snapshot is { Messages.Count: > 0 } ? snapshot.Messages : null;
     }
 
-    private static void AppendSessionExport(StringBuilder sb, Data.Entities.Discussion disc, List<SessionMessage> raw)
+    private static void AppendSessionExport(StringBuilder sb, Data.Entities.Discussion disc,
+        List<SessionMessage> raw, List<Data.Entities.ConversationRecord> localEvents)
     {
         var collapsed = CollapseMessages(raw);
         var textMessages = collapsed.Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content)).ToList();
 
+        var eventEntries = localEvents.Select(e => new CollapsedMessage
+        {
+            Role = "event",
+            EventType = "event",
+            Content = e.Content,
+            Timestamp = e.Timestamp,
+            Source = e.Source,
+        }).ToList();
+
+        var merged = textMessages.Concat(eventEntries).OrderBy(m => m.Timestamp).ToList();
+
+        var messageCount = textMessages.Count;
+        var eventCount = eventEntries.Count;
+        var countLabel = eventCount > 0
+            ? $"{messageCount} message(s), {eventCount} event(s)"
+            : $"{messageCount} message(s)";
+
         sb.AppendLine($"## {disc.Title ?? "Untitled"} [{disc.Id}]");
-        sb.AppendLine($"Created: {disc.CreatedAt:yyyy-MM-dd HH:mm} — {textMessages.Count} message(s)");
+        sb.AppendLine($"Created: {disc.CreatedAt:yyyy-MM-dd HH:mm} — {countLabel}");
         sb.AppendLine();
 
-        foreach (var msg in textMessages)
+        foreach (var msg in merged)
         {
-            var role = msg.Role == "user" ? "user" : "nova";
-            sb.AppendLine($"**{role}** ({msg.Timestamp:HH:mm}):");
-            sb.AppendLine(msg.Content);
+            if (msg.EventType == "event")
+            {
+                var source = msg.Source?.Replace("event:", "") ?? "system";
+                sb.AppendLine($"[event:{source}] ({msg.Timestamp:HH:mm}): {msg.Content}");
+            }
+            else
+            {
+                var role = msg.Role == "user" ? "user" : "nova";
+                sb.AppendLine($"**{role}** ({msg.Timestamp:HH:mm}):");
+                sb.AppendLine(msg.Content);
+            }
             sb.AppendLine();
         }
     }
@@ -247,12 +277,21 @@ public static class ConversationExporter
     private static string? Truncate(string? s, int max) =>
         s is { Length: > 0 } && s.Length > max ? s[..max] + "..." : s;
 
+    private static async Task<List<Data.Entities.ConversationRecord>> FetchLocalEvents(NovaDbContext db, string discussionId)
+    {
+        return await db.Conversations
+            .Where(m => m.ContextId == discussionId && m.Source.StartsWith("event:"))
+            .OrderBy(m => m.Timestamp)
+            .ToListAsync();
+    }
+
     private class CollapsedMessage
     {
         public string Role { get; set; } = "";
         public string EventType { get; set; } = "";
         public string? Content { get; set; }
         public DateTime Timestamp { get; set; }
+        public string? Source { get; set; }
     }
 }
 

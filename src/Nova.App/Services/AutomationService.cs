@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cronos;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Nova.App.Configuration;
 using Nova.App.Data;
@@ -271,8 +272,14 @@ public class AutomationService
                             : null;
                         NovaMirror.PublishAutomationRun(automation.Name, result?.Triggered == true, result?.Summary, null);
 
-                        if (result?.Triggered == true && automation.ReportToDiscussionId != null)
-                            await ReportToDiscussionAsync(automation, result, ct);
+                        if (result?.Triggered == true)
+                        {
+                            var reportId = automation.ReportToDiscussionId;
+                            if (reportId != null)
+                                await ReportToDiscussionAsync(automation, result, ct);
+                            else
+                                _ = LiveEventService.Instance?.PostAsync($"automation:{automation.Name}", $"Automation \"{automation.Name}\" completed");
+                        }
 
                         if (result?.Triggered == true && automation.RemoveOnTrigger)
                         {
@@ -290,6 +297,7 @@ public class AutomationService
                         automation.ConsecutiveFailures++;
                         automation.LastError = ex.Message;
                         NovaMirror.PublishAutomationRun(automation.Name, false, null, ex.Message);
+                        _ = LiveEventService.Instance?.PostAsync($"automation:{automation.Name}", $"Automation \"{automation.Name}\" failed: {ex.Message}");
                         _log.Error("automations", $"[{automation.Name}] failed ({automation.ConsecutiveFailures}x): {ex.Message}");
 
                         var max = automation.MaxFailures > 0 ? automation.MaxFailures : 20;
@@ -338,7 +346,20 @@ public class AutomationService
 
         var prompt = config.Prompt;
 
-        if (config.PreCreateDiscussion)
+        if (config.TargetLive)
+        {
+            var liveId = await ResolveLiveDiscussionIdAsync();
+            if (liveId != null)
+            {
+                automation.ReportToDiscussionId = liveId;
+                prompt = $"<nova-context live-discussion=\"{liveId}\">\n"
+                    + $"Your LIVE discussion ID is: {liveId}.\n"
+                    + $"Post your content to it using: POST http://127.0.0.1:18803/api/discussions/{liveId}/nova-message\n"
+                    + "Do NOT create a new discussion — use the LIVE timeline.\n"
+                    + "</nova-context>\n\n" + prompt;
+            }
+        }
+        else if (config.PreCreateDiscussion)
         {
             var discussionId = await PreCreateDiscussionAsync(automation.OwnerId, ct);
             if (discussionId != null)
@@ -464,6 +485,21 @@ public class AutomationService
         return new AutomationResult { Triggered = true, Summary = "Backup completed" };
     }
 
+    private async Task<string?> ResolveLiveDiscussionIdAsync()
+    {
+        if (_scopeFactory == null) return null;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<NovaDbContext>();
+            return await db.Discussions
+                .Where(d => d.Type == "live" && d.AgentId == NovaMirror.AgentId && d.Status != "archived")
+                .Select(d => d.Id)
+                .FirstOrDefaultAsync();
+        }
+        catch { return null; }
+    }
+
     private async Task ReportFailureAsync(Automation automation, string reason, CancellationToken ct)
     {
         var discussionId = automation.ReportToDiscussionId!;
@@ -471,15 +507,9 @@ public class AutomationService
 
         try
         {
-            var eventContent = $"""
-                <nova-event source="automation:{automation.Name}" type="watcher-failed">
-                Watcher "{automation.Name}" failed: {reason}
-                </nova-event>
-                """;
-
             await _http.PostAsJsonAsync(
                 $"http://127.0.0.1:18803/api/discussions/{discussionId}/event",
-                new { content = eventContent, source = automation.Name }, ct);
+                new { content = $"Automation \"{automation.Name}\" failed: {reason}", source = $"automation:{automation.Name}" }, ct);
         }
         catch (Exception ex)
         {
@@ -494,15 +524,9 @@ public class AutomationService
 
         try
         {
-            var eventContent = $"""
-                <nova-event source="automation:{automation.Name}" type="{automation.ActionType}">
-                {result.Summary}
-                </nova-event>
-                """;
-
             await _http.PostAsJsonAsync(
                 $"http://127.0.0.1:18803/api/discussions/{discussionId}/event",
-                new { content = eventContent, source = automation.Name }, ct);
+                new { content = result.Summary, source = $"automation:{automation.Name}" }, ct);
         }
         catch (Exception ex)
         {
@@ -963,6 +987,7 @@ public class AiSessionConfig
     public string Prompt { get; set; } = "";
     public string? SystemPromptHint { get; set; }
     public bool PreCreateDiscussion { get; set; }
+    public bool TargetLive { get; set; }
     public int? Timeout { get; set; }
 
     /// <summary>Abstract quality tier (fast, standard, deep, research) resolved at run time. Null = backend default.</summary>

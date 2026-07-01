@@ -3,6 +3,7 @@ export interface DiscussionInfo {
   title: string | null
   sessionId: string | null
   status: "idle" | "thinking" | "stopped" | "archived"
+  type: "chat" | "live"
   createdAt: string
   lastActivity: string
   messageCount: number
@@ -25,6 +26,15 @@ export interface DiscussionMessage {
   parts: MessagePartDto[]
   timestamp: string
   senderAgentId?: string
+  source?: string
+}
+
+export interface EventType {
+  key: string
+  name: string
+  icon: string | null
+  color: string | null
+  description: string | null
 }
 
 export interface MessagePartDto {

@@ -37,6 +37,23 @@ nova-workspace/temp/
 nova-workspace/.wrangler/
 *_raw.png
 
+# Nova workspace scratch (game extracts, tooling, generated files)
+nova-workspace/*.py
+nova-workspace/*.dll
+nova-workspace/*.mp3
+nova-workspace/**/__pycache__/
+nova-workspace/config/*.bak
+nova-workspace/config/suite-apis.md
+nova-workspace/e33_extract/
+nova-workspace/e33_extracted/
+nova-workspace/pst_extracted/
+nova-workspace/witcher_extracted/
+nova-workspace/tools/FModel/
+
+# Editor / agent tooling
+.claude/
+web/src/summary.txt
+
 # Secrets
 .env
 *.pfx

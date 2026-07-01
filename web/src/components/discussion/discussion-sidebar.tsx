@@ -1,4 +1,4 @@
-import { memo, useCallback } from "react"
+import { memo, useCallback, useMemo } from "react"
 import { ItemList, ItemListRow } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
 import type { DiscussionInfo, AgentInfo } from "@/lib/types"
@@ -26,7 +26,54 @@ function isUnread(d: DiscussionInfo): boolean {
 }
 
 export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, onArchive, onDismiss, getAgent, multiAgent }: Props) {
-  const renderItem = useCallback((discussion: DiscussionInfo) => {
+  const { live, chat } = useMemo(() => {
+    const live: DiscussionInfo[] = []
+    const chat: DiscussionInfo[] = []
+    for (const d of discussions) {
+      if (d.type === "live") live.push(d)
+      else chat.push(d)
+    }
+    return { live, chat }
+  }, [discussions])
+
+  const renderLiveItem = useCallback((discussion: DiscussionInfo) => {
+    const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
+    return (
+      <ItemListRow
+        selected={discussion.id === activeDiscussionId}
+        onClick={() => onSelect(discussion.id)}
+        icon={
+          agent ? (
+            <>
+              <img
+                src={agent.avatarUrl}
+                alt={agent.name}
+                className="absolute inset-0 w-full h-full rounded-lg object-cover"
+                onError={(e) => { e.currentTarget.style.display = "none" }}
+              />
+              <div className="absolute -bottom-1 right-0 scale-75 origin-bottom-right">
+                <i className="fa-solid fa-tower-broadcast text-[8px]" style={{ color: "var(--color-accent-teal)" }} />
+              </div>
+            </>
+          ) : (
+            <i className="fa-solid fa-tower-broadcast" style={{ color: "var(--color-accent-teal)" }} />
+          )
+        }
+        className={[
+          agent ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
+        ].filter(Boolean).join(" ")}
+        title={discussion.title || "Live"}
+        subtitle={
+          <span className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-accent-teal animate-pulse shrink-0" />
+            <span style={{ color: "var(--color-accent-teal)" }}>Live</span>
+          </span>
+        }
+      />
+    )
+  }, [activeDiscussionId, onSelect, getAgent, multiAgent])
+
+  const renderChatItem = useCallback((discussion: DiscussionInfo) => {
     const alive = discussion.status !== "archived" && discussion.status !== "stopped"
     const unread = alive && isUnread(discussion)
     const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
@@ -88,12 +135,28 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
   }, [activeDiscussionId, onSelect, onArchive, onDismiss, getAgent, multiAgent])
 
   return (
-    <ItemList
-      items={discussions}
-      keyFn={(d) => d.id}
-      emptyMessage="No discussions yet"
-      renderItem={renderItem}
-    />
+    <div className="flex flex-col h-full overflow-hidden">
+      {live.length > 0 && (
+        <div className="shrink-0">
+          <ItemList
+            items={live}
+            keyFn={(d) => d.id}
+            renderItem={renderLiveItem}
+          />
+          {chat.length > 0 && (
+            <div className="border-b border-overlay-6 mx-3" />
+          )}
+        </div>
+      )}
+      <div className="flex-1 overflow-hidden">
+        <ItemList
+          items={chat}
+          keyFn={(d) => d.id}
+          emptyMessage="No discussions yet"
+          renderItem={renderChatItem}
+        />
+      </div>
+    </div>
   )
 })
 

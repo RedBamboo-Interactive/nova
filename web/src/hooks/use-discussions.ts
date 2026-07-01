@@ -1,10 +1,79 @@
 import { useState, useCallback, useEffect, useRef, useMemo, startTransition } from "react"
 import { useToast } from "@redbamboo/ui"
 import { api } from "@/lib/api"
-import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent } from "@/lib/types"
+import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "@/lib/types"
 import type { MessageBlock, MessagePart, PendingQuestion, ChatEvent, ImageAttachment } from "@redbamboo/chat"
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
+
+function stripContextXml(content: string): string {
+  return content
+    .replace(/<nova-context[\s\S]*?<\/nova-context>\s*/g, "")
+    .replace(/<nova-prior-messages?[\s\S]*?<\/nova-prior-messages?>\s*/g, "")
+    .replace(/<nova-event[^>]*>([\s\S]*?)<\/nova-event>/g, "$1")
+    .trim()
+}
+
+function isEventMessage(m: MessageBlock): boolean {
+  const source = m.metadata?.source as string | undefined
+  if (source?.startsWith("event:")) return true
+  const text = m.parts[0]?.content ?? ""
+  return /<nova-event\s/.test(text)
+}
+
+type EventResolver = (source: string) => EventType
+
+function formatEventMessage(m: MessageBlock, resolve?: EventResolver): MessageBlock {
+  const source = (m.metadata?.source as string | undefined) ?? "event:system"
+  const key = source.replace(/^event:/, "").split(":")[0] ?? "system"
+  const text = m.parts[0]?.content ?? ""
+  const cleaned = text.replace(/<nova-event[^>]*>([\s\S]*?)<\/nova-event>/g, "$1").trim() || text
+  const eventType = resolve?.(source)
+  return {
+    ...m,
+    role: "assistant",
+    parts: [{ type: "tool_use", toolName: `event:${key}`, toolInput: JSON.stringify({ event: cleaned, icon: eventType?.icon ?? null, color: eventType?.color ?? null }), content: cleaned }],
+  }
+}
+
+function cleanMessages(blocks: MessageBlock[], resolve?: EventResolver): MessageBlock[] {
+  const result: MessageBlock[] = []
+  let eventGroup: MessageBlock[] = []
+
+  const flushEvents = () => {
+    if (eventGroup.length === 0) return
+    const parts = eventGroup.map((m) => {
+      const formatted = formatEventMessage(m, resolve)
+      return formatted.parts[0]!
+    })
+    result.push({
+      ...eventGroup[0]!,
+      role: "assistant",
+      parts,
+    })
+    eventGroup = []
+  }
+
+  for (const m of blocks) {
+    if (isEventMessage(m)) {
+      eventGroup.push(m)
+      continue
+    }
+    flushEvents()
+    if (m.role !== "user") { result.push(m); continue }
+    const textPart = m.parts.find((p) => p.type === "text")
+    if (!textPart?.content || !textPart.content.includes("<nova-")) { result.push(m); continue }
+    const cleaned = stripContextXml(textPart.content)
+    if (cleaned === textPart.content) { result.push(m); continue }
+    if (!cleaned) continue
+    result.push({
+      ...m,
+      parts: m.parts.map((p) => p === textPart ? { ...p, content: cleaned } : p),
+    })
+  }
+  flushEvents()
+  return result
+}
 
 function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
   return messages.map((m) => ({
@@ -18,6 +87,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
     })),
     timestamp: m.timestamp,
     senderAgentId: m.senderAgentId,
+    metadata: m.source ? { source: m.source } : undefined,
   }))
 }
 
@@ -75,6 +145,34 @@ export function useDiscussions() {
     setLoadingDiscussionId(id)
     loadedRef.current.add(id)
     try {
+      if (disc?.type === "live" && disc?.sessionId) {
+        // LIVE: merge session messages (chat) with Nova API messages (events)
+        let sessionMsgs: MessageBlock[] = []
+        try {
+          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
+          if (data.messages?.length) sessionMsgs = rebuildBlocks(data.messages)
+        } catch {}
+
+        let apiMsgs: MessageBlock[] = []
+        try {
+          const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/discussions/${id}`)
+          if (data.messages?.length) apiMsgs = toChatMessages(data.messages)
+        } catch {}
+
+        const seen = new Set<string>()
+        const merged = [...sessionMsgs, ...apiMsgs]
+          .filter((m) => {
+            const key = `${m.timestamp}:${m.parts[0]?.content?.slice(0, 50)}`
+            if (seen.has(key)) return false
+            seen.add(key)
+            return true
+          })
+          .sort((a, b) => new Date(a.timestamp ?? 0).getTime() - new Date(b.timestamp ?? 0).getTime())
+
+        setMessages((prev) => ({ ...prev, [id]: cleanMessages(merged) }))
+        return
+      }
+
       if (disc?.sessionId) {
         try {
           const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
@@ -85,7 +183,7 @@ export function useDiscussions() {
             api.put(`/api/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
           }
           if (data.messages?.length) {
-            setMessages((prev) => ({ ...prev, [id]: rebuildBlocks(data.messages) }))
+            setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages)) }))
             return
           }
         } catch {
@@ -93,7 +191,7 @@ export function useDiscussions() {
             await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
             const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
             if (data.messages?.length) {
-              setMessages((prev) => ({ ...prev, [id]: rebuildBlocks(data.messages) }))
+              setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages)) }))
               return
             }
           } catch {
@@ -105,7 +203,7 @@ export function useDiscussions() {
       try {
         const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/discussions/${id}`)
         if (data.messages?.length) {
-          setMessages((prev) => ({ ...prev, [id]: toChatMessages(data.messages) }))
+          setMessages((prev) => ({ ...prev, [id]: cleanMessages(toChatMessages(data.messages)) }))
         }
       } catch { /* discussion not found */ }
     } finally {
@@ -149,10 +247,12 @@ export function useDiscussions() {
 
   const autoSelected = useRef(false)
   useEffect(() => {
-    const first = visibleDiscussions[0]
-    if (!autoSelected.current && !activeDiscussionId && first) {
+    if (autoSelected.current || activeDiscussionId) return
+    const live = visibleDiscussions.find((d) => d.type === "live")
+    const target = live ?? visibleDiscussions[0]
+    if (target) {
       autoSelected.current = true
-      selectDiscussion(first.id)
+      selectDiscussion(target.id)
     }
   }, [visibleDiscussions, activeDiscussionId, selectDiscussion])
 
@@ -353,34 +453,39 @@ export function useDiscussions() {
       )
       if (!wasArchived) api.put(`/api/discussions/${discId}/stopped`).catch(() => {})
     } else if (event.type === "discussion.created") {
-      const { discussionId, agentId, status } = event.data as { discussionId: string; agentId?: string; status?: string }
+      const { discussionId, agentId, status, type } = event.data as { discussionId: string; agentId?: string; status?: string; type?: string }
       if (!discussionId) return
       setDiscussions((prev) => {
         if (prev.some((d) => d.id === discussionId)) return prev
-        const newDisc = {
+        const newDisc: DiscussionInfo = {
           id: discussionId,
-          title: null as string | null,
-          sessionId: null as string | null,
-          status: (status ?? "idle") as "idle" | "thinking" | "stopped" | "archived",
+          title: null,
+          sessionId: null,
+          status: (status ?? "idle") as DiscussionInfo["status"],
+          type: (type ?? "chat") as DiscussionInfo["type"],
           createdAt: new Date().toISOString(),
           lastActivity: new Date().toISOString(),
           messageCount: 0,
-          lastReadAt: null as string | null,
+          lastReadAt: null,
           agentId: agentId ?? null,
         }
         return [newDisc, ...prev]
       })
     } else if (event.type === "discussion.event") {
-      const { discussionId, content, senderAgentId } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string }
+      const { discussionId, content, source, senderAgentId } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string }
       if (!discussionId) return
       setMessages((prev) => {
         const current = prev[discussionId] ?? []
+        const sourceKey = source ? `event:${source}` : "event:system"
+        const key = source?.split(":")[0] ?? "system"
+        const cleaned = content.replace(/<nova-event[^>]*>([\s\S]*?)<\/nova-event>/g, "$1").trim() || content
         const newBlock: import("@redbamboo/chat").MessageBlock = {
           id: `event-${Date.now()}`,
-          role: "user",
-          parts: [{ type: "text", content }],
+          role: "assistant",
+          parts: [{ type: "tool_use", toolName: key, toolInput: JSON.stringify({ event: cleaned }), content: cleaned }],
           timestamp: new Date().toISOString(),
           senderAgentId,
+          metadata: { source: sourceKey },
         }
         return { ...prev, [discussionId]: [...current, newBlock] }
       })
@@ -400,6 +505,14 @@ export function useDiscussions() {
         }
         return { ...prev, [discussionId]: [...current, newBlock] }
       })
+    } else if (event.type === "discussion.cleared") {
+      const { discussionId } = event.data as { discussionId: string }
+      if (!discussionId) return
+      setMessages((prev) => ({ ...prev, [discussionId]: [] }))
+      setStreaming((prev) => ({ ...prev, [discussionId]: false }))
+      setPendingQuestions((prev) => ({ ...prev, [discussionId]: null }))
+      loadedRef.current.delete(discussionId)
+      loadMessages(discussionId)
     } else if (event.type === "session.stream") {
       const { sessionId, event: evt } = event.data as { sessionId: string; event: ClaudeStreamEvent }
       const discId = sessionToDiscussion.get(sessionId)
@@ -448,13 +561,17 @@ export function useDiscussions() {
   }, [refreshDiscussions, reloadActiveMessages])
 
   const archiveDiscussion = useCallback(async (id: string) => {
-    const prev = discussions.find((d) => d.id === id)
+    const disc = discussions.find((d) => d.id === id)
+    if (disc?.type === "live") {
+      toast({ variant: "error", title: "Can't archive", description: "Live discussions cannot be archived" })
+      return
+    }
     setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: "archived" as const } : d))
     if (activeDiscussionId === id) setActiveDiscussionId(null)
     try {
       await api.delete(`/api/discussions/${id}`)
     } catch (err) {
-      if (prev) setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: prev.status } : d))
+      if (disc) setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: disc.status } : d))
       toast({ variant: "error", title: "Failed to archive", description: err instanceof Error ? err.message : "Unknown error" })
     }
   }, [activeDiscussionId, discussions, toast])

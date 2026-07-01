@@ -30,7 +30,7 @@ public sealed class RedLeafDiscussionReader
         string Id, string? Title, string? SessionId, string Status,
         DateTime CreatedAt, DateTime LastActivity, int MessageCount,
         DateTime? LastReadAt, string? OwnerId, Guid EntityId,
-        string? AgentId);
+        string? AgentId, string Type = "chat");
 
     public sealed record MessageRead(
         long Id, string Role, string? Content, string? PartsJson, string? Source,
@@ -119,7 +119,8 @@ public sealed class RedLeafDiscussionReader
             ParseUtc(Str(d, "last_read_at")),
             Str(d, "owner_id"),
             Guid.Parse(entity.GetProperty("id").GetString()!),
-            Str(d, "agent"));
+            Str(d, "agent"),
+            Str(d, "type") ?? "chat");
     }
 
     private static MessageRead MapMessage(JsonElement rec)

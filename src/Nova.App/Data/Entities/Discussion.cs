@@ -13,5 +13,6 @@ public class Discussion
     public string? InjectedContext { get; set; }
     public string? OwnerId { get; set; }
     public string? AgentId { get; set; }
+    public string Type { get; set; } = "chat";
     public string? LastContextJson { get; set; }
 }

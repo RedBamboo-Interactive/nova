@@ -259,6 +259,22 @@ export function ChatView() {
   const avatarBase = activeAgent ? activeAgent.avatarUrl : "/api/avatar"
   const avatarSrc = avatarVersion ? `${avatarBase}?v=${avatarVersion}` : avatarBase
 
+  const isLive = activeDiscussion?.type === "live"
+
+  const liveFooter = isLive ? (
+    <div className="flex items-center gap-3 px-4 py-2 border-t border-overlay-6">
+      <div className="h-px flex-1 bg-gradient-to-r from-transparent via-orange-400/30 to-transparent" />
+      <div className="flex items-center gap-1.5">
+        <span className="relative flex h-2 w-2">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-400" />
+        </span>
+        <span className="text-[11px] font-medium tracking-wide uppercase" style={{ color: "rgb(251 146 60)" }}>Live</span>
+      </div>
+      <div className="h-px flex-1 bg-gradient-to-l from-transparent via-orange-400/30 to-transparent" />
+    </div>
+  ) : null
+
   const chatArea = activeDiscussion ? (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
       {isLoadingMessages && activeMessages.length === 0 && (
@@ -279,6 +295,7 @@ export function ChatView() {
         onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
         placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}
         header={<>{chatHeader}{upstreamBanner}</>}
+        footer={liveFooter}
         speechBackend={speechBackend}
         resolveImageSrc={resolveImageSrc}
         resolveFileLink={resolveFileLink}

@@ -17,6 +17,7 @@ using RedBamboo.AppHost.Streams;
 using RedBamboo.AppHost.Watchers;
 using RedBamboo.AppHost.WebSockets;
 using Nova.App.Data;
+using Nova.App.Data.Entities;
 using Nova.App.Services;
 
 namespace Nova.App.Api;
@@ -446,6 +447,23 @@ public class StaticServer
                 _app.Services.GetService<WebSocketBroadcaster>()
                     ?.Broadcast("agent.avatar-changed", new { agentId = NovaMirror.AgentId, url = resolvedUrl });
 
+                // Post to LIVE timeline
+                if (!string.IsNullOrEmpty(outfitId))
+                {
+                    try
+                    {
+                        var outfitResp = await rl.GetStringAsync($"api/entities/{outfitId}");
+                        using var outfitDoc = JsonDocument.Parse(outfitResp);
+                        var outfitName = outfitDoc.RootElement.TryGetProperty("name", out var n) ? n.GetString() : null;
+                        _ = LiveEventService.Instance?.PostAsync("outfit", $"Changed into \"{outfitName ?? "new outfit"}\"");
+                    }
+                    catch { _ = LiveEventService.Instance?.PostAsync("outfit", "Changed outfit"); }
+                }
+                else
+                {
+                    _ = LiveEventService.Instance?.PostAsync("outfit", "Reset to base avatar");
+                }
+
                 // Notify Nova via discussion event
                 if (!string.IsNullOrEmpty(discussionId))
                 {
@@ -556,6 +574,7 @@ public class StaticServer
             var db = scope.ServiceProvider.GetRequiredService<NovaDbContext>();
             db.Database.EnsureCreated();
             EnsureSchema(db);
+            EnsureLiveDiscussions(db);
         }
 
         var repoWebDist = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "web", "dist");
@@ -586,6 +605,15 @@ public class StaticServer
         }
 
         await _app.StartAsync(ct);
+
+        var scopeFactory = _app.Services.GetRequiredService<IServiceScopeFactory>();
+        _ = new LiveEventService(scopeFactory, App.LogService);
+        var livePoller = new LivePollerService(App.LogService);
+        _ = Task.Run(async () =>
+        {
+            try { await livePoller.StartAsync(CancellationToken.None); }
+            catch (Exception ex) { App.LogService.Error("live-poller", $"Poller crashed: {ex}"); }
+        });
 
         var wsBroadcaster = _app.Services.GetService<WebSocketBroadcaster>();
         var jwtService = _app.Services.GetRequiredService<JwtService>();
@@ -717,6 +745,14 @@ public class StaticServer
             cmd.ExecuteNonQuery();
         }
 
+        if (!discColumns.Contains("Type"))
+        {
+            cmd.CommandText = "ALTER TABLE Discussions ADD COLUMN Type TEXT NOT NULL DEFAULT 'chat'";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS IX_Discussions_LivePerAgent ON Discussions(AgentId) WHERE Type = 'live' AND Status != 'archived'";
+            cmd.ExecuteNonQuery();
+        }
+
         cmd.CommandText = "PRAGMA table_info(Conversations)";
         using var reader = cmd.ExecuteReader();
         var columns = new HashSet<string>();
@@ -762,6 +798,28 @@ public class StaticServer
             cmd.CommandText = "CREATE INDEX IF NOT EXISTS IX_InvocationLogs_AgentId ON InvocationLogs(AgentId)";
             cmd.ExecuteNonQuery();
         }
+    }
+
+    private static void EnsureLiveDiscussions(NovaDbContext db)
+    {
+        if (NovaMirror.AgentId is null) return;
+
+        var hasLive = db.Discussions.Any(d => d.Type == "live" && d.AgentId == NovaMirror.AgentId && d.Status != "archived");
+        if (hasLive) return;
+
+        var agentName = "Nova";
+        var live = new Discussion
+        {
+            Id = Guid.NewGuid().ToString("N")[..8],
+            Type = "live",
+            Title = $"{agentName} Live",
+            Status = "idle",
+            AgentId = NovaMirror.AgentId,
+            OwnerId = NovaMirror.UserId,
+        };
+        db.Discussions.Add(live);
+        db.SaveChanges();
+        NovaMirror.PublishDiscussion(live);
     }
 
     private static async Task WaitForPortAsync(int port, CancellationToken ct)

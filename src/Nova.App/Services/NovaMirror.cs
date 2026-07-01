@@ -42,6 +42,7 @@ public static class NovaMirror
             last_activity = new DateTimeOffset(DateTime.SpecifyKind(d.LastActivity, DateTimeKind.Utc)).ToString("O"),
             last_read_at = d.LastReadAt is { } lr
                 ? new DateTimeOffset(DateTime.SpecifyKind(lr, DateTimeKind.Utc)).ToString("O") : null,
+            type = d.Type,
             app = "nova",
         });
 
