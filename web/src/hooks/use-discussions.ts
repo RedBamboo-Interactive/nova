@@ -40,18 +40,17 @@ function cleanMessages(blocks: MessageBlock[], resolve?: EventResolver): Message
   const result: MessageBlock[] = []
   let eventGroup: MessageBlock[] = []
 
-  const flushEvents = () => {
-    if (eventGroup.length === 0) return
-    const parts = eventGroup.map((m) => {
-      const formatted = formatEventMessage(m, resolve)
-      return formatted.parts[0]!
-    })
-    result.push({
-      ...eventGroup[0]!,
-      role: "assistant",
-      parts,
-    })
+  const makeEventBlock = () => {
+    if (eventGroup.length === 0) return null
+    const parts = eventGroup.map((m) => formatEventMessage(m, resolve).parts[0]!)
+    const block: MessageBlock = { ...eventGroup[0]!, role: "assistant", parts }
     eventGroup = []
+    return block
+  }
+
+  const flushEvents = () => {
+    const block = makeEventBlock()
+    if (block) result.push(block)
   }
 
   for (const m of blocks) {
@@ -59,20 +58,55 @@ function cleanMessages(blocks: MessageBlock[], resolve?: EventResolver): Message
       eventGroup.push(m)
       continue
     }
-    flushEvents()
-    if (m.role !== "user") { result.push(m); continue }
-    const textPart = m.parts.find((p) => p.type === "text")
-    if (!textPart?.content || !textPart.content.includes("<nova-")) { result.push(m); continue }
-    const cleaned = stripContextXml(textPart.content)
-    if (cleaned === textPart.content) { result.push(m); continue }
-    if (!cleaned) continue
-    result.push({
-      ...m,
-      parts: m.parts.map((p) => p === textPart ? { ...p, content: cleaned } : p),
-    })
+    // Only flush events before user messages, not between consecutive assistant blocks
+    if (m.role === "user") {
+      flushEvents()
+    } else if (eventGroup.length > 0 && m.role === "assistant") {
+      // Events between assistant blocks: hold them, insert before this assistant run
+      const lastResult = result[result.length - 1]
+      if (!lastResult || lastResult.role !== "assistant") {
+        flushEvents()
+      }
+      // else: keep accumulating, will flush before next user message or at end
+    }
+    if (m.role === "user") {
+      const textPart = m.parts.find((p) => p.type === "text")
+      if (!textPart?.content || !textPart.content.includes("<nova-")) { result.push(m); continue }
+      const cleaned = stripContextXml(textPart.content)
+      if (cleaned === textPart.content) { result.push(m); continue }
+      if (!cleaned) continue
+      result.push({
+        ...m,
+        parts: m.parts.map((p) => p === textPart ? { ...p, content: cleaned } : p),
+      })
+    } else {
+      result.push(m)
+    }
   }
   flushEvents()
-  return result
+
+  // Post-process: move event blocks that ended up between assistant blocks to before the assistant run
+  const final: MessageBlock[] = []
+  for (let i = 0; i < result.length; i++) {
+    const block = result[i]!
+    const isEvent = block.parts.every((p) => p.toolName?.startsWith("event:"))
+    if (isEvent && final.length > 0 && final[final.length - 1]!.role === "assistant") {
+      // Find where this assistant run started
+      let insertAt = final.length - 1
+      while (insertAt > 0 && final[insertAt - 1]!.role === "assistant" && !final[insertAt - 1]!.parts.every((p) => p.toolName?.startsWith("event:"))) {
+        insertAt--
+      }
+      // Merge with existing event block at that position if present
+      if (insertAt > 0 && final[insertAt - 1]!.parts.every((p) => p.toolName?.startsWith("event:"))) {
+        final[insertAt - 1] = { ...final[insertAt - 1]!, parts: [...final[insertAt - 1]!.parts, ...block.parts] }
+      } else {
+        final.splice(insertAt, 0, block)
+      }
+    } else {
+      final.push(block)
+    }
+  }
+  return final
 }
 
 function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
@@ -91,7 +125,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
   }))
 }
 
-export function useDiscussions() {
+export function useDiscussions(eventResolver?: EventResolver) {
   const { toast } = useToast()
   const [discussions, setDiscussions] = useState<DiscussionInfo[]>([])
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null)
@@ -169,7 +203,7 @@ export function useDiscussions() {
           })
           .sort((a, b) => new Date(a.timestamp ?? 0).getTime() - new Date(b.timestamp ?? 0).getTime())
 
-        setMessages((prev) => ({ ...prev, [id]: cleanMessages(merged) }))
+        setMessages((prev) => ({ ...prev, [id]: cleanMessages(merged, eventResolver) }))
         return
       }
 
@@ -183,7 +217,7 @@ export function useDiscussions() {
             api.put(`/api/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
           }
           if (data.messages?.length) {
-            setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages)) }))
+            setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages), eventResolver) }))
             return
           }
         } catch {
@@ -191,7 +225,7 @@ export function useDiscussions() {
             await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
             const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
             if (data.messages?.length) {
-              setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages)) }))
+              setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages), eventResolver) }))
               return
             }
           } catch {
@@ -203,7 +237,7 @@ export function useDiscussions() {
       try {
         const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/discussions/${id}`)
         if (data.messages?.length) {
-          setMessages((prev) => ({ ...prev, [id]: cleanMessages(toChatMessages(data.messages)) }))
+          setMessages((prev) => ({ ...prev, [id]: cleanMessages(toChatMessages(data.messages), eventResolver) }))
         }
       } catch { /* discussion not found */ }
     } finally {
@@ -479,14 +513,37 @@ export function useDiscussions() {
         const sourceKey = source ? `event:${source}` : "event:system"
         const key = source?.split(":")[0] ?? "system"
         const cleaned = content.replace(/<nova-event[^>]*>([\s\S]*?)<\/nova-event>/g, "$1").trim() || content
+        const eventType = eventResolver?.(sourceKey)
+        const eventPart: import("@redbamboo/chat").MessagePart = {
+          type: "tool_use", toolName: `event:${key}`,
+          toolInput: JSON.stringify({ event: cleaned, icon: eventType?.icon ?? null, color: eventType?.color ?? null }),
+          content: cleaned,
+        }
+
+        // Merge into the last block if it's already an event group
+        const last = current[current.length - 1]
+        if (last && last.metadata?.source && (last.metadata.source as string).startsWith("event:")) {
+          const updated = [...current]
+          updated[updated.length - 1] = { ...last, parts: [...last.parts, eventPart] }
+          return { ...prev, [discussionId]: updated }
+        }
+
         const newBlock: import("@redbamboo/chat").MessageBlock = {
           id: `event-${Date.now()}`,
           role: "assistant",
-          parts: [{ type: "tool_use", toolName: key, toolInput: JSON.stringify({ event: cleaned }), content: cleaned }],
+          parts: [eventPart],
           timestamp: new Date().toISOString(),
           senderAgentId,
           metadata: { source: sourceKey },
         }
+
+        // If last block is assistant (likely streaming), insert event before it
+        if (last && last.role === "assistant" && !last.metadata?.source) {
+          const updated = [...current]
+          updated.splice(updated.length - 1, 0, newBlock)
+          return { ...prev, [discussionId]: updated }
+        }
+
         return { ...prev, [discussionId]: [...current, newBlock] }
       })
     } else if (event.type === "discussion.nova-message") {

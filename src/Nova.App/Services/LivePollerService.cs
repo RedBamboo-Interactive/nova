@@ -15,6 +15,7 @@ public class LivePollerService
     private SpotifyState? _lastSpotify;
     private Dictionary<string, SonosRoomState> _lastSonos = [];
     private Dictionary<string, HueGroupState> _lastHueGroups = [];
+    private WeatherState? _lastWeather;
 
     public LivePollerService(LogService log)
     {
@@ -47,8 +48,9 @@ public class LivePollerService
         var sonosTask = PollLoopAsync("sonos", TimeSpan.FromSeconds(5), PollSonosAsync, ct);
         var spotifyTask = PollLoopAsync("spotify", TimeSpan.FromSeconds(5), PollSpotifyAsync, ct);
         var hueTask = PollLoopAsync("hue", TimeSpan.FromSeconds(15), PollHueAsync, ct);
+        var weatherTask = PollLoopAsync("weather", TimeSpan.FromMinutes(10), PollWeatherAsync, ct);
 
-        await Task.WhenAll(sonosTask, spotifyTask, hueTask);
+        await Task.WhenAll(sonosTask, spotifyTask, hueTask, weatherTask);
     }
 
     private async Task PollLoopAsync(string name, TimeSpan interval, Func<Task> poll, CancellationToken ct)
@@ -250,7 +252,101 @@ public class LivePollerService
         _lastSonos = current;
     }
 
+    private async Task PollWeatherAsync()
+    {
+        var live = LiveEventService.Instance;
+        if (live == null) return;
+
+        JsonElement data;
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var resp = await http.GetAsync(
+                "https://api.open-meteo.com/v1/forecast?latitude=47.3769&longitude=8.5417" +
+                "&current=temperature_2m,weather_code,wind_speed_10m,precipitation" +
+                "&timezone=Europe/Zurich");
+            if (!resp.IsSuccessStatusCode) return;
+            data = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        }
+        catch { return; }
+
+        if (!data.TryGetProperty("current", out var current)) return;
+
+        var temp = current.TryGetProperty("temperature_2m", out var t) ? t.GetDouble() : 0;
+        var code = current.TryGetProperty("weather_code", out var wc) ? wc.GetInt32() : 0;
+        var wind = current.TryGetProperty("wind_speed_10m", out var w) ? w.GetDouble() : 0;
+        var precip = current.TryGetProperty("precipitation", out var p) ? p.GetDouble() : 0;
+        var condition = ClassifyWeather(code);
+
+        var state = new WeatherState(temp, code, condition, wind, precip);
+
+        if (_lastWeather == null)
+        {
+            _lastWeather = state;
+            _log.Info("live-poller", $"Weather baseline: {temp:F0}°C, {condition}, wind {wind:F0} km/h");
+            return;
+        }
+
+        var events = new List<string>();
+
+        var tempDelta = Math.Abs(state.Temp - _lastWeather.Temp);
+        if (tempDelta >= 3)
+        {
+            var dir = state.Temp > _lastWeather.Temp ? "up" : "down";
+            events.Add($"Temperature {dir} to {state.Temp:F0}°C (was {_lastWeather.Temp:F0}°C)");
+        }
+
+        if (state.Condition != _lastWeather.Condition)
+        {
+            events.Add($"Weather changed: {_lastWeather.Condition} → {state.Condition}");
+        }
+
+        var prevWindCat = ClassifyWind(_lastWeather.Wind);
+        var currWindCat = ClassifyWind(state.Wind);
+        if (prevWindCat != currWindCat)
+        {
+            events.Add($"Wind now {currWindCat} ({state.Wind:F0} km/h)");
+        }
+
+        if (state.Precip > 0 && _lastWeather.Precip == 0)
+            events.Add($"Precipitation started ({state.Precip:F1} mm)");
+        else if (state.Precip == 0 && _lastWeather.Precip > 0)
+            events.Add("Precipitation stopped");
+
+        if (events.Count > 0)
+        {
+            await live.PostAsync("weather", string.Join(". ", events),
+                new { temp = state.Temp, condition = state.Condition, wind = state.Wind, precip = state.Precip, code = state.Code });
+        }
+
+        _lastWeather = state;
+    }
+
+    private static string ClassifyWeather(int code) => code switch
+    {
+        0 => "Clear",
+        1 or 2 => "Partly cloudy",
+        3 => "Overcast",
+        45 or 48 => "Fog",
+        51 or 53 or 55 => "Drizzle",
+        56 or 57 => "Freezing drizzle",
+        61 or 63 or 65 or 80 or 81 or 82 => "Rain",
+        66 or 67 => "Freezing rain",
+        71 or 73 or 75 or 77 or 85 or 86 => "Snow",
+        95 or 96 or 99 => "Thunderstorm",
+        _ => "Unknown",
+    };
+
+    private static string ClassifyWind(double kmh) => kmh switch
+    {
+        < 10 => "calm",
+        < 30 => "breezy",
+        < 50 => "windy",
+        _ => "strong",
+    };
+
     private record SpotifyState(bool Playing, string? TrackUri, string? Track, string? Artist);
     private record SonosRoomState(string Room, bool Playing, string? Track, string? Artist, string TrackKey);
     private record HueGroupState(string Name, bool On, int Brightness);
+    private record WeatherState(double Temp, int Code, string Condition, double Wind, double Precip);
 }

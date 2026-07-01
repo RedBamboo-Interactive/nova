@@ -486,7 +486,7 @@ public static class DiscussionEndpoints
 
             discussion.Status = "archived";
             await db.SaveChangesAsync();
-            _ = LiveEventService.Instance?.PostAsync("discussion", $"Archived: \"{discussion.Title ?? "untitled"}\"");
+            _ = DiscussionActivityService.OnArchived(id, discussion.Title);
             return Results.Ok(ToInfo(discussion));
         });
 
@@ -853,6 +853,7 @@ public static class DiscussionEndpoints
                 senderAgentId = request.SenderAgentId,
             });
 
+            _ = DiscussionActivityService.OnNovaMessage(id, discussion.Title, request.Content);
             return Results.Ok(new { success = true });
         });
 
@@ -889,6 +890,7 @@ public static class DiscussionEndpoints
             if (!outcome.Success)
                 return ApiError.BadGateway(outcome.ErrorCode!, outcome.ErrorMessage!);
 
+            _ = DiscussionActivityService.OnUserMessage(id, discussion.Title, request.Content ?? "[image]");
             return Results.Ok(new { success = true, sessionId = outcome.SessionId, metadata = outcome.Metadata });
         })
         .WithRequestBody(new

@@ -52,11 +52,11 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                 onError={(e) => { e.currentTarget.style.display = "none" }}
               />
               <div className="absolute -bottom-1 right-0 scale-75 origin-bottom-right">
-                <i className="fa-solid fa-tower-broadcast text-[8px]" style={{ color: "var(--color-accent-teal)" }} />
+                <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
               </div>
             </>
           ) : (
-            <i className="fa-solid fa-tower-broadcast" style={{ color: "var(--color-accent-teal)" }} />
+            <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
           )
         }
         className={[

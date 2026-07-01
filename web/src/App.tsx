@@ -9,6 +9,7 @@ import { ToastProvider } from "@redbamboo/ui"
 import { AppShell } from "@/components/layout/app-shell"
 import { useLocalSettings } from "@/hooks/use-local-settings"
 import { useDiscussions } from "@/hooks/use-discussions"
+import { useEventTypes } from "@/hooks/use-event-types"
 import type { WsEvent } from "@/lib/types"
 import { routes } from "@/routes"
 
@@ -60,7 +61,8 @@ function AskNovaHandler({ discRef, setPendingContext }: { discRef: React.RefObje
 function AppLayout() {
   const settings = useLocalSettings()
   const { isLoading, isAuthenticated } = useAuth()
-  const disc = useDiscussions()
+  const { resolve: resolveEventType } = useEventTypes()
+  const disc = useDiscussions(resolveEventType)
   const discRef = useRef(disc)
   discRef.current = disc
   const pendingContext = usePendingNovaContext()

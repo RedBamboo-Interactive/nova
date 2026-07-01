@@ -66,6 +66,8 @@ public class LiveEventService
         }
     }
 
+    public string? DiscussionId => _cachedLiveId;
+
     public void InvalidateCache() => _cachedLiveId = null;
 
     private async Task<string?> ResolveLiveIdAsync()
