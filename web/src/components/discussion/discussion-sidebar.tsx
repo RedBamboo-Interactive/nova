@@ -15,6 +15,7 @@ interface Props {
   activeDiscussionId: string | null
   onSelect: (id: string) => void
   onArchive: (id: string) => void
+  onRotate: (id: string) => void
   onDismiss: (id: string) => void
   getAgent?: (id: string | null) => AgentInfo | undefined
   multiAgent?: boolean
@@ -25,7 +26,7 @@ function isUnread(d: DiscussionInfo): boolean {
     && (!d.lastReadAt || d.lastActivity > d.lastReadAt)
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, onArchive, onDismiss, getAgent, multiAgent }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, getAgent, multiAgent }: Props) {
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
     const chat: DiscussionInfo[] = []
@@ -69,9 +70,18 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             <span style={{ color: "var(--color-accent-teal)" }}>Live</span>
           </span>
         }
+        trailing={
+          <button
+            onClick={(e) => { e.stopPropagation(); onRotate(discussion.id) }}
+            className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-accent-teal transition-all"
+            title="Rotate timeline"
+          >
+            <i className="fa-solid fa-arrows-rotate text-xs" />
+          </button>
+        }
       />
     )
-  }, [activeDiscussionId, onSelect, getAgent, multiAgent])
+  }, [activeDiscussionId, onSelect, onRotate, getAgent, multiAgent])
 
   const renderChatItem = useCallback((discussion: DiscussionInfo) => {
     const alive = discussion.status !== "archived" && discussion.status !== "stopped"

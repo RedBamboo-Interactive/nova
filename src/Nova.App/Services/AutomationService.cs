@@ -12,6 +12,7 @@ using Nova.App.Data;
 using Nova.App.Data.Entities;
 using RedBamboo.AppHost.Auth;
 using RedBamboo.AppHost.Logging;
+using RedBamboo.AppHost.WebSockets;
 
 namespace Nova.App.Services;
 
@@ -335,6 +336,7 @@ public class AutomationService
             "ai-session" => await ExecuteAiSessionAsync(automation, ct),
             "http-check" => await ExecuteHttpCheckAsync(automation, ct),
             "builtin:backup" => await ExecuteBackupAsync(ct),
+            "builtin:live-rotation" => await ExecuteLiveRotationAsync(ct),
             _ => throw new InvalidOperationException($"Unknown action type: {automation.ActionType}"),
         };
     }
@@ -483,6 +485,72 @@ public class AutomationService
         await _memory.BackupAsync();
         _log.Info("automations", "Daily backup completed");
         return new AutomationResult { Triggered = true, Summary = "Backup completed" };
+    }
+
+    private async Task<AutomationResult> ExecuteLiveRotationAsync(CancellationToken ct)
+    {
+        if (_scopeFactory == null)
+            return new AutomationResult { Triggered = false, Summary = "No scope factory available" };
+
+        var liveId = await ResolveLiveDiscussionIdAsync();
+        if (liveId == null)
+            return new AutomationResult { Triggered = false, Summary = "No active LIVE discussion to rotate" };
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<NovaDbContext>();
+            var broadcaster = scope.ServiceProvider.GetService<WebSocketBroadcaster>();
+
+            var discussion = await db.Discussions.FindAsync(liveId);
+            if (discussion == null)
+                return new AutomationResult { Triggered = false, Summary = "LIVE discussion not found" };
+
+            if (discussion.SessionId is not null)
+            {
+                try
+                {
+                    var factory = scope.ServiceProvider.GetRequiredService<AuthenticatedHttpClientFactory>();
+                    var rc = factory.CreateClient(App.Config.Suite.RedCompute, TimeSpan.FromSeconds(30));
+                    await rc.PostAsync($"/ai-session/sessions/{discussion.SessionId}/stop", null, ct);
+                }
+                catch { }
+            }
+
+            discussion.Status = "archived";
+            discussion.SessionId = null;
+            await db.SaveChangesAsync(ct);
+            _ = DiscussionActivityService.OnArchived(liveId, discussion.Title);
+
+            var newDiscussion = new Discussion
+            {
+                Id = Guid.NewGuid().ToString("N")[..8],
+                Status = "idle",
+                Type = "live",
+                OwnerId = discussion.OwnerId,
+                AgentId = discussion.AgentId,
+            };
+            db.Discussions.Add(newDiscussion);
+            await db.SaveChangesAsync(ct);
+
+            NovaMirror.PublishDiscussion(discussion);
+            NovaMirror.PublishDiscussion(newDiscussion);
+
+            broadcaster?.Broadcast("discussion.rotated", new
+            {
+                oldDiscussionId = liveId,
+                newDiscussionId = newDiscussion.Id,
+                agentId = newDiscussion.AgentId,
+            });
+
+            _log.Info("automations", $"LIVE discussion rotated: {liveId} → {newDiscussion.Id}");
+            return new AutomationResult { Triggered = true, Summary = $"Rotated LIVE discussion: {liveId} → {newDiscussion.Id}" };
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("automations", $"LIVE rotation failed: {ex.Message}");
+            return new AutomationResult { Triggered = false, Summary = $"Rotation failed: {ex.Message}" };
+        }
     }
 
     private async Task<string?> ResolveLiveDiscussionIdAsync()
@@ -872,6 +940,25 @@ public class AutomationService
             var id = await UpsertToRedLeafAsync(backup);
             if (id.HasValue) _entityIds[backup.Name] = id.Value;
             _log.Info("automations", "Added built-in backup automation");
+        }
+
+        if (_automations.All(a => a.Name != "system:live-rotation"))
+        {
+            var liveRotation = new Automation
+            {
+                Name = "system:live-rotation",
+                Description = "Daily LIVE discussion rotation",
+                Schedule = "30 3 * * *",
+                ActionType = "builtin:live-rotation",
+                Icon = "fa-solid fa-arrows-rotate",
+                OwnerId = defaultOwner,
+                Enabled = true,
+            };
+            _automations.Add(liveRotation);
+            liveRotation.NextRun = CalculateNextRun(liveRotation);
+            var id = await UpsertToRedLeafAsync(liveRotation);
+            if (id.HasValue) _entityIds[liveRotation.Name] = id.Value;
+            _log.Info("automations", "Added built-in live-rotation automation");
         }
 
         var dreamingSkill = _memory.ReadMemoryFile("config/skills/dreaming.md") ?? "";

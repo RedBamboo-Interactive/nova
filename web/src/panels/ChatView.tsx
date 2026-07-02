@@ -94,6 +94,7 @@ export function ChatView() {
     interruptDiscussion,
     answerQuestion,
     archiveDiscussion,
+    rotateDiscussion,
     dismissDiscussion,
     renameDiscussion,
     resumeDiscussion,
@@ -344,6 +345,7 @@ export function ChatView() {
               activeDiscussionId={urlDiscussionId ?? activeDiscussionId}
               onSelect={handleSelectDiscussion}
               onArchive={archiveDiscussion}
+              onRotate={rotateDiscussion}
               onDismiss={dismissDiscussion}
               getAgent={getAgent}
               multiAgent={multiAgent}

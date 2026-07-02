@@ -90,7 +90,10 @@ function cleanMessages(blocks: MessageBlock[], resolve?: EventResolver): Message
   for (let i = 0; i < result.length; i++) {
     const block = result[i]!
     const isEvent = block.parts.every((p) => p.toolName?.startsWith("event:"))
-    if (isEvent && final.length > 0 && final[final.length - 1]!.role === "assistant") {
+    const hasMoreAssistantContent = result.slice(i + 1).some(b =>
+      b.role === "assistant" && !b.parts.every(p => p.toolName?.startsWith("event:"))
+    )
+    if (isEvent && final.length > 0 && final[final.length - 1]!.role === "assistant" && hasMoreAssistantContent) {
       // Find where this assistant run started
       let insertAt = final.length - 1
       while (insertAt > 0 && final[insertAt - 1]!.role === "assistant" && !final[insertAt - 1]!.parts.every((p) => p.toolName?.startsWith("event:"))) {
@@ -537,8 +540,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
           metadata: { source: sourceKey },
         }
 
-        // If last block is assistant (likely streaming), insert event before it
-        if (last && last.role === "assistant" && !last.metadata?.source) {
+        // If last block is assistant and still streaming, insert event before it
+        if (last && last.role === "assistant" && !last.metadata?.source && last.parts.some(p => p.isPartial)) {
           const updated = [...current]
           updated.splice(updated.length - 1, 0, newBlock)
           return { ...prev, [discussionId]: updated }
@@ -570,6 +573,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setPendingQuestions((prev) => ({ ...prev, [discussionId]: null }))
       loadedRef.current.delete(discussionId)
       loadMessages(discussionId)
+    } else if (event.type === "discussion.rotated") {
+      const { oldDiscussionId } = event.data as { oldDiscussionId: string; newDiscussionId: string; agentId: string }
+      setDiscussions((prev) => prev.filter((d) => d.id !== oldDiscussionId))
+      setMessages((prev) => { const next = { ...prev }; delete next[oldDiscussionId]; return next })
+      loadedRef.current.delete(oldDiscussionId)
+      if (activeDiscussionId === oldDiscussionId) setActiveDiscussionId(null)
+      refreshDiscussions()
     } else if (event.type === "session.stream") {
       const { sessionId, event: evt } = event.data as { sessionId: string; event: ClaudeStreamEvent }
       const discId = sessionToDiscussion.get(sessionId)
@@ -639,6 +649,18 @@ export function useDiscussions(eventResolver?: EventResolver) {
     if (activeDiscussionId === id) setActiveDiscussionId(null)
   }, [activeDiscussionId])
 
+  const rotateDiscussion = useCallback(async (id: string) => {
+    try {
+      await api.post<{ archived: DiscussionInfo; created: DiscussionInfo }>(`/api/discussions/${id}/rotate`)
+      setDiscussions((prev) => prev.filter((d) => d.id !== id))
+      setMessages((prev) => { const next = { ...prev }; delete next[id]; return next })
+      loadedRef.current.delete(id)
+      toast({ variant: "success", title: "Timeline rotated", description: "Fresh LIVE discussion created" })
+    } catch (err) {
+      toast({ variant: "error", title: "Failed to rotate", description: err instanceof Error ? err.message : "Unknown error" })
+    }
+  }, [toast])
+
   const renameDiscussion = useCallback(async (id: string, title: string) => {
     await api.put(`/api/discussions/${id}/title`, { title })
     setDiscussions((prev) => prev.map((d) => d.id === id ? { ...d, title } : d))
@@ -658,6 +680,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     interruptDiscussion,
     answerQuestion,
     archiveDiscussion,
+    rotateDiscussion,
     dismissDiscussion,
     renameDiscussion,
     resumeDiscussion,

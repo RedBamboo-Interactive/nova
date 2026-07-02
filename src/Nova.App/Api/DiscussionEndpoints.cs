@@ -668,6 +668,76 @@ public static class DiscussionEndpoints
             return Results.Ok(new { cleared = deleted, discussion = ToInfo(discussion) });
         });
 
+        registry.MapPost("/api/discussions/{id}/rotate", "Archive the current LIVE discussion and create a fresh one for the same agent", async (string id, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
+        {
+            var discussion = await db.Discussions.FindAsync(id);
+            if (discussion is null)
+                return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
+
+            if (discussion.Type != "live")
+                return Results.Json(new { error = "Only LIVE discussions can be rotated" }, statusCode: 400);
+
+            if (discussion.SessionId is not null)
+            {
+                try { await RedCompute.PostAsync($"/ai-session/sessions/{discussion.SessionId}/stop", null); }
+                catch { }
+            }
+
+            discussion.Status = "archived";
+            discussion.SessionId = null;
+            await db.SaveChangesAsync();
+            _ = DiscussionActivityService.OnArchived(id, discussion.Title);
+
+            var newDiscussion = new Discussion
+            {
+                Id = Guid.NewGuid().ToString("N")[..8],
+                Status = "idle",
+                Type = "live",
+                OwnerId = discussion.OwnerId,
+                AgentId = discussion.AgentId,
+            };
+            db.Discussions.Add(newDiscussion);
+            await db.SaveChangesAsync();
+
+            NovaMirror.PublishDiscussion(discussion);
+            NovaMirror.PublishDiscussion(newDiscussion);
+
+            broadcaster?.Broadcast("discussion.rotated", new
+            {
+                oldDiscussionId = id,
+                newDiscussionId = newDiscussion.Id,
+                agentId = newDiscussion.AgentId,
+            });
+
+            var scopeFactory = ctx.RequestServices.GetRequiredService<IServiceScopeFactory>();
+            var discId = newDiscussion.Id;
+            var ownerId = newDiscussion.OwnerId;
+            var discAgentId = newDiscussion.AgentId;
+            _pendingSessions[discId] = Task.Run(async () =>
+            {
+                try
+                {
+                    var agentMemory = await _agentMemoryFactory!.GetMemoryAsync(discAgentId);
+                    var sessionId = await TryCreateSessionAsync(agentMemory, discAgentId, ownerId);
+                    if (sessionId is null) return null;
+                    using var scope = scopeFactory.CreateScope();
+                    var scopedDb = scope.ServiceProvider.GetRequiredService<NovaDbContext>();
+                    await scopedDb.Discussions
+                        .Where(d => d.Id == discId && d.SessionId == null)
+                        .ExecuteUpdateAsync(s => s.SetProperty(d => d.SessionId, sessionId));
+                    return sessionId;
+                }
+                catch { return null; }
+                finally { _pendingSessions.TryRemove(discId, out _); }
+            });
+
+            return Results.Ok(new { archived = ToInfo(discussion), created = ToInfo(newDiscussion) });
+        });
+
         registry.MapPost("/api/discussions/{id}/event", "Inject an automation event into a discussion", async (string id, DiscussionEventRequest request, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
