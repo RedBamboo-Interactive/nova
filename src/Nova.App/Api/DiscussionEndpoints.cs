@@ -272,6 +272,7 @@ public static class DiscussionEndpoints
                 messages = records.Select(m => new
                 {
                     id = m.Id.ToString(),
+                    messageUid = m.Uid,
                     role = m.Role,
                     parts = !string.IsNullOrEmpty(m.PartsJson)
                         ? System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement[]>(m.PartsJson)!
@@ -654,13 +655,11 @@ public static class DiscussionEndpoints
                 Content = "New day. Timeline cleared.",
                 Source = "event:system",
                 Timestamp = DateTime.UtcNow,
+                Uid = Guid.NewGuid().ToString("N"),
             };
             db.Conversations.Add(marker);
             discussion.MessageCount = 1;
             await db.SaveChangesAsync();
-
-            NovaMirror.PublishDiscussion(discussion);
-            NovaMirror.PublishMessages([marker]);
 
             broadcaster?.Broadcast("discussion.cleared", new
             {
@@ -704,9 +703,6 @@ public static class DiscussionEndpoints
             };
             db.Discussions.Add(newDiscussion);
             await db.SaveChangesAsync();
-
-            NovaMirror.PublishDiscussion(discussion);
-            NovaMirror.PublishDiscussion(newDiscussion);
 
             broadcaster?.Broadcast("discussion.rotated", new
             {
@@ -776,40 +772,17 @@ public static class DiscussionEndpoints
                 Source = source,
                 UserId = userId,
                 SenderAgentId = request.SenderAgentId,
+                Uid = Guid.NewGuid().ToString("N"),
             };
             db.Conversations.Add(record);
 
             discussion.LastActivity = DateTime.UtcNow;
             discussion.MessageCount++;
+            // Mirrored to nova-messages by the SaveChanges interception in
+            // NovaDbContext — no explicit publish or direct stream write here,
+            // they would produce duplicate records. Live UI is fed by the
+            // broadcast below, not by re-reading the stream.
             await db.SaveChangesAsync();
-            NovaMirror.PublishDiscussion(discussion);
-
-            try
-            {
-                var disc = await _redLeaf!.GetDiscussionAsync(id);
-                if (disc != null)
-                {
-                    var streamRecord = new
-                    {
-                        data = new
-                        {
-                            discussion_id = id,
-                            role,
-                            content = request.Content,
-                            parts_json = partsJson,
-                            source,
-                            sender_agent_id = request.SenderAgentId,
-                            timestamp = record.Timestamp.ToString("O"),
-                        },
-                        entity_id = disc.EntityId,
-                    };
-                    await RedLeaf.PostAsJsonAsync("api/streams/nova-messages/records", streamRecord, JsonOptions);
-                }
-            }
-            catch (Exception ex)
-            {
-                App.LogService.Warn("discussions", $"Direct RedLeaf write failed for event in {id}: {ex.Message}");
-            }
 
             broadcaster?.Broadcast("discussion.event", new
             {
@@ -836,9 +809,11 @@ public static class DiscussionEndpoints
 
                 try
                 {
+                    // The transcript copy carries the same uid as the
+                    // nova-messages record — one logical event, one identity.
                     object messageBody = request.SenderAgentId is not null
-                        ? new { content = request.Content, metadata = new { senderAgentId = request.SenderAgentId, senderName = await _agentMemoryFactory!.GetAgentNameAsync(request.SenderAgentId) } }
-                        : new { content = request.Content };
+                        ? new { content = request.Content, messageUid = record.Uid, metadata = new { senderAgentId = request.SenderAgentId, senderName = await _agentMemoryFactory!.GetAgentNameAsync(request.SenderAgentId) } }
+                        : new { content = request.Content, messageUid = record.Uid };
                     await RedCompute.PostAsJsonAsync(
                         $"/ai-session/sessions/{discussion.SessionId}/message",
                         messageBody, JsonOptions);
@@ -879,6 +854,7 @@ public static class DiscussionEndpoints
                 Source = "nova-message",
                 UserId = userId,
                 SenderAgentId = request.SenderAgentId,
+                Uid = Guid.NewGuid().ToString("N"),
             };
             db.Conversations.Add(record);
 
@@ -890,8 +866,6 @@ public static class DiscussionEndpoints
                 discussion.Title = request.Title;
 
             await db.SaveChangesAsync();
-            NovaMirror.PublishDiscussion(discussion);
-            NovaMirror.PublishMessages([record]);
 
             // Best-effort inject into live session (message is already persisted above).
             // If the session isn't ready or RedCompute is down, the message will be
@@ -911,6 +885,7 @@ public static class DiscussionEndpoints
                             content = request.Content,
                             audioUrl = string.IsNullOrEmpty(request.AudioUrl) ? null : request.AudioUrl,
                             metadata,
+                            messageUid = record.Uid,
                         }, JsonOptions);
                     resp.EnsureSuccessStatusCode();
                 }
@@ -964,7 +939,7 @@ public static class DiscussionEndpoints
                 return ApiError.BadGateway(outcome.ErrorCode!, outcome.ErrorMessage!);
 
             _ = DiscussionActivityService.OnUserMessage(id, discussion.Title, request.Content ?? "[image]");
-            return Results.Ok(new { success = true, sessionId = outcome.SessionId, metadata = outcome.Metadata });
+            return Results.Ok(new { success = true, sessionId = outcome.SessionId, metadata = outcome.Metadata, messageUid = outcome.MessageUid });
         })
         .WithRequestBody(new
         {
@@ -993,7 +968,7 @@ public static class DiscussionEndpoints
 
         // ── Reactions ──────────────────────────────────────────────────
 
-        registry.MapPost("/api/discussions/{id}/messages/{messageId}/reactions", "Add an emoji reaction to a message", async (string id, long messageId, ReactionRequest request, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
+        registry.MapPost("/api/discussions/{id}/reactions", "Add an emoji reaction to a message", async (string id, ReactionRequest request, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
@@ -1003,8 +978,8 @@ public static class DiscussionEndpoints
             if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
-            if (string.IsNullOrWhiteSpace(request.Emoji))
-                return Results.BadRequest(new { error = "Emoji is required" });
+            if (string.IsNullOrWhiteSpace(request.Emoji) || string.IsNullOrWhiteSpace(request.MessageKey))
+                return Results.BadRequest(new { error = "Emoji and messageKey are required" });
 
             var isAgent = !string.IsNullOrEmpty(request.AgentId);
             var actorId = isAgent ? request.AgentId! : userId ?? "anonymous";
@@ -1014,7 +989,7 @@ public static class DiscussionEndpoints
             var slug = NovaMirror.DiscussionSlug(id);
             NovaMirror.Client?.EnqueueForEntity("message-reactions", slug, new
             {
-                message_id = messageId,
+                message_key = request.MessageKey,
                 emoji = request.Emoji.Trim(),
                 action = "add",
                 actor_type = actorType,
@@ -1025,7 +1000,7 @@ public static class DiscussionEndpoints
             broadcaster?.Broadcast("discussion.reaction", new
             {
                 discussionId = id,
-                messageId,
+                messageKey = request.MessageKey,
                 emoji = request.Emoji.Trim(),
                 action = "add",
                 actorId,
@@ -1036,7 +1011,7 @@ public static class DiscussionEndpoints
             return Results.Ok(new { success = true });
         });
 
-        registry.MapDelete("/api/discussions/{id}/messages/{messageId}/reactions/{emoji}", "Remove an emoji reaction from a message", async (string id, long messageId, string emoji, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
+        registry.MapPost("/api/discussions/{id}/reactions/remove", "Remove an emoji reaction from a message", async (string id, ReactionRequest request, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
         {
             var discussion = await db.Discussions.FindAsync(id);
             if (discussion is null)
@@ -1046,14 +1021,17 @@ public static class DiscussionEndpoints
             if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
                 return Results.Json(new { error = "Forbidden" }, statusCode: 403);
 
+            if (string.IsNullOrWhiteSpace(request.Emoji) || string.IsNullOrWhiteSpace(request.MessageKey))
+                return Results.BadRequest(new { error = "Emoji and messageKey are required" });
+
             var actorId = userId ?? "anonymous";
             var actorName = ctx.User.FindFirstValue("name") ?? "User";
 
             var slug = NovaMirror.DiscussionSlug(id);
             NovaMirror.Client?.EnqueueForEntity("message-reactions", slug, new
             {
-                message_id = messageId,
-                emoji = Uri.UnescapeDataString(emoji),
+                message_key = request.MessageKey,
+                emoji = request.Emoji.Trim(),
                 action = "remove",
                 actor_type = "user",
                 actor_id = actorId,
@@ -1063,8 +1041,8 @@ public static class DiscussionEndpoints
             broadcaster?.Broadcast("discussion.reaction", new
             {
                 discussionId = id,
-                messageId,
-                emoji = Uri.UnescapeDataString(emoji),
+                messageKey = request.MessageKey,
+                emoji = request.Emoji.Trim(),
                 action = "remove",
                 actorId,
                 actorName,
@@ -1091,25 +1069,57 @@ public static class DiscussionEndpoints
             var reactions = await AggregateReactionsAsync(disc.EntityId, userId);
             return Results.Ok(new { reactions });
         });
+    }
 
-        registry.MapGet("/api/discussions/{id}/messages/{messageId}/reactions", "Get aggregated reactions for a single message", async (string id, long messageId, HttpContext ctx, NovaDbContext db) =>
+    private static async Task<List<string>> GetRecentReactionLinesAsync(string discussionId, DateTime since)
+    {
+        var lines = new List<string>();
+        try
         {
-            var discussion = await db.Discussions.FindAsync(id);
-            if (discussion is null)
-                return Results.NotFound(new { error = "Discussion not found" });
+            var disc = await _redLeaf!.GetDiscussionAsync(discussionId);
+            if (disc is null) return lines;
 
-            var userId = ctx.User.FindFirstValue("sub");
-            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
-                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
+            var sinceIso = new DateTimeOffset(DateTime.SpecifyKind(since, DateTimeKind.Utc)).ToString("O");
+            var response = await RedLeaf.GetAsync(
+                $"api/streams/message-reactions/records?entity_id={disc.EntityId}&order=asc&limit=50&since={Uri.EscapeDataString(sinceIso)}");
+            if (!response.IsSuccessStatusCode) return lines;
 
-            var disc = await _redLeaf!.GetDiscussionAsync(id);
-            if (disc is null)
-                return Results.Ok(new { reactions = Array.Empty<object>() });
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var items = doc.RootElement.GetProperty("items");
+            if (items.GetArrayLength() == 0) return lines;
 
-            var all = await AggregateReactionsAsync(disc.EntityId, userId);
-            var msgKey = messageId.ToString();
-            return Results.Ok(new { reactions = all.ContainsKey(msgKey) ? all[msgKey] : Array.Empty<object>() });
-        });
+            var messages = await _redLeaf.GetMessagesAsync(disc.EntityId);
+            var msgByUid = new Dictionary<string, string>();
+            foreach (var m in messages)
+            {
+                if (m.Uid != null && !msgByUid.ContainsKey(m.Uid))
+                {
+                    var preview = (m.Content ?? "").Replace("\n", " ");
+                    if (preview.Length > 60) preview = preview[..57] + "...";
+                    msgByUid[m.Uid] = preview;
+                }
+            }
+
+            foreach (var rec in items.EnumerateArray())
+            {
+                using var data = JsonDocument.Parse(rec.GetProperty("data").GetString()!);
+                var d = data.RootElement;
+                var action = d.TryGetProperty("action", out var a) ? a.GetString() ?? "add" : "add";
+                if (action != "add") continue;
+
+                var emoji = d.TryGetProperty("emoji", out var e) ? e.GetString() ?? "" : "";
+                var actorName = d.TryGetProperty("actor_name", out var an) ? an.GetString() ?? "" : "";
+                var msgKey = d.TryGetProperty("message_key", out var mk) ? mk.GetString() ?? "" : "";
+
+                var preview = msgByUid.GetValueOrDefault(msgKey);
+                if (preview != null)
+                    lines.Add($"{actorName} reacted {emoji} to: \"{preview}\"");
+                else
+                    lines.Add($"{actorName} reacted {emoji}");
+            }
+        }
+        catch { }
+        return lines;
     }
 
     private static async Task<Dictionary<string, object[]>> AggregateReactionsAsync(Guid entityId, string? currentUserId)
@@ -1123,33 +1133,36 @@ public static class DiscussionEndpoints
             using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             var items = doc.RootElement.GetProperty("items");
 
-            // state: (messageId, emoji, actorId) → (actorName, actorType)
-            var state = new Dictionary<(string msgId, string emoji, string actorId), (string name, string type)>();
+            var state = new Dictionary<(string msgKey, string emoji, string actorId), (string name, string type)>();
 
             foreach (var rec in items.EnumerateArray())
             {
                 using var data = JsonDocument.Parse(rec.GetProperty("data").GetString()!);
                 var d = data.RootElement;
 
-                var msgId = d.TryGetProperty("message_id", out var mid)
-                    ? (mid.ValueKind == JsonValueKind.Number ? mid.GetInt64().ToString() : mid.GetString() ?? "")
-                    : "";
+                var msgKey = d.TryGetProperty("message_key", out var mk) ? mk.GetString() ?? "" : "";
+                if (string.IsNullOrEmpty(msgKey))
+                {
+                    // backward compat: fall back to message_id
+                    msgKey = d.TryGetProperty("message_id", out var mid)
+                        ? (mid.ValueKind == JsonValueKind.Number ? mid.GetInt64().ToString() : mid.GetString() ?? "")
+                        : "";
+                }
                 var emoji = d.TryGetProperty("emoji", out var e) ? e.GetString() ?? "" : "";
                 var action = d.TryGetProperty("action", out var a) ? a.GetString() ?? "add" : "add";
                 var actorId = d.TryGetProperty("actor_id", out var ai) ? ai.GetString() ?? "" : "";
                 var actorName = d.TryGetProperty("actor_name", out var an) ? an.GetString() ?? "" : "";
                 var actorType = d.TryGetProperty("actor_type", out var at) ? at.GetString() ?? "user" : "user";
 
-                var key = (msgId, emoji, actorId);
+                var key = (msgKey, emoji, actorId);
                 if (action == "add")
                     state[key] = (actorName, actorType);
                 else
                     state.Remove(key);
             }
 
-            // group by message, then emoji
             var result = new Dictionary<string, object[]>();
-            foreach (var group in state.GroupBy(kv => kv.Key.msgId))
+            foreach (var group in state.GroupBy(kv => kv.Key.msgKey))
             {
                 var emojiGroups = group
                     .GroupBy(kv => kv.Key.emoji)
@@ -1201,7 +1214,7 @@ public static class DiscussionEndpoints
         return session.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
     }
 
-    internal sealed record SendMessageOutcome(bool Success, string? SessionId, string? ErrorCode, string? ErrorMessage, Dictionary<string, object?>? Metadata = null);
+    internal sealed record SendMessageOutcome(bool Success, string? SessionId, string? ErrorCode, string? ErrorMessage, Dictionary<string, object?>? Metadata = null, string? MessageUid = null);
 
     /// <summary>
     /// Shared message-send pipeline: lazily creates the RedCompute session, injects any
@@ -1251,7 +1264,7 @@ public static class DiscussionEndpoints
                 {
                     var resp = await RedCompute.PostAsJsonAsync(
                         $"/ai-session/sessions/{discussion.SessionId}/inject",
-                        new { role = "assistant", content = msg.Content }, JsonOptions);
+                        new { role = "assistant", content = msg.Content, messageUid = msg.Uid }, JsonOptions);
                     resp.EnsureSuccessStatusCode();
                 }
                 catch { /* best-effort — don't block the user's message */ }
@@ -1352,11 +1365,13 @@ public static class DiscussionEndpoints
             locReading?.Zone, locReading?.PlaceName);
         var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
 
+        var reactionLines = await GetRecentReactionLinesAsync(discussion.Id, discussion.LastContextJson != null ? discussion.LastActivity : DateTime.MinValue);
+
         string contextBlock;
         if (previousSnapshot == null || discussion.MessageCount == 0)
-            contextBlock = NovaContextBuilder.BuildFullContext(currentSnapshot, discussion.Id, now, device, input, agentName);
+            contextBlock = NovaContextBuilder.BuildFullContext(currentSnapshot, discussion.Id, now, device, input, agentName, reactionLines);
         else
-            contextBlock = NovaContextBuilder.BuildDeltaContext(currentSnapshot, previousSnapshot, discussion.Id, now, device, input, agentName);
+            contextBlock = NovaContextBuilder.BuildDeltaContext(currentSnapshot, previousSnapshot, discussion.Id, now, device, input, agentName, reactionLines);
 
         discussion.LastContextJson = NovaContextBuilder.SerializeSnapshot(currentSnapshot);
 
@@ -1367,12 +1382,23 @@ public static class DiscussionEndpoints
             : "";
         var enrichedContent = contextBlock + priorBlock + "\n" + content;
 
+        string? messageUid = null;
         try
         {
             var resp = await RedCompute.PostAsJsonAsync(
                 $"/ai-session/sessions/{discussion.SessionId}/message",
                 new { content = enrichedContent, images }, JsonOptions);
             resp.EnsureSuccessStatusCode();
+            try
+            {
+                // RedCompute mints the message uid at ingestion; carry it so
+                // Nova's copy of this message and the frontend's optimistic
+                // block share the transcript record's identity.
+                var sendResult = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+                if (sendResult.TryGetProperty("messageUid", out var muEl))
+                    messageUid = muEl.GetString();
+            }
+            catch { /* pre-uid RedCompute — response has no messageUid */ }
         }
         catch
         {
@@ -1401,12 +1427,14 @@ public static class DiscussionEndpoints
                 Source = "user-message",
                 Timestamp = now,
                 UserId = userId,
+                // Same logical message as the session transcript copy.
+                Uid = messageUid ?? Guid.NewGuid().ToString("N"),
             });
         }
 
         await db.SaveChangesAsync();
 
-        return new(true, discussion.SessionId, null, null, metadata);
+        return new(true, discussion.SessionId, null, null, metadata, messageUid);
     }
 
 
@@ -1532,6 +1560,7 @@ public class DiscussionMessageRequest
 public class ReactionRequest
 {
     public string Emoji { get; set; } = "";
+    public string? MessageKey { get; set; }
     public string? AgentId { get; set; }
     public string? AgentName { get; set; }
 }

@@ -796,6 +796,12 @@ public class StaticServer
             cmd.ExecuteNonQuery();
         }
 
+        if (!columns.Contains("Uid"))
+        {
+            cmd.CommandText = "ALTER TABLE Conversations ADD COLUMN Uid TEXT";
+            cmd.ExecuteNonQuery();
+        }
+
         cmd.CommandText = "PRAGMA table_info(InvocationLogs)";
         using var invReader = cmd.ExecuteReader();
         var invColumns = new HashSet<string>();
@@ -830,7 +836,6 @@ public class StaticServer
         };
         db.Discussions.Add(live);
         db.SaveChanges();
-        NovaMirror.PublishDiscussion(live);
     }
 
     private static async Task WaitForPortAsync(int port, CancellationToken ct)

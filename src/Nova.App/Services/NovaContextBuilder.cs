@@ -111,7 +111,8 @@ public static class NovaContextBuilder
 
     public static string BuildFullContext(
         ContextSnapshot snapshot,
-        string currentId, DateTime now, ResolvedDevice device, string input, string? agentName)
+        string currentId, DateTime now, ResolvedDevice device, string input, string? agentName,
+        List<string>? reactionLines = null)
     {
         var sb = new StringBuilder();
         AppendOpenTag(sb, now, device, input, currentId, agentName, snapshot.Location, snapshot.Latitude, snapshot.Longitude, snapshot.Zone, snapshot.PlaceName);
@@ -167,7 +168,8 @@ public static class NovaContextBuilder
 
     public static string BuildDeltaContext(
         ContextSnapshot current, ContextSnapshot previous,
-        string currentId, DateTime now, ResolvedDevice device, string input, string? agentName)
+        string currentId, DateTime now, ResolvedDevice device, string input, string? agentName,
+        List<string>? reactionLines = null)
     {
         var changes = new List<string>();
 
@@ -244,6 +246,10 @@ public static class NovaContextBuilder
 
         var sb = new StringBuilder();
         AppendOpenTag(sb, now, device, input, currentId, agentName, current.Location, current.Latitude, current.Longitude, current.Zone, current.PlaceName);
+
+        if (reactionLines is { Count: > 0 })
+            foreach (var r in reactionLines)
+                changes.Add(r);
 
         if (changes.Count > 0)
         {

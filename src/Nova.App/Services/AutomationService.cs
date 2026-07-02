@@ -531,9 +531,6 @@ public class AutomationService
             db.Discussions.Add(newDiscussion);
             await db.SaveChangesAsync(ct);
 
-            NovaMirror.PublishDiscussion(discussion);
-            NovaMirror.PublishDiscussion(newDiscussion);
-
             broadcaster?.Broadcast("discussion.rotated", new
             {
                 oldDiscussionId = liveId,

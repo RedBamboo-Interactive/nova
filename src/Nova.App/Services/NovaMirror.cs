@@ -59,6 +59,7 @@ public static class NovaMirror
                 parts_json = m.PartsJson,
                 source = m.Source,
                 sender_agent_id = m.SenderAgentId,
+                uid = m.Uid,
                 timestamp = new DateTimeOffset(DateTime.SpecifyKind(m.Timestamp, DateTimeKind.Utc)).ToString("O"),
             }, userId: m.UserId);
         }

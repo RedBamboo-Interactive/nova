@@ -1,16 +1,18 @@
 import { useState, useCallback, useEffect, useDeferredValue } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@redbamboo/ui"
-import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions } from "@redbamboo/chat"
+import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions, type MessageBlock } from "@redbamboo/chat"
 import { useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
 import { EditableTitle } from "@/components/discussion/editable-title"
 import { AgentPicker } from "@/components/agent-picker"
 import { NovaStatusLine } from "@/components/nova-status-line"
 import { OutfitBrowser } from "@/components/outfit-browser"
+import { ReactionPills, AddReactionButton } from "@/components/discussion/reactions"
 import { createNovaSpeechBackend } from "@/lib/speech"
 import { useLocalSettings } from "@/hooks/use-local-settings"
 import { useAgents } from "@/hooks/use-agents"
+import { useReactions } from "@/hooks/use-reactions"
 import { useDisc, useNovaPendingContext } from "@/App"
 import { useSessionStats } from "@/hooks/use-session-stats"
 import { setSettings } from "@/lib/settings-store"
@@ -246,6 +248,34 @@ export function ChatView() {
     return { name: agent.name, avatarUrl: agent.avatarUrl }
   }, [getAgent])
 
+  const { reactions, react, unreact } = useReactions(activeDiscussionId)
+
+  const renderMessageExtra = useCallback((block: MessageBlock) => {
+    // The block id IS the message uid when the backend minted one — stable
+    // across streaming, reloads, and both message stores. Older blocks fall
+    // back to their load-path id.
+    const msgKey = block.id
+    const msgReactions = reactions[msgKey] ?? []
+    const isUserMsg = block.role === "user"
+
+    const handleToggle = (emoji: string, hasReacted: boolean) => {
+      if (hasReacted) unreact(msgKey, emoji)
+      else react(msgKey, emoji)
+    }
+    const handleAdd = (emoji: string) => react(msgKey, emoji)
+
+    return (
+      <>
+        {msgReactions.length > 0 && (
+          <div className={isUserMsg ? "flex justify-end" : ""}>
+            <ReactionPills reactions={msgReactions} onToggle={handleToggle} onAdd={handleAdd} />
+          </div>
+        )}
+        <AddReactionButton onAdd={handleAdd} align={isUserMsg ? "right" : "left"} />
+      </>
+    )
+  }, [reactions, react, unreact])
+
   const activeAgent = activeDiscussion ? getAgent(activeDiscussion.agentId) : undefined
   const { opacity: avatarOpacity } = useAvatarStyle()
   const { showAvatar: avatarEnabled } = useLocalSettings()
@@ -286,6 +316,7 @@ export function ChatView() {
         assistantAvatar={avatarSrc}
         resolveAgentInfo={resolveAgentInfo}
         renderStatusLine={renderStatusLine}
+        renderMessageExtra={renderMessageExtra}
       />
     </div>
   ) : (

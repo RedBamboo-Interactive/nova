@@ -114,7 +114,7 @@ function cleanMessages(blocks: MessageBlock[], resolve?: EventResolver): Message
 
 function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
   return messages.map((m) => ({
-    id: m.id,
+    id: m.messageUid ?? m.id,
     role: m.role,
     parts: m.parts.map((p): MessagePart => ({
       type: p.type === "tool_use" || p.type === "tool_result" ? p.type : p.type === "audio" ? "audio" : "text",
@@ -207,30 +207,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
     syncAndRefresh()
   }, [syncAndRefresh])
 
-  const annotateRecordIds = useCallback(async (id: string, blocks: MessageBlock[]): Promise<MessageBlock[]> => {
-    try {
-      const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/discussions/${id}`)
-      if (!data.messages?.length) return blocks
-
-      const normalize = (ts: string) => {
-        try { return new Date(ts).toISOString() } catch { return ts }
-      }
-
-      const idMap = new Map<string, string>()
-      for (const m of data.messages) {
-        if (/^\d+$/.test(m.id)) idMap.set(`${normalize(m.timestamp)}:${m.role}`, m.id)
-      }
-
-      return blocks.map((b) => {
-        if (/^\d+$/.test(b.id)) return b
-        const recordId = idMap.get(`${normalize(b.timestamp)}:${b.role}`)
-        return recordId ? { ...b, id: recordId } : b
-      })
-    } catch {
-      return blocks
-    }
-  }, [])
-
   const loadMessages = useCallback(async (id: string) => {
     if (loadedRef.current.has(id)) return
 
@@ -254,28 +230,23 @@ export function useDiscussions(eventResolver?: EventResolver) {
           if (data.messages?.length) apiMsgs = toChatMessages(data.messages)
         } catch {}
 
-        const normalize = (ts: string) => {
-          try { return new Date(ts).toISOString() } catch { return ts }
-        }
-        const idByTimestamp = new Map<string, string>()
-        for (const m of apiMsgs) {
-          if (/^\d+$/.test(m.id)) idByTimestamp.set(`${normalize(m.timestamp)}:${m.role}`, m.id)
-        }
-
         const seen = new Set<string>()
-        const merged = [...sessionMsgs, ...apiMsgs]
+        // Nova API messages first: when both stores hold the same logical
+        // message (shared uid), the Nova copy wins dedup — it carries the
+        // source metadata that drives event rendering. Order on screen is
+        // unaffected (the merge re-sorts by timestamp below).
+        const merged = [...apiMsgs, ...sessionMsgs]
           .filter((m) => {
+            // Blocks sharing an id are the same logical message cross-posted
+            // to both stores (message uid); the timestamp+prefix key covers
+            // records that predate the uid rollout.
             const key = `${m.timestamp}:${m.parts[0]?.content?.slice(0, 50)}`
-            if (seen.has(key)) return false
+            if (seen.has(m.id) || seen.has(key)) return false
+            seen.add(m.id)
             seen.add(key)
             return true
           })
           .sort((a, b) => new Date(a.timestamp ?? 0).getTime() - new Date(b.timestamp ?? 0).getTime())
-          .map((m) => {
-            if (/^\d+$/.test(m.id)) return m
-            const recordId = idByTimestamp.get(`${normalize(m.timestamp)}:${m.role}`)
-            return recordId ? { ...m, id: recordId } : m
-          })
 
         setMessages((prev) => ({ ...prev, [id]: cleanMessages(merged, eventResolver) }))
         return
@@ -291,9 +262,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             api.put(`/api/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
           }
           if (data.messages?.length) {
-            const blocks = cleanMessages(rebuildBlocks(data.messages), eventResolver)
-            const annotated = await annotateRecordIds(id, blocks)
-            setMessages((prev) => ({ ...prev, [id]: annotated }))
+            setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages), eventResolver) }))
             return
           }
         } catch {
@@ -301,9 +270,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
             const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
             if (data.messages?.length) {
-              const blocks = cleanMessages(rebuildBlocks(data.messages), eventResolver)
-              const annotated = await annotateRecordIds(id, blocks)
-              setMessages((prev) => ({ ...prev, [id]: annotated }))
+              setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages), eventResolver) }))
               return
             }
           } catch {
@@ -430,12 +397,16 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }
     }
 
-    const backfillMetadata = (meta?: Record<string, unknown>) => {
-      if (!meta) return
+    // Re-key the optimistic block to the server-minted message uid so a
+    // reaction added before reload survives it, and attach send metadata.
+    const backfillMessage = (meta?: Record<string, unknown>, uid?: string | null) => {
+      if (!meta && !uid) return
       setMessages((prev) => ({
         ...prev,
         [discussionId]: (prev[discussionId] ?? []).map((m) =>
-          m.id === userMsg.id ? { ...m, metadata: meta } : m
+          m.id === userMsg.id
+            ? { ...m, ...(uid ? { id: uid } : {}), ...(meta ? { metadata: meta } : {}) }
+            : m
         ),
       }))
     }
@@ -444,9 +415,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
     const gpsPayload = gps ? { latitude: gps.latitude, longitude: gps.longitude } : {}
 
     try {
-      const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown> }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod, ...gpsPayload })
+      const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod, ...gpsPayload })
       updateSessionId(res)
-      backfillMetadata(res.metadata)
+      backfillMessage(res.metadata, res.messageUid)
       return
     } catch {
       if (!disc.sessionId) { fail(); return }
@@ -461,9 +432,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown> }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod, ...gpsPayload })
+        const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod, ...gpsPayload })
         updateSessionId(res)
-        backfillMetadata(res.metadata)
+        backfillMessage(res.metadata, res.messageUid)
         return
       } catch {
         if (attempt < 2) {
@@ -672,6 +643,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           : evt.toolInput ? JSON.stringify(evt.toolInput) : null,
         toolResult: evt.toolResult ?? null,
         messageId: evt.messageId ?? null,
+        messageUid: evt.messageUid ?? null,
       }
 
       setMessages((prev) => {

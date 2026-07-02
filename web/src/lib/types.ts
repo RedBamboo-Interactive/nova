@@ -22,6 +22,9 @@ export interface AgentInfo {
 
 export interface DiscussionMessage {
   id: string
+  /** Universal message identity (shared with the session-transcript copy of
+   * the same message). Preferred over id as the block id when present. */
+  messageUid?: string | null
   role: "user" | "assistant"
   parts: MessagePartDto[]
   timestamp: string
@@ -51,6 +54,7 @@ export interface ClaudeStreamEvent {
   toolInput?: unknown
   toolResult?: string | null
   messageId?: string | null
+  messageUid?: string | null
 }
 
 export interface WsEvent {
