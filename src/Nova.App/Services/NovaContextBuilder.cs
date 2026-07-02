@@ -22,6 +22,18 @@ public sealed class ContextSnapshot
     [JsonPropertyName("location")]
     public string? Location { get; set; }
 
+    [JsonPropertyName("latitude")]
+    public double? Latitude { get; set; }
+
+    [JsonPropertyName("longitude")]
+    public double? Longitude { get; set; }
+
+    [JsonPropertyName("zone")]
+    public string? Zone { get; set; }
+
+    [JsonPropertyName("placeName")]
+    public string? PlaceName { get; set; }
+
     [JsonPropertyName("mood")]
     public string? Mood { get; set; }
 
@@ -60,7 +72,11 @@ public static class NovaContextBuilder
         string? outfit,
         string? outfitAsset,
         string? location = null,
-        string? mood = null)
+        string? mood = null,
+        double? latitude = null,
+        double? longitude = null,
+        string? zone = null,
+        string? placeName = null)
     {
         return new ContextSnapshot
         {
@@ -86,6 +102,10 @@ public static class NovaContextBuilder
             OutfitAsset = outfitAsset,
             Location = location,
             Mood = mood,
+            Latitude = latitude,
+            Longitude = longitude,
+            Zone = zone,
+            PlaceName = placeName,
         };
     }
 
@@ -94,7 +114,7 @@ public static class NovaContextBuilder
         string currentId, DateTime now, ResolvedDevice device, string input, string? agentName)
     {
         var sb = new StringBuilder();
-        AppendOpenTag(sb, now, device, input, currentId, agentName, snapshot.Location);
+        AppendOpenTag(sb, now, device, input, currentId, agentName, snapshot.Location, snapshot.Latitude, snapshot.Longitude, snapshot.Zone, snapshot.PlaceName);
 
         if (snapshot.Mood != null)
             sb.Append($"\nMood: {snapshot.Mood}");
@@ -132,6 +152,7 @@ public static class NovaContextBuilder
         sb.Append("\n\nRecall any discussion: curl -s http://127.0.0.1:18803/api/discussions/{id}/export");
         sb.Append("\nSearch all discussions: curl -s \"http://127.0.0.1:18803/api/discussions/search?q={query}\"");
         sb.Append("\nGet full context snapshot: curl -s http://127.0.0.1:18803/api/discussions/{id}/context");
+        sb.Append("\nReact to a message: curl -s -X POST http://127.0.0.1:18803/api/discussions/{id}/messages/{messageId}/reactions -H \"Content-Type: application/json\" -d '{\"emoji\":\"...\",\"agentId\":\"...\",\"agentName\":\"...\"}'");
 
         var liveDisc = active.FirstOrDefault(d => d.Type == "live");
         if (liveDisc != null)
@@ -222,7 +243,7 @@ public static class NovaContextBuilder
             changes.Add($"Mood changed: {current.Mood}");
 
         var sb = new StringBuilder();
-        AppendOpenTag(sb, now, device, input, currentId, agentName, current.Location);
+        AppendOpenTag(sb, now, device, input, currentId, agentName, current.Location, current.Latitude, current.Longitude, current.Zone, current.PlaceName);
 
         if (changes.Count > 0)
         {
@@ -274,12 +295,16 @@ public static class NovaContextBuilder
         };
     }
 
-    private static void AppendOpenTag(StringBuilder sb, DateTime now, ResolvedDevice device, string input, string currentId, string? agentName, string? userLocation = null)
+    private static void AppendOpenTag(StringBuilder sb, DateTime now, ResolvedDevice device, string input, string currentId, string? agentName, string? userLocation = null, double? latitude = null, double? longitude = null, string? zone = null, string? placeName = null)
     {
         var agentAttr = agentName != null ? $" agent=\"{agentName}\"" : "";
         var locationAttr = userLocation != null ? $" location=\"{userLocation}\"" : "";
+        var latAttr = latitude.HasValue ? $" latitude=\"{latitude.Value:F4}\"" : "";
+        var lngAttr = longitude.HasValue ? $" longitude=\"{longitude.Value:F4}\"" : "";
+        var zoneAttr = zone != null ? $" zone=\"{zone}\"" : "";
+        var placeAttr = placeName != null ? $" place=\"{placeName}\"" : "";
         var roomAttr = device.Room != null ? $" room=\"{device.Room}\"" : "";
-        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device.ShortLabel}\" device_type=\"{device.Type}\" platform=\"{device.Platform}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}{locationAttr}{roomAttr}>");
+        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device.ShortLabel}\" device_type=\"{device.Type}\" platform=\"{device.Platform}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}{locationAttr}{latAttr}{lngAttr}{zoneAttr}{placeAttr}{roomAttr}>");
     }
 
     private static string FormatRelativeTime(TimeSpan elapsed)

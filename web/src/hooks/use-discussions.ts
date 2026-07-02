@@ -150,6 +150,40 @@ export function useDiscussions(eventResolver?: EventResolver) {
   activeIdRef.current = activeDiscussionId
   const streamingRef = useRef(streaming)
   streamingRef.current = streaming
+  const gpsRef = useRef<{ latitude: number; longitude: number; accuracy?: number } | null>(null)
+  const lastPostedGpsRef = useRef<{ latitude: number; longitude: number } | null>(null)
+
+  useEffect(() => {
+    if (!navigator.geolocation) return
+    const id = navigator.geolocation.watchPosition(
+      (pos) => {
+        gpsRef.current = {
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy ?? undefined,
+        }
+      },
+      () => { gpsRef.current = null },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
+    )
+    return () => navigator.geolocation.clearWatch(id)
+  }, [])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const gps = gpsRef.current
+      if (!gps) return
+      const last = lastPostedGpsRef.current
+      if (last && last.latitude === gps.latitude && last.longitude === gps.longitude) return
+      lastPostedGpsRef.current = { latitude: gps.latitude, longitude: gps.longitude }
+      api.post("/api/location/update", {
+        latitude: gps.latitude,
+        longitude: gps.longitude,
+        accuracy: gps.accuracy ?? null,
+      }).catch(() => {})
+    }, 120_000)
+    return () => clearInterval(interval)
+  }, [])
 
   const sessionToDiscussion = useMemo(() => {
     const map = new Map<string, string>()
@@ -172,6 +206,30 @@ export function useDiscussions(eventResolver?: EventResolver) {
   useEffect(() => {
     syncAndRefresh()
   }, [syncAndRefresh])
+
+  const annotateRecordIds = useCallback(async (id: string, blocks: MessageBlock[]): Promise<MessageBlock[]> => {
+    try {
+      const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/discussions/${id}`)
+      if (!data.messages?.length) return blocks
+
+      const normalize = (ts: string) => {
+        try { return new Date(ts).toISOString() } catch { return ts }
+      }
+
+      const idMap = new Map<string, string>()
+      for (const m of data.messages) {
+        if (/^\d+$/.test(m.id)) idMap.set(`${normalize(m.timestamp)}:${m.role}`, m.id)
+      }
+
+      return blocks.map((b) => {
+        if (/^\d+$/.test(b.id)) return b
+        const recordId = idMap.get(`${normalize(b.timestamp)}:${b.role}`)
+        return recordId ? { ...b, id: recordId } : b
+      })
+    } catch {
+      return blocks
+    }
+  }, [])
 
   const loadMessages = useCallback(async (id: string) => {
     if (loadedRef.current.has(id)) return
@@ -196,6 +254,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
           if (data.messages?.length) apiMsgs = toChatMessages(data.messages)
         } catch {}
 
+        const normalize = (ts: string) => {
+          try { return new Date(ts).toISOString() } catch { return ts }
+        }
+        const idByTimestamp = new Map<string, string>()
+        for (const m of apiMsgs) {
+          if (/^\d+$/.test(m.id)) idByTimestamp.set(`${normalize(m.timestamp)}:${m.role}`, m.id)
+        }
+
         const seen = new Set<string>()
         const merged = [...sessionMsgs, ...apiMsgs]
           .filter((m) => {
@@ -205,6 +271,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
             return true
           })
           .sort((a, b) => new Date(a.timestamp ?? 0).getTime() - new Date(b.timestamp ?? 0).getTime())
+          .map((m) => {
+            if (/^\d+$/.test(m.id)) return m
+            const recordId = idByTimestamp.get(`${normalize(m.timestamp)}:${m.role}`)
+            return recordId ? { ...m, id: recordId } : m
+          })
 
         setMessages((prev) => ({ ...prev, [id]: cleanMessages(merged, eventResolver) }))
         return
@@ -220,7 +291,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
             api.put(`/api/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
           }
           if (data.messages?.length) {
-            setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages), eventResolver) }))
+            const blocks = cleanMessages(rebuildBlocks(data.messages), eventResolver)
+            const annotated = await annotateRecordIds(id, blocks)
+            setMessages((prev) => ({ ...prev, [id]: annotated }))
             return
           }
         } catch {
@@ -228,7 +301,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
             await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
             const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
             if (data.messages?.length) {
-              setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages), eventResolver) }))
+              const blocks = cleanMessages(rebuildBlocks(data.messages), eventResolver)
+              const annotated = await annotateRecordIds(id, blocks)
+              setMessages((prev) => ({ ...prev, [id]: annotated }))
               return
             }
           } catch {
@@ -365,8 +440,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }))
     }
 
+    const gps = gpsRef.current
+    const gpsPayload = gps ? { latitude: gps.latitude, longitude: gps.longitude } : {}
+
     try {
-      const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown> }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod })
+      const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown> }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod, ...gpsPayload })
       updateSessionId(res)
       backfillMetadata(res.metadata)
       return
@@ -383,7 +461,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown> }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod })
+        const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown> }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod, ...gpsPayload })
         updateSessionId(res)
         backfillMetadata(res.metadata)
         return

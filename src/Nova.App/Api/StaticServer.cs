@@ -65,11 +65,14 @@ public class StaticServer
         var geo = new GeoLocationService();
         _ = geo.ResolveAsync();
 
+        var locationService = new LocationService();
+
         builder.Services.AddSingleton(_engine);
         builder.Services.AddSingleton(_memory);
         builder.Services.AddSingleton(_agentResolver);
         builder.Services.AddSingleton(_agentMemoryFactory);
         builder.Services.AddSingleton(geo);
+        builder.Services.AddSingleton(locationService);
 
 
         var redSuiteDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RedSuite");
@@ -130,13 +133,16 @@ public class StaticServer
         _streamClient.DefineStream(new StreamDefinition(
             "automation-runs", "Automation Runs",
             "Per-trigger automation results", RetentionDays: 90, ParentType: "automation"));
+        _streamClient.DefineStream(new StreamDefinition(
+            "message-reactions", "Message Reactions",
+            "Emoji reactions on discussion messages", RetentionDays: null, ParentType: "discussion"));
         NovaMirror.Client = _streamClient;
         NovaMirror.AgentId ??= App.Config.AgentId;
 
         DiscussionEndpoints.Initialize(authFactory, new RedLeafDiscussionReader(
             App.Config.Suite.RedLeaf,
             new JwtService(new JwtOptions { SigningKey = signingKey })),
-            _agentMemoryFactory, geo);
+            _agentMemoryFactory, geo, locationService);
         DelegateEndpoints.Initialize(authFactory);
         ConversationExporter.Initialize(authFactory);
 
@@ -530,6 +536,7 @@ public class StaticServer
         registry.MapAutomationEndpoints(_engine);
         registry.MapDelegateEndpoints();
         registry.MapCallbackEndpoints();
+        registry.MapLocationEndpoints();
 
         var broadcaster = _app.Services.GetService<WebSocketBroadcaster>();
         broadcaster?.RegisterEvent(new WsEventSchema(
@@ -546,6 +553,10 @@ public class StaticServer
             "Fired when a Nova-authored assistant message is injected into a discussion without triggering inference " +
             "(POST /api/discussions/{id}/nova-message).",
             Fields: ["discussionId", "content"]));
+        broadcaster?.RegisterEvent(new WsEventSchema(
+            "discussion.reaction",
+            "Fired when an emoji reaction is added or removed on a discussion message.",
+            Fields: ["discussionId", "messageId", "emoji", "action", "actorId", "actorName", "actorType"]));
 
         var descriptor = new NovaServiceDescriptor(port, logService, _engine, registry);
 

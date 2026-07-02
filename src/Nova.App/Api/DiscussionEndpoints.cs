@@ -43,16 +43,18 @@ public static class DiscussionEndpoints
     private static RedLeafDiscussionReader? _redLeaf;
     private static AgentMemoryFactory? _agentMemoryFactory;
     private static GeoLocationService? _geo;
+    private static LocationService? _location;
     private static DeviceResolver? _deviceResolver;
     private static string? _lastDeviceName;
 
-    public static void Initialize(AuthenticatedHttpClientFactory factory, RedLeafDiscussionReader redLeaf, AgentMemoryFactory agentMemoryFactory, GeoLocationService? geo = null)
+    public static void Initialize(AuthenticatedHttpClientFactory factory, RedLeafDiscussionReader redLeaf, AgentMemoryFactory agentMemoryFactory, GeoLocationService? geo = null, LocationService? location = null)
     {
         RedCompute = factory.CreateClient(App.Config.Suite.RedCompute, TimeSpan.FromSeconds(30));
         RedLeaf = factory.CreateClient(App.Config.Suite.RedLeaf, TimeSpan.FromSeconds(10));
         _redLeaf = redLeaf;
         _agentMemoryFactory = agentMemoryFactory;
         _geo = geo;
+        _location = location;
         _deviceResolver = new DeviceResolver(RedLeaf);
     }
 
@@ -955,7 +957,8 @@ public static class DiscussionEndpoints
 
             var outcome = await SendMessageCoreAsync(
                 db, memory, discussion, userId,
-                request.Content, request.Images, resolved, request.InputMethod ?? "typed");
+                request.Content, request.Images, resolved, request.InputMethod ?? "typed",
+                request.Latitude, request.Longitude);
 
             if (!outcome.Success)
                 return ApiError.BadGateway(outcome.ErrorCode!, outcome.ErrorMessage!);
@@ -987,6 +990,186 @@ public static class DiscussionEndpoints
                 inputMethod = new { type = "string", description = "How the message was produced (e.g. 'typed', 'voice'); surfaced to Nova in the context block.", @default = "typed" },
             },
         });
+
+        // ── Reactions ──────────────────────────────────────────────────
+
+        registry.MapPost("/api/discussions/{id}/messages/{messageId}/reactions", "Add an emoji reaction to a message", async (string id, long messageId, ReactionRequest request, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
+        {
+            var discussion = await db.Discussions.FindAsync(id);
+            if (discussion is null)
+                return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
+
+            if (string.IsNullOrWhiteSpace(request.Emoji))
+                return Results.BadRequest(new { error = "Emoji is required" });
+
+            var isAgent = !string.IsNullOrEmpty(request.AgentId);
+            var actorId = isAgent ? request.AgentId! : userId ?? "anonymous";
+            var actorName = isAgent ? (request.AgentName ?? "Agent") : (ctx.User.FindFirstValue("name") ?? "User");
+            var actorType = isAgent ? "agent" : "user";
+
+            var slug = NovaMirror.DiscussionSlug(id);
+            NovaMirror.Client?.EnqueueForEntity("message-reactions", slug, new
+            {
+                message_id = messageId,
+                emoji = request.Emoji.Trim(),
+                action = "add",
+                actor_type = actorType,
+                actor_id = actorId,
+                actor_name = actorName,
+            }, userId: actorId);
+
+            broadcaster?.Broadcast("discussion.reaction", new
+            {
+                discussionId = id,
+                messageId,
+                emoji = request.Emoji.Trim(),
+                action = "add",
+                actorId,
+                actorName,
+                actorType,
+            });
+
+            return Results.Ok(new { success = true });
+        });
+
+        registry.MapDelete("/api/discussions/{id}/messages/{messageId}/reactions/{emoji}", "Remove an emoji reaction from a message", async (string id, long messageId, string emoji, HttpContext ctx, NovaDbContext db, WebSocketBroadcaster? broadcaster) =>
+        {
+            var discussion = await db.Discussions.FindAsync(id);
+            if (discussion is null)
+                return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
+
+            var actorId = userId ?? "anonymous";
+            var actorName = ctx.User.FindFirstValue("name") ?? "User";
+
+            var slug = NovaMirror.DiscussionSlug(id);
+            NovaMirror.Client?.EnqueueForEntity("message-reactions", slug, new
+            {
+                message_id = messageId,
+                emoji = Uri.UnescapeDataString(emoji),
+                action = "remove",
+                actor_type = "user",
+                actor_id = actorId,
+                actor_name = actorName,
+            }, userId: actorId);
+
+            broadcaster?.Broadcast("discussion.reaction", new
+            {
+                discussionId = id,
+                messageId,
+                emoji = Uri.UnescapeDataString(emoji),
+                action = "remove",
+                actorId,
+                actorName,
+                actorType = "user",
+            });
+
+            return Results.Ok(new { success = true });
+        });
+
+        registry.MapGet("/api/discussions/{id}/reactions", "Get aggregated reactions for all messages in a discussion", async (string id, HttpContext ctx, NovaDbContext db) =>
+        {
+            var discussion = await db.Discussions.FindAsync(id);
+            if (discussion is null)
+                return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
+
+            var disc = await _redLeaf!.GetDiscussionAsync(id);
+            if (disc is null)
+                return Results.Ok(new { reactions = new Dictionary<string, object>() });
+
+            var reactions = await AggregateReactionsAsync(disc.EntityId, userId);
+            return Results.Ok(new { reactions });
+        });
+
+        registry.MapGet("/api/discussions/{id}/messages/{messageId}/reactions", "Get aggregated reactions for a single message", async (string id, long messageId, HttpContext ctx, NovaDbContext db) =>
+        {
+            var discussion = await db.Discussions.FindAsync(id);
+            if (discussion is null)
+                return Results.NotFound(new { error = "Discussion not found" });
+
+            var userId = ctx.User.FindFirstValue("sub");
+            if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
+                return Results.Json(new { error = "Forbidden" }, statusCode: 403);
+
+            var disc = await _redLeaf!.GetDiscussionAsync(id);
+            if (disc is null)
+                return Results.Ok(new { reactions = Array.Empty<object>() });
+
+            var all = await AggregateReactionsAsync(disc.EntityId, userId);
+            var msgKey = messageId.ToString();
+            return Results.Ok(new { reactions = all.ContainsKey(msgKey) ? all[msgKey] : Array.Empty<object>() });
+        });
+    }
+
+    private static async Task<Dictionary<string, object[]>> AggregateReactionsAsync(Guid entityId, string? currentUserId)
+    {
+        try
+        {
+            var response = await RedLeaf.GetAsync($"api/streams/message-reactions/records?entity_id={entityId}&order=asc&limit=1000");
+            if (!response.IsSuccessStatusCode)
+                return new Dictionary<string, object[]>();
+
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var items = doc.RootElement.GetProperty("items");
+
+            // state: (messageId, emoji, actorId) → (actorName, actorType)
+            var state = new Dictionary<(string msgId, string emoji, string actorId), (string name, string type)>();
+
+            foreach (var rec in items.EnumerateArray())
+            {
+                using var data = JsonDocument.Parse(rec.GetProperty("data").GetString()!);
+                var d = data.RootElement;
+
+                var msgId = d.TryGetProperty("message_id", out var mid)
+                    ? (mid.ValueKind == JsonValueKind.Number ? mid.GetInt64().ToString() : mid.GetString() ?? "")
+                    : "";
+                var emoji = d.TryGetProperty("emoji", out var e) ? e.GetString() ?? "" : "";
+                var action = d.TryGetProperty("action", out var a) ? a.GetString() ?? "add" : "add";
+                var actorId = d.TryGetProperty("actor_id", out var ai) ? ai.GetString() ?? "" : "";
+                var actorName = d.TryGetProperty("actor_name", out var an) ? an.GetString() ?? "" : "";
+                var actorType = d.TryGetProperty("actor_type", out var at) ? at.GetString() ?? "user" : "user";
+
+                var key = (msgId, emoji, actorId);
+                if (action == "add")
+                    state[key] = (actorName, actorType);
+                else
+                    state.Remove(key);
+            }
+
+            // group by message, then emoji
+            var result = new Dictionary<string, object[]>();
+            foreach (var group in state.GroupBy(kv => kv.Key.msgId))
+            {
+                var emojiGroups = group
+                    .GroupBy(kv => kv.Key.emoji)
+                    .Select(eg => new
+                    {
+                        emoji = eg.Key,
+                        count = eg.Count(),
+                        actors = eg.Select(kv => new { id = kv.Key.actorId, name = kv.Value.name, type = kv.Value.type }).ToArray(),
+                        userReacted = eg.Any(kv => kv.Key.actorId == currentUserId),
+                    })
+                    .ToArray();
+                result[group.Key] = emojiGroups.Cast<object>().ToArray();
+            }
+
+            return result;
+        }
+        catch
+        {
+            return new Dictionary<string, object[]>();
+        }
     }
 
     internal static async Task<string?> TryCreateSessionAsync(MemoryManager memory, string? agentId, string? ownerId)
@@ -1027,7 +1210,8 @@ public static class DiscussionEndpoints
     /// </summary>
     internal static async Task<SendMessageOutcome> SendMessageCoreAsync(
         NovaDbContext db, MemoryManager memory, Discussion discussion, string? userId,
-        string content, ImageAttachmentDto[]? images, ResolvedDevice device, string input)
+        string content, ImageAttachmentDto[]? images, ResolvedDevice device, string input,
+        double? latitude = null, double? longitude = null)
     {
         if (discussion.SessionId is null && _pendingSessions.TryRemove(discussion.Id, out var pending))
         {
@@ -1158,9 +1342,14 @@ public static class DiscussionEndpoints
             catch { }
         }
 
+        if (latitude.HasValue && longitude.HasValue && _location != null)
+            _location.UpdateLocation(latitude.Value, longitude.Value, null);
+
+        var locReading = _location?.Latest;
         var currentSnapshot = NovaContextBuilder.BuildSnapshot(
             ownDiscussions, otherAgentDiscussions, currentOutfit, currentOutfitAsset,
-            _geo?.Location, moodSummary);
+            _geo?.Location, moodSummary, latitude, longitude,
+            locReading?.Zone, locReading?.PlaceName);
         var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
 
         string contextBlock;
@@ -1336,6 +1525,15 @@ public class DiscussionMessageRequest
     public string Content { get; set; } = "";
     public ImageAttachmentDto[]? Images { get; set; }
     public string? InputMethod { get; set; }
+    public double? Latitude { get; set; }
+    public double? Longitude { get; set; }
+}
+
+public class ReactionRequest
+{
+    public string Emoji { get; set; } = "";
+    public string? AgentId { get; set; }
+    public string? AgentName { get; set; }
 }
 
 public class ImageAttachmentDto

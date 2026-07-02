@@ -353,7 +353,6 @@ public class AutomationService
             var liveId = await ResolveLiveDiscussionIdAsync();
             if (liveId != null)
             {
-                automation.ReportToDiscussionId = liveId;
                 prompt = $"<nova-context live-discussion=\"{liveId}\">\n"
                     + $"Your LIVE discussion ID is: {liveId}.\n"
                     + $"Post your content to it using: POST http://127.0.0.1:18803/api/discussions/{liveId}/nova-message\n"
@@ -366,7 +365,6 @@ public class AutomationService
             var discussionId = await PreCreateDiscussionAsync(automation.OwnerId, ct);
             if (discussionId != null)
             {
-                automation.ReportToDiscussionId = discussionId;
                 prompt = $"<nova-context pre-created-discussion=\"{discussionId}\">\n"
                     + $"A discussion has already been created for you with ID: {discussionId}.\n"
                     + $"Post your content to it using: POST http://127.0.0.1:18803/api/discussions/{discussionId}/nova-message\n"

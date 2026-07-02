@@ -43,6 +43,10 @@ public class NovaServiceDescriptor : RegistryServiceDescriptor
         "GET /api/discussions/export",
         "GET /api/discussions/{id}/export",
         "POST /api/ask",
+        "POST /api/discussions/{id}/messages/{messageId}/reactions",
+        "DELETE /api/discussions/{id}/messages/{messageId}/reactions/{emoji}",
+        "GET /api/discussions/{id}/reactions",
+        "GET /api/discussions/{id}/messages/{messageId}/reactions",
     ];
 
     private static readonly string[] AutomationEndpointKeys =
