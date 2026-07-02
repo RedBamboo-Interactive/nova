@@ -16,6 +16,9 @@ public class LivePollerService
     private Dictionary<string, SonosRoomState> _lastSonos = [];
     private Dictionary<string, HueGroupState> _lastHueGroups = [];
     private WeatherState? _lastWeather;
+    private SteamState? _lastSteam;
+    private DateTime? _steamSessionStart;
+    private List<string>? _steamFriendIds;
 
     public LivePollerService(LogService log)
     {
@@ -50,7 +53,20 @@ public class LivePollerService
         var hueTask = PollLoopAsync("hue", TimeSpan.FromSeconds(15), PollHueAsync, ct);
         var weatherTask = PollLoopAsync("weather", TimeSpan.FromMinutes(10), PollWeatherAsync, ct);
 
-        await Task.WhenAll(sonosTask, spotifyTask, hueTask, weatherTask);
+        var tasks = new List<Task> { sonosTask, spotifyTask, hueTask, weatherTask };
+
+        var steamConfig = App.Config.Steam;
+        if (!string.IsNullOrEmpty(steamConfig.ApiKey))
+        {
+            tasks.Add(PollLoopAsync("steam", TimeSpan.FromMinutes(2), () => PollSteamAsync(steamConfig), ct));
+            _log.Info("live-poller", "Steam polling enabled");
+        }
+        else
+        {
+            _log.Info("live-poller", "Steam polling disabled (no API key configured)");
+        }
+
+        await Task.WhenAll(tasks);
     }
 
     private async Task PollLoopAsync(string name, TimeSpan interval, Func<Task> poll, CancellationToken ct)
@@ -345,8 +361,136 @@ public class LivePollerService
         _ => "strong",
     };
 
+    private async Task PollSteamAsync(Configuration.SteamSettings config)
+    {
+        var live = LiveEventService.Instance;
+        if (live == null) return;
+
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+
+        // Fetch player summary
+        JsonElement playerData;
+        try
+        {
+            var resp = await http.GetAsync(
+                $"https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key={config.ApiKey}&steamids={config.SteamId}");
+            if (!resp.IsSuccessStatusCode) return;
+            var json = await resp.Content.ReadFromJsonAsync<JsonElement>();
+            if (!json.TryGetProperty("response", out var r) || !r.TryGetProperty("players", out var players)
+                || players.GetArrayLength() == 0) return;
+            playerData = players[0];
+        }
+        catch { return; }
+
+        var personaState = playerData.TryGetProperty("personastate", out var ps) ? ps.GetInt32() : 0;
+        var game = playerData.TryGetProperty("gameextrainfo", out var gi) ? gi.GetString() : null;
+        var gameId = playerData.TryGetProperty("gameid", out var gid) ? gid.GetString() : null;
+
+        var current = new SteamState(personaState, game, gameId);
+
+        if (_lastSteam == null)
+        {
+            _lastSteam = current;
+            if (game != null)
+                _log.Info("live-poller", $"Steam baseline: playing {game}");
+            else
+                _log.Info("live-poller", $"Steam baseline: not in game");
+            return;
+        }
+
+        // Game started
+        if (current.Game != null && _lastSteam.Game == null)
+        {
+            _steamSessionStart = DateTime.UtcNow;
+            var friends = await GetFriendsInGame(http, config, current.GameId);
+            var withStr = friends.Count > 0 ? $" with {string.Join(", ", friends)}" : "";
+            await live.PostAsync("steam", $"Started playing {current.Game}{withStr}",
+                new { game = current.Game, gameId = current.GameId, friends, status = "playing" });
+        }
+        // Game changed
+        else if (current.Game != null && current.GameId != _lastSteam.GameId)
+        {
+            var duration = FormatDuration(_steamSessionStart);
+            var durationStr = duration != null ? $" ({duration})" : "";
+            await live.PostAsync("steam", $"Stopped playing {_lastSteam.Game}{durationStr}",
+                new { game = _lastSteam.Game, status = "stopped", duration });
+
+            _steamSessionStart = DateTime.UtcNow;
+            var friends = await GetFriendsInGame(http, config, current.GameId);
+            var withStr = friends.Count > 0 ? $" with {string.Join(", ", friends)}" : "";
+            await live.PostAsync("steam", $"Started playing {current.Game}{withStr}",
+                new { game = current.Game, gameId = current.GameId, friends, status = "playing" });
+        }
+        // Game stopped
+        else if (current.Game == null && _lastSteam.Game != null)
+        {
+            var duration = FormatDuration(_steamSessionStart);
+            var durationStr = duration != null ? $" ({duration})" : "";
+            _steamSessionStart = null;
+            await live.PostAsync("steam", $"Stopped playing {_lastSteam.Game}{durationStr}",
+                new { game = _lastSteam.Game, status = "stopped", duration });
+        }
+
+        _lastSteam = current;
+    }
+
+    private async Task<List<string>> GetFriendsInGame(HttpClient http, Configuration.SteamSettings config, string? gameId)
+    {
+        if (gameId == null) return [];
+
+        try
+        {
+            if (_steamFriendIds == null)
+            {
+                var resp = await http.GetAsync(
+                    $"https://api.steampowered.com/ISteamUser/GetFriendList/v1/?key={config.ApiKey}&steamid={config.SteamId}&relationship=friend");
+                if (!resp.IsSuccessStatusCode) return [];
+                var json = await resp.Content.ReadFromJsonAsync<JsonElement>();
+                if (!json.TryGetProperty("friendslist", out var fl) || !fl.TryGetProperty("friends", out var friends)) return [];
+
+                _steamFriendIds = [];
+                foreach (var f in friends.EnumerateArray())
+                    if (f.TryGetProperty("steamid", out var sid))
+                        _steamFriendIds.Add(sid.GetString()!);
+
+                _log.Info("live-poller", $"Steam friend list cached: {_steamFriendIds.Count} friends");
+            }
+
+            // GetPlayerSummaries accepts up to 100 steamids
+            var ids = string.Join(",", _steamFriendIds);
+            var summResp = await http.GetAsync(
+                $"https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key={config.ApiKey}&steamids={ids}");
+            if (!summResp.IsSuccessStatusCode) return [];
+            var summJson = await summResp.Content.ReadFromJsonAsync<JsonElement>();
+            if (!summJson.TryGetProperty("response", out var r) || !r.TryGetProperty("players", out var players)) return [];
+
+            var names = new List<string>();
+            foreach (var p in players.EnumerateArray())
+            {
+                var fGameId = p.TryGetProperty("gameid", out var fgid) ? fgid.GetString() : null;
+                if (fGameId == gameId)
+                {
+                    var name = p.TryGetProperty("personaname", out var pn) ? pn.GetString() : null;
+                    if (name != null) names.Add(name);
+                }
+            }
+            return names;
+        }
+        catch { return []; }
+    }
+
+    private static string? FormatDuration(DateTime? start)
+    {
+        if (start == null) return null;
+        var span = DateTime.UtcNow - start.Value;
+        if (span.TotalHours >= 1)
+            return $"{(int)span.TotalHours}h {span.Minutes}m";
+        return span.Minutes < 1 ? "< 1m" : $"{span.Minutes}m";
+    }
+
     private record SpotifyState(bool Playing, string? TrackUri, string? Track, string? Artist);
     private record SonosRoomState(string Room, bool Playing, string? Track, string? Artist, string TrackKey);
     private record HueGroupState(string Name, bool On, int Brightness);
     private record WeatherState(double Temp, int Code, string Condition, double Wind, double Precip);
+    private record SteamState(int PersonaState, string? Game, string? GameId);
 }

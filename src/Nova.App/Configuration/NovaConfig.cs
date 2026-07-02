@@ -12,6 +12,7 @@ public class NovaConfig
     /// <summary>RedLeaf agent entity ID that this Nova instance represents.</summary>
     public string? AgentId { get; set; }
 
+    public SteamSettings Steam { get; set; } = new();
     public TunnelSettings Tunnel { get; set; } = new();
     public SuiteSettings Suite { get; set; } = new();
 }
@@ -23,6 +24,12 @@ public class SuiteSettings
     public string CodeRed { get; set; } = "http://127.0.0.1:18801";
     public string RedMatter { get; set; } = "http://127.0.0.1:18802";
     public string RedLeaf { get; set; } = "http://127.0.0.1:18804";
+}
+
+public class SteamSettings
+{
+    public string? ApiKey { get; set; }
+    public string SteamId { get; set; } = "76561198011986631";
 }
 
 public class TunnelSettings
