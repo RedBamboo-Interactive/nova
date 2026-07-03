@@ -250,13 +250,9 @@ export function ChatView() {
 
   const { reactions, react, unreact } = useReactions(activeDiscussionId)
 
-  const renderMessageExtra = useCallback((block: MessageBlock) => {
-    // The block id IS the message uid when the backend minted one — stable
-    // across streaming, reloads, and both message stores. Older blocks fall
-    // back to their load-path id.
+  const renderSideActions = useCallback((block: MessageBlock) => {
     const msgKey = block.id
     const msgReactions = reactions[msgKey] ?? []
-    const isUserMsg = block.role === "user"
 
     const handleToggle = (emoji: string, hasReacted: boolean) => {
       if (hasReacted) unreact(msgKey, emoji)
@@ -266,12 +262,10 @@ export function ChatView() {
 
     return (
       <>
-        {msgReactions.length > 0 && (
-          <div className={isUserMsg ? "flex justify-end" : ""}>
-            <ReactionPills reactions={msgReactions} onToggle={handleToggle} onAdd={handleAdd} />
-          </div>
-        )}
-        <AddReactionButton onAdd={handleAdd} align={isUserMsg ? "right" : "left"} />
+        <ReactionPills reactions={msgReactions} onToggle={handleToggle} />
+        <div className="opacity-0 group-hover/msg:opacity-100 transition-opacity duration-150">
+          <AddReactionButton onAdd={handleAdd} />
+        </div>
       </>
     )
   }, [reactions, react, unreact])
@@ -316,7 +310,7 @@ export function ChatView() {
         assistantAvatar={avatarSrc}
         resolveAgentInfo={resolveAgentInfo}
         renderStatusLine={renderStatusLine}
-        renderMessageExtra={renderMessageExtra}
+        renderSideActions={renderSideActions}
       />
     </div>
   ) : (

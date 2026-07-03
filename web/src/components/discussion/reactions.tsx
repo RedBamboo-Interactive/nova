@@ -60,26 +60,19 @@ function ReactionIcon({ emoji, lookup, size = 11 }: { emoji: string; lookup: Map
   return <i className={`${item.icon} text-[${size}px]`} style={item.color ? { color: item.color } : undefined} />
 }
 
-interface ReactionPillsProps {
-  reactions: ReactionGroup[]
-  onToggle: (emoji: string, hasReacted: boolean) => void
-  onAdd: (emoji: string) => void
-}
-
-export function ReactionPills({ reactions, onToggle, onAdd }: ReactionPillsProps) {
-  const [pickerOpen, setPickerOpen] = useState(false)
+export function ReactionPills({ reactions, onToggle }: { reactions: ReactionGroup[]; onToggle: (emoji: string, hasReacted: boolean) => void }) {
   const items = useReactionEmoji()
   const lookup = emojiIconLookup(items)
 
-  if (reactions.length === 0 && !pickerOpen) return null
+  if (reactions.length === 0) return null
 
   return (
-    <div className="flex flex-wrap items-center gap-1 mt-1 msg-enter-ai">
+    <div className="flex flex-col items-center gap-0.5">
       {reactions.map((r) => (
         <button
           key={r.emoji}
           onClick={() => onToggle(r.emoji, r.userReacted)}
-          className={`inline-flex items-center gap-1 h-6 px-1.5 rounded-full text-xs transition-colors cursor-pointer ${
+          className={`flex flex-col items-center w-6 py-1 rounded-full text-xs transition-colors cursor-pointer ${
             r.userReacted
               ? "bg-overlay-8 text-text-secondary"
               : "bg-overlay-4 hover:bg-overlay-8 text-text-disabled hover:text-text-muted"
@@ -87,59 +80,35 @@ export function ReactionPills({ reactions, onToggle, onAdd }: ReactionPillsProps
           title={r.actors.map((a) => a.name).join(", ")}
         >
           <ReactionIcon emoji={r.emoji} lookup={lookup} />
-          <span className="font-medium tabular-nums">{r.count}</span>
+          <span className="font-medium tabular-nums text-[10px] leading-tight">{r.count}</span>
         </button>
       ))}
-      <div className="relative">
-        <button
-          onClick={() => setPickerOpen(!pickerOpen)}
-          className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-overlay-4 hover:bg-overlay-8 text-text-disabled hover:text-text-muted transition-colors cursor-pointer"
-          title="Add reaction"
-        >
-          <i className="fa-regular fa-face-smile text-[11px]" />
-        </button>
-        {pickerOpen && (
-          <EmojiPicker
-            items={items}
-            lookup={lookup}
-            onSelect={(emoji) => { onAdd(emoji); setPickerOpen(false) }}
-            onClose={() => setPickerOpen(false)}
-          />
-        )}
-      </div>
     </div>
   )
 }
 
-interface AddReactionButtonProps {
-  onAdd: (emoji: string) => void
-  align: "left" | "right"
-}
-
-export function AddReactionButton({ onAdd, align }: AddReactionButtonProps) {
+export function AddReactionButton({ onAdd }: { onAdd: (emoji: string) => void }) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const items = useReactionEmoji()
   const lookup = emojiIconLookup(items)
 
   return (
-    <div className={`relative h-0 ${align === "right" ? "flex justify-end" : ""}`}>
-      <div className={`absolute top-0 ${align === "right" ? "right-0" : "left-0"} ${pickerOpen ? "opacity-100" : "opacity-0 pointer-events-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto"} transition-opacity duration-150`}>
-        <button
-          onClick={() => setPickerOpen(!pickerOpen)}
-          className="mt-0.5 w-6 h-6 flex items-center justify-center rounded-full bg-overlay-6 hover:bg-overlay-10 text-text-disabled hover:text-text-muted transition-colors cursor-pointer"
-          title="Add reaction"
-        >
-          <i className="fa-regular fa-face-smile text-[11px]" />
-        </button>
-        {pickerOpen && (
-          <EmojiPicker
-            items={items}
-            lookup={lookup}
-            onSelect={(emoji) => { onAdd(emoji); setPickerOpen(false) }}
-            onClose={() => setPickerOpen(false)}
-          />
-        )}
-      </div>
+    <div className="relative">
+      <button
+        onClick={() => setPickerOpen(!pickerOpen)}
+        className="w-6 h-6 flex items-center justify-center rounded-full bg-overlay-4 hover:bg-overlay-8 text-text-disabled hover:text-text-muted transition-colors cursor-pointer"
+        title="Add reaction"
+      >
+        <i className="fa-regular fa-face-smile text-[11px]" />
+      </button>
+      {pickerOpen && (
+        <EmojiPicker
+          items={items}
+          lookup={lookup}
+          onSelect={(emoji) => { onAdd(emoji); setPickerOpen(false) }}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
     </div>
   )
 }
