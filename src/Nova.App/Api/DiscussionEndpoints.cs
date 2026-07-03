@@ -1362,7 +1362,7 @@ public static class DiscussionEndpoints
         var currentSnapshot = NovaContextBuilder.BuildSnapshot(
             ownDiscussions, otherAgentDiscussions, currentOutfit, currentOutfitAsset,
             _geo?.Location, moodSummary, latitude, longitude,
-            locReading?.Zone, locReading?.PlaceName);
+            locReading?.Zone, locReading?.PlaceName, locReading?.Timezone);
         var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
 
         var reactionLines = await GetRecentReactionLinesAsync(discussion.Id, discussion.LastContextJson != null ? discussion.LastActivity : DateTime.MinValue);

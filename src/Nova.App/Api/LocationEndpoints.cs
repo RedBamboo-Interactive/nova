@@ -15,19 +15,21 @@ public static class LocationEndpoints
             var svc = ctx.RequestServices.GetRequiredService<LocationService>();
 
             double? lat = null, lng = null, accuracy = null;
+            string? timezone = null;
             try
             {
                 var body = await ctx.Request.ReadFromJsonAsync<LocationUpdateRequest>();
                 lat = body?.Latitude;
                 lng = body?.Longitude;
                 accuracy = body?.Accuracy;
+                timezone = body?.Timezone;
             }
             catch { return Results.BadRequest(new { error = "Invalid JSON" }); }
 
             if (lat == null || lng == null)
                 return Results.BadRequest(new { error = "latitude and longitude are required" });
 
-            svc.UpdateLocation(lat.Value, lng.Value, accuracy);
+            svc.UpdateLocation(lat.Value, lng.Value, accuracy, timezone);
             return Results.Ok(new { success = true });
         });
 
@@ -58,4 +60,5 @@ public class LocationUpdateRequest
     public double? Latitude { get; set; }
     public double? Longitude { get; set; }
     public double? Accuracy { get; set; }
+    public string? Timezone { get; set; }
 }

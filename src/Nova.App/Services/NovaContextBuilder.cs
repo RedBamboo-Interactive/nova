@@ -34,6 +34,9 @@ public sealed class ContextSnapshot
     [JsonPropertyName("placeName")]
     public string? PlaceName { get; set; }
 
+    [JsonPropertyName("timezone")]
+    public string? Timezone { get; set; }
+
     [JsonPropertyName("mood")]
     public string? Mood { get; set; }
 
@@ -76,7 +79,8 @@ public static class NovaContextBuilder
         double? latitude = null,
         double? longitude = null,
         string? zone = null,
-        string? placeName = null)
+        string? placeName = null,
+        string? timezone = null)
     {
         return new ContextSnapshot
         {
@@ -106,6 +110,7 @@ public static class NovaContextBuilder
             Longitude = longitude,
             Zone = zone,
             PlaceName = placeName,
+            Timezone = timezone,
         };
     }
 
@@ -115,7 +120,7 @@ public static class NovaContextBuilder
         List<string>? reactionLines = null)
     {
         var sb = new StringBuilder();
-        AppendOpenTag(sb, now, device, input, currentId, agentName, snapshot.Location, snapshot.Latitude, snapshot.Longitude, snapshot.Zone, snapshot.PlaceName);
+        AppendOpenTag(sb, now, device, input, currentId, agentName, snapshot.Location, snapshot.Latitude, snapshot.Longitude, snapshot.Zone, snapshot.PlaceName, snapshot.Timezone);
 
         if (snapshot.Mood != null)
             sb.Append($"\nMood: {snapshot.Mood}");
@@ -245,7 +250,7 @@ public static class NovaContextBuilder
             changes.Add($"Mood changed: {current.Mood}");
 
         var sb = new StringBuilder();
-        AppendOpenTag(sb, now, device, input, currentId, agentName, current.Location, current.Latitude, current.Longitude, current.Zone, current.PlaceName);
+        AppendOpenTag(sb, now, device, input, currentId, agentName, current.Location, current.Latitude, current.Longitude, current.Zone, current.PlaceName, current.Timezone);
 
         if (reactionLines is { Count: > 0 })
             foreach (var r in reactionLines)
@@ -301,8 +306,19 @@ public static class NovaContextBuilder
         };
     }
 
-    private static void AppendOpenTag(StringBuilder sb, DateTime now, ResolvedDevice device, string input, string currentId, string? agentName, string? userLocation = null, double? latitude = null, double? longitude = null, string? zone = null, string? placeName = null)
+    private static void AppendOpenTag(StringBuilder sb, DateTime now, ResolvedDevice device, string input, string currentId, string? agentName, string? userLocation = null, double? latitude = null, double? longitude = null, string? zone = null, string? placeName = null, string? timezone = null)
     {
+        var localTimeAttr = "";
+        if (timezone != null)
+        {
+            try
+            {
+                var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
+                var localTime = TimeZoneInfo.ConvertTimeFromUtc(now, tz);
+                localTimeAttr = $" local_time=\"{localTime:HH:mm}\"";
+            }
+            catch (TimeZoneNotFoundException) { }
+        }
         var agentAttr = agentName != null ? $" agent=\"{agentName}\"" : "";
         var locationAttr = userLocation != null ? $" location=\"{userLocation}\"" : "";
         var latAttr = latitude.HasValue ? $" latitude=\"{latitude.Value:F4}\"" : "";
@@ -310,7 +326,7 @@ public static class NovaContextBuilder
         var zoneAttr = zone != null ? $" zone=\"{zone}\"" : "";
         var placeAttr = placeName != null ? $" place=\"{placeName}\"" : "";
         var roomAttr = device.Room != null ? $" room=\"{device.Room}\"" : "";
-        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device.ShortLabel}\" device_type=\"{device.Type}\" platform=\"{device.Platform}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}{locationAttr}{latAttr}{lngAttr}{zoneAttr}{placeAttr}{roomAttr}>");
+        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\"{localTimeAttr} day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device.ShortLabel}\" device_type=\"{device.Type}\" platform=\"{device.Platform}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}{locationAttr}{latAttr}{lngAttr}{zoneAttr}{placeAttr}{roomAttr}>");
     }
 
     private static string FormatRelativeTime(TimeSpan elapsed)

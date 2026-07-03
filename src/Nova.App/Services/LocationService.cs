@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace Nova.App.Services;
 
-public record LocationReading(double Latitude, double Longitude, double? Accuracy, DateTime Timestamp, string? Zone, string? PlaceName);
+public record LocationReading(double Latitude, double Longitude, double? Accuracy, DateTime Timestamp, string? Zone, string? PlaceName, string? Timezone);
 
 public class LocationService
 {
@@ -24,11 +24,11 @@ public class LocationService
 
     public LocationReading? Latest => _latest;
 
-    public void UpdateLocation(double lat, double lng, double? accuracy)
+    public void UpdateLocation(double lat, double lng, double? accuracy, string? timezone = null)
     {
         var zone = DetectZone(lat, lng);
         var placeName = zone ?? ResolvePlace(lat, lng);
-        _latest = new LocationReading(lat, lng, accuracy, DateTime.UtcNow, zone, placeName);
+        _latest = new LocationReading(lat, lng, accuracy, DateTime.UtcNow, zone, placeName, timezone ?? _latest?.Timezone);
 
         bool zoneEventFired = false;
         foreach (var z in Zones)

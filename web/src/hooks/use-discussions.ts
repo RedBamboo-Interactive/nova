@@ -180,6 +180,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         latitude: gps.latitude,
         longitude: gps.longitude,
         accuracy: gps.accuracy ?? null,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       }).catch(() => {})
     }, 120_000)
     return () => clearInterval(interval)
