@@ -263,7 +263,7 @@ export function ChatView() {
     return (
       <>
         <ReactionPills reactions={msgReactions} onToggle={handleToggle} />
-        <div className="opacity-0 group-hover/msg:opacity-100 transition-opacity duration-150">
+        <div className="opacity-0 [@media(hover:hover)]:group-hover/msg:opacity-100 group-data-[actions]/msg:opacity-100 transition-opacity duration-150">
           <AddReactionButton onAdd={handleAdd} />
         </div>
       </>

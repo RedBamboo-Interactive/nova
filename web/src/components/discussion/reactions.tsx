@@ -67,7 +67,7 @@ export function ReactionPills({ reactions, onToggle }: { reactions: ReactionGrou
   if (reactions.length === 0) return null
 
   return (
-    <div className="flex flex-col items-center gap-0.5">
+    <div className="flex flex-col items-center gap-0.5 msg-enter-ai" data-visible>
       {reactions.map((r) => (
         <button
           key={r.emoji}
