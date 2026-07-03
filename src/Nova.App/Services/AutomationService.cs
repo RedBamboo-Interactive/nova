@@ -538,6 +538,8 @@ public class AutomationService
                 agentId = newDiscussion.AgentId,
             });
 
+            LiveEventService.Instance?.InvalidateCache();
+
             _log.Info("automations", $"LIVE discussion rotated: {liveId} → {newDiscussion.Id}");
             return new AutomationResult { Triggered = true, Summary = $"Rotated LIVE discussion: {liveId} → {newDiscussion.Id}" };
         }
