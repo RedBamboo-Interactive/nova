@@ -72,7 +72,7 @@ export function ReactionPills({ reactions, onToggle }: { reactions: ReactionGrou
         <button
           key={r.emoji}
           onClick={() => onToggle(r.emoji, r.userReacted)}
-          className={`flex flex-col items-center w-6 py-1 rounded-full text-xs transition-colors cursor-pointer ${
+          className={`flex flex-row items-center gap-1 h-6 px-1.5 md:flex-col md:gap-0 md:h-auto md:px-0 md:w-6 md:py-1 rounded-full text-xs transition-colors cursor-pointer ${
             r.userReacted
               ? "bg-overlay-8 text-text-secondary"
               : "bg-overlay-4 hover:bg-overlay-8 text-text-disabled hover:text-text-muted"
@@ -80,7 +80,7 @@ export function ReactionPills({ reactions, onToggle }: { reactions: ReactionGrou
           title={r.actors.map((a) => a.name).join(", ")}
         >
           <ReactionIcon emoji={r.emoji} lookup={lookup} />
-          <span className="font-medium tabular-nums text-[10px] leading-tight">{r.count}</span>
+          {r.count > 1 && <span className="font-medium tabular-nums text-[10px] leading-tight">{r.count}</span>}
         </button>
       ))}
     </div>
