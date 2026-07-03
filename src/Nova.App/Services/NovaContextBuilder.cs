@@ -40,6 +40,21 @@ public sealed class ContextSnapshot
     [JsonPropertyName("mood")]
     public string? Mood { get; set; }
 
+    [JsonPropertyName("liveEvents")]
+    public List<LiveEventEntry> LiveEvents { get; set; } = [];
+
+    public sealed class LiveEventEntry
+    {
+        [JsonPropertyName("source")]
+        public string Source { get; set; } = "";
+
+        [JsonPropertyName("content")]
+        public string Content { get; set; } = "";
+
+        [JsonPropertyName("timestamp")]
+        public DateTime Timestamp { get; set; }
+    }
+
     public sealed class DiscussionEntry
     {
         [JsonPropertyName("id")]
@@ -80,7 +95,8 @@ public static class NovaContextBuilder
         double? longitude = null,
         string? zone = null,
         string? placeName = null,
-        string? timezone = null)
+        string? timezone = null,
+        List<ContextSnapshot.LiveEventEntry>? liveEvents = null)
     {
         return new ContextSnapshot
         {
@@ -111,6 +127,7 @@ public static class NovaContextBuilder
             Zone = zone,
             PlaceName = placeName,
             Timezone = timezone,
+            LiveEvents = liveEvents ?? [],
         };
     }
 
@@ -163,6 +180,16 @@ public static class NovaContextBuilder
         var liveDisc = active.FirstOrDefault(d => d.Type == "live");
         if (liveDisc != null)
             sb.Append($"\nPost to LIVE timeline: curl -s -X POST http://127.0.0.1:18803/api/discussions/{liveDisc.Id}/event -H \"Content-Type: application/json\" -d '{{\"content\":\"...\",\"source\":\"...\"}}'");
+
+        if (snapshot.LiveEvents.Count > 0)
+        {
+            sb.Append("\n\nRecent LIVE events:");
+            foreach (var ev in snapshot.LiveEvents)
+            {
+                var source = ev.Source.StartsWith("event:") ? ev.Source[6..] : ev.Source;
+                sb.Append($"\n- [{source}] {ev.Content} ({FormatRelativeTime(now - ev.Timestamp)})");
+            }
+        }
 
         if (snapshot.Outfit != null)
             sb.Append($"\n\n{snapshot.Outfit}");
@@ -248,6 +275,20 @@ public static class NovaContextBuilder
         // Mood
         if (current.Mood != previous.Mood && current.Mood != null)
             changes.Add($"Mood changed: {current.Mood}");
+
+        // New LIVE events since last context
+        var prevEventTimestamps = previous.LiveEvents.Select(e => e.Timestamp).ToHashSet();
+        var newEvents = current.LiveEvents
+            .Where(e => !prevEventTimestamps.Contains(e.Timestamp))
+            .ToList();
+        if (newEvents.Count > 0)
+        {
+            foreach (var ev in newEvents)
+            {
+                var source = ev.Source.StartsWith("event:") ? ev.Source[6..] : ev.Source;
+                changes.Add($"[{source}] {ev.Content}");
+            }
+        }
 
         var sb = new StringBuilder();
         AppendOpenTag(sb, now, device, input, currentId, agentName, current.Location, current.Latitude, current.Longitude, current.Zone, current.PlaceName, current.Timezone);

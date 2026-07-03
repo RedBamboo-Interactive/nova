@@ -1359,10 +1359,29 @@ public static class DiscussionEndpoints
             _location.UpdateLocation(latitude.Value, longitude.Value, null);
 
         var locReading = _location?.Latest;
+
+        List<ContextSnapshot.LiveEventEntry>? liveEvents = null;
+        var liveDiscussion = ownDiscussions.FirstOrDefault(d => d.Type == "live");
+        if (liveDiscussion != null)
+        {
+            liveEvents = await db.Conversations
+                .Where(c => c.ContextId == liveDiscussion.Id && c.Source.StartsWith("event:"))
+                .OrderByDescending(c => c.Timestamp)
+                .Take(15)
+                .Select(c => new ContextSnapshot.LiveEventEntry
+                {
+                    Source = c.Source,
+                    Content = c.Content,
+                    Timestamp = c.Timestamp,
+                })
+                .ToListAsync();
+            liveEvents.Reverse();
+        }
+
         var currentSnapshot = NovaContextBuilder.BuildSnapshot(
             ownDiscussions, otherAgentDiscussions, currentOutfit, currentOutfitAsset,
             _geo?.Location, moodSummary, latitude, longitude,
-            locReading?.Zone, locReading?.PlaceName, locReading?.Timezone);
+            locReading?.Zone, locReading?.PlaceName, locReading?.Timezone, liveEvents);
         var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
 
         var reactionLines = await GetRecentReactionLinesAsync(discussion.Id, discussion.LastContextJson != null ? discussion.LastActivity : DateTime.MinValue);
