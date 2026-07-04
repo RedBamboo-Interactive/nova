@@ -1,10 +1,10 @@
 import { Navigate, type RouteObject } from "react-router-dom"
-import { ChatView } from "@/panels/ChatView"
-import { AutomationsPanel } from "@/panels/HeartbeatsPanel"
-import { MemoryPanel } from "@/panels/MemoryPanel"
+import { ChatView } from "./panels/ChatView"
+import { AutomationsPanel } from "./panels/HeartbeatsPanel"
+import { MemoryPanel } from "./panels/MemoryPanel"
 
 export const routes: RouteObject[] = [
-  { index: true, element: <Navigate to="/chat" replace /> },
+  { index: true, element: <Navigate to="chat" replace /> },
   {
     path: "chat",
     handle: { crumb: "Chat", icon: "fa-solid fa-comment" },

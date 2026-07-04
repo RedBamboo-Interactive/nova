@@ -1,7 +1,7 @@
 import { memo, useCallback, useMemo } from "react"
 import { ItemList, ItemListRow } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
-import type { DiscussionInfo, AgentInfo } from "@/lib/types"
+import type { DiscussionInfo, AgentInfo } from "../../lib/types"
 
 const statusColor: Record<string, string> = {
   thinking: "var(--color-accent-gold)",

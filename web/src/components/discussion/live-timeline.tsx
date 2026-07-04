@@ -2,7 +2,7 @@ import { useRef, useEffect, useMemo, useCallback } from "react"
 import { ScrollArea } from "@redbamboo/ui"
 import { Composer, MarkdownRenderer } from "@redbamboo/chat"
 import type { MessageBlock, ImageAttachment, PendingQuestion } from "@redbamboo/chat"
-import type { EventType } from "@/lib/types"
+import type { EventType } from "../../lib/types"
 
 type TimelineEntry =
   | { kind: "time-marker"; time: string; key: string }

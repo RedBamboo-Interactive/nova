@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react"
-import { api } from "@/lib/api"
+import { api } from "../lib/api"
 
 export interface NovaSettings {
   general: {
@@ -21,7 +21,7 @@ export function useSettings() {
   const [saving, setSaving] = useState(false)
 
   const refresh = useCallback(async () => {
-    const data = await api.get<NovaSettings>("/api/settings")
+    const data = await api.get<NovaSettings>("/api/apps/nova/settings")
     setSettings(data)
   }, [])
 
@@ -33,7 +33,7 @@ export function useSettings() {
     async (image: string | null) => {
       setSaving(true)
       try {
-        await api.put("/api/settings/docker", { image })
+        await api.put("/api/apps/nova/settings/docker", { image })
         await refresh()
       } finally {
         setSaving(false)

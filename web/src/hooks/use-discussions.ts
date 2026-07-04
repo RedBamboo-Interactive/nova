@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo, startTransition } from "react"
 import { useToast } from "@redbamboo/ui"
-import { api } from "@/lib/api"
-import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "@/lib/types"
+import { api } from "../lib/api"
+import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
 import type { MessageBlock, MessagePart, PendingQuestion, ChatEvent, ImageAttachment } from "@redbamboo/chat"
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
@@ -176,7 +176,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const last = lastPostedGpsRef.current
       if (last && last.latitude === gps.latitude && last.longitude === gps.longitude) return
       lastPostedGpsRef.current = { latitude: gps.latitude, longitude: gps.longitude }
-      api.post("/api/location/update", {
+      api.post("/api/apps/nova/location/update", {
         latitude: gps.latitude,
         longitude: gps.longitude,
         accuracy: gps.accuracy ?? null,
@@ -195,12 +195,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [discussions])
 
   const refreshDiscussions = useCallback(async () => {
-    const list = await api.get<DiscussionInfo[]>("/api/discussions")
+    const list = await api.get<DiscussionInfo[]>("/api/apps/nova/discussions")
     setDiscussions(list.filter((d) => !dismissedIds.has(d.id)))
   }, [dismissedIds])
 
   const syncAndRefresh = useCallback(async () => {
-    await api.post("/api/discussions/sync").catch(() => {})
+    await api.post("/api/apps/nova/discussions/sync").catch(() => {})
     await refreshDiscussions()
   }, [refreshDiscussions])
 
@@ -227,7 +227,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
         let apiMsgs: MessageBlock[] = []
         try {
-          const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/discussions/${id}`)
+          const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}`)
           if (data.messages?.length) apiMsgs = toChatMessages(data.messages)
         } catch {}
 
@@ -260,7 +260,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             setDiscussions((prev) =>
               prev.map((d) => d.id === id ? { ...d, title: data.session.title! } : d)
             )
-            api.put(`/api/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
+            api.put(`/api/apps/nova/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
           }
           if (data.messages?.length) {
             setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages), eventResolver) }))
@@ -281,7 +281,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }
 
       try {
-        const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/discussions/${id}`)
+        const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}`)
         if (data.messages?.length) {
           setMessages((prev) => ({ ...prev, [id]: cleanMessages(toChatMessages(data.messages), eventResolver) }))
         }
@@ -307,7 +307,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     setActiveDiscussionId(id)
     startTransition(() => {
       loadMessages(id)
-      api.put(`/api/discussions/${id}/read`).catch(() => {})
+      api.put(`/api/apps/nova/discussions/${id}/read`).catch(() => {})
       setDiscussions((prev) =>
         prev.map((d) => d.id === id ? { ...d, lastReadAt: new Date().toISOString() } : d)
       )
@@ -340,7 +340,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     setIsSpawning(true)
     try {
       const body = agentId ? { agentId } : undefined
-      const d = await api.post<DiscussionInfo>("/api/discussions", body)
+      const d = await api.post<DiscussionInfo>("/api/apps/nova/discussions", body)
       setDiscussions((prev) => prev.some((x) => x.id === d.id) ? prev : [d, ...prev])
       setActiveDiscussionId(d.id)
       setMessages((prev) => ({ ...prev, [d.id]: [] }))
@@ -380,7 +380,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setDiscussions((prev) =>
         prev.map((d) => d.id === discussionId ? { ...d, title } : d)
       )
-      api.put(`/api/discussions/${discussionId}/title`, { title }).catch(() => {})
+      api.put(`/api/apps/nova/discussions/${discussionId}/title`, { title }).catch(() => {})
     }
 
     const fail = () => {
@@ -416,7 +416,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     const gpsPayload = gps ? { latitude: gps.latitude, longitude: gps.longitude } : {}
 
     try {
-      const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod, ...gpsPayload })
+      const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/apps/nova/discussions/${discussionId}/message`, { content, images, inputMethod, ...gpsPayload })
       updateSessionId(res)
       backfillMessage(res.metadata, res.messageUid)
       return
@@ -433,7 +433,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/discussions/${discussionId}/message`, { content, images, inputMethod, ...gpsPayload })
+        const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/apps/nova/discussions/${discussionId}/message`, { content, images, inputMethod, ...gpsPayload })
         updateSessionId(res)
         backfillMessage(res.metadata, res.messageUid)
         return
@@ -504,17 +504,17 @@ export function useDiscussions(eventResolver?: EventResolver) {
         )
         if (wasArchived) return
         if (isStopped) {
-          api.put(`/api/discussions/${discId}/stopped`).catch(() => {})
+          api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
         } else {
-          api.put(`/api/discussions/${discId}/activity`).catch(() => {})
+          api.put(`/api/apps/nova/discussions/${discId}/activity`).catch(() => {})
           if (isViewing) {
-            api.put(`/api/discussions/${discId}/read`).catch(() => {})
+            api.put(`/api/apps/nova/discussions/${discId}/read`).catch(() => {})
           }
           const syncTitle = (name: string) => {
             setDiscussions((prev) =>
               prev.map((d) => d.id === discId ? { ...d, title: name } : d)
             )
-            api.put(`/api/discussions/${discId}/title`, { title: name }).catch(() => {})
+            api.put(`/api/apps/nova/discussions/${discId}/title`, { title: name }).catch(() => {})
           }
           if (session.title) {
             syncTitle(session.title)
@@ -538,7 +538,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           return d.id === discId ? { ...d, status: "stopped" as const } : d
         })
       )
-      if (!wasArchived) api.put(`/api/discussions/${discId}/stopped`).catch(() => {})
+      if (!wasArchived) api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
     } else if (event.type === "discussion.created") {
       const { discussionId, agentId, status, type } = event.data as { discussionId: string; agentId?: string; status?: string; type?: string }
       if (!discussionId) return
@@ -687,7 +687,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: "archived" as const } : d))
     if (activeDiscussionId === id) setActiveDiscussionId(null)
     try {
-      await api.delete(`/api/discussions/${id}`)
+      await api.delete(`/api/apps/nova/discussions/${id}`)
     } catch (err) {
       if (disc) setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: disc.status } : d))
       toast({ variant: "error", title: "Failed to archive", description: err instanceof Error ? err.message : "Unknown error" })
@@ -702,7 +702,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   const rotateDiscussion = useCallback(async (id: string) => {
     try {
-      await api.post<{ archived: DiscussionInfo; created: DiscussionInfo }>(`/api/discussions/${id}/rotate`)
+      await api.post<{ archived: DiscussionInfo; created: DiscussionInfo }>(`/api/apps/nova/discussions/${id}/rotate`)
       setDiscussions((prev) => prev.filter((d) => d.id !== id))
       setMessages((prev) => { const next = { ...prev }; delete next[id]; return next })
       loadedRef.current.delete(id)
@@ -713,7 +713,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [toast])
 
   const renameDiscussion = useCallback(async (id: string, title: string) => {
-    await api.put(`/api/discussions/${id}/title`, { title })
+    await api.put(`/api/apps/nova/discussions/${id}/title`, { title })
     setDiscussions((prev) => prev.map((d) => d.id === id ? { ...d, title } : d))
   }, [])
 

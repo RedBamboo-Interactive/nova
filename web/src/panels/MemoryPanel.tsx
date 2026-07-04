@@ -3,11 +3,11 @@ import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, ScrollArea, ItemListRow, Badge } from "@redbamboo/ui"
 import { MarkdownRenderer } from "@redbamboo/chat"
 import { useBreadcrumbLabel } from "@redbamboo/utility"
-import { api } from "@/lib/api"
-import { useLocalSettings } from "@/hooks/use-local-settings"
-import { useAgents } from "@/hooks/use-agents"
-import { AgentPicker } from "@/components/agent-picker"
-import { setSettings } from "@/lib/settings-store"
+import { api } from "../lib/api"
+import { useLocalSettings } from "../hooks/use-local-settings"
+import { useAgents } from "../hooks/use-agents"
+import { AgentPicker } from "../components/agent-picker"
+import { setSettings } from "../lib/settings-store"
 
 export function MemoryPanel() {
   const { "*": splatPath } = useParams()
@@ -21,10 +21,12 @@ export function MemoryPanel() {
   const agentFilter = settings.agentFilter
   const multiAgent = agents.length > 1
 
-  const selectedFile = splatPath || null
+  // On the index route the host's /apps/nova/* splat ("journal") leaks through
+  // the merged params — only a deeper path is an actual file selection.
+  const selectedFile = splatPath && splatPath !== "journal" ? splatPath : null
 
   useBreadcrumbLabel(
-    selectedFile ? `/journal/${selectedFile}` : undefined,
+    selectedFile ? `/apps/nova/journal/${selectedFile}` : undefined,
     selectedFile?.split("/").pop(),
   )
 
@@ -32,8 +34,8 @@ export function MemoryPanel() {
 
   const refreshManifest = useCallback(async () => {
     const url = agentFilter
-      ? `/api/workspace/manifest?agent=${encodeURIComponent(agentFilter)}`
-      : "/api/workspace/manifest"
+      ? `/api/apps/nova/workspace/manifest?agent=${encodeURIComponent(agentFilter)}`
+      : "/api/apps/nova/workspace/manifest"
     const data = await api.get<{ files: string[] }>(url)
     setFiles(data.files)
   }, [agentFilter])
@@ -45,12 +47,12 @@ export function MemoryPanel() {
   useEffect(() => {
     if (!selectedFile) return
     api.get<{ content: string }>(
-      `/api/memory/file?path=${encodeURIComponent(selectedFile)}${agentParam}`,
+      `/api/apps/nova/memory/file?path=${encodeURIComponent(selectedFile)}${agentParam}`,
     ).then((data) => setContent(data.content))
   }, [selectedFile, agentParam])
 
   const handleSelectFile = useCallback((path: string) => {
-    navigate(`/journal/${path}`)
+    navigate(`/apps/nova/journal/${path}`)
     setMobileTab(1)
   }, [navigate])
 
@@ -149,7 +151,7 @@ export function MemoryPanel() {
       mobileTab={mobileTab}
       onMobileTabChange={(tab) => {
         setMobileTab(tab)
-        if (tab === 0) navigate("/journal")
+        if (tab === 0) navigate("/apps/nova/journal")
       }}
       sidebar={sidebar}
       detail={detail}

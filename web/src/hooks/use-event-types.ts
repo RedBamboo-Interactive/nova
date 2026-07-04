@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react"
-import { api } from "@/lib/api"
-import type { EventType } from "@/lib/types"
+import { api } from "../lib/api"
+import type { EventType } from "../lib/types"
 
 const DEFAULT_EVENT: EventType = {
   key: "default",
@@ -14,7 +14,7 @@ export function useEventTypes() {
   const [types, setTypes] = useState<EventType[]>([])
 
   useEffect(() => {
-    api.get<EventType[]>("/api/event-types")
+    api.get<EventType[]>("/api/apps/nova/event-types")
       .then(setTypes)
       .catch(() => {})
   }, [])

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react"
-import type { ReactionGroup } from "@/hooks/use-reactions"
+import type { ReactionGroup } from "../../hooks/use-reactions"
+import { api } from "../../lib/api"
 
 interface ReactionEmoji {
   emoji: string
@@ -30,15 +31,16 @@ function useReactionEmoji(): ReactionEmoji[] {
 
   useEffect(() => {
     if (cached) return
-    fetch("http://localhost:18804/api/entities?type=reaction-emoji&limit=50")
-      .then(r => r.json())
+    api.get<{ items?: any[] } | any[]>("/api/entities?type=reaction-emoji&limit=50")
       .then(res => {
-        const list: ReactionEmoji[] = (res.items ?? res)
+        const rows: any[] = Array.isArray(res) ? res : res.items ?? []
+        const list: ReactionEmoji[] = rows
           .map((e: any) => {
             const d = typeof e.data === "string" ? JSON.parse(e.data) : e.data
             return { emoji: d?.emoji ?? e.name, icon: d?.icon ?? "fa-light fa-circle-question", color: d?.color, sort: d?.sort ?? 0 }
           })
           .sort((a: ReactionEmoji, b: ReactionEmoji) => a.sort - b.sort)
+        if (list.length === 0) return
         cached = list
         setItems(list)
       })
@@ -54,10 +56,14 @@ function emojiIconLookup(items: ReactionEmoji[]): Map<string, ReactionEmoji> {
   return map
 }
 
-function ReactionIcon({ emoji, lookup, size = 11 }: { emoji: string; lookup: Map<string, ReactionEmoji>; size?: number }) {
+function ReactionIcon({ item, size = 11 }: { item: ReactionEmoji; size?: number }) {
+  return <i className={item.icon} style={{ fontSize: size, ...(item.color ? { color: item.color } : undefined) }} />
+}
+
+function LookupReactionIcon({ emoji, lookup, size }: { emoji: string; lookup: Map<string, ReactionEmoji>; size?: number }) {
   const item = lookup.get(emoji)
   if (!item) return <span className="text-sm leading-none opacity-50">{emoji}</span>
-  return <i className={`${item.icon} text-[${size}px]`} style={item.color ? { color: item.color } : undefined} />
+  return <ReactionIcon item={item} size={size} />
 }
 
 export function ReactionPills({ reactions, onToggle }: { reactions: ReactionGroup[]; onToggle: (emoji: string, hasReacted: boolean) => void }) {
@@ -79,7 +85,7 @@ export function ReactionPills({ reactions, onToggle }: { reactions: ReactionGrou
           }`}
           title={r.actors.map((a) => a.name).join(", ")}
         >
-          <ReactionIcon emoji={r.emoji} lookup={lookup} />
+          <LookupReactionIcon emoji={r.emoji} lookup={lookup} />
           {r.count > 1 && <span className="font-medium tabular-nums text-[10px] leading-tight">{r.count}</span>}
         </button>
       ))}
@@ -90,7 +96,6 @@ export function ReactionPills({ reactions, onToggle }: { reactions: ReactionGrou
 export function AddReactionButton({ onAdd }: { onAdd: (emoji: string) => void }) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const items = useReactionEmoji()
-  const lookup = emojiIconLookup(items)
 
   return (
     <div className="relative">
@@ -104,7 +109,6 @@ export function AddReactionButton({ onAdd }: { onAdd: (emoji: string) => void })
       {pickerOpen && (
         <EmojiPicker
           items={items}
-          lookup={lookup}
           onSelect={(emoji) => { onAdd(emoji); setPickerOpen(false) }}
           onClose={() => setPickerOpen(false)}
         />
@@ -115,12 +119,11 @@ export function AddReactionButton({ onAdd }: { onAdd: (emoji: string) => void })
 
 interface EmojiPickerProps {
   items: ReactionEmoji[]
-  lookup: Map<string, ReactionEmoji>
   onSelect: (emoji: string) => void
   onClose: () => void
 }
 
-function EmojiPicker({ items, lookup, onSelect, onClose }: EmojiPickerProps) {
+function EmojiPicker({ items, onSelect, onClose }: EmojiPickerProps) {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -144,7 +147,7 @@ function EmojiPicker({ items, lookup, onSelect, onClose }: EmojiPickerProps) {
             className="w-[29px] h-[29px] flex items-center justify-center rounded-md hover:bg-overlay-10 transition-colors cursor-pointer text-text-muted hover:text-text-primary"
             title={item.emoji}
           >
-            <ReactionIcon emoji={item.emoji} lookup={lookup} size={13} />
+            <ReactionIcon item={item} size={13} />
           </button>
         ))}
       </div>

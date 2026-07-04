@@ -1,17 +1,16 @@
-import { useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react"
-import { createBrowserRouter, RouterProvider, Outlet, useNavigate } from "react-router-dom"
+import { useCallback, useRef, useMemo, createContext, useContext } from "react"
+import { useNavigate, useRoutes } from "react-router-dom"
 import {
-  WsEventProvider, useWsSubscribe, BreadcrumbLabelProvider, AuthProvider, useAuth,
+  useWsSubscribe,
   useAskNovaReceiver, usePendingNovaContext,
   type AskNovaContext, type PendingNovaContext,
 } from "@redbamboo/utility"
 import { ToastProvider } from "@redbamboo/ui"
-import { AppShell } from "@/components/layout/app-shell"
-import { useLocalSettings } from "@/hooks/use-local-settings"
-import { useDiscussions } from "@/hooks/use-discussions"
-import { useEventTypes } from "@/hooks/use-event-types"
-import type { WsEvent } from "@/lib/types"
-import { routes } from "@/routes"
+import { AppShell } from "./components/layout/app-shell"
+import { useDiscussions } from "./hooks/use-discussions"
+import { useEventTypes } from "./hooks/use-event-types"
+import type { WsEvent } from "./lib/types"
+import { routes } from "./routes"
 
 type DiscussionsHook = ReturnType<typeof useDiscussions>
 
@@ -51,83 +50,45 @@ function AskNovaHandler({ discRef, setPendingContext }: { discRef: React.RefObje
     const d = await discRef.current.createDiscussion()
     if (!d) return
     setPendingContext(ctx)
-    navigate(`/chat/${d.id}`)
+    navigate(`/apps/nova/chat/${d.id}`)
   }, [navigate, setPendingContext])
 
   useAskNovaReceiver({ onContext })
   return null
 }
 
-function AppLayout() {
-  const settings = useLocalSettings()
-  const { isLoading, isAuthenticated } = useAuth()
+/**
+ * Nova as a Leaf plugin page. The host shell owns auth, theme, the WebSocket
+ * provider, and the command palette — this component only mounts Nova's internal
+ * routes (chat / pulse / journal) and the discussion state shared across them.
+ */
+function NovaAppInner() {
   const { resolve: resolveEventType } = useEventTypes()
   const disc = useDiscussions(resolveEventType)
   const discRef = useRef(disc)
   discRef.current = disc
   const pendingContext = usePendingNovaContext()
 
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      window.location.href = "/login"
-    }
-  }, [isLoading, isAuthenticated])
-
-  useEffect(() => {
-    const root = document.documentElement
-    root.classList.toggle("dark", settings.theme === "dark")
-    root.dataset.contrast = settings.contrast
-  }, [settings.theme, settings.contrast])
-
-  const wsUrl = useCallback(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-    return `${protocol}//${window.location.host}/ws`
-  }, [])
-
-  const onReconnect = useCallback(() => {
-    discRef.current.handleUpstreamDisconnect()
-    discRef.current.handleUpstreamReconnect()
-  }, [])
-
-  const onVisibilityChange = useCallback(() => {
-    discRef.current.syncAndRefresh()
-    discRef.current.reloadActiveMessages()
-  }, [])
-
   const appCtx = useMemo<AppContext>(() => ({ disc, pendingContext }), [disc, pendingContext])
-
-  if (isLoading || !isAuthenticated) return null
+  const element = useRoutes(routes)
 
   return (
-    <WsEventProvider url={wsUrl} onReconnect={onReconnect} onVisibilityChange={onVisibilityChange}>
+    <>
       <WsDiscussionBridge discRef={discRef} />
       <AskNovaHandler discRef={discRef} setPendingContext={pendingContext.set} />
       <AppContextValue.Provider value={appCtx}>
-        <BreadcrumbLabelProvider>
-          <AppShell>
-            <div className="h-full overflow-hidden">
-              <Outlet />
-            </div>
-          </AppShell>
-        </BreadcrumbLabelProvider>
+        <AppShell>
+          <div className="h-full overflow-hidden">{element}</div>
+        </AppShell>
       </AppContextValue.Provider>
-    </WsEventProvider>
+    </>
   )
 }
 
-const router = createBrowserRouter([
-  {
-    element: <AppLayout />,
-    children: routes,
-  },
-])
-
-export function App() {
+export function NovaApp() {
   return (
-    <AuthProvider>
-      <ToastProvider>
-        <RouterProvider router={router} />
-      </ToastProvider>
-    </AuthProvider>
+    <ToastProvider>
+      <NovaAppInner />
+    </ToastProvider>
   )
 }

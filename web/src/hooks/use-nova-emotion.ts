@@ -4,5 +4,5 @@ export function useNovaEmotion(
   _messages: MessageBlock[],
   _isStreaming: boolean,
 ) {
-  return { emotion: "idle" as const, src: "/api/avatar" }
+  return { emotion: "idle" as const, src: "/api/apps/nova/avatar" }
 }

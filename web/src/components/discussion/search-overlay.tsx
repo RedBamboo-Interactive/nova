@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { ModalBase, ModalHeader, Input } from "@redbamboo/ui"
-import { api } from "@/lib/api"
+import { api } from "../../lib/api"
 
 interface SearchSnippet {
   role: string
@@ -43,7 +43,7 @@ export function SearchOverlay({ onClose, onNavigate }: Props) {
     const timer = setTimeout(async () => {
       try {
         const data = await api.get<{ query: string; results: SearchResult[] }>(
-          `/api/discussions/search?q=${encodeURIComponent(q)}&limit=20`,
+          `/api/apps/nova/discussions/search?q=${encodeURIComponent(q)}&limit=20`,
         )
         setResults(data.results ?? [])
       } catch {

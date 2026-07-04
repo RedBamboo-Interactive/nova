@@ -1,9 +1,8 @@
 import { useState, useEffect } from "react"
 import { PanelHeader, Button } from "@redbamboo/ui"
-import { TunnelSettingsPanel } from "@redbamboo/utility"
-import { useLocalSettings } from "@/hooks/use-local-settings"
-import { setSettings as setLocalSettings } from "@/lib/settings-store"
-import { useSettings } from "@/hooks/use-settings"
+import { useLocalSettings } from "../../hooks/use-local-settings"
+import { setSettings as setLocalSettings } from "../../lib/settings-store"
+import { useSettings } from "../../hooks/use-settings"
 
 interface Props {
   onClose: () => void
@@ -67,7 +66,6 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 export function SettingsPanel({ onClose }: Props) {
   const localSettings = useLocalSettings()
   const { settings, saving, updateDocker } = useSettings()
-  const [autoStart, setAutoStart] = useState(false)
   const [dockerEnabled, setDockerEnabled] = useState(false)
   const [dockerImage, setDockerImage] = useState("")
   const [dockerDirty, setDockerDirty] = useState(false)
@@ -79,10 +77,6 @@ export function SettingsPanel({ onClose }: Props) {
     }
   }, [settings?.docker, dockerDirty])
 
-  useEffect(() => {
-    fetch("/api/autostart").then(r => r.json()).then(d => setAutoStart(d.enabled)).catch(() => {})
-  }, [])
-
   return (
     <div data-slot="settings-panel" className="flex flex-col h-full">
       <PanelHeader title="Settings" leading={<i className="fa-solid fa-gear text-sm text-text-muted" />}>
@@ -93,43 +87,13 @@ export function SettingsPanel({ onClose }: Props) {
 
       <div className="flex-1 overflow-y-auto p-4">
         <div className="divide-y divide-overlay-6">
-          {/* Appearance */}
+          {/* Appearance — theme and contrast live in the host shell settings. */}
           <div className="pb-4">
             <SectionHeader>Appearance</SectionHeader>
-            <SettingRow label="Light mode">
-              <Toggle
-                checked={localSettings.theme === "light"}
-                onChange={(v) =>
-                  setLocalSettings({ theme: v ? "light" : "dark" })
-                }
-              />
-            </SettingRow>
-            <SettingRow label="High contrast">
-              <Toggle
-                checked={localSettings.contrast === "high"}
-                onChange={(v) =>
-                  setLocalSettings({ contrast: v ? "high" : "low" })
-                }
-              />
-            </SettingRow>
             <SettingRow label="Show avatar">
               <Toggle
                 checked={localSettings.showAvatar}
                 onChange={(v) => setLocalSettings({ showAvatar: v })}
-              />
-            </SettingRow>
-          </div>
-
-          {/* System */}
-          <div className="py-4">
-            <SectionHeader>System</SectionHeader>
-            <SettingRow label="Start with Windows" hint="Launch Nova automatically when you sign in.">
-              <Toggle
-                checked={autoStart}
-                onChange={async (v) => {
-                  setAutoStart(v)
-                  await fetch("/api/autostart", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: v }) })
-                }}
               />
             </SettingRow>
           </div>
@@ -193,12 +157,6 @@ export function SettingsPanel({ onClose }: Props) {
                 )}
               </>
             )}
-          </div>
-
-          {/* Remote Access */}
-          <div className="pt-4">
-            <SectionHeader>Remote Access</SectionHeader>
-            <TunnelSettingsPanel />
           </div>
         </div>
       </div>

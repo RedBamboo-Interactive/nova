@@ -2,58 +2,15 @@
 bin/
 obj/
 *.user
-*.suo
-*.vs/
 .vs/
 
 # Frontend
-web/node_modules/
-web/dist/
-web/.vite/
+node_modules/
+dist/
 
-# Runtime workspace (memory is local, not versioned)
-nova-workspace/memory/
-nova-workspace/config/runtime/
-nova-workspace/CLAUDE.md
-nova-workspace/AGENTS.md
-
-# IDE
-.idea/
-*.swp
+# Runtime data (agent workspaces, journal, screenshots)
+nova-workspace/
 
 # OS
 Thumbs.db
-Desktop.ini
 .DS_Store
-
-# Test artifacts
-screenshots/
-test-results/
-videos/
-
-# Temp files
-scripts/
-nova-workspace/temp/
-nova-workspace/.wrangler/
-*_raw.png
-
-# Nova workspace scratch (game extracts, tooling, generated files)
-nova-workspace/*.py
-nova-workspace/*.dll
-nova-workspace/*.mp3
-nova-workspace/**/__pycache__/
-nova-workspace/config/*.bak
-nova-workspace/config/suite-apis.md
-nova-workspace/e33_extract/
-nova-workspace/e33_extracted/
-nova-workspace/pst_extracted/
-nova-workspace/witcher_extracted/
-nova-workspace/tools/FModel/
-
-# Editor / agent tooling
-.claude/
-web/src/summary.txt
-
-# Secrets
-.env
-*.pfx

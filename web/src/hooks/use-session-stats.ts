@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import type { SessionStats } from "@redbamboo/chat"
-import { api } from "@/lib/api"
+import { api } from "../lib/api"
 
 interface RedComputeSession {
   model?: string

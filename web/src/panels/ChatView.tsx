@@ -3,19 +3,19 @@ import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@redbamboo/ui"
 import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions, type MessageBlock } from "@redbamboo/chat"
 import { useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
-import { DiscussionSidebar } from "@/components/discussion/discussion-sidebar"
-import { EditableTitle } from "@/components/discussion/editable-title"
-import { AgentPicker } from "@/components/agent-picker"
-import { NovaStatusLine } from "@/components/nova-status-line"
-import { OutfitBrowser } from "@/components/outfit-browser"
-import { ReactionPills, AddReactionButton } from "@/components/discussion/reactions"
-import { createNovaSpeechBackend } from "@/lib/speech"
-import { useLocalSettings } from "@/hooks/use-local-settings"
-import { useAgents } from "@/hooks/use-agents"
-import { useReactions } from "@/hooks/use-reactions"
-import { useDisc, useNovaPendingContext } from "@/App"
-import { useSessionStats } from "@/hooks/use-session-stats"
-import { setSettings } from "@/lib/settings-store"
+import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
+import { EditableTitle } from "../components/discussion/editable-title"
+import { AgentPicker } from "../components/agent-picker"
+import { NovaStatusLine } from "../components/nova-status-line"
+import { OutfitBrowser } from "../components/outfit-browser"
+import { ReactionPills, AddReactionButton } from "../components/discussion/reactions"
+import { createNovaSpeechBackend } from "../lib/speech"
+import { useLocalSettings } from "../hooks/use-local-settings"
+import { useAgents } from "../hooks/use-agents"
+import { useReactions } from "../hooks/use-reactions"
+import { useDisc, useNovaPendingContext } from "../App"
+import { useSessionStats } from "../hooks/use-session-stats"
+import { setSettings } from "../lib/settings-store"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -35,7 +35,7 @@ function useAvatarStyle() {
 
 function resolveImageSrc(src: string): string | undefined {
   if (/^[A-Za-z]:[\\\/]/.test(src))
-    return `/api/file?path=${encodeURIComponent(src)}`
+    return `/api/apps/nova/file?path=${encodeURIComponent(src)}`
   return src
 }
 
@@ -52,7 +52,9 @@ function resolveFileLink(filePath: string, opts?: { line?: number }): (() => voi
 }
 
 function navigateCodeRed(path: string) {
-  fetch(`http://localhost:18801/api/navigate?path=${encodeURIComponent(path)}`, {
+  // CodeRed is a plugin on this origin now: the kernel bridges codered.navigate
+  // onto /ws and the shell routes to /apps/codered client-side.
+  fetch(`/api/apps/codered/navigate?path=${encodeURIComponent(path)}`, {
     method: "POST",
     credentials: "include",
   }).catch(() => {})
@@ -113,7 +115,7 @@ export function ChatView() {
   }, [urlDiscussionId, activeDiscussionId, selectDiscussion])
 
   useBreadcrumbLabel(
-    urlDiscussionId ? `/chat/${urlDiscussionId}` : undefined,
+    urlDiscussionId ? `/apps/nova/chat/${urlDiscussionId}` : undefined,
     activeDiscussion?.title || "New Discussion",
   )
 
@@ -163,14 +165,14 @@ export function ChatView() {
   }, [activeDiscussionId, resumeDiscussion])
 
   const handleSelectDiscussion = useCallback((id: string) => {
-    navigate(`/chat/${id}`)
+    navigate(`/apps/nova/chat/${id}`)
     setMobileTab(1)
   }, [navigate])
 
   const handleNewDiscussion = useCallback(async (agentId?: string) => {
     const effectiveAgentId = agentId ?? agentFilter ?? defaultAgentId ?? undefined
     const d = await createDiscussion(effectiveAgentId)
-    if (d) navigate(`/chat/${d.id}`)
+    if (d) navigate(`/apps/nova/chat/${d.id}`)
     setMobileTab(1)
   }, [createDiscussion, navigate, agentFilter, defaultAgentId])
 
@@ -281,7 +283,7 @@ export function ChatView() {
     window.addEventListener("nova:avatar-changed", handler)
     return () => window.removeEventListener("nova:avatar-changed", handler)
   }, [])
-  const avatarBase = activeAgent ? activeAgent.avatarUrl : "/api/avatar"
+  const avatarBase = activeAgent ? activeAgent.avatarUrl : "/api/apps/nova/avatar"
   const avatarSrc = avatarVersion ? `${avatarBase}?v=${avatarVersion}` : avatarBase
 
   const chatArea = activeDiscussion ? (

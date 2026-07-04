@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Leaf.Plugins.Nova</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The SDK is the hard ceiling: plugins never reference the kernel. -->
+    <ProjectReference Include="..\..\..\..\src\Leaf.Sdk\Leaf.Sdk.csproj" Condition="'$(LeafSdkProject)' == ''" />
+    <!-- Standalone builds (outside the Leaf workspace junction): -p:LeafSdkProject=<path> -->
+    <ProjectReference Include="$(LeafSdkProject)" Condition="'$(LeafSdkProject)' != ''" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The manifest the loader reads from disk is also the Manifest property this
+         assembly exposes — embedding the same file keeps them from drifting. -->
+    <EmbeddedResource Include="..\..\plugin.json" LogicalName="plugin.json" />
+  </ItemGroup>
+
+</Project>

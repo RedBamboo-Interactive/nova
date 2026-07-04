@@ -10,30 +10,73 @@ import {
 } from "@redbamboo/ui"
 import { MarkdownRenderer } from "@redbamboo/chat"
 import { useBreadcrumbLabel } from "@redbamboo/utility"
-import { api } from "@/lib/api"
-import { useLocalSettings } from "@/hooks/use-local-settings"
-import { useAgents } from "@/hooks/use-agents"
-import { AgentPicker } from "@/components/agent-picker"
-import { setSettings } from "@/lib/settings-store"
+import { api } from "../lib/api"
+import { useLocalSettings } from "../hooks/use-local-settings"
+import { useAgents } from "../hooks/use-agents"
+import { AgentPicker } from "../components/agent-picker"
+import { setSettings } from "../lib/settings-store"
 
+// Kernel automation ENTITY, flattened. Automations moved to the kernel with the
+// Leaf migration — this panel is a viewer over /api/entities?type=automation plus
+// the kernel's manual-trigger endpoint.
 interface Automation {
+  id: string
   name: string
   description: string
   schedule: string
   enabled: boolean
   removeOnTrigger: boolean
   icon?: string
+  agentId?: string
   actionType: string
+  prompt?: string
   actionConfig?: Record<string, unknown>
   reportToDiscussionId?: string
   lastRun?: string
   nextRun?: string
-  lastResult?: { triggered: boolean; summary: string; data?: string; sessionId?: string }
+  lastError?: string
+  lastResult?: string
+  consecutiveFailures?: number
+}
+
+function parseEntityData(raw: unknown): Record<string, unknown> {
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw) as Record<string, unknown> } catch { return {} }
+  }
+  return (raw as Record<string, unknown>) ?? {}
+}
+
+function mapAutomationEntity(e: { id: string; name: string; data: unknown }): Automation {
+  const d = parseEntityData(e.data)
+  const str = (k: string) => (typeof d[k] === "string" ? (d[k] as string) : undefined)
+  return {
+    id: e.id,
+    name: e.name,
+    description: str("description") ?? "",
+    schedule: str("schedule") ?? "",
+    enabled: d.enabled !== false && d.enabled !== "false",
+    removeOnTrigger: d.remove_on_trigger === true || d.remove_on_trigger === "true",
+    icon: str("icon"),
+    agentId: str("agent"),
+    actionType: str("action_type") ?? "ai-session",
+    prompt: str("prompt"),
+    actionConfig: typeof d.action_config === "object" && d.action_config !== null
+      ? (d.action_config as Record<string, unknown>)
+      : undefined,
+    reportToDiscussionId: str("report_to_discussion_id"),
+    lastRun: str("last_run"),
+    nextRun: str("next_run"),
+    lastError: str("last_error"),
+    lastResult: str("last_result"),
+    consecutiveFailures: typeof d.consecutive_failures === "number" ? d.consecutive_failures : undefined,
+  }
 }
 
 const actionMeta: Record<string, { icon: string; label: string }> = {
   "ai-session":     { icon: "fa-solid fa-brain",          label: "AI Session" },
+  "nova-session":   { icon: "fa-solid fa-brain",          label: "Nova Session" },
   "http-check":     { icon: "fa-solid fa-satellite-dish",  label: "HTTP Watcher" },
+  "http-action":    { icon: "fa-solid fa-bolt",           label: "HTTP Action" },
   "builtin:backup": { icon: "fa-solid fa-box-archive",    label: "System" },
 }
 
@@ -244,40 +287,52 @@ function AutomationDetail({ automation, onDelete, onTrigger, triggering }: {
           )}
         </div>
 
-        {automation.actionConfig && Object.keys(automation.actionConfig).length > 0 && (
+        {(automation.prompt || (automation.actionConfig && Object.keys(automation.actionConfig).length > 0)) && (
           <div>
             <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
               Configuration
             </div>
-            <ConfigDisplay config={automation.actionConfig} />
+            <ConfigDisplay config={{
+              ...(automation.prompt ? { prompt: automation.prompt } : {}),
+              ...automation.actionConfig,
+            }} />
           </div>
         )}
 
-        {automation.lastResult && (
+        {automation.lastResult && !automation.lastError && (
           <div>
             <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
               Last Result
             </div>
             <div className="bg-overlay-5 rounded-md p-3 space-y-2">
               <div className="flex items-center gap-2 text-xs">
-                <i className={`fa-solid ${automation.lastResult.triggered ? "fa-circle-check text-green-500" : "fa-circle-xmark text-text-muted"}`} />
-                <span className="font-medium">
-                  {automation.lastResult.triggered ? "Triggered" : "Not triggered"}
-                </span>
-                {automation.lastResult.sessionId && (
-                  <a
-                    href={`/ai-session/sessions/${automation.lastResult.sessionId}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="ml-auto text-text-muted hover:text-primary transition-colors"
-                    title="View session"
-                  >
-                    <i className="fa-solid fa-arrow-up-right-from-square text-[10px]" />
-                  </a>
+                <i className="fa-solid fa-circle-check text-green-500" />
+                <span className="font-medium">Succeeded</span>
+                {automation.lastRun && (
+                  <span className="text-text-muted ml-auto">{formatTime(automation.lastRun)}</span>
                 )}
               </div>
               <div className="text-sm leading-relaxed markdown-body">
-                <MarkdownRenderer content={automation.lastResult.summary} />
+                <MarkdownRenderer content={automation.lastResult} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {automation.lastError && (
+          <div>
+            <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
+              Last Error
+            </div>
+            <div className="bg-overlay-5 rounded-md p-3 space-y-2">
+              <div className="flex items-center gap-2 text-xs">
+                <i className="fa-solid fa-triangle-exclamation text-amber-500" />
+                <span className="font-medium">
+                  {automation.consecutiveFailures ? `${automation.consecutiveFailures} consecutive failure(s)` : "Last run failed"}
+                </span>
+              </div>
+              <div className="text-sm leading-relaxed markdown-body">
+                <MarkdownRenderer content={automation.lastError} />
               </div>
             </div>
           </div>
@@ -301,13 +356,14 @@ export function AutomationsPanel() {
   const selectedName = urlAutomationName ?? null
 
   useBreadcrumbLabel(
-    urlAutomationName ? `/pulse/${urlAutomationName}` : undefined,
+    urlAutomationName ? `/apps/nova/pulse/${urlAutomationName}` : undefined,
     urlAutomationName ?? undefined,
   )
 
   const refresh = useCallback(async () => {
-    const data = await api.get<{ automations: Automation[] }>("/api/automations")
-    setAutomations(data.automations)
+    const data = await api.get<{ items: Array<{ id: string; name: string; data: unknown }> }>(
+      "/api/entities?type=automation&limit=200")
+    setAutomations(data.items.map(mapAutomationEntity))
   }, [])
 
   useEffect(() => {
@@ -319,26 +375,26 @@ export function AutomationsPanel() {
   const userAutomations = automations.filter((a) => !a.name.startsWith("system:"))
   const systemAutomations = automations.filter((a) => a.name.startsWith("system:"))
 
-  const handleDelete = useCallback(async (name: string) => {
-    await api.delete(`/api/automations/${name}`)
-    if (selectedName === name) navigate("/pulse")
+  const handleDelete = useCallback(async (a: Automation) => {
+    await api.delete(`/api/entities/${a.id}`)
+    if (selectedName === a.name) navigate("/apps/nova/pulse")
     refresh()
   }, [selectedName, refresh, navigate])
 
   const [triggering, setTriggering] = useState<string | null>(null)
-  const handleTrigger = useCallback(async (name: string) => {
-    setTriggering(name)
+  const handleTrigger = useCallback(async (a: Automation) => {
+    setTriggering(a.name)
     try {
-      await api.post(`/api/automations/${encodeURIComponent(name)}/trigger`)
-    } catch { /* best effort — outcome lands in lastResult */ }
+      await api.post(`/api/automations/${a.id}/trigger`)
+    } catch { /* best effort — outcome lands on the entity's last_run/last_error */ }
     setTimeout(() => {
-      setTriggering((prev) => (prev === name ? null : prev))
+      setTriggering((prev) => (prev === a.name ? null : prev))
       refresh()
     }, 1500)
   }, [refresh])
 
   const handleSelect = useCallback((name: string) => {
-    navigate(`/pulse/${encodeURIComponent(name)}`)
+    navigate(`/apps/nova/pulse/${encodeURIComponent(name)}`)
     setMobileTab(1)
   }, [navigate])
 
@@ -369,7 +425,7 @@ export function AutomationsPanel() {
               className="opacity-0 group-hover/row:opacity-100 transition-opacity"
               onClick={async (e) => {
                 e.stopPropagation()
-                handleDelete(a.name)
+                handleDelete(a)
               }}
             >
               <i className="fa-solid fa-xmark text-xs" />
@@ -440,8 +496,8 @@ export function AutomationsPanel() {
   const detail = selected ? (
     <AutomationDetail
       automation={selected}
-      onDelete={() => handleDelete(selected.name)}
-      onTrigger={() => handleTrigger(selected.name)}
+      onDelete={() => handleDelete(selected)}
+      onTrigger={() => handleTrigger(selected)}
       triggering={triggering === selected.name}
     />
   ) : (
@@ -460,7 +516,7 @@ export function AutomationsPanel() {
       mobileTab={mobileTab}
       onMobileTabChange={(tab) => {
         setMobileTab(tab)
-        if (tab === 0) navigate("/pulse")
+        if (tab === 0) navigate("/apps/nova/pulse")
       }}
       sidebar={sidebar}
       detail={detail}

@@ -4,7 +4,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "@redbamboo/ui"
-import type { AgentInfo } from "@/lib/types"
+import type { AgentInfo } from "../lib/types"
 
 interface AgentPickerProps {
   agents: AgentInfo[]

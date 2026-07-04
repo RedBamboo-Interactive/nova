@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import { ModalBase, ModalHeader } from "@redbamboo/ui"
-import { api } from "@/lib/api"
+import { api } from "../lib/api"
 
 interface OutfitEntry {
   id: string
@@ -27,7 +27,7 @@ interface Props {
 function assetSrc(relativeUrl: string): string {
   if (!relativeUrl) return "/nova-avatar.png"
   const filename = relativeUrl.split("/").pop() ?? relativeUrl
-  return `/api/redleaf-asset/${filename}`
+  return `/api/assets/${filename}`
 }
 
 function relativeDate(iso: string | null): string {
@@ -51,14 +51,14 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
 
   useEffect(() => {
     const qs = agentId ? `?agentId=${agentId}` : ""
-    api.get<OutfitData>(`/api/outfits${qs}`).then(setData).catch(() => {}).finally(() => setLoading(false))
+    api.get<OutfitData>(`/api/apps/nova/outfits${qs}`).then(setData).catch(() => {}).finally(() => setLoading(false))
   }, [])
 
   async function selectOutfit(outfit: OutfitEntry | null) {
     const key = outfit?.url ?? "__base__"
     setSelecting(key)
     try {
-      await api.post("/api/outfits/select", {
+      await api.post("/api/apps/nova/outfits/select", {
         url: outfit?.url ?? "",
         outfitId: outfit?.id ?? null,
         discussionId,

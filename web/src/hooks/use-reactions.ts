@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { useWsSubscribe } from "@redbamboo/utility"
-import { api } from "@/lib/api"
+import { api } from "../lib/api"
 
 export interface ReactionActor {
   id: string
@@ -38,7 +38,7 @@ export function useReactions(discussionId: string | null) {
     if (!discussionId) { setReactions({}); loadedRef.current = null; return }
     if (loadedRef.current === discussionId) return
     loadedRef.current = discussionId
-    api.get<{ reactions: ReactionMap }>(`/api/discussions/${discussionId}/reactions`)
+    api.get<{ reactions: ReactionMap }>(`/api/apps/nova/discussions/${discussionId}/reactions`)
       .then((data) => setReactions(data.reactions ?? {}))
       .catch(() => setReactions({}))
   }, [discussionId])
@@ -94,12 +94,12 @@ export function useReactions(discussionId: string | null) {
 
   const react = useCallback(async (messageKey: string, emoji: string) => {
     if (!discussionId) return
-    await api.post(`/api/discussions/${discussionId}/reactions`, { messageKey, emoji })
+    await api.post(`/api/apps/nova/discussions/${discussionId}/reactions`, { messageKey, emoji })
   }, [discussionId])
 
   const unreact = useCallback(async (messageKey: string, emoji: string) => {
     if (!discussionId) return
-    await api.post(`/api/discussions/${discussionId}/reactions/remove`, { messageKey, emoji })
+    await api.post(`/api/apps/nova/discussions/${discussionId}/reactions/remove`, { messageKey, emoji })
   }, [discussionId])
 
   return { reactions, react, unreact }
