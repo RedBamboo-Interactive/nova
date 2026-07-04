@@ -9,14 +9,14 @@ importers:
   .:
     dependencies:
       '@redbamboo/chat':
-        specifier: link:../../../../redbamboo-packages/packages/chat
-        version: link:../../../../redbamboo-packages/packages/chat
+        specifier: link:../../redbamboo-packages/packages/chat
+        version: link:../../redbamboo-packages/packages/chat
       '@redbamboo/ui':
-        specifier: link:../../../../redbamboo-packages/packages/ui
-        version: link:../../../../redbamboo-packages/packages/ui
+        specifier: link:../../redbamboo-packages/packages/ui
+        version: link:../../redbamboo-packages/packages/ui
       '@redbamboo/utility':
-        specifier: link:../../../../redbamboo-packages/packages/utility
-        version: link:../../../../redbamboo-packages/packages/utility
+        specifier: link:../../redbamboo-packages/packages/utility
+        version: link:../../redbamboo-packages/packages/utility
       react:
         specifier: ^19.0.0
         version: 19.2.7
