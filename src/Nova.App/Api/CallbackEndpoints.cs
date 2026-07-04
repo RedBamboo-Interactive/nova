@@ -51,9 +51,56 @@ public static class CallbackEndpoints
                 _ => $"Session {sessionId} status: {status}",
             };
 
+            // Fetch the session's last response from RedCompute
+            string? lastResponse = null;
+            try
+            {
+                await Task.Delay(1000);
+                var resp = await RedCompute.GetAsync($"/ai-session/sessions/{sessionId}");
+                if (resp.IsSuccessStatusCode)
+                {
+                    var rawJson = await resp.Content.ReadAsStringAsync();
+                    using var doc = JsonDocument.Parse(rawJson);
+                    var messages = doc.RootElement.GetProperty("messages");
+                    var allMessages = messages.EnumerateArray().ToList();
+
+                    var lastUserIdx = -1;
+                    for (int i = allMessages.Count - 1; i >= 0; i--)
+                    {
+                        if (allMessages[i].GetProperty("role").GetString() == "user")
+                        { lastUserIdx = i; break; }
+                    }
+
+                    var responseParts = new List<string>();
+                    for (int i = lastUserIdx + 1; i < allMessages.Count; i++)
+                    {
+                        var m = allMessages[i];
+                        if (m.GetProperty("role").GetString() == "assistant"
+                            && m.GetProperty("eventType").GetString() == "text"
+                            && m.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String)
+                        {
+                            var text = c.GetString();
+                            if (!string.IsNullOrWhiteSpace(text))
+                                responseParts.Add(text);
+                        }
+                    }
+
+                    if (responseParts.Count > 0)
+                        lastResponse = string.Join("", responseParts);
+                }
+            }
+            catch (Exception ex)
+            {
+                App.LogService.Warn("callbacks", $"Could not fetch session {sessionId} response: {ex.Message}");
+            }
+
+            var responseSection = lastResponse != null
+                ? $"\n\n## Session response\n{lastResponse}\n\nFull transcript: GET {App.Config.Suite.RedCompute}/ai-session/sessions/{sessionId}"
+                : $"\n\nFull transcript: GET {App.Config.Suite.RedCompute}/ai-session/sessions/{sessionId}";
+
             var eventContent = $"""
-                <nova-event source="callback:session-complete" type="session-complete" stopReason="{stopReason ?? "unknown"}">
-                {summary}
+                <nova-event source="callback:session-complete" type="session-complete" sessionId="{sessionId}" stopReason="{stopReason ?? "unknown"}">
+                {summary}{responseSection}
                 </nova-event>
                 """;
 
