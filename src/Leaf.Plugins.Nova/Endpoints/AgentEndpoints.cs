@@ -75,7 +75,7 @@ public static class AgentEndpoints
                         url = Str(o.Data, "asset"),
                         prompt = Str(o.Data, "prompt"),
                         reasoning = Str(o.Data, "reasoning"),
-                        nsfw = Str(o.Data, "nsfw") == "true",
+                        nsfw = IsTruthy(o.Data, "nsfw"),
                         date = o.CreatedAt.UtcDateTime.ToString("o"),
                         active = o.Id.ToString() == currentOverride,
                     })
@@ -179,5 +179,14 @@ public static class AgentEndpoints
         var node = data[key];
         if (node is not JsonValue v) return null;
         return v.TryGetValue<string>(out var s) ? s : null;
+    }
+
+    private static bool IsTruthy(JsonObject data, string key)
+    {
+        var node = data[key];
+        if (node is not JsonValue v) return false;
+        if (v.TryGetValue<bool>(out var b)) return b;
+        if (v.TryGetValue<string>(out var s)) return s == "true";
+        return false;
     }
 }
