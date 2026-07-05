@@ -41,7 +41,7 @@ export interface EventType {
 }
 
 export interface MessagePartDto {
-  type: "text" | "tool_use" | "tool_result" | "audio"
+  type: "text" | "tool_use" | "tool_result" | "audio" | "event_data"
   content: string
   toolName?: string
   toolInput?: string

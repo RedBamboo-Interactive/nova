@@ -128,18 +128,10 @@ public static class AgentEndpoints
                 });
 
                 _ = string.IsNullOrEmpty(outfitId)
-                    ? live.PostAsync("outfit", "Reset to base avatar")
-                    : live.PostAsync("outfit", $"Changed into \"{outfitName ?? "new outfit"}\"");
+                    ? live.PostAsync("outfit", "Reset to base avatar", new { status = "reset" })
+                    : live.PostAsync("outfit", $"Changed into \"{outfitName ?? "new outfit"}\"",
+                        new { outfitId, outfitName, asset = resolvedUrl });
 
-                if (!string.IsNullOrEmpty(discussionId))
-                {
-                    var discussion = await store.GetAsync(discussionId);
-                    if (discussion != null)
-                    {
-                        var outfitLabel = string.IsNullOrEmpty(resolvedUrl) ? "base avatar" : "a new outfit";
-                        await injector.InjectAsync(discussion, $"Laurent changed your outfit to {outfitLabel}.", null, "outfit-change");
-                    }
-                }
 
                 return Results.Ok(new { success = true, url = resolvedUrl });
             }

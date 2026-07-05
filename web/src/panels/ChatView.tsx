@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useDeferredValue } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@redbamboo/ui"
-import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions, type MessageBlock } from "@redbamboo/chat"
+import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent } from "@redbamboo/chat"
 import { useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
@@ -169,6 +169,14 @@ export function ChatView() {
     setMobileTab(1)
   }, [navigate])
 
+  // Discussion-activity events link back to the discussion they describe.
+  const resolveEventLink = useCallback((event: ParsedEvent) => {
+    if (event.key !== "discussion") return undefined
+    const discussionId = event.data?.discussionId
+    if (typeof discussionId !== "string" || !discussionId) return undefined
+    return () => handleSelectDiscussion(discussionId)
+  }, [handleSelectDiscussion])
+
   const handleNewDiscussion = useCallback(async (agentId?: string) => {
     const effectiveAgentId = agentId ?? agentFilter ?? defaultAgentId ?? undefined
     const d = await createDiscussion(effectiveAgentId)
@@ -309,6 +317,7 @@ export function ChatView() {
         speechBackend={speechBackend}
         resolveImageSrc={resolveImageSrc}
         resolveFileLink={resolveFileLink}
+        resolveEventLink={resolveEventLink}
         assistantAvatar={avatarSrc}
         resolveAgentInfo={resolveAgentInfo}
         renderStatusLine={renderStatusLine}

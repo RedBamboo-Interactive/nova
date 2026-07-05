@@ -73,6 +73,7 @@ public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
         var track = data.TryGetProperty("track", out var t) ? t.GetString() : null;
         var artist = data.TryGetProperty("artist", out var a) ? a.GetString() : null;
         var album = data.TryGetProperty("album", out var al) ? al.GetString() : null;
+        var albumArt = data.TryGetProperty("album_art", out var art) ? art.GetString() : null;
         var device = data.TryGetProperty("device", out var dev) && dev.TryGetProperty("name", out var dn) ? dn.GetString() : null;
 
         var current = new SpotifyState(playing, trackUri, track, artist);
@@ -86,14 +87,16 @@ public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
         if (current.TrackUri != _lastSpotify.TrackUri && current.Playing && current.Track != null)
         {
             await live.PostAsync("spotify", $"Now playing: {current.Track} — {current.Artist}",
-                new { track, artist, album, device });
+                new { track, artist, album, albumArt, device });
         }
         else if (current.Playing != _lastSpotify.Playing)
         {
             if (!current.Playing)
-                await live.PostAsync("spotify", "Paused playback");
+                await live.PostAsync("spotify", "Paused playback",
+                    new { track = current.Track ?? _lastSpotify.Track, artist = current.Artist ?? _lastSpotify.Artist, albumArt, device, status = "paused" });
             else if (current.Track != null)
-                await live.PostAsync("spotify", $"Resumed: {current.Track} — {current.Artist}");
+                await live.PostAsync("spotify", $"Resumed: {current.Track} — {current.Artist}",
+                    new { track, artist, album, albumArt, device, status = "resumed" });
         }
 
         _lastSpotify = current;
@@ -140,7 +143,8 @@ public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
             if (_lastHueGroups.TryGetValue(id, out var prev) && state.On != prev.On)
             {
                 var action = state.On ? "turned on" : "turned off";
-                await live.PostAsync("hue", $"{state.Name} lights {action}");
+                await live.PostAsync("hue", $"{state.Name} lights {action}",
+                    new { room = state.Name, id, on = state.On, brightness = state.Brightness });
             }
         }
 
@@ -172,14 +176,16 @@ public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
             var playback = state.TryGetProperty("playbackState", out var ps) ? ps.GetString() : null;
             var playing = playback == "PLAYING";
 
-            string? track = null, artist = null;
+            string? track = null, artist = null, albumArt = null;
             if (state.TryGetProperty("currentTrack", out var trackEl))
             {
                 track = trackEl.TryGetProperty("title", out var tt) ? tt.GetString() : null;
                 artist = trackEl.TryGetProperty("artist", out var at) ? at.GetString() : null;
+                // May be a LAN-only URL — the renderer hides album art that fails to load.
+                albumArt = trackEl.TryGetProperty("absoluteAlbumArtUri", out var aa) ? aa.GetString() : null;
             }
 
-            current[room] = new SonosRoomState(room, playing, track, artist, $"{track}:{artist}");
+            current[room] = new SonosRoomState(room, playing, track, artist, $"{track}:{artist}", albumArt);
         }
 
         if (_lastSonos.Count == 0)
@@ -195,20 +201,22 @@ public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
                 if (state.Playing && state.TrackKey != prev.TrackKey && state.Track != null)
                 {
                     await live.PostAsync("sonos", $"Now playing in {room}: {state.Track} — {state.Artist}",
-                        new { room, track = state.Track, artist = state.Artist });
+                        new { room, track = state.Track, artist = state.Artist, albumArt = state.AlbumArt });
                 }
                 else if (state.Playing != prev.Playing)
                 {
                     if (state.Playing && state.Track != null)
-                        await live.PostAsync("sonos", $"{room}: Resumed {state.Track} — {state.Artist}");
+                        await live.PostAsync("sonos", $"{room}: Resumed {state.Track} — {state.Artist}",
+                            new { room, track = state.Track, artist = state.Artist, albumArt = state.AlbumArt, status = "resumed" });
                     else
-                        await live.PostAsync("sonos", $"{room}: Paused");
+                        await live.PostAsync("sonos", $"{room}: Paused",
+                            new { room, track = state.Track, artist = state.Artist, albumArt = state.AlbumArt, status = "paused" });
                 }
             }
             else if (state.Playing && state.Track != null)
             {
                 await live.PostAsync("sonos", $"Now playing in {room}: {state.Track} — {state.Artist}",
-                    new { room, track = state.Track, artist = state.Artist });
+                    new { room, track = state.Track, artist = state.Artist, albumArt = state.AlbumArt });
             }
         }
 
@@ -435,7 +443,7 @@ public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
     }
 
     private record SpotifyState(bool Playing, string? TrackUri, string? Track, string? Artist);
-    private record SonosRoomState(string Room, bool Playing, string? Track, string? Artist, string TrackKey);
+    private record SonosRoomState(string Room, bool Playing, string? Track, string? Artist, string TrackKey, string? AlbumArt);
     private record HueGroupState(string Name, bool On, int Brightness);
     private record WeatherState(double Temp, int Code, string Condition, double Wind, double Precip);
     private record SteamState(int PersonaState, string? Game, string? GameId);

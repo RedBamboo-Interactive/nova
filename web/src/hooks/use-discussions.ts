@@ -29,10 +29,18 @@ function formatEventMessage(m: MessageBlock, resolve?: EventResolver): MessageBl
   const text = m.parts[0]?.content ?? ""
   const cleaned = text.replace(/<nova-event[^>]*>([\s\S]*?)<\/nova-event>/g, "$1").trim() || text
   const eventType = resolve?.(source)
+  const data = (m.metadata?.eventData as Record<string, unknown> | undefined) ?? null
   return {
     ...m,
     role: "assistant",
-    parts: [{ type: "tool_use", toolName: `event:${key}`, toolInput: JSON.stringify({ event: cleaned, icon: eventType?.icon ?? null, color: eventType?.color ?? null }), content: cleaned }],
+    parts: [{
+      type: "tool_use",
+      toolName: `event:${key}`,
+      // timestamp rides per-part: event groups merge blocks, keeping only the
+      // first message's block timestamp.
+      toolInput: JSON.stringify({ event: cleaned, icon: eventType?.icon ?? null, color: eventType?.color ?? null, data, timestamp: m.timestamp }),
+      content: cleaned,
+    }],
   }
 }
 
@@ -113,19 +121,36 @@ function cleanMessages(blocks: MessageBlock[], resolve?: EventResolver): Message
 }
 
 function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
-  return messages.map((m) => ({
-    id: m.messageUid ?? m.id,
-    role: m.role,
-    parts: m.parts.map((p): MessagePart => ({
-      type: p.type === "tool_use" || p.type === "tool_result" ? p.type : p.type === "audio" ? "audio" : "text",
-      content: p.content,
-      toolName: p.toolName,
-      toolInput: p.toolInput,
-    })),
-    timestamp: m.timestamp,
-    senderAgentId: m.senderAgentId,
-    metadata: m.source ? { source: m.source } : undefined,
-  }))
+  return messages.map((m) => {
+    // Structured event metadata arrives as a sibling event_data part — stash it
+    // on the block so formatEventMessage can fold it into the event part.
+    let eventData: Record<string, unknown> | undefined
+    const eventDataPart = m.parts.find((p) => p.type === "event_data")
+    if (eventDataPart?.content) {
+      try {
+        const parsed = JSON.parse(eventDataPart.content)
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) eventData = parsed
+      } catch { /* legacy or garbled — text-only event */ }
+    }
+    const metadata: Record<string, unknown> = {}
+    if (m.source) metadata.source = m.source
+    if (eventData) metadata.eventData = eventData
+    return {
+      id: m.messageUid ?? m.id,
+      role: m.role,
+      parts: m.parts
+        .filter((p) => p.type !== "event_data")
+        .map((p): MessagePart => ({
+          type: p.type === "tool_use" || p.type === "tool_result" ? p.type : p.type === "audio" ? "audio" : "text",
+          content: p.content,
+          toolName: p.toolName,
+          toolInput: p.toolInput,
+        })),
+      timestamp: m.timestamp,
+      senderAgentId: m.senderAgentId,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    }
+  })
 }
 
 export function useDiscussions(eventResolver?: EventResolver) {
@@ -559,7 +584,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return [newDisc, ...prev]
       })
     } else if (event.type === "discussion.event") {
-      const { discussionId, content, source, senderAgentId } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string }
+      const { discussionId, content, source, senderAgentId, metadata } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; metadata?: Record<string, unknown> | null }
       if (!discussionId) return
       setMessages((prev) => {
         const current = prev[discussionId] ?? []
@@ -569,7 +594,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         const eventType = eventResolver?.(sourceKey)
         const eventPart: import("@redbamboo/chat").MessagePart = {
           type: "tool_use", toolName: `event:${key}`,
-          toolInput: JSON.stringify({ event: cleaned, icon: eventType?.icon ?? null, color: eventType?.color ?? null }),
+          toolInput: JSON.stringify({ event: cleaned, icon: eventType?.icon ?? null, color: eventType?.color ?? null, data: metadata ?? null, timestamp: new Date().toISOString() }),
           content: cleaned,
         }
 

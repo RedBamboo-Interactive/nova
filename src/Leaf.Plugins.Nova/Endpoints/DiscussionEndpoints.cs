@@ -760,12 +760,30 @@ public static class DiscussionEndpoints
             try
             {
                 return JsonSerializer.Deserialize<JsonElement[]>(partsJson)!
-                    .Select(p => (object)new
+                    .Select(p =>
                     {
-                        type = p.TryGetProperty("type", out var t) ? t.GetString() : "text",
-                        content = p.TryGetProperty("content", out var c) ? c.GetString() : "",
-                        toolName = p.TryGetProperty("toolName", out var tn) ? tn.GetString() : null,
-                        toolInput = p.TryGetProperty("toolInput", out var ti) ? ti.GetString() : null,
+                        var type = p.TryGetProperty("type", out var t) ? t.GetString() : "text";
+
+                        // Event metadata parts store their payload under source/data —
+                        // reproject into the DTO shape so the client can read it.
+                        if (type == "event_data")
+                        {
+                            return (object)new
+                            {
+                                type,
+                                content = p.TryGetProperty("data", out var d) ? d.GetRawText() : "",
+                                toolName = p.TryGetProperty("source", out var s) ? s.GetString() : null,
+                                toolInput = (string?)null,
+                            };
+                        }
+
+                        return (object)new
+                        {
+                            type,
+                            content = p.TryGetProperty("content", out var c) ? c.GetString() : "",
+                            toolName = p.TryGetProperty("toolName", out var tn) ? tn.GetString() : null,
+                            toolInput = p.TryGetProperty("toolInput", out var ti) ? ti.GetString() : null,
+                        };
                     })
                     .ToArray();
             }

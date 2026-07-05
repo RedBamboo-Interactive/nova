@@ -55,6 +55,7 @@ public sealed class EventInjector(
             ["content"] = content,
             ["source"] = source ?? "automation",
             ["senderAgentId"] = senderAgentId,
+            ["metadata"] = metadata is { } m ? JsonNode.Parse(m.GetRawText()) : null,
         }, ct);
 
         if (discussion.SessionId is not null && role != "system")
@@ -101,7 +102,7 @@ public sealed class LiveEvents(DiscussionStore store, EventInjector injector, Ag
     {
         if (device.Name == "unknown" || device.Name == _lastDeviceName) return;
         if (_lastDeviceName != null)
-            _ = PostAsync("device", $"Switched to {device.Name}");
+            _ = PostAsync("device", $"Switched to {device.Name}", new { device = device.Name });
         _lastDeviceName = device.Name;
     }
 
@@ -149,7 +150,8 @@ public sealed class DiscussionActivity(LiveEvents live)
         if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title)) return;
         var preview = Truncate(contentPreview, 80);
         if (preview == "…") return;
-        await live.PostAsync("discussion", $"Laurent in \"{title}\": {preview}");
+        await live.PostAsync("discussion", $"Laurent in \"{title}\": {preview}",
+            new { discussionId, title, kind = "user-message", preview });
     }
 
     public async Task OnNovaMessage(string discussionId, string? title, string contentPreview)
@@ -158,13 +160,15 @@ public sealed class DiscussionActivity(LiveEvents live)
         if (!TryThrottle(discussionId)) return;
         var preview = Truncate(contentPreview, 80);
         if (preview == "…") return;
-        await live.PostAsync("discussion", $"Nova in \"{title}\": {preview}");
+        await live.PostAsync("discussion", $"Nova in \"{title}\": {preview}",
+            new { discussionId, title, kind = "nova-message", preview });
     }
 
     public async Task OnArchived(string discussionId, string? title)
     {
         if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title)) return;
-        await live.PostAsync("discussion", $"\"{title}\" archived");
+        await live.PostAsync("discussion", $"\"{title}\" archived",
+            new { discussionId, title, kind = "archived" });
     }
 
     private bool TryThrottle(string discussionId)
