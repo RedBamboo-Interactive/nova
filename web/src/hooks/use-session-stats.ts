@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import type { SessionStats } from "@redbamboo/chat"
 import { api } from "../lib/api"
 
@@ -13,15 +13,21 @@ interface RedComputeSession {
   contextTokens?: number
   contextWindow?: number
   effort?: string
+  jobId?: string
 }
 
-export function useSessionStats(sessionId: string | null | undefined, isStreaming: boolean): SessionStats | null {
-  const [stats, setStats] = useState<SessionStats | null>(null)
+interface DiscussionRef {
+  id: string
+  title: string | null
+}
+
+export function useSessionStats(sessionId: string | null | undefined, isStreaming: boolean, discussion?: DiscussionRef | null): SessionStats | null {
+  const [sessionData, setSessionData] = useState<RedComputeSession | null>(null)
   const prevStreaming = useRef(isStreaming)
 
   useEffect(() => {
     if (!sessionId) {
-      setStats(null)
+      setSessionData(null)
       return
     }
 
@@ -30,20 +36,7 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
     const fetchStats = async () => {
       try {
         const data = await api.get<{ session: RedComputeSession }>(`/ai-session/sessions/${sessionId}`)
-        if (!cancelled && data.session) {
-          setStats({
-            model: data.session.model,
-            status: data.session.status,
-            startedAt: data.session.startedAt,
-            costUsd: data.session.costUsd,
-            messageCount: data.session.messageCount,
-            outputTokens: data.session.outputTokens,
-            cachedInputTokens: data.session.cachedInputTokens,
-            contextTokens: data.session.contextTokens,
-            contextWindow: data.session.contextWindow,
-            effort: data.session.effort,
-          })
-        }
+        if (!cancelled && data.session) setSessionData(data.session)
       } catch {}
     }
 
@@ -58,25 +51,28 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
 
     if (wasStreaming && !isStreaming && sessionId) {
       api.get<{ session: RedComputeSession }>(`/ai-session/sessions/${sessionId}`)
-        .then(data => {
-          if (data.session) {
-            setStats({
-              model: data.session.model,
-              status: data.session.status,
-              startedAt: data.session.startedAt,
-              costUsd: data.session.costUsd,
-              messageCount: data.session.messageCount,
-              outputTokens: data.session.outputTokens,
-              cachedInputTokens: data.session.cachedInputTokens,
-              contextTokens: data.session.contextTokens,
-              contextWindow: data.session.contextWindow,
-              effort: data.session.effort,
-            })
-          }
-        })
+        .then(data => { if (data.session) setSessionData(data.session) })
         .catch(() => {})
     }
   }, [isStreaming, sessionId])
 
-  return stats
+  return useMemo(() => {
+    if (!sessionData || !sessionId) return null
+    return {
+      name: discussion?.title || undefined,
+      sessionId,
+      discussionId: discussion?.id,
+      jobHash: sessionData.jobId,
+      model: sessionData.model,
+      status: sessionData.status,
+      startedAt: sessionData.startedAt,
+      costUsd: sessionData.costUsd,
+      messageCount: sessionData.messageCount,
+      outputTokens: sessionData.outputTokens,
+      cachedInputTokens: sessionData.cachedInputTokens,
+      contextTokens: sessionData.contextTokens,
+      contextWindow: sessionData.contextWindow,
+      effort: sessionData.effort,
+    }
+  }, [sessionData, sessionId, discussion?.id, discussion?.title])
 }

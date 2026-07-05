@@ -129,7 +129,7 @@ export function ChatView() {
     : discussions
 
   const pendingContext = useNovaPendingContext()
-  const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming)
+  const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming, activeDiscussion)
   const [mobileTab, setMobileTab] = useState(0)
 
   const { wrapMessage, clear: clearContext } = pendingContext
