@@ -9,7 +9,12 @@
   "frontend": {
     "package": "@redbamboo/plugin-nova",
     "route": "/apps/nova",
-    "pwa": true
+    "pwa": true,
+    "sections": [
+      { "id": "chat", "name": "Chat", "icon": "fa-solid fa-comment", "path": "chat", "order": 1, "default": true },
+      { "id": "pulse", "name": "Pulse", "icon": "fa-solid fa-heart-pulse", "path": "pulse", "order": 2 },
+      { "id": "journal", "name": "Journal", "icon": "fa-solid fa-book", "path": "journal", "order": 3 }
+    ]
   },
   "permissions": [
     { "kind": "net", "target": "127.0.0.1:18800", "reason": "RedCompute AI sessions, TTS/STT, delegation" },

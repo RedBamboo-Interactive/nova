@@ -1,9 +1,6 @@
-import { useState } from "react"
-import { useLocation, useNavigate } from "react-router-dom"
+import { useState, useEffect, useCallback } from "react"
+import { useNavigate } from "react-router-dom"
 import {
-  Button,
-  NavTabs,
-  NavTab,
   ResizablePanelGroup,
   ResizablePanel,
   ResizableHandle,
@@ -20,34 +17,6 @@ function SettingsCommand({ onSettings }: { onSettings: () => void }) {
     group: "Nova",
     keywords: ["preferences", "config", "docker", "nova"],
     action: onSettings,
-  })
-  return null
-}
-
-function TabCommands({ navigate }: { navigate: (path: string) => void }) {
-  useCommand("nova-tab-chat", {
-    label: "Go to Chat",
-    description: "Open the chat panel with the discussion list",
-    group: "Nova",
-    shortcut: "F1",
-    keywords: ["chat", "discussions"],
-    action: () => navigate("/apps/nova/chat"),
-  })
-  useCommand("nova-tab-pulse", {
-    label: "Go to Pulse",
-    description: "Open the Pulse panel listing automations and watchers",
-    group: "Nova",
-    shortcut: "F2",
-    keywords: ["pulse", "automations", "heartbeats"],
-    action: () => navigate("/apps/nova/pulse"),
-  })
-  useCommand("nova-tab-journal", {
-    label: "Go to Journal",
-    description: "Open the Journal panel to browse memory files",
-    group: "Nova",
-    shortcut: "F3",
-    keywords: ["journal", "memory", "files"],
-    action: () => navigate("/apps/nova/journal"),
   })
   return null
 }
@@ -183,53 +152,23 @@ interface Props {
 }
 
 /**
- * Nova's internal chrome inside the Leaf shell: the Chat/Pulse/Journal tab row,
- * conversation search, and the settings side panel. The outer shell (brand header,
- * command palette, console, breadcrumbs) belongs to the host.
+ * Nova's internal chrome inside the Leaf shell. Tab navigation (Chat/Pulse/Journal)
+ * is now handled by the shell via app-section entities declared in plugin.json.
+ * This component provides conversation search, settings panel, and discussion commands.
  */
 export function AppShell({ children }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
-  const location = useLocation()
   const navigate = useNavigate()
+
+  const toggleSettings = useCallback(() => setSettingsOpen((prev) => !prev), [])
+  useEffect(() => {
+    window.addEventListener("nova-toggle-settings", toggleSettings)
+    return () => window.removeEventListener("nova-toggle-settings", toggleSettings)
+  }, [toggleSettings])
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center gap-2 px-3 pt-2 pb-1.5 shrink-0 border-b border-overlay-6">
-        <NavTabs>
-          <NavTab
-            active={location.pathname.startsWith("/apps/nova/chat")}
-            icon="fa-solid fa-comment"
-            onClick={() => navigate("/apps/nova/chat")}
-          >
-            Chat
-          </NavTab>
-          <NavTab
-            active={location.pathname.startsWith("/apps/nova/pulse")}
-            icon="fa-solid fa-heart-pulse"
-            onClick={() => navigate("/apps/nova/pulse")}
-          >
-            Pulse
-          </NavTab>
-          <NavTab
-            active={location.pathname.startsWith("/apps/nova/journal")}
-            icon="fa-solid fa-book"
-            onClick={() => navigate("/apps/nova/journal")}
-          >
-            Journal
-          </NavTab>
-        </NavTabs>
-        <div className="ml-auto flex items-center gap-1">
-          <Button variant="ghost" size="icon-xs" title="Search conversations (Ctrl+Shift+F)" onClick={() => setSearchOpen(true)}>
-            <i className="fa-solid fa-magnifying-glass text-xs" />
-          </Button>
-          <Button variant="ghost" size="icon-xs" title="Nova settings" onClick={() => setSettingsOpen((prev) => !prev)}>
-            <i className="fa-solid fa-gear text-xs" />
-          </Button>
-        </div>
-      </div>
-
-      <TabCommands navigate={navigate} />
       <DiscussionCommands navigate={navigate} />
       <SearchCommand onOpen={() => setSearchOpen(true)} />
       <SettingsCommand onSettings={() => setSettingsOpen((prev) => !prev)} />
