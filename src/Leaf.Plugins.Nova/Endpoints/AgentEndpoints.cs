@@ -98,7 +98,7 @@ public static class AgentEndpoints
             var outfitId = body?["outfitId"]?.GetValue<string>();
             var discussionId = body?["discussionId"]?.GetValue<string>();
 
-            var novaId = agents.NovaAgentId;
+            var novaId = body?["agentId"]?.GetValue<string>() ?? agents.NovaAgentId;
             if (novaId == null || !Guid.TryParse(novaId, out var novaGuid))
                 return Results.BadRequest(new { error = "No agent configured" });
 
@@ -153,9 +153,11 @@ public static class AgentEndpoints
                 var reasoning = body["reasoning"]?.GetValue<string>();
                 var nsfw = body["nsfw"]?.GetValue<bool>() ?? false;
 
+                var agentId = body["agentId"]?.GetValue<string>() ?? agents.NovaAgentId;
+
                 var data = new JsonObject
                 {
-                    ["agent"] = agents.NovaAgentId,
+                    ["agent"] = agentId,
                     ["asset"] = assetUrl,
                     ["prompt"] = prompt,
                     ["nsfw"] = nsfw ? "true" : "false",
