@@ -1,8 +1,50 @@
+using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using Leaf.Sdk;
 using Leaf.Sdk.Services;
 
 namespace Leaf.Plugins.Nova;
+
+/// <summary>
+/// Discussion lifecycle vocabulary. <c>archiving</c> is the durable archive intent:
+/// the discussion is closed to the user, but its RedCompute session has not been
+/// confirmed stopped yet. Only the archive finalizer may move it on to
+/// <c>archived</c>; no writer may ever leave either state otherwise.
+/// </summary>
+public static class DiscussionStatus
+{
+    public const string Idle = "idle";
+    public const string Thinking = "thinking";
+    public const string Stopped = "stopped";
+    public const string Archiving = "archiving";
+    public const string Archived = "archived";
+
+    public static bool IsClosed(string status) => status is Archived or Archiving;
+}
+
+/// <summary>
+/// Per-discussion-entity write gate. The kernel's entity patch and message post are
+/// both read-modify-write over the whole data JSON with no concurrency control, so
+/// two overlapping writes lose one of them — even when they touch different keys
+/// (a last_activity touch can silently revert a just-written archived status).
+/// Every writer of Nova discussion entities lives in this process, so serializing
+/// per entity here is sufficient to prevent those lost updates.
+/// </summary>
+public static class DiscussionEntityGate
+{
+    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> Gates = new();
+
+    public static async Task<T> RunAsync<T>(Guid entityId, Func<Task<T>> action, CancellationToken ct = default)
+    {
+        var gate = Gates.GetOrAdd(entityId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try { return await action(); }
+        finally { gate.Release(); }
+    }
+
+    public static Task RunAsync(Guid entityId, Func<Task> action, CancellationToken ct = default)
+        => RunAsync(entityId, async () => { await action(); return true; }, ct);
+}
 
 /// <summary>
 /// A discussion as the plugin sees it — a flattened view of the <c>discussion</c>
@@ -80,10 +122,44 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
     }
 
     public Task PatchAsync(Guid entityId, JsonObject patch, string? name = null, CancellationToken ct = default)
-        => entities.PatchAsync(entityId, patch, name, ct);
+        => DiscussionEntityGate.RunAsync(entityId, () => entities.PatchAsync(entityId, patch, name, ct), ct);
 
     public Task TouchAsync(Guid entityId, CancellationToken ct = default)
         => PatchAsync(entityId, new JsonObject { ["last_activity"] = DateTimeOffset.UtcNow.ToString("O") }, ct: ct);
+
+    /// <summary>Message post routed through the per-entity gate (the kernel post also
+    /// rewrites the discussion entity's data blob for message_count/last_activity).</summary>
+    public Task PostMessageAsync(Guid entityId, string role, string content, JsonObject metadata, string? userId = null, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync(entityId, () => discussions.PostAsync(entityId, role, content, metadata, userId, ct), ct);
+
+    /// <summary>
+    /// The single write point for discussion status. Re-reads current state inside the
+    /// per-entity gate, so the check and the write cannot interleave with other writers.
+    /// Rules: closed states (<see cref="DiscussionStatus.Archiving"/>/<see cref="DiscussionStatus.Archived"/>)
+    /// are terminal — the only transition out is archiving → archived (the finalizer's
+    /// confirmation that the session is stopped). Returns the resulting status, or null
+    /// when the transition was refused or the entity is gone.
+    /// </summary>
+    public Task<string?> TrySetStatusAsync(Guid entityId, string to, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<string?>(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity == null) return null;
+
+            var current = Str(entity.Data, "status") ?? DiscussionStatus.Stopped;
+            if (current == to) return current;
+
+            var allowed = current switch
+            {
+                DiscussionStatus.Archived => false,
+                DiscussionStatus.Archiving => to == DiscussionStatus.Archived,
+                _ => true,
+            };
+            if (!allowed) return null;
+
+            await entities.PatchAsync(entityId, new JsonObject { ["status"] = to }, null, ct);
+            return to;
+        }, ct);
 
     private static DiscussionRead? Map(LeafEntity entity)
     {

@@ -144,8 +144,8 @@ public static class NovaContextBuilder
         else
             sb.Append("\nRead memory/dreaming/mood.md for your current emotional state before responding.");
 
-        var active = snapshot.Discussions.Where(d => d.Status != "archived").ToList();
-        var archived = snapshot.Discussions.Where(d => d.Status == "archived" && d.MessageCount > 0).ToList();
+        var active = snapshot.Discussions.Where(d => !DiscussionStatus.IsClosed(d.Status)).ToList();
+        var archived = snapshot.Discussions.Where(d => DiscussionStatus.IsClosed(d.Status) && d.MessageCount > 0).ToList();
 
         if (active.Count > 0)
         {
@@ -315,8 +315,8 @@ public static class NovaContextBuilder
         ContextSnapshot snapshot, DateTime now, ResolvedDevice device, string input,
         string currentId, string? agentName)
     {
-        var active = snapshot.Discussions.Where(d => d.Status != "archived").ToList();
-        var archived = snapshot.Discussions.Where(d => d.Status == "archived").ToList();
+        var active = snapshot.Discussions.Where(d => !DiscussionStatus.IsClosed(d.Status)).ToList();
+        var archived = snapshot.Discussions.Where(d => DiscussionStatus.IsClosed(d.Status)).ToList();
 
         return new Dictionary<string, object?>
         {

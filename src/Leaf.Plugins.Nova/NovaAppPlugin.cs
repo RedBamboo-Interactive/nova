@@ -52,6 +52,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<EventInjector>(),
                 sp.GetRequiredService<AgentDirectory>()));
         services.AddSingleton<DiscussionActivity>();
+        services.AddSingleton(sp =>
+            new DiscussionLifecycle(sp.GetRequiredService<DiscussionStore>(), sp.GetRequiredService<RedComputeClient>()));
         // Automation action "nova-session" — collected by the kernel after build and
         // dispatched from its AutomationService for entities with that action_type.
         services.AddSingleton<IAutomationActionHandler>(sp =>
@@ -123,7 +125,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
         {
             var discussionStore = host.GetRequiredService<DiscussionStore>();
             var all = await discussionStore.ListAsync(agents.NovaAgentId, ct);
-            if (!all.Any(d => d.Type == "live" && d.AgentId == agents.NovaAgentId && d.Status != "archived"))
+            if (!all.Any(d => d.Type == "live" && d.AgentId == agents.NovaAgentId && !DiscussionStatus.IsClosed(d.Status)))
                 await discussionStore.CreateAsync($"{nova!.Name} Live", agents.NovaAgentId, "local-user", "live", ct);
         }
 
@@ -146,6 +148,11 @@ public sealed class NovaAppPlugin : ILeafPlugin
         var lifetime = host.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
         var poller = host.GetRequiredService<LivePoller>();
         _ = Task.Run(() => poller.RunAsync(lifetime.ApplicationStopping), CancellationToken.None);
+
+        // Archive reconciler: finishes archives whose session stop was never confirmed
+        // (RedCompute down, restart between intent and finalization).
+        var lifecycle = host.GetRequiredService<DiscussionLifecycle>();
+        _ = Task.Run(() => lifecycle.RunReconcilerAsync(lifetime.ApplicationStopping), CancellationToken.None);
     }
 
     private static (string? ApiKey, string? SteamId) ReadLegacySteamConfig()

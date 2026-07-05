@@ -6,6 +6,10 @@ import type { MessageBlock, MessagePart, PendingQuestion, ChatEvent, ImageAttach
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 
+function isClosed(status: string | undefined): boolean {
+  return status === "archived" || status === "archiving"
+}
+
 function stripContextXml(content: string): string {
   return content
     .replace(/<nova-context[\s\S]*?<\/nova-context>\s*/g, "")
@@ -175,6 +179,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
   activeIdRef.current = activeDiscussionId
   const streamingRef = useRef(streaming)
   streamingRef.current = streaming
+  // Synchronous view of the list for event handlers: reading status via a
+  // setState updater's side effect is not reliable (updaters may run later).
+  const discussionsRef = useRef(discussions)
+  discussionsRef.current = discussions
+  // Archive intents in flight (and confirmed): a stale list refresh racing the
+  // DELETE must not resurrect these rows.
+  const pendingArchivesRef = useRef<Set<string>>(new Set())
   const gpsRef = useRef<{ latitude: number; longitude: number; accuracy?: number } | null>(null)
   const lastPostedGpsRef = useRef<{ latitude: number; longitude: number } | null>(null)
 
@@ -221,7 +232,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   const refreshDiscussions = useCallback(async () => {
     const list = await api.get<DiscussionInfo[]>("/api/apps/nova/discussions")
-    setDiscussions(list.filter((d) => !dismissedIds.has(d.id)))
+    setDiscussions(list
+      .filter((d) => !dismissedIds.has(d.id))
+      .map((d) => pendingArchivesRef.current.has(d.id) ? { ...d, status: "archiving" as const } : d))
   }, [dismissedIds])
 
   const syncAndRefresh = useCallback(async () => {
@@ -340,7 +353,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [loadMessages])
 
   const visibleDiscussions = useMemo(
-    () => discussions.filter((d) => d.status !== "archived"),
+    () => discussions.filter((d) => !isClosed(d.status)),
     [discussions],
   )
 
@@ -510,14 +523,18 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (!discId) return
       if (session.status !== "Active") {
         setStreaming((prev) => ({ ...prev, [discId]: false }))
+        // Closed (archived/archiving) discussions are terminal: never echo
+        // session events back to the server for them. Checked via the ref —
+        // a setState updater's side effect is not guaranteed to have run here.
+        const known = discussionsRef.current.find((d) => d.id === discId)
+        if (!known || isClosed(known.status) || pendingArchivesRef.current.has(discId)) return
         const isStopped = session.status === "Stopped" || session.status === "Error"
         const discStatus = isStopped ? "stopped" as const : "idle" as const
         const now = new Date().toISOString()
         const isViewing = activeIdRef.current === discId
-        let wasArchived = false
         setDiscussions((prev) =>
           prev.map((d) => {
-            if (d.id !== discId || d.status === "archived") { if (d.id === discId) wasArchived = true; return d }
+            if (d.id !== discId || isClosed(d.status)) return d
             if (d.status === "thinking") return d
             return {
               ...d,
@@ -527,7 +544,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
             }
           })
         )
-        if (wasArchived) return
         if (isStopped) {
           api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
         } else {
@@ -556,14 +572,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (!discId) return
       setStreaming((prev) => ({ ...prev, [discId]: false }))
       setPendingQuestions((prev) => ({ ...prev, [discId]: null }))
-      let wasArchived = false
+      const known = discussionsRef.current.find((d) => d.id === discId)
+      const closed = !known || isClosed(known.status) || pendingArchivesRef.current.has(discId)
       setDiscussions((prev) =>
-        prev.map((d) => {
-          if (d.id === discId && d.status === "archived") { wasArchived = true; return d }
-          return d.id === discId ? { ...d, status: "stopped" as const } : d
-        })
+        prev.map((d) => d.id === discId && !isClosed(d.status) ? { ...d, status: "stopped" as const } : d)
       )
-      if (!wasArchived) api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
+      if (!closed) api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
     } else if (event.type === "discussion.created") {
       const { discussionId, agentId, status, type } = event.data as { discussionId: string; agentId?: string; status?: string; type?: string }
       if (!discussionId) return
@@ -704,20 +718,26 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [refreshDiscussions, reloadActiveMessages])
 
   const archiveDiscussion = useCallback(async (id: string) => {
-    const disc = discussions.find((d) => d.id === id)
+    const disc = discussionsRef.current.find((d) => d.id === id)
     if (disc?.type === "live") {
       toast({ variant: "error", title: "Can't archive", description: "Live discussions cannot be archived" })
       return
     }
-    setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: "archived" as const } : d))
-    if (activeDiscussionId === id) setActiveDiscussionId(null)
+    // Optimistic close: record the intent first so list refreshes and session
+    // events during the DELETE cannot resurrect the row, then hide it.
+    pendingArchivesRef.current.add(id)
+    setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: "archiving" as const } : d))
+    if (activeIdRef.current === id) setActiveDiscussionId(null)
     try {
       await api.delete(`/api/apps/nova/discussions/${id}`)
+      // Intent stays in the set after success: the server now owns the state
+      // and default list fetches exclude closed discussions anyway.
     } catch (err) {
+      pendingArchivesRef.current.delete(id)
       if (disc) setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: disc.status } : d))
       toast({ variant: "error", title: "Failed to archive", description: err instanceof Error ? err.message : "Unknown error" })
     }
-  }, [activeDiscussionId, discussions, toast])
+  }, [toast])
 
   const dismissDiscussion = useCallback((id: string) => {
     setDismissedIds((prev) => new Set(prev).add(id))

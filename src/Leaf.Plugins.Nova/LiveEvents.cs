@@ -40,13 +40,14 @@ public sealed class EventInjector(
         }
 
         var uid = Guid.NewGuid().ToString("N");
-        await discussions.PostAsync(discussion.EntityId, role, content, new JsonObject
-        {
-            ["parts_json"] = partsJson,
-            ["source"] = sourceTag,
-            ["sender_agent_id"] = senderAgentId,
-            ["uid"] = uid,
-        }, userId, ct);
+        await DiscussionEntityGate.RunAsync(discussion.EntityId, () =>
+            discussions.PostAsync(discussion.EntityId, role, content, new JsonObject
+            {
+                ["parts_json"] = partsJson,
+                ["source"] = sourceTag,
+                ["sender_agent_id"] = senderAgentId,
+                ["uid"] = uid,
+            }, userId, ct), ct);
 
         await events.PublishAsync("discussion.event", new JsonObject
         {
@@ -126,12 +127,12 @@ public sealed class LiveEvents(DiscussionStore store, EventInjector injector, Ag
         if (_cachedLiveId != null)
         {
             var cached = await store.GetAsync(_cachedLiveId);
-            if (cached is { Status: not "archived", Type: "live" }) return cached;
+            if (cached is { Type: "live" } && !DiscussionStatus.IsClosed(cached.Status)) return cached;
             _cachedLiveId = null;
         }
 
         var all = await store.ListAsync(agents.NovaAgentId);
-        var live = all.FirstOrDefault(d => d.Type == "live" && d.Status != "archived"
+        var live = all.FirstOrDefault(d => d.Type == "live" && !DiscussionStatus.IsClosed(d.Status)
             && (agents.NovaAgentId == null || d.AgentId == agents.NovaAgentId));
         _cachedLiveId = live?.Id;
         return live;

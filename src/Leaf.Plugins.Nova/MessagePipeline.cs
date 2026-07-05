@@ -129,7 +129,7 @@ public sealed class MessagePipeline(
 
         var all = (await store.ListAsync(ct: ct))
             .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
-            .Where(d => d.Status != "archived" || d.LastActivity >= cutoff)
+            .Where(d => !DiscussionStatus.IsClosed(d.Status) || d.LastActivity >= cutoff)
             .ToList();
 
         var ownDiscussions = discussion.AgentId != null
@@ -140,7 +140,7 @@ public sealed class MessagePipeline(
         if (discussion.AgentId != null)
         {
             otherAgentDiscussions = all
-                .Where(d => d.AgentId != discussion.AgentId && d.Status != "archived")
+                .Where(d => d.AgentId != discussion.AgentId && !DiscussionStatus.IsClosed(d.Status))
                 .Take(5)
                 .ToList();
         }
@@ -244,7 +244,7 @@ public sealed class MessagePipeline(
         if (hasImages)
         {
             // Persisted with the transcript uid — one logical message, one identity.
-            await discussions.PostAsync(discussion.EntityId, "user", content, new JsonObject
+            await store.PostMessageAsync(discussion.EntityId, "user", content, new JsonObject
             {
                 ["parts_json"] = JsonSerializer.Serialize(
                     images!.Select(img => new { type = "image", mediaType = img.MediaType, base64 = img.Base64 }),

@@ -151,6 +151,34 @@ public sealed class RedComputeClient
         }
     }
 
+    /// <summary>Result of <see cref="ProbeSessionAsync"/>: <c>Reachable</c> false means we
+    /// could not get an answer; <c>Status</c> null with <c>Reachable</c> true means the
+    /// session no longer exists (a definitive "nothing is running").</summary>
+    public sealed record SessionProbe(bool Reachable, string? Status);
+
+    /// <summary>
+    /// Status probe that distinguishes "RedCompute unreachable" from "session gone".
+    /// The archive finalizer needs the difference: a 404 proves no process is running,
+    /// while a transport error means the stop is unverified and must be retried.
+    /// </summary>
+    public async Task<SessionProbe> ProbeSessionAsync(string sessionId, CancellationToken ct = default)
+    {
+        try
+        {
+            var resp = await _http.GetAsync($"/ai-session/sessions/{sessionId}", ct);
+            if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return new(true, null);
+            if (!resp.IsSuccessStatusCode) return new(false, null);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            var status = doc.RootElement.TryGetProperty("session", out var session)
+                && session.TryGetProperty("status", out var st) ? st.GetString() : null;
+            return new(true, status);
+        }
+        catch
+        {
+            return new(false, null);
+        }
+    }
+
     /// <summary>Status of a single session ("Active", "Idle", ...), or null when unreachable/missing.</summary>
     public async Task<string?> GetSessionStatusAsync(string sessionId, CancellationToken ct = default)
     {

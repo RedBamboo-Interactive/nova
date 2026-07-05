@@ -2,7 +2,9 @@ export interface DiscussionInfo {
   id: string
   title: string | null
   sessionId: string | null
-  status: "idle" | "thinking" | "stopped" | "archived"
+  /** "archiving" = archive intent committed server-side, session stop not yet
+   * confirmed. Treated exactly like "archived" everywhere in the UI. */
+  status: "idle" | "thinking" | "stopped" | "archiving" | "archived"
   type: "chat" | "live"
   createdAt: string
   lastActivity: string

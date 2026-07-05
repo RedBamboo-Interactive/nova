@@ -78,7 +78,7 @@ public static class DiscussionEndpoints
             IEnumerable<DiscussionRead> filtered = discussions;
             filtered = !string.IsNullOrEmpty(status)
                 ? filtered.Where(d => d.Status == status)
-                : filtered.Where(d => d.Status != "archived");
+                : filtered.Where(d => !DiscussionStatus.IsClosed(d.Status));
 
             if (!string.IsNullOrEmpty(search))
                 filtered = filtered.Where(d => d.Title != null && d.Title.Contains(search, StringComparison.OrdinalIgnoreCase));
@@ -93,7 +93,7 @@ public static class DiscussionEndpoints
         {
             var userId = UserId(ctx);
             var discussions = (await store.ListAsync())
-                .Where(d => d.Status != "archived" && d.SessionId != null)
+                .Where(d => !DiscussionStatus.IsClosed(d.Status) && d.SessionId != null)
                 .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
                 .ToList();
 
@@ -131,7 +131,7 @@ public static class DiscussionEndpoints
         {
             var userId = UserId(ctx);
             var discussions = (await store.ListAsync())
-                .Where(d => d.Status != "archived" && d.SessionId != null)
+                .Where(d => !DiscussionStatus.IsClosed(d.Status) && d.SessionId != null)
                 .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
                 .ToList();
 
@@ -164,8 +164,11 @@ public static class DiscussionEndpoints
 
                 if (newStatus != null)
                 {
-                    await store.PatchAsync(d.EntityId, new JsonObject { ["status"] = newStatus });
-                    discussions[i] = d with { Status = newStatus };
+                    // State-machine write: refused (null) if the discussion closed
+                    // (archiving/archived) while this sweep was probing sessions.
+                    var applied = await store.TrySetStatusAsync(d.EntityId, newStatus);
+                    if (applied != null)
+                        discussions[i] = d with { Status = applied };
                 }
             }
 
@@ -183,7 +186,7 @@ public static class DiscussionEndpoints
 
             if (type == "live")
             {
-                var existing = (await store.ListAsync()).Any(d => d.Type == "live" && d.AgentId == agentId && d.Status != "archived");
+                var existing = (await store.ListAsync()).Any(d => d.Type == "live" && d.AgentId == agentId && !DiscussionStatus.IsClosed(d.Status));
                 if (existing)
                     return Results.Json(new { error = "A LIVE discussion already exists for this agent" }, statusCode: 409);
             }
@@ -211,7 +214,7 @@ public static class DiscussionEndpoints
             var agentFilter = ctx.Request.Query["agent"].FirstOrDefault();
             var userId = UserId(ctx);
             var live = (await store.ListAsync(agentFilter))
-                .Where(d => d.Type == "live" && d.Status != "archived" && OwnerScope.CanAccess(d.OwnerId, userId))
+                .Where(d => d.Type == "live" && !DiscussionStatus.IsClosed(d.Status) && OwnerScope.CanAccess(d.OwnerId, userId))
                 .Select(DiscussionStore.ToInfo);
             return Results.Ok(live);
         });
@@ -350,14 +353,14 @@ public static class DiscussionEndpoints
             var cutoff = DateTime.UtcNow.AddDays(-2);
             var all = (await store.ListAsync())
                 .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
-                .Where(d => d.Status != "archived" || d.LastActivity >= cutoff)
+                .Where(d => !DiscussionStatus.IsClosed(d.Status) || d.LastActivity >= cutoff)
                 .ToList();
 
             var own = discussion.AgentId != null
                 ? all.Where(d => d.AgentId == discussion.AgentId).ToList()
                 : all;
             var others = discussion.AgentId != null
-                ? all.Where(d => d.AgentId != discussion.AgentId && d.Status != "archived").Take(5).ToList()
+                ? all.Where(d => d.AgentId != discussion.AgentId && !DiscussionStatus.IsClosed(d.Status)).Take(5).ToList()
                 : null;
 
             var (outfit, outfitAsset) = await pipeline.ResolveOutfitContextAsync(discussion.AgentId);
@@ -414,15 +417,11 @@ public static class DiscussionEndpoints
             if (discussion is null) return NotFound();
             if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
 
-            if (discussion.Status is not "archived")
-            {
-                await store.PatchAsync(discussion.EntityId, new JsonObject { ["status"] = "stopped" });
-                discussion = discussion with { Status = "stopped" };
-            }
-            return Results.Ok(DiscussionStore.ToInfo(discussion));
+            var result = await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped);
+            return Results.Ok(DiscussionStore.ToInfo(discussion with { Status = result ?? discussion.Status }));
         });
 
-        group.MapDelete("/discussions/{id}", async (string id, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute, DiscussionActivity activity) =>
+        group.MapDelete("/discussions/{id}", async (string id, HttpContext ctx, DiscussionStore store, DiscussionLifecycle lifecycle, DiscussionActivity activity) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
@@ -431,15 +430,16 @@ public static class DiscussionEndpoints
             if (discussion.Type == "live")
                 return Results.Json(new { error = "Live discussions cannot be archived" }, statusCode: 400);
 
-            if (discussion.SessionId is not null)
-            {
-                try { await redCompute.StopAsync(discussion.SessionId); }
-                catch { /* proceed with archive regardless */ }
-            }
+            if (DiscussionStatus.IsClosed(discussion.Status))
+                return Results.Ok(DiscussionStore.ToInfo(discussion)); // idempotent
 
-            await store.PatchAsync(discussion.EntityId, new JsonObject { ["status"] = "archived" });
+            // Two-phase: commit the archive intent now (wins any status race), stop
+            // and verify the session in the background, archived once confirmed.
+            var status = await lifecycle.BeginArchiveAsync(discussion);
+            if (status == null) return NotFound();
+
             _ = activity.OnArchived(id, discussion.Title);
-            return Results.Ok(DiscussionStore.ToInfo(discussion with { Status = "archived" }));
+            return Results.Ok(DiscussionStore.ToInfo(discussion with { Status = status }));
         });
 
         group.MapPost("/discussions/{id}/clear", async (string id, HttpContext ctx, DiscussionStore store, IDiscussions discussions, RedComputeClient redCompute, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
@@ -467,8 +467,8 @@ public static class DiscussionEndpoints
                 ["last_activity"] = DateTimeOffset.UtcNow.ToString("O"),
             });
 
-            // Day marker; PostAsync bumps message_count back to 1.
-            await discussions.PostAsync(discussion.EntityId, "assistant", "New day. Timeline cleared.", new JsonObject
+            // Day marker; the post bumps message_count back to 1.
+            await store.PostMessageAsync(discussion.EntityId, "assistant", "New day. Timeline cleared.", new JsonObject
             {
                 ["source"] = "event:system",
                 ["uid"] = Guid.NewGuid().ToString("N"),
@@ -479,13 +479,13 @@ public static class DiscussionEndpoints
             return Results.Ok(new { cleared = true, discussion = DiscussionStore.ToInfo(discussion with { SessionId = null, MessageCount = 1 }) });
         });
 
-        group.MapPost("/discussions/{id}/rotate", async (string id, HttpContext ctx, DiscussionStore store, AgentDirectory agents, RedComputeClient redCompute, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, MessagePipeline pipeline, DiscussionActivity activity) =>
+        group.MapPost("/discussions/{id}/rotate", async (string id, HttpContext ctx, DiscussionStore store, AgentDirectory agents, DiscussionLifecycle lifecycle, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, MessagePipeline pipeline, DiscussionActivity activity) =>
         {
             // "live" resolves to Nova's current LIVE discussion — the system:live-rotation
             // http-action automation calls this form because it cannot resolve the id itself.
             var discussion = id == "live"
                 ? (await store.ListAsync()).FirstOrDefault(d =>
-                    d.Type == "live" && d.Status != "archived"
+                    d.Type == "live" && !DiscussionStatus.IsClosed(d.Status)
                     && (agents.NovaAgentId == null || d.AgentId == null || d.AgentId == agents.NovaAgentId))
                 : await store.GetAsync(id);
             if (discussion is null) return NotFound();
@@ -494,17 +494,9 @@ public static class DiscussionEndpoints
             if (discussion.Type != "live")
                 return Results.Json(new { error = "Only LIVE discussions can be rotated" }, statusCode: 400);
 
-            if (discussion.SessionId is not null)
-            {
-                try { await redCompute.StopAsync(discussion.SessionId); }
-                catch { }
-            }
-
-            await store.PatchAsync(discussion.EntityId, new JsonObject
-            {
-                ["status"] = "archived",
-                ["session_id"] = null,
-            });
+            // Same two-phase archive as DELETE; session_id stays until the finalizer
+            // confirms the stop, so the session cannot be orphaned by a rotation.
+            await lifecycle.BeginArchiveAsync(discussion);
             _ = activity.OnArchived(discussion.Id, discussion.Title);
 
             var fresh = await store.CreateAsync(null, discussion.AgentId, discussion.OwnerId, "live");
@@ -520,7 +512,7 @@ public static class DiscussionEndpoints
 
             return Results.Ok(new
             {
-                archived = DiscussionStore.ToInfo(discussion with { Status = "archived", SessionId = null }),
+                archived = DiscussionStore.ToInfo(discussion with { Status = DiscussionStatus.Archiving }),
                 created = DiscussionStore.ToInfo(fresh),
             });
         });
@@ -560,7 +552,7 @@ public static class DiscussionEndpoints
             }
 
             var uid = Guid.NewGuid().ToString("N");
-            await discussions.PostAsync(discussion.EntityId, "assistant", request.Content, new JsonObject
+            await store.PostMessageAsync(discussion.EntityId, "assistant", request.Content, new JsonObject
             {
                 ["parts_json"] = partsJson,
                 ["source"] = "nova-message",
