@@ -79,9 +79,9 @@ export function SettingsPanel({ onClose }: Props) {
 
   return (
     <div data-slot="settings-panel" className="flex flex-col h-full">
-      <PanelHeader title="Settings" leading={<i className="fa-solid fa-gear text-sm text-text-muted" />}>
+      <PanelHeader title="Settings" leading={<i className="ph-fill ph-gear text-sm text-text-muted" />}>
         <Button variant="ghost" size="icon-xs" onClick={onClose}>
-          <i className="fa-solid fa-xmark" />
+          <i className="ph-fill ph-x" />
         </Button>
       </PanelHeader>
 

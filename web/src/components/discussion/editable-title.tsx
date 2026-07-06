@@ -56,7 +56,7 @@ export function EditableTitle({ title, onRename }: Props) {
       title="Rename discussion"
     >
       <span className="text-[14px] font-medium text-contrast truncate">{title}</span>
-      <i className="fa-solid fa-pen text-[10px] text-text-muted opacity-0 group-hover/title:opacity-100 transition-opacity shrink-0" />
+      <i className="ph-fill ph-pen text-[10px] text-text-muted opacity-0 group-hover/title:opacity-100 transition-opacity shrink-0" />
     </button>
   )
 }

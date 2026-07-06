@@ -3,16 +3,16 @@ import { MorphSpinner, getSpinnerColor } from "@redbamboo/chat"
 import type { MessageBlock } from "@redbamboo/chat"
 
 const toolLabels: Record<string, { icon: string; label: string }> = {
-  Read:       { icon: "fa-solid fa-file-lines",       label: "Reading..." },
-  Write:      { icon: "fa-solid fa-pen",              label: "Writing..." },
-  Edit:       { icon: "fa-solid fa-pen-to-square",    label: "Editing..." },
-  Glob:       { icon: "fa-solid fa-folder-open",      label: "Browsing files..." },
-  Grep:       { icon: "fa-solid fa-magnifying-glass", label: "Searching..." },
-  Bash:       { icon: "fa-solid fa-terminal",         label: "Running command..." },
-  PowerShell: { icon: "fa-solid fa-terminal",         label: "Running command..." },
-  WebFetch:   { icon: "fa-solid fa-globe",            label: "Fetching..." },
-  WebSearch:  { icon: "fa-solid fa-globe",            label: "Searching the web..." },
-  TodoWrite:  { icon: "fa-solid fa-list-check",       label: "Planning..." },
+  Read:       { icon: "ph-fill ph-file-text",       label: "Reading..." },
+  Write:      { icon: "ph-fill ph-pen",              label: "Writing..." },
+  Edit:       { icon: "ph-fill ph-note-pencil",    label: "Editing..." },
+  Glob:       { icon: "ph-fill ph-folder-open",      label: "Browsing files..." },
+  Grep:       { icon: "ph-fill ph-magnifying-glass", label: "Searching..." },
+  Bash:       { icon: "ph-fill ph-terminal",         label: "Running command..." },
+  PowerShell: { icon: "ph-fill ph-terminal",         label: "Running command..." },
+  WebFetch:   { icon: "ph-fill ph-globe",            label: "Fetching..." },
+  WebSearch:  { icon: "ph-fill ph-globe",            label: "Searching the web..." },
+  TodoWrite:  { icon: "ph-fill ph-list-checks",       label: "Planning..." },
 }
 
 function getStatusFromMessages(messages: MessageBlock[]): { icon: string; label: string } | null {
@@ -24,31 +24,31 @@ function getStatusFromMessages(messages: MessageBlock[]): { icon: string; label:
       const part = block.parts[j]!
 
       if (part.type === "thinking") {
-        return { icon: "fa-solid fa-brain", label: "Thinking..." }
+        return { icon: "ph-fill ph-brain", label: "Thinking..." }
       }
 
       if (part.type === "tool_use" && part.toolName) {
         const memoryPath = part.toolInput?.includes("memory/") || part.toolInput?.includes("memory\\")
         if (memoryPath && (part.toolName === "Read" || part.toolName === "Glob" || part.toolName === "Grep")) {
-          return { icon: "fa-solid fa-brain", label: "Remembering..." }
+          return { icon: "ph-fill ph-brain", label: "Remembering..." }
         }
         if (memoryPath && (part.toolName === "Write" || part.toolName === "Edit")) {
-          return { icon: "fa-solid fa-brain", label: "Memorizing..." }
+          return { icon: "ph-fill ph-brain", label: "Memorizing..." }
         }
 
         const automationPath = part.toolInput?.includes("automation") || part.toolInput?.includes("schedule") || part.toolInput?.includes("cron")
         if (automationPath) {
-          return { icon: "fa-solid fa-bolt", label: "Automating..." }
+          return { icon: "ph-fill ph-lightning", label: "Automating..." }
         }
 
         const known = toolLabels[part.toolName]
         if (known) return known
 
-        return { icon: "fa-solid fa-gear", label: "Working..." }
+        return { icon: "ph-fill ph-gear", label: "Working..." }
       }
 
       if (part.type === "text") {
-        return { icon: "fa-solid fa-comment", label: "Responding..." }
+        return { icon: "ph-fill ph-chat-circle", label: "Responding..." }
       }
     }
   }

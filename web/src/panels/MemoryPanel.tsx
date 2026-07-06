@@ -78,7 +78,7 @@ export function MemoryPanel() {
         {files.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-text-muted">
             <div className="text-center">
-              <i className="fa-solid fa-book text-2xl mb-3 opacity-30" />
+              <i className="ph-fill ph-book text-2xl mb-3 opacity-30" />
               <p className="text-sm">No files in workspace</p>
             </div>
           </div>
@@ -96,7 +96,7 @@ export function MemoryPanel() {
                       return next
                     })}
                   >
-                    <i className={`fa-solid fa-chevron-right text-[9px] text-text-disabled transition-transform duration-150 ${isOpen ? "rotate-90" : ""}`} />
+                    <i className={`ph-fill ph-caret-right text-[9px] text-text-disabled transition-transform duration-150 ${isOpen ? "rotate-90" : ""}`} />
                     <span className="text-[10px] font-medium text-text-disabled uppercase tracking-wider">
                       {dir}
                     </span>
@@ -109,7 +109,7 @@ export function MemoryPanel() {
                         selected={selectedFile === file}
                         onClick={() => handleSelectFile(file)}
                         icon={
-                          <i className="fa-solid fa-file-lines text-xs text-text-muted" />
+                          <i className="ph-fill ph-file-text text-xs text-text-muted" />
                         }
                         title={name}
                       />
@@ -138,7 +138,7 @@ export function MemoryPanel() {
   ) : (
     <div className="h-full flex items-center justify-center text-text-muted">
       <div className="text-center">
-        <i className="fa-solid fa-file-lines text-2xl mb-3 opacity-30" />
+        <i className="ph-fill ph-file-text text-2xl mb-3 opacity-30" />
         <p className="text-sm">Select a file to view</p>
       </div>
     </div>

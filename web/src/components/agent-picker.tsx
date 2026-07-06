@@ -28,11 +28,11 @@ export function AgentPicker({ agents, selectedId, onSelect, showAll = false }: A
           </>
         ) : (
           <>
-            <i className="fa-solid fa-users text-[10px]" />
+            <i className="ph-fill ph-users text-[10px]" />
             <span>All agents</span>
           </>
         )}
-        <i className="fa-solid fa-chevron-down text-[8px] opacity-50" />
+        <i className="ph-fill ph-caret-down text-[8px] opacity-50" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" sideOffset={4}>
         {showAll && (
@@ -40,7 +40,7 @@ export function AgentPicker({ agents, selectedId, onSelect, showAll = false }: A
             onClick={() => onSelect(null)}
             className={!selectedId ? "text-primary" : ""}
           >
-            <i className="fa-solid fa-users size-4 text-center" />
+            <i className="ph-fill ph-users size-4 text-center" />
             All agents
           </DropdownMenuItem>
         )}

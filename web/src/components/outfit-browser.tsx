@@ -84,14 +84,14 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
   return (
     <ModalBase dataModal="outfit-browser" ariaLabel="Browse outfits" onClose={onClose} size="lg">
       <ModalHeader
-        icon={<i className="fa-solid fa-shirt text-primary" />}
+        icon={<i className="ph-fill ph-t-shirt text-primary" />}
         title={<span className="text-sm font-medium">Outfits</span>}
         onClose={onClose}
       />
       <div className="px-6 pb-5">
         {loading ? (
           <div className="flex items-center justify-center py-8 text-text-muted text-sm">
-            <i className="fa-solid fa-spinner fa-spin mr-2" /> Loading...
+            <i className="ph-fill ph-spinner animate-spin mr-2" /> Loading...
           </div>
         ) : (
           <>
@@ -105,7 +105,7 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
                       : "bg-overlay-6 text-text-muted hover:bg-overlay-10"
                   }`}
                 >
-                  <i className={`fa-solid ${showNsfw ? "fa-eye" : "fa-eye-slash"} text-[10px]`} />
+                  <i className={`ph-fill ${showNsfw ? "ph-eye" : "ph-eye-slash"} text-[10px]`} />
                   Show NSFW
                   <span className="text-[10px] opacity-60">({nsfwCount})</span>
                 </button>
@@ -129,12 +129,12 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
                 </div>
                 {selecting === "__base__" && (
                   <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                    <i className="fa-solid fa-spinner fa-spin text-white" />
+                    <i className="ph-fill ph-spinner animate-spin text-white" />
                   </div>
                 )}
                 {isBaseActive && (
                   <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
-                    <i className="fa-solid fa-check text-[10px] text-white" />
+                    <i className="ph-fill ph-check text-[10px] text-white" />
                   </div>
                 )}
               </button>
@@ -167,12 +167,12 @@ export function OutfitBrowser({ onClose, discussionId, agentId }: Props) {
                     )}
                     {selecting === outfit.url && (
                       <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                        <i className="fa-solid fa-spinner fa-spin text-white" />
+                        <i className="ph-fill ph-spinner animate-spin text-white" />
                       </div>
                     )}
                     {outfit.active && (
                       <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
-                        <i className="fa-solid fa-check text-[10px] text-white" />
+                        <i className="ph-fill ph-check text-[10px] text-white" />
                       </div>
                     )}
                   </button>

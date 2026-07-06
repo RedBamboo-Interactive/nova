@@ -58,7 +58,7 @@ export function SearchOverlay({ onClose, onNavigate }: Props) {
   return (
     <ModalBase dataModal="discussion-search" ariaLabel="Search conversations" onClose={onClose} size="lg">
       <ModalHeader
-        icon={<i className="fa-solid fa-magnifying-glass text-primary" />}
+        icon={<i className="ph-fill ph-magnifying-glass text-primary" />}
         title={<span className="text-sm font-medium">Search Conversations</span>}
         onClose={onClose}
       />
@@ -95,7 +95,7 @@ export function SearchOverlay({ onClose, onNavigate }: Props) {
           )}
           {searching && (
             <div className="text-xs text-text-muted text-center py-6">
-              <i className="fa-solid fa-spinner fa-spin mr-1.5" />
+              <i className="ph-fill ph-spinner animate-spin mr-1.5" />
               Searching…
             </div>
           )}

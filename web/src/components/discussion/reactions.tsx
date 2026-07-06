@@ -10,18 +10,18 @@ interface ReactionEmoji {
 }
 
 const FALLBACK: ReactionEmoji[] = [
-  { emoji: "👍", icon: "fa-light fa-thumbs-up", sort: 0 },
-  { emoji: "❤️", icon: "fa-solid fa-heart", color: "#ef4444", sort: 1 },
-  { emoji: "🔥", icon: "fa-solid fa-fire-flame-curved", color: "#f59e0b", sort: 2 },
-  { emoji: "👀", icon: "fa-light fa-eyes", sort: 3 },
-  { emoji: "😂", icon: "fa-light fa-face-laugh-squint", sort: 4 },
-  { emoji: "🎉", icon: "fa-light fa-party-horn", sort: 5 },
-  { emoji: "💯", icon: "fa-light fa-hundred-points", sort: 6 },
-  { emoji: "🚀", icon: "fa-light fa-rocket", sort: 7 },
-  { emoji: "✅", icon: "fa-light fa-circle-check", sort: 8 },
-  { emoji: "🤔", icon: "fa-light fa-face-thinking", sort: 9 },
-  { emoji: "👏", icon: "fa-light fa-hands-clapping", sort: 10 },
-  { emoji: "✨", icon: "fa-light fa-sparkles", sort: 11 },
+  { emoji: "👍", icon: "ph-light ph-thumbs-up", sort: 0 },
+  { emoji: "❤️", icon: "ph-fill ph-heart", color: "#ef4444", sort: 1 },
+  { emoji: "🔥", icon: "ph-fill ph-fire", color: "#f59e0b", sort: 2 },
+  { emoji: "👀", icon: "ph-light ph-eyes", sort: 3 },
+  { emoji: "😂", icon: "ph-light ph-smiley", sort: 4 },
+  { emoji: "🎉", icon: "ph-light ph-confetti", sort: 5 },
+  { emoji: "💯", icon: "ph-light ph-seal-check", sort: 6 },
+  { emoji: "🚀", icon: "ph-light ph-rocket", sort: 7 },
+  { emoji: "✅", icon: "ph-light ph-check-circle", sort: 8 },
+  { emoji: "🤔", icon: "ph-light ph-smiley-meh", sort: 9 },
+  { emoji: "👏", icon: "ph-light ph-hands-clapping", sort: 10 },
+  { emoji: "✨", icon: "ph-light ph-sparkle", sort: 11 },
 ]
 
 let cached: ReactionEmoji[] | null = null
@@ -37,7 +37,7 @@ function useReactionEmoji(): ReactionEmoji[] {
         const list: ReactionEmoji[] = rows
           .map((e: any) => {
             const d = typeof e.data === "string" ? JSON.parse(e.data) : e.data
-            return { emoji: d?.emoji ?? e.name, icon: d?.icon ?? "fa-light fa-circle-question", color: d?.color, sort: d?.sort ?? 0 }
+            return { emoji: d?.emoji ?? e.name, icon: d?.icon ?? "ph-light ph-question", color: d?.color, sort: d?.sort ?? 0 }
           })
           .sort((a: ReactionEmoji, b: ReactionEmoji) => a.sort - b.sort)
         if (list.length === 0) return
@@ -104,7 +104,7 @@ export function AddReactionButton({ onAdd }: { onAdd: (emoji: string) => void })
         className="w-6 h-6 flex items-center justify-center rounded-full bg-overlay-4 hover:bg-overlay-8 text-text-disabled hover:text-text-muted transition-colors cursor-pointer"
         title="Add reaction"
       >
-        <i className="fa-regular fa-face-smile text-[11px]" />
+        <i className="ph ph-smiley text-[11px]" />
       </button>
       {pickerOpen && (
         <EmojiPicker

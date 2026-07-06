@@ -7,7 +7,7 @@ export const routes: RouteObject[] = [
   { index: true, element: <Navigate to="chat" replace /> },
   {
     path: "chat",
-    handle: { crumb: "Chat", icon: "fa-solid fa-comment" },
+    handle: { crumb: "Chat", icon: "ph-fill ph-chat-circle" },
     children: [
       { index: true, element: <ChatView /> },
       {
@@ -19,7 +19,7 @@ export const routes: RouteObject[] = [
   },
   {
     path: "pulse",
-    handle: { crumb: "Pulse", icon: "fa-solid fa-heart-pulse" },
+    handle: { crumb: "Pulse", icon: "ph-fill ph-heartbeat" },
     children: [
       { index: true, element: <AutomationsPanel /> },
       {
@@ -31,7 +31,7 @@ export const routes: RouteObject[] = [
   },
   {
     path: "journal",
-    handle: { crumb: "Journal", icon: "fa-solid fa-book" },
+    handle: { crumb: "Journal", icon: "ph-fill ph-book" },
     children: [
       { index: true, element: <MemoryPanel /> },
       {

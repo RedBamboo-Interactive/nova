@@ -5,7 +5,7 @@ import type { EventType } from "../lib/types"
 const DEFAULT_EVENT: EventType = {
   key: "default",
   name: "Event",
-  icon: "fa-solid fa-circle-dot",
+  icon: "ph-fill ph-radio-button",
   color: null,
   description: null,
 }

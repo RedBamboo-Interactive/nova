@@ -186,7 +186,7 @@ export function ChatView() {
 
   const upstreamBanner = !upstreamConnected && (
     <div className="flex items-center gap-2 px-4 py-2 bg-accent-teal-a15 border-b border-overlay-6 text-text-muted text-sm">
-      <i className="fa-solid fa-arrows-rotate fa-spin" />
+      <i className="ph-fill ph-arrows-clockwise animate-spin" />
       <span>Reconnecting to AI service…</span>
     </div>
   )
@@ -217,9 +217,9 @@ export function ChatView() {
       {multiAgent ? (
         <DropdownMenu>
           <DropdownMenuTrigger className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10 cursor-pointer">
-            <i className="fa-solid fa-plus text-xs" />
+            <i className="ph-fill ph-plus text-xs" />
             <span>New</span>
-            <i className="fa-solid fa-chevron-down text-[8px] opacity-50" />
+            <i className="ph-fill ph-caret-down text-[8px] opacity-50" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" sideOffset={4}>
             {agents.map((agent) => (
@@ -241,7 +241,7 @@ export function ChatView() {
           className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
           title="New discussion"
         >
-          <i className="fa-solid fa-plus text-xs" />
+          <i className="ph-fill ph-plus text-xs" />
           <span>New</span>
         </button>
       )}
@@ -298,7 +298,7 @@ export function ChatView() {
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
       {isLoadingMessages && activeMessages.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center z-10">
-          <i className="fa-solid fa-spinner fa-spin text-2xl opacity-40" />
+          <i className="ph-fill ph-spinner animate-spin text-2xl opacity-40" />
         </div>
       )}
       <ChatPanel
@@ -328,18 +328,18 @@ export function ChatView() {
     <div className="flex-1 flex items-center justify-center text-text-muted">
       {isSpawning ? (
         <div className="text-center">
-          <i className="fa-solid fa-spinner fa-spin text-2xl mx-auto mb-3 opacity-40" />
+          <i className="ph-fill ph-spinner animate-spin text-2xl mx-auto mb-3 opacity-40" />
           <p className="text-sm">Starting discussion…</p>
         </div>
       ) : (
         <div className="text-center">
-          <i className="fa-solid fa-star text-3xl mx-auto mb-3 opacity-30" />
+          <i className="ph-fill ph-star text-3xl mx-auto mb-3 opacity-30" />
           <p className="text-sm mb-4">Start a conversation</p>
           <button
             onClick={() => handleNewDiscussion()}
             className="text-xs px-3 py-1.5 rounded bg-overlay-10 hover:bg-overlay-15 text-contrast transition-colors"
           >
-            <i className="fa-solid fa-plus mr-1.5" />
+            <i className="ph-fill ph-plus mr-1.5" />
             New Discussion
           </button>
         </div>
@@ -363,7 +363,7 @@ export function ChatView() {
             style={{ opacity: avatarOpacity }}
           />
           <div className="absolute inset-1.5 rounded-full bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-            <i className="fa-solid fa-shirt text-white/0 group-hover:text-white/70 text-xs transition-colors" />
+            <i className="ph-fill ph-t-shirt text-white/0 group-hover:text-white/70 text-xs transition-colors" />
           </div>
         </button>
       )}
@@ -401,7 +401,7 @@ export function ChatView() {
                   className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
                 />
                 <div className="absolute inset-0 rounded-full bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                  <i className="fa-solid fa-shirt text-white/0 group-hover:text-white/70 text-lg transition-colors" />
+                  <i className="ph-fill ph-t-shirt text-white/0 group-hover:text-white/70 text-lg transition-colors" />
                 </div>
               </div>
             </button>

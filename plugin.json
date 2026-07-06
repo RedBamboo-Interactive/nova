@@ -2,7 +2,7 @@
   "id": "nova",
   "name": "Nova",
   "description": "AI companion chat interface with multi-agent discussions, delegation, and voice.",
-  "icon": "fa-star",
+  "icon": "ph-star",
   "color": "nova",
   "requires": ["entities", "records", "discussions", "ai-inference", "assets"],
   "backend": { "assembly": "Leaf.Plugins.Nova" },
@@ -11,9 +11,9 @@
     "route": "/apps/nova",
     "pwa": true,
     "sections": [
-      { "id": "chat", "name": "Chat", "icon": "fa-solid fa-comment", "path": "chat", "order": 1, "default": true },
-      { "id": "pulse", "name": "Pulse", "icon": "fa-solid fa-heart-pulse", "path": "pulse", "order": 2 },
-      { "id": "journal", "name": "Journal", "icon": "fa-solid fa-book", "path": "journal", "order": 3 }
+      { "id": "chat", "name": "Chat", "icon": "ph-fill ph-chat-circle", "path": "chat", "order": 1, "default": true },
+      { "id": "pulse", "name": "Pulse", "icon": "ph-fill ph-heartbeat", "path": "pulse", "order": 2 },
+      { "id": "journal", "name": "Journal", "icon": "ph-fill ph-book", "path": "journal", "order": 3 }
     ]
   },
   "permissions": [
