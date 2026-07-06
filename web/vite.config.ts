@@ -2,22 +2,31 @@ import { fileURLToPath } from "node:url"
 import { defineConfig } from "vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
+import { federation } from "@module-federation/vite"
 
-/**
- * Library-mode build for the .leafpkg web bundle (kernel design doc §6.2):
- * a single ESM entry (dist/plugin.js) plus the plugin's own compiled Tailwind
- * (dist/plugin.css). Shell-shared dependencies stay as bare specifiers and are
- * resolved at runtime by the kernel shell's import map — adding an external
- * here requires a matching shared module in the kernel
- * (PluginAssetEndpoints.SharedModules).
- *
- * `pnpm build:pkg` for release packaging, `pnpm dev` (vite build --watch) for
- * the workspace dev loop — the kernel serves dist/ via /plugin-assets/{id}/.
- */
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    federation({
+      name: "nova",
+      filename: "remoteEntry.js",
+      exposes: {
+        ".": "./src/index.ts",
+      },
+      shared: {
+        react: { singleton: true },
+        "react/jsx-runtime": { singleton: true },
+        "react-dom": { singleton: true },
+        "react-dom/client": { singleton: true },
+        "react-router-dom": { singleton: true },
+        "@redbamboo/ui": { singleton: true },
+        "@redbamboo/utility": { singleton: true },
+      },
+      dts: false,
+    }),
+  ],
   define: {
-    // The bundle loads into an already-built shell — always production semantics.
     "process.env.NODE_ENV": JSON.stringify("production"),
   },
   build: {
@@ -28,18 +37,12 @@ export default defineConfig({
       cssFileName: "plugin",
     },
     rollupOptions: {
-      external: [
-        "react",
-        "react/jsx-runtime",
-        "react-dom",
-        "react-dom/client",
-        "react-router-dom",
-        "@redbamboo/ui",
-        "@redbamboo/utility",
-      ],
       output: {
         chunkFileNames: "chunks/[name]-[hash].js",
-        assetFileNames: "assets/[name]-[hash][extname]",
+        assetFileNames: (info) => {
+          const n = (info.names && info.names[0]) || info.name || ""
+          return n.endsWith(".css") ? "plugin.css" : "assets/[name]-[hash][extname]"
+        },
       },
     },
   },
