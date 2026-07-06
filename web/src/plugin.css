@@ -1,0 +1,12 @@
+/* Compiled per-plugin Tailwind for the .leafpkg bundle (kernel design §6.1).
+   Theme + utilities only: the shell already ships preflight and base styles,
+   so this file must never re-emit them. Built against the shared @redbamboo/ui
+   tokens so utility values match the shell's exactly. */
+@layer theme, base, components, utilities;
+@import "@redbamboo/ui/tokens.css";
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@source "./";
+/* @redbamboo/chat is bundled into plugin.js (not import-map-shared), so its
+   classes must be scanned here — node_modules is excluded by default. */
+@source "../node_modules/@redbamboo/chat/src";

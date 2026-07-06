@@ -1,6 +1,8 @@
 {
   "id": "nova",
   "name": "Nova",
+  "version": "0.1.0",
+  "kernelApi": "^0.1.0",
   "description": "AI companion chat interface with multi-agent discussions, delegation, and voice.",
   "icon": "ph-star",
   "color": "nova",
