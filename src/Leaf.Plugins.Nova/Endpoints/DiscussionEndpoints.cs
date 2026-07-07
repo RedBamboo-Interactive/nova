@@ -14,6 +14,8 @@ public class CreateDiscussionRequest
 {
     public string? AgentId { get; set; }
     public string? Type { get; set; }
+    public string? QualityTier { get; set; }
+    public string? Provider { get; set; }
 }
 
 public class DiscussionTitleRequest
@@ -191,7 +193,8 @@ public static class DiscussionEndpoints
                     return Results.Json(new { error = "A LIVE discussion already exists for this agent" }, statusCode: 409);
             }
 
-            var discussion = await store.CreateAsync(null, agentId, UserId(ctx), type);
+            var discussion = await store.CreateAsync(null, agentId, UserId(ctx), type,
+                createReq?.QualityTier, createReq?.Provider);
 
             await events.PublishAsync("discussion.created", new JsonObject
             {

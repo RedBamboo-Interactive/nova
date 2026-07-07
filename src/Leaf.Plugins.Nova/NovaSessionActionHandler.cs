@@ -49,7 +49,7 @@ public sealed class NovaSessionActionHandler(
         // contract the standalone app's automations relied on.
         DiscussionRead? preCreated = null;
         if (Bool(config, "preCreateDiscussion"))
-            preCreated = await discussions.CreateAsync(null, agent.Id, ownerId, "chat", ct);
+            preCreated = await discussions.CreateAsync(null, agent.Id, ownerId, "chat", ct: ct);
 
         var fullPrompt = ComposePrompt(automation.Name, agent, preCreated, prompt);
 

@@ -55,7 +55,8 @@ public sealed record DiscussionRead(
     DateTime CreatedAt, DateTime LastActivity, int MessageCount,
     DateTime? LastReadAt, string? OwnerId, Guid EntityId,
     string? AgentId, string Type = "chat",
-    string? LastContextJson = null, string? InjectedContext = null);
+    string? LastContextJson = null, string? InjectedContext = null,
+    string? QualityTier = null, string? Provider = null);
 
 /// <summary>
 /// Centralized owner-scoping rules for user-owned resources. A resource is accessible
@@ -108,16 +109,20 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         return entity == null ? null : Map(entity);
     }
 
-    public async Task<DiscussionRead> CreateAsync(string? title, string? agentId, string? ownerId, string type = "chat", CancellationToken ct = default)
+    public async Task<DiscussionRead> CreateAsync(string? title, string? agentId, string? ownerId, string type = "chat",
+        string? qualityTier = null, string? provider = null, CancellationToken ct = default)
     {
         var discussionId = Guid.NewGuid().ToString("N")[..8];
-        var entity = await discussions.CreateAsync(title, agentId, new JsonObject
+        var data = new JsonObject
         {
             ["discussion_id"] = discussionId,
             ["app"] = "nova",
             ["owner_id"] = ownerId,
             ["type"] = type,
-        }, ct);
+        };
+        if (qualityTier != null) data["quality_tier"] = qualityTier;
+        if (provider != null) data["provider"] = provider;
+        var entity = await discussions.CreateAsync(title, agentId, data, ct);
         return Map(entity)!;
     }
 
@@ -182,7 +187,9 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             Str(d, "agent"),
             Str(d, "type") ?? "chat",
             Str(d, "last_context_json"),
-            Str(d, "injected_context"));
+            Str(d, "injected_context"),
+            Str(d, "quality_tier"),
+            Str(d, "provider"));
     }
 
     public static object ToInfo(DiscussionRead d) => new
@@ -197,6 +204,8 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         messageCount = d.MessageCount,
         lastReadAt = d.LastReadAt,
         agentId = d.AgentId,
+        qualityTier = d.QualityTier,
+        provider = d.Provider,
     };
 
     private static string? Str(JsonObject data, string key)

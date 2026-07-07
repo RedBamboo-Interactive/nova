@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useDeferredValue } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { MasterDetailLayout, PanelHeader, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@redbamboo/ui"
+import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
 import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent } from "@redbamboo/chat"
 import { useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
@@ -93,7 +93,6 @@ export function ChatView() {
     isSpawning,
     pendingQuestion,
     selectDiscussion,
-    createDiscussion,
     sendMessage,
     interruptDiscussion,
     answerQuestion,
@@ -111,6 +110,7 @@ export function ChatView() {
   useEffect(() => {
     if (urlDiscussionId && urlDiscussionId !== activeDiscussionId) {
       selectDiscussion(urlDiscussionId)
+      setMobileTab(1)
     }
   }, [urlDiscussionId, activeDiscussionId, selectDiscussion])
 
@@ -119,7 +119,7 @@ export function ChatView() {
     activeDiscussion?.title || "New Discussion",
   )
 
-  const { agents, getAgent, defaultAgentId } = useAgents()
+  const { agents, getAgent } = useAgents()
   const multiAgent = agents.length > 1
   const settings = useLocalSettings()
   const agentFilter = settings.agentFilter
@@ -177,12 +177,9 @@ export function ChatView() {
     return () => handleSelectDiscussion(discussionId)
   }, [handleSelectDiscussion])
 
-  const handleNewDiscussion = useCallback(async (agentId?: string) => {
-    const effectiveAgentId = agentId ?? agentFilter ?? defaultAgentId ?? undefined
-    const d = await createDiscussion(effectiveAgentId)
-    if (d) navigate(`/apps/nova/chat/${d.id}`)
-    setMobileTab(1)
-  }, [createDiscussion, navigate, agentFilter, defaultAgentId])
+  const openNewDiscussion = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("nova:open-new-discussion"))
+  }, [])
 
   const upstreamBanner = !upstreamConnected && (
     <div className="flex items-center gap-2 px-4 py-2 bg-accent-teal-a15 border-b border-overlay-6 text-text-muted text-sm">
@@ -214,37 +211,14 @@ export function ChatView() {
           showAll
         />
       )}
-      {multiAgent ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10 cursor-pointer">
-            <i className="ph-fill ph-plus text-xs" />
-            <span>New</span>
-            <i className="ph-fill ph-caret-down text-[8px] opacity-50" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" sideOffset={4}>
-            {agents.map((agent) => (
-              <DropdownMenuItem key={agent.id} onClick={() => handleNewDiscussion(agent.id)}>
-                <img
-                  src={agent.avatarUrl}
-                  alt={agent.name}
-                  className="w-4 h-4 rounded object-cover"
-                  onError={(e) => { e.currentTarget.style.display = "none" }}
-                />
-                {agent.name}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : (
-        <button
-          onClick={() => handleNewDiscussion()}
-          className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
-          title="New discussion"
-        >
-          <i className="ph-fill ph-plus text-xs" />
-          <span>New</span>
-        </button>
-      )}
+      <button
+        onClick={openNewDiscussion}
+        className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
+        title="New discussion (Ctrl+N)"
+      >
+        <i className="ph-fill ph-plus text-xs" />
+        <span>New</span>
+      </button>
     </PanelHeader>
   )
 
@@ -336,7 +310,7 @@ export function ChatView() {
           <i className="ph-fill ph-star text-3xl mx-auto mb-3 opacity-30" />
           <p className="text-sm mb-4">Start a conversation</p>
           <button
-            onClick={() => handleNewDiscussion()}
+            onClick={openNewDiscussion}
             className="text-xs px-3 py-1.5 rounded bg-overlay-10 hover:bg-overlay-15 text-contrast transition-colors"
           >
             <i className="ph-fill ph-plus mr-1.5" />

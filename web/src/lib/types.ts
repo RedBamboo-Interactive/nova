@@ -11,6 +11,8 @@ export interface DiscussionInfo {
   messageCount: number
   lastReadAt: string | null
   agentId: string | null
+  qualityTier?: string | null
+  provider?: string | null
 }
 
 export interface AgentInfo {

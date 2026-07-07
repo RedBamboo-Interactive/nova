@@ -126,7 +126,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
             var discussionStore = host.GetRequiredService<DiscussionStore>();
             var all = await discussionStore.ListAsync(agents.NovaAgentId, ct);
             if (!all.Any(d => d.Type == "live" && d.AgentId == agents.NovaAgentId && !DiscussionStatus.IsClosed(d.Status)))
-                await discussionStore.CreateAsync($"{nova!.Name} Live", agents.NovaAgentId, "local-user", "live", ct);
+                await discussionStore.CreateAsync($"{nova!.Name} Live", agents.NovaAgentId, "local-user", "live", ct: ct);
         }
 
         // Steam credentials for the LIVE poller: migrate from the standalone app's

@@ -374,11 +374,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
   }, [visibleDiscussions, activeDiscussionId, selectDiscussion])
 
-  const createDiscussion = useCallback(async (agentId?: string) => {
+  const createDiscussion = useCallback(async (agentId?: string, qualityTier?: string, provider?: string) => {
     setIsSpawning(true)
     try {
-      const body = agentId ? { agentId } : undefined
-      const d = await api.post<DiscussionInfo>("/api/apps/nova/discussions", body)
+      const body: Record<string, string> = {}
+      if (agentId) body.agentId = agentId
+      if (qualityTier) body.qualityTier = qualityTier
+      if (provider) body.provider = provider
+      const d = await api.post<DiscussionInfo>("/api/apps/nova/discussions", Object.keys(body).length ? body : undefined)
       setDiscussions((prev) => prev.some((x) => x.id === d.id) ? prev : [d, ...prev])
       setActiveDiscussionId(d.id)
       setMessages((prev) => ({ ...prev, [d.id]: [] }))

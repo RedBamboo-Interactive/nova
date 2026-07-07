@@ -44,19 +44,30 @@ public sealed class MessagePipeline(
         {
             try
             {
-                var sessionId = await TryCreateSessionAsync(discussion.AgentId, discussion.OwnerId);
-                if (sessionId is null) return null;
+                var sessionId = await TryCreateSessionAsync(discussion.AgentId, discussion.OwnerId,
+                    discussion.QualityTier, discussion.Provider);
+                if (sessionId is null)
+                {
+                    await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped);
+                    return null;
+                }
                 var current = await store.GetAsync(discId);
                 if (current is { SessionId: null })
                     await store.PatchAsync(current.EntityId, new JsonObject { ["session_id"] = sessionId });
                 return sessionId;
             }
-            catch { return null; }
+            catch
+            {
+                try { await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped); }
+                catch { /* best effort */ }
+                return null;
+            }
             finally { _pendingSessions.TryRemove(discId, out _); }
         });
     }
 
-    public async Task<string?> TryCreateSessionAsync(string? agentId, string? ownerId, CancellationToken ct = default)
+    public async Task<string?> TryCreateSessionAsync(string? agentId, string? ownerId,
+        string? qualityTierOverride = null, string? providerOverride = null, CancellationToken ct = default)
     {
         var workspace = await workspaces.GetAsync(agentId, ct);
         workspace.GenerateClaudeMd();
@@ -67,10 +78,11 @@ public sealed class MessagePipeline(
         var body = new Dictionary<string, object?>
         {
             ["projectPath"] = workspace.WorkspacePath,
-            ["qualityTier"] = appConfig.DefaultQualityMode,
+            ["qualityTier"] = qualityTierOverride ?? appConfig.DefaultQualityMode,
         };
-        if (agentProvider != null)
-            body["provider"] = agentProvider;
+        var effectiveProvider = providerOverride ?? agentProvider;
+        if (effectiveProvider != null)
+            body["provider"] = effectiveProvider;
 
         return await redCompute.CreateSessionAsync(body, ownerId, "Nova:agent", ct);
     }
@@ -90,7 +102,8 @@ public sealed class MessagePipeline(
         {
             try
             {
-                sessionId = await TryCreateSessionAsync(discussion.AgentId, discussion.OwnerId, ct);
+                sessionId = await TryCreateSessionAsync(discussion.AgentId, discussion.OwnerId,
+                    discussion.QualityTier, discussion.Provider, ct);
             }
             catch
             {

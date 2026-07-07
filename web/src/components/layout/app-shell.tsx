@@ -8,6 +8,7 @@ import {
 import { useCommand } from "@redbamboo/utility"
 import { SettingsPanel } from "../../components/layout/settings-panel"
 import { SearchOverlay } from "../../components/discussion/search-overlay"
+import { NewDiscussionPicker } from "../../components/new-discussion-picker"
 import { useDisc } from "../../App"
 
 function SettingsCommand({ onSettings }: { onSettings: () => void }) {
@@ -25,13 +26,12 @@ function SettingsCommand({ onSettings }: { onSettings: () => void }) {
  * Discussion commands live at the Nova shell level so Ctrl+N etc. work from any
  * panel (Pulse, Journal) — each action navigates to the chat panel as needed.
  */
-function DiscussionCommands({ navigate }: { navigate: (path: string) => void }) {
+function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: string) => void; onNewDiscussion: () => void }) {
   const {
     discussions,
     activeDiscussion,
     activeDiscussionId,
     isStreaming,
-    createDiscussion,
     archiveDiscussion,
     resumeDiscussion,
     interruptDiscussion,
@@ -43,10 +43,7 @@ function DiscussionCommands({ navigate }: { navigate: (path: string) => void }) 
     group: "Discussions",
     shortcut: "Ctrl+N",
     keywords: ["start", "create", "new", "chat"],
-    action: async () => {
-      const d = await createDiscussion()
-      if (d) navigate(`/apps/nova/chat/${d.id}`)
-    },
+    action: onNewDiscussion,
   })
 
   useCommand("nova-switch-discussion", {
@@ -159,19 +156,37 @@ interface Props {
 export function AppShell({ children }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const navigate = useNavigate()
+  const { createDiscussion } = useDisc()
+
+  const openPicker = useCallback(() => setPickerOpen(true), [])
 
   const toggleSettings = useCallback(() => setSettingsOpen((prev) => !prev), [])
   useEffect(() => {
     window.addEventListener("nova-toggle-settings", toggleSettings)
-    return () => window.removeEventListener("nova-toggle-settings", toggleSettings)
-  }, [toggleSettings])
+    window.addEventListener("nova:open-new-discussion", openPicker)
+    return () => {
+      window.removeEventListener("nova-toggle-settings", toggleSettings)
+      window.removeEventListener("nova:open-new-discussion", openPicker)
+    }
+  }, [toggleSettings, openPicker])
+
+  const handlePickerSelect = useCallback(async (agentId: string, qualityTier: string, provider?: string) => {
+    const d = await createDiscussion(agentId, qualityTier, provider)
+    if (d) navigate(`/apps/nova/chat/${d.id}`)
+  }, [createDiscussion, navigate])
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <DiscussionCommands navigate={navigate} />
+      <DiscussionCommands navigate={navigate} onNewDiscussion={openPicker} />
       <SearchCommand onOpen={() => setSearchOpen(true)} />
       <SettingsCommand onSettings={() => setSettingsOpen((prev) => !prev)} />
+      <NewDiscussionPicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onSelect={handlePickerSelect}
+      />
       {searchOpen && (
         <SearchOverlay
           onClose={() => setSearchOpen(false)}
