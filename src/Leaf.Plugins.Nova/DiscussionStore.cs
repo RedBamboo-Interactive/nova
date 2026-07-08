@@ -56,7 +56,8 @@ public sealed record DiscussionRead(
     DateTime? LastReadAt, string? OwnerId, Guid EntityId,
     string? AgentId, string Type = "chat",
     string? LastContextJson = null, string? InjectedContext = null,
-    string? QualityTier = null, string? Provider = null);
+    string? QualityTier = null, string? Provider = null,
+    bool Confidential = false);
 
 /// <summary>
 /// Centralized owner-scoping rules for user-owned resources. A resource is accessible
@@ -189,7 +190,8 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             Str(d, "last_context_json"),
             Str(d, "injected_context"),
             Str(d, "quality_tier"),
-            Str(d, "provider"));
+            Str(d, "provider"),
+            Bool(d, "confidential") ?? false);
     }
 
     public static object ToInfo(DiscussionRead d) => new
@@ -206,6 +208,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         agentId = d.AgentId,
         qualityTier = d.QualityTier,
         provider = d.Provider,
+        confidential = d.Confidential,
     };
 
     private static string? Str(JsonObject data, string key)
@@ -213,6 +216,14 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         var node = data[key];
         if (node is not JsonValue v) return null;
         return v.TryGetValue<string>(out var s) ? s : null;
+    }
+
+    private static bool? Bool(JsonObject data, string key)
+    {
+        var node = data[key];
+        if (node is not JsonValue v) return null;
+        if (v.TryGetValue<bool>(out var b)) return b;
+        return null;
     }
 
     private static int? Int(JsonObject data, string key)

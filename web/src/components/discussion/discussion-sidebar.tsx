@@ -114,7 +114,12 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           : unread ? "[&_[data-slot=item-list-title]]:text-contrast [&_[data-slot=item-list-title]]:font-semibold"
           : "",
         ].filter(Boolean).join(" ")}
-        title={discussion.title || "New discussion"}
+        title={
+          <>
+            {discussion.title || "New discussion"}
+            {discussion.confidential && <i className="ph-fill ph-lock-simple text-[10px] text-text-muted ml-1.5 opacity-60" />}
+          </>
+        }
         subtitle={formatRelative(discussion.lastActivity)}
         trailing={
           discussion.status !== "archived" ? (

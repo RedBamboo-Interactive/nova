@@ -146,18 +146,18 @@ public sealed class DiscussionActivity(LiveEvents live)
     private readonly ConcurrentDictionary<string, DateTime> _lastNovaEvent = new();
     private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(2);
 
-    public async Task OnUserMessage(string discussionId, string? title, string contentPreview)
+    public async Task OnUserMessage(string discussionId, string? title, string contentPreview, bool confidential = false)
     {
-        if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title)) return;
+        if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title) || confidential) return;
         var preview = Truncate(contentPreview, 80);
         if (preview == "…") return;
         await live.PostAsync("discussion", $"Laurent in \"{title}\": {preview}",
             new { discussionId, title, kind = "user-message", preview });
     }
 
-    public async Task OnNovaMessage(string discussionId, string? title, string contentPreview)
+    public async Task OnNovaMessage(string discussionId, string? title, string contentPreview, bool confidential = false)
     {
-        if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title)) return;
+        if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title) || confidential) return;
         if (!TryThrottle(discussionId)) return;
         var preview = Truncate(contentPreview, 80);
         if (preview == "…") return;
@@ -165,9 +165,9 @@ public sealed class DiscussionActivity(LiveEvents live)
             new { discussionId, title, kind = "nova-message", preview });
     }
 
-    public async Task OnArchived(string discussionId, string? title)
+    public async Task OnArchived(string discussionId, string? title, bool confidential = false)
     {
-        if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title)) return;
+        if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title) || confidential) return;
         await live.PostAsync("discussion", $"\"{title}\" archived",
             new { discussionId, title, kind = "archived" });
     }

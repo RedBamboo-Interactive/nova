@@ -23,6 +23,11 @@ public class DiscussionTitleRequest
     public string? Title { get; set; }
 }
 
+public class DiscussionConfidentialRequest
+{
+    public bool Confidential { get; set; }
+}
+
 public class DiscussionEventRequest
 {
     public string Content { get; set; } = "";
@@ -292,6 +297,7 @@ public static class DiscussionEndpoints
 
             var discussions = (await store.ListAsync())
                 .Where(d => d.LastActivity >= since && OwnerScope.CanAccess(d.OwnerId, userId))
+                .Where(d => !d.Confidential)
                 .Take(limit)
                 .ToList();
 
@@ -357,6 +363,7 @@ public static class DiscussionEndpoints
             var all = (await store.ListAsync())
                 .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
                 .Where(d => !DiscussionStatus.IsClosed(d.Status) || d.LastActivity >= cutoff)
+                .Where(d => !d.Confidential || d.Id == id)
                 .ToList();
 
             var own = discussion.AgentId != null
@@ -390,6 +397,16 @@ public static class DiscussionEndpoints
             await store.PatchAsync(discussion.EntityId, new JsonObject { ["title"] = request.Title },
                 name: request.Title ?? $"Discussion {id}");
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Title = request.Title }));
+        });
+
+        group.MapPut("/discussions/{id}/confidential", async (string id, DiscussionConfidentialRequest request, HttpContext ctx, DiscussionStore store) =>
+        {
+            var discussion = await store.GetAsync(id);
+            if (discussion is null) return NotFound();
+            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+
+            await store.PatchAsync(discussion.EntityId, new JsonObject { ["confidential"] = request.Confidential });
+            return Results.Ok(DiscussionStore.ToInfo(discussion with { Confidential = request.Confidential }));
         });
 
         group.MapPut("/discussions/{id}/read", async (string id, HttpContext ctx, DiscussionStore store) =>
@@ -441,7 +458,7 @@ public static class DiscussionEndpoints
             var status = await lifecycle.BeginArchiveAsync(discussion);
             if (status == null) return NotFound();
 
-            _ = activity.OnArchived(id, discussion.Title);
+            _ = activity.OnArchived(id, discussion.Title, discussion.Confidential);
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Status = status }));
         });
 
@@ -500,7 +517,7 @@ public static class DiscussionEndpoints
             // Same two-phase archive as DELETE; session_id stays until the finalizer
             // confirms the stop, so the session cannot be orphaned by a rotation.
             await lifecycle.BeginArchiveAsync(discussion);
-            _ = activity.OnArchived(discussion.Id, discussion.Title);
+            _ = activity.OnArchived(discussion.Id, discussion.Title, discussion.Confidential);
 
             var fresh = await store.CreateAsync(null, discussion.AgentId, discussion.OwnerId, "live");
 
@@ -602,7 +619,7 @@ public static class DiscussionEndpoints
                 ["senderAgentId"] = request.SenderAgentId,
             });
 
-            _ = activity.OnNovaMessage(id, discussion.Title, request.Content);
+            _ = activity.OnNovaMessage(id, discussion.Title, request.Content, discussion.Confidential);
             return Results.Ok(new { success = true });
         });
 
@@ -630,7 +647,7 @@ public static class DiscussionEndpoints
                 return Results.Json(new { error = outcome.ErrorMessage, code = outcome.ErrorCode }, statusCode: 502);
 
             _ = activity.OnUserMessage(id, discussion.Title,
-                string.IsNullOrWhiteSpace(request.Content) ? "[image]" : request.Content);
+                string.IsNullOrWhiteSpace(request.Content) ? "[image]" : request.Content, discussion.Confidential);
             return Results.Ok(new { success = true, sessionId = outcome.SessionId, metadata = outcome.Metadata, messageUid = outcome.MessageUid });
         });
 

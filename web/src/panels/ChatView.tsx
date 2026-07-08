@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useDeferredValue } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { MasterDetailLayout, PanelHeader } from "@redbamboo/ui"
+import { MasterDetailLayout, PanelHeader, Switch } from "@redbamboo/ui"
 import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent } from "@redbamboo/chat"
 import { useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
@@ -100,6 +100,7 @@ export function ChatView() {
     rotateDiscussion,
     dismissDiscussion,
     renameDiscussion,
+    setConfidential,
     resumeDiscussion,
     isLoadingMessages,
     upstreamConnected,
@@ -188,6 +189,11 @@ export function ChatView() {
     </div>
   )
 
+  const handleConfidentialToggle = useCallback((checked: boolean) => {
+    if (!activeDiscussionId) return
+    setConfidential(activeDiscussionId, checked)
+  }, [activeDiscussionId, setConfidential])
+
   const chatHeader = activeDiscussion && (
     <PanelHeader
       leading={
@@ -197,7 +203,19 @@ export function ChatView() {
         />
       }
     >
-      <ContextIndicator stats={sessionStats} messages={activeMessages} />
+      <ContextIndicator stats={sessionStats} messages={activeMessages}>
+        <div className="flex items-center justify-between py-1.5 border-t border-overlay-6 pt-3">
+          <div className="flex items-center gap-2">
+            <i className="ph-fill ph-lock-simple text-xs text-text-muted" />
+            <span className="text-xs text-text-muted">Confidential</span>
+          </div>
+          <Switch
+            size="sm"
+            checked={activeDiscussion.confidential ?? false}
+            onCheckedChange={handleConfidentialToggle}
+          />
+        </div>
+      </ContextIndicator>
     </PanelHeader>
   )
 

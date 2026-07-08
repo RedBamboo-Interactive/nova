@@ -143,6 +143,7 @@ public sealed class MessagePipeline(
         var all = (await store.ListAsync(ct: ct))
             .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
             .Where(d => !DiscussionStatus.IsClosed(d.Status) || d.LastActivity >= cutoff)
+            .Where(d => !d.Confidential || d.Id == discussion.Id)
             .ToList();
 
         var ownDiscussions = discussion.AgentId != null

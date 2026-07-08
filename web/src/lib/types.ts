@@ -13,6 +13,7 @@ export interface DiscussionInfo {
   agentId: string | null
   qualityTier?: string | null
   provider?: string | null
+  confidential?: boolean
 }
 
 export interface AgentInfo {

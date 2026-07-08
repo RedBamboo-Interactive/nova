@@ -765,6 +765,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
     setDiscussions((prev) => prev.map((d) => d.id === id ? { ...d, title } : d))
   }, [])
 
+  const setConfidential = useCallback(async (id: string, confidential: boolean) => {
+    await api.put(`/api/apps/nova/discussions/${id}/confidential`, { confidential })
+    setDiscussions((prev) => prev.map((d) => d.id === id ? { ...d, confidential } : d))
+  }, [])
+
   return {
     discussions: visibleDiscussions,
     activeDiscussion,
@@ -782,6 +787,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     rotateDiscussion,
     dismissDiscussion,
     renameDiscussion,
+    setConfidential,
     resumeDiscussion,
     refreshDiscussions,
     syncAndRefresh,
