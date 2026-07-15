@@ -24,6 +24,7 @@ public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
     private SteamState? _lastSteam;
     private DateTime? _steamSessionStart;
     private List<string>? _steamFriendIds;
+    private List<string> _lastSteamFriendsInGame = [];
 
     private readonly HttpClient _kernel = new() { BaseAddress = new Uri(KernelBase), Timeout = TimeSpan.FromSeconds(10) };
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
@@ -342,6 +343,7 @@ public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
         {
             _steamSessionStart = DateTime.UtcNow;
             var friends = await GetFriendsInGameAsync(apiKey, steamId, current.GameId);
+            _lastSteamFriendsInGame = friends;
             var withStr = friends.Count > 0 ? $" with {string.Join(", ", friends)}" : "";
             await live.PostAsync("steam", $"Started playing {current.Game}{withStr}",
                 new { game = current.Game, gameId = current.GameId, friends, status = "playing" });
@@ -354,14 +356,29 @@ public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
 
             _steamSessionStart = DateTime.UtcNow;
             var friends = await GetFriendsInGameAsync(apiKey, steamId, current.GameId);
+            _lastSteamFriendsInGame = friends;
             var withStr = friends.Count > 0 ? $" with {string.Join(", ", friends)}" : "";
             await live.PostAsync("steam", $"Started playing {current.Game}{withStr}",
                 new { game = current.Game, gameId = current.GameId, friends, status = "playing" });
+        }
+        else if (current.Game != null && current.GameId == _lastSteam.GameId)
+        {
+            var friends = await GetFriendsInGameAsync(apiKey, steamId, current.GameId);
+            var joined = friends.Except(_lastSteamFriendsInGame).ToList();
+            var left = _lastSteamFriendsInGame.Except(friends).ToList();
+            if (joined.Count > 0)
+                await live.PostAsync("steam", $"{string.Join(", ", joined)} joined {current.Game}",
+                    new { game = current.Game, friends, joined, status = "group-changed" });
+            if (left.Count > 0)
+                await live.PostAsync("steam", $"{string.Join(", ", left)} left {current.Game}",
+                    new { game = current.Game, friends, left, status = "group-changed" });
+            _lastSteamFriendsInGame = friends;
         }
         else if (current.Game == null && _lastSteam.Game != null)
         {
             var duration = FormatDuration(_steamSessionStart);
             _steamSessionStart = null;
+            _lastSteamFriendsInGame = [];
             await live.PostAsync("steam", $"Stopped playing {_lastSteam.Game}{(duration != null ? $" ({duration})" : "")}",
                 new { game = _lastSteam.Game, status = "stopped", duration });
         }

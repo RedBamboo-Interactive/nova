@@ -160,7 +160,7 @@ public static class AgentEndpoints
                     ["agent"] = agentId,
                     ["asset"] = assetUrl,
                     ["prompt"] = prompt,
-                    ["nsfw"] = nsfw ? "true" : "false",
+                    ["nsfw"] = nsfw,
                 };
                 if (reasoning != null) data["reasoning"] = reasoning;
 
