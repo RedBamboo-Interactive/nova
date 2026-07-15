@@ -184,7 +184,7 @@ export function ChatView() {
 
   const upstreamBanner = !upstreamConnected && (
     <div className="flex items-center gap-2 px-4 py-2 bg-accent-teal-a15 border-b border-overlay-6 text-text-muted text-sm">
-      <i className="ph-fill ph-arrows-clockwise animate-spin" />
+      <i className="ph-bold ph-arrows-clockwise animate-spin" />
       <span>Reconnecting to AI service…</span>
     </div>
   )
@@ -206,7 +206,7 @@ export function ChatView() {
       <ContextIndicator stats={sessionStats} messages={activeMessages}>
         <div className="flex items-center justify-between py-1.5 border-t border-overlay-6 pt-3">
           <div className="flex items-center gap-2">
-            <i className="ph-fill ph-lock-simple text-xs text-text-muted" />
+            <i className="ph-bold ph-lock-simple text-xs text-text-muted" />
             <span className="text-xs text-text-muted">Confidential</span>
           </div>
           <Switch
@@ -234,7 +234,7 @@ export function ChatView() {
         className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
         title="New discussion (Ctrl+N)"
       >
-        <i className="ph-fill ph-plus text-xs" />
+        <i className="ph-bold ph-plus text-xs" />
         <span>New</span>
       </button>
     </PanelHeader>
@@ -290,7 +290,7 @@ export function ChatView() {
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
       {isLoadingMessages && activeMessages.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center z-10">
-          <i className="ph-fill ph-spinner animate-spin text-2xl opacity-40" />
+          <i className="ph-bold ph-spinner animate-spin text-2xl opacity-40" />
         </div>
       )}
       <ChatPanel
@@ -320,18 +320,18 @@ export function ChatView() {
     <div className="flex-1 flex items-center justify-center text-text-muted">
       {isSpawning ? (
         <div className="text-center">
-          <i className="ph-fill ph-spinner animate-spin text-2xl mx-auto mb-3 opacity-40" />
+          <i className="ph-bold ph-spinner animate-spin text-2xl mx-auto mb-3 opacity-40" />
           <p className="text-sm">Starting discussion…</p>
         </div>
       ) : (
         <div className="text-center">
-          <i className="ph-fill ph-star text-3xl mx-auto mb-3 opacity-30" />
+          <i className="ph-bold ph-star text-3xl mx-auto mb-3 opacity-30" />
           <p className="text-sm mb-4">Start a conversation</p>
           <button
             onClick={openNewDiscussion}
             className="text-xs px-3 py-1.5 rounded bg-overlay-10 hover:bg-overlay-15 text-contrast transition-colors"
           >
-            <i className="ph-fill ph-plus mr-1.5" />
+            <i className="ph-bold ph-plus mr-1.5" />
             New Discussion
           </button>
         </div>
@@ -355,7 +355,7 @@ export function ChatView() {
             style={{ opacity: avatarOpacity }}
           />
           <div className="absolute inset-1.5 rounded-full bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-            <i className="ph-fill ph-t-shirt text-white/0 group-hover:text-white/70 text-xs transition-colors" />
+            <i className="ph-bold ph-t-shirt text-white/0 group-hover:text-white/70 text-xs transition-colors" />
           </div>
         </button>
       )}
@@ -393,7 +393,7 @@ export function ChatView() {
                   className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
                 />
                 <div className="absolute inset-0 rounded-full bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                  <i className="ph-fill ph-t-shirt text-white/0 group-hover:text-white/70 text-lg transition-colors" />
+                  <i className="ph-bold ph-t-shirt text-white/0 group-hover:text-white/70 text-lg transition-colors" />
                 </div>
               </div>
             </button>

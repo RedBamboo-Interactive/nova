@@ -12,10 +12,10 @@ interface QualityTierInfo { slug: string; label: string; color: string; icon: st
 interface ProviderInfo { slug: string; name: string; backend: string; icon?: string; isDefault: boolean; defaultModel?: string; hasApiKey: boolean; description?: string }
 
 const FALLBACK_TIERS: QualityTierInfo[] = [
-  { slug: "fast",     label: "Fast",     color: "#22d3ee", icon: "ph-fill ph-rabbit"     },
-  { slug: "standard", label: "Standard", color: "#a78bfa", icon: "ph-fill ph-lightning"  },
-  { slug: "deep",     label: "Deep",     color: "#fb923c", icon: "ph-fill ph-brain"      },
-  { slug: "research", label: "Research", color: "#f43f5e", icon: "ph-fill ph-microscope" },
+  { slug: "fast",     label: "Fast",     color: "#22d3ee", icon: "ph-bold ph-rabbit"     },
+  { slug: "standard", label: "Standard", color: "#a78bfa", icon: "ph-bold ph-lightning"  },
+  { slug: "deep",     label: "Deep",     color: "#fb923c", icon: "ph-bold ph-brain"      },
+  { slug: "research", label: "Research", color: "#f43f5e", icon: "ph-bold ph-microscope" },
 ]
 
 interface Props {
@@ -163,9 +163,9 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
             {providers.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium text-text-muted hover:text-text hover:bg-overlay-5 transition-colors cursor-pointer">
-                  <i className={(selectedProv?.icon ?? "ph-fill ph-plug") + " text-[10px]"} />
+                  <i className={(selectedProv?.icon ?? "ph-bold ph-plug") + " text-[10px]"} />
                   <span>{selectedProv?.name ?? "Provider"}</span>
-                  <i className="ph-fill ph-caret-down text-[8px] opacity-50" />
+                  <i className="ph-bold ph-caret-down text-[8px] opacity-50" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" sideOffset={4}>
                   {providers.map(p => (
@@ -174,7 +174,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
                       onClick={() => setSelectedProvider(p.slug)}
                       className={selectedProvider === p.slug ? "text-primary" : ""}
                     >
-                      <i className={(p.icon ?? "ph-fill ph-plug") + " size-4 text-center"} />
+                      <i className={(p.icon ?? "ph-bold ph-plug") + " size-4 text-center"} />
                       {p.name}
                     </DropdownMenuItem>
                   ))}
@@ -185,7 +185,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
               <DropdownMenuTrigger className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium text-text-muted hover:text-text hover:bg-overlay-5 transition-colors cursor-pointer">
                 <i className={selectedTier.icon + " text-[10px]"} style={{ color: selectedTier.color }} />
                 <span>{selectedTier.label}</span>
-                <i className="ph-fill ph-caret-down text-[8px] opacity-50" />
+                <i className="ph-bold ph-caret-down text-[8px] opacity-50" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" sideOffset={4}>
                 {tiers.map(tier => (

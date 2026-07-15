@@ -76,7 +76,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-accent-teal transition-all"
             title="Rotate timeline"
           >
-            <i className="ph-fill ph-arrows-clockwise text-xs" />
+            <i className="ph-bold ph-arrows-clockwise text-xs" />
           </button>
         }
       />
@@ -117,7 +117,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         title={
           <>
             {discussion.title || "New discussion"}
-            {discussion.confidential && <i className="ph-fill ph-lock-simple text-[10px] text-text-muted ml-1.5 opacity-60" />}
+            {discussion.confidential && <i className="ph-bold ph-lock-simple text-[10px] text-text-muted ml-1.5 opacity-60" />}
           </>
         }
         subtitle={formatRelative(discussion.lastActivity)}
@@ -132,7 +132,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                 className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-red-400 transition-all"
                 title="Archive discussion"
               >
-                <i className="ph-fill ph-archive text-xs" />
+                <i className="ph-bold ph-archive text-xs" />
               </button>
             </div>
           ) : (
@@ -141,7 +141,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
               className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-contrast transition-all"
               title="Remove from list"
             >
-              <i className="ph-fill ph-x text-xs" />
+              <i className="ph-bold ph-x text-xs" />
             </button>
           )
         }

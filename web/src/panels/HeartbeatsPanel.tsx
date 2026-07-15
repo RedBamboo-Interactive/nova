@@ -73,11 +73,11 @@ function mapAutomationEntity(e: { id: string; name: string; data: unknown }): Au
 }
 
 const actionMeta: Record<string, { icon: string; label: string }> = {
-  "ai-session":     { icon: "ph-fill ph-brain",          label: "AI Session" },
-  "nova-session":   { icon: "ph-fill ph-brain",          label: "Nova Session" },
-  "http-check":     { icon: "ph-fill ph-broadcast",  label: "HTTP Watcher" },
-  "http-action":    { icon: "ph-fill ph-lightning",           label: "HTTP Action" },
-  "builtin:backup": { icon: "ph-fill ph-archive",    label: "System" },
+  "ai-session":     { icon: "ph-bold ph-brain",          label: "AI Session" },
+  "nova-session":   { icon: "ph-bold ph-brain",          label: "Nova Session" },
+  "http-check":     { icon: "ph-bold ph-broadcast",  label: "HTTP Watcher" },
+  "http-action":    { icon: "ph-bold ph-lightning",           label: "HTTP Action" },
+  "builtin:backup": { icon: "ph-bold ph-archive",    label: "System" },
 }
 
 function cronToHuman(cron: string): string {
@@ -204,8 +204,8 @@ function ConfigDisplay({ config }: { config: Record<string, unknown> }) {
 }
 
 function getIcon(a: Automation): string {
-  if (a.icon) return a.icon.startsWith("fa-") ? `ph-fill ${a.icon}` : a.icon
-  return (actionMeta[a.actionType] ?? { icon: "ph-fill ph-gear" }).icon
+  if (a.icon) return a.icon.startsWith("fa-") ? `ph-bold ${a.icon}` : a.icon
+  return (actionMeta[a.actionType] ?? { icon: "ph-bold ph-gear" }).icon
 }
 
 function AutomationDetail({ automation, onDelete, onTrigger, triggering }: {
@@ -214,7 +214,7 @@ function AutomationDetail({ automation, onDelete, onTrigger, triggering }: {
   onTrigger: () => void
   triggering: boolean
 }) {
-  const meta = actionMeta[automation.actionType] ?? { icon: "ph-fill ph-gear", label: automation.actionType }
+  const meta = actionMeta[automation.actionType] ?? { icon: "ph-bold ph-gear", label: automation.actionType }
   const isSystem = automation.name.startsWith("system:")
 
   return (
@@ -227,7 +227,7 @@ function AutomationDetail({ automation, onDelete, onTrigger, triggering }: {
           disabled={triggering}
           title="Run this automation now (runs in the background)"
         >
-          <i className={`ph-fill ${triggering ? "ph-spinner animate-spin" : "ph-play"} text-xs mr-1`} />
+          <i className={`ph-bold ${triggering ? "ph-spinner animate-spin" : "ph-play"} text-xs mr-1`} />
           {triggering ? "Started" : "Run now"}
         </Button>
         {!isSystem && (
@@ -237,7 +237,7 @@ function AutomationDetail({ automation, onDelete, onTrigger, triggering }: {
             onClick={onDelete}
             title="Delete automation"
           >
-            <i className="ph-fill ph-trash text-xs" />
+            <i className="ph-bold ph-trash text-xs" />
           </Button>
         )}
       </PanelHeader>
@@ -306,7 +306,7 @@ function AutomationDetail({ automation, onDelete, onTrigger, triggering }: {
             </div>
             <div className="bg-overlay-5 rounded-md p-3 space-y-2">
               <div className="flex items-center gap-2 text-xs">
-                <i className="ph-fill ph-check-circle text-green-500" />
+                <i className="ph-bold ph-check-circle text-green-500" />
                 <span className="font-medium">Succeeded</span>
                 {automation.lastRun && (
                   <span className="text-text-muted ml-auto">{formatTime(automation.lastRun)}</span>
@@ -326,7 +326,7 @@ function AutomationDetail({ automation, onDelete, onTrigger, triggering }: {
             </div>
             <div className="bg-overlay-5 rounded-md p-3 space-y-2">
               <div className="flex items-center gap-2 text-xs">
-                <i className="ph-fill ph-warning text-amber-500" />
+                <i className="ph-bold ph-warning text-amber-500" />
                 <span className="font-medium">
                   {automation.consecutiveFailures ? `${automation.consecutiveFailures} consecutive failure(s)` : "Last run failed"}
                 </span>
@@ -399,7 +399,7 @@ export function AutomationsPanel() {
   }, [navigate])
 
   const renderRow = useCallback((a: Automation, isSystem = false) => {
-    const meta = actionMeta[a.actionType] ?? { icon: "ph-fill ph-gear", label: a.actionType }
+    const meta = actionMeta[a.actionType] ?? { icon: "ph-bold ph-gear", label: a.actionType }
     return (
       <ItemListRow
         selected={a.name === selectedName}
@@ -428,7 +428,7 @@ export function AutomationsPanel() {
                 handleDelete(a)
               }}
             >
-              <i className="ph-fill ph-x text-xs" />
+              <i className="ph-bold ph-x text-xs" />
             </Button>
           ) : undefined
         }
@@ -456,7 +456,7 @@ export function AutomationsPanel() {
         {visibleAutomations.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-text-muted">
             <div className="text-center">
-              <i className="ph-fill ph-heartbeat text-2xl mb-3 opacity-30" />
+              <i className="ph-bold ph-heartbeat text-2xl mb-3 opacity-30" />
               <p className="text-sm">No routines{!isNovaSelected ? " for this agent" : " yet"}</p>
               {isNovaSelected && (
                 <p className="text-xs text-text-disabled mt-1">
@@ -503,7 +503,7 @@ export function AutomationsPanel() {
   ) : (
     <div className="h-full flex items-center justify-center text-text-muted">
       <div className="text-center">
-        <i className="ph-fill ph-heartbeat text-2xl mb-3 opacity-30" />
+        <i className="ph-bold ph-heartbeat text-2xl mb-3 opacity-30" />
         <p className="text-sm">Select a routine to view details</p>
       </div>
     </div>

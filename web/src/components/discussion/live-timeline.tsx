@@ -60,7 +60,7 @@ function buildEntries(
       const text = extractEventContent(msg)
       entries.push({
         kind: "event",
-        icon: eventType.icon ?? "ph-fill ph-radio-button",
+        icon: eventType.icon ?? "ph-bold ph-radio-button",
         iconColor: eventType.color ?? undefined,
         text,
         timestamp: ts,
@@ -112,7 +112,7 @@ export function LiveTimeline({ messages, isStreaming, onSend, onInterrupt, resol
           {entries.length === 0 && (
             <div className="flex items-center justify-center h-32 text-text-muted text-sm">
               <div className="text-center">
-                <i className="ph-fill ph-broadcast text-2xl opacity-30 mb-2" />
+                <i className="ph-bold ph-broadcast text-2xl opacity-30 mb-2" />
                 <p>Timeline is empty</p>
               </div>
             </div>

@@ -13,9 +13,9 @@
     "route": "/apps/nova",
     "pwa": true,
     "sections": [
-      { "id": "chat", "name": "Chat", "icon": "ph-fill ph-chat-circle", "path": "chat", "order": 1, "default": true },
-      { "id": "pulse", "name": "Pulse", "icon": "ph-fill ph-heartbeat", "path": "pulse", "order": 2 },
-      { "id": "journal", "name": "Journal", "icon": "ph-fill ph-book", "path": "journal", "order": 3 }
+      { "id": "chat", "name": "Chat", "icon": "ph-bold ph-chat-circle", "path": "chat", "order": 1, "default": true },
+      { "id": "pulse", "name": "Pulse", "icon": "ph-bold ph-heartbeat", "path": "pulse", "order": 2 },
+      { "id": "journal", "name": "Journal", "icon": "ph-bold ph-book", "path": "journal", "order": 3 }
     ]
   },
   "permissions": [

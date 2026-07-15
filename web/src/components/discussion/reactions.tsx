@@ -11,8 +11,8 @@ interface ReactionEmoji {
 
 const FALLBACK: ReactionEmoji[] = [
   { emoji: "👍", icon: "ph-light ph-thumbs-up", sort: 0 },
-  { emoji: "❤️", icon: "ph-fill ph-heart", color: "#ef4444", sort: 1 },
-  { emoji: "🔥", icon: "ph-fill ph-fire", color: "#f59e0b", sort: 2 },
+  { emoji: "❤️", icon: "ph-bold ph-heart", color: "#ef4444", sort: 1 },
+  { emoji: "🔥", icon: "ph-bold ph-fire", color: "#f59e0b", sort: 2 },
   { emoji: "👀", icon: "ph-light ph-eyes", sort: 3 },
   { emoji: "😂", icon: "ph-light ph-smiley", sort: 4 },
   { emoji: "🎉", icon: "ph-light ph-confetti", sort: 5 },
