@@ -382,7 +382,7 @@ export function ChatView() {
           {showAvatar && (
             <button
               onClick={() => setOutfitBrowserOpen(true)}
-              className="hidden md:flex justify-center px-3 pb-5 pt-2 w-full cursor-pointer group"
+              className="flex justify-center px-3 pb-5 pt-2 w-full cursor-pointer group"
               style={{ opacity: avatarOpacity }}
               title="Browse outfits"
             >
