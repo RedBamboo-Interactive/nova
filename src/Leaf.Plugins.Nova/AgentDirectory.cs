@@ -98,6 +98,22 @@ public sealed class AgentDirectory(IEntityStore store, NovaConfigStore config)
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "RedLeaf", "agents", item.Slug);
 
+            var providerRaw = Str(data, "provider");
+            if (providerRaw != null && Guid.TryParse(providerRaw, out var provGuid))
+            {
+                try { var pe = await store.GetAsync(provGuid, ct); if (pe != null) providerRaw = pe.Slug; }
+                catch { }
+            }
+
+            string? qualityTier = null;
+            var qmRaw = Str(data, "quality_mode");
+            if (qmRaw != null && Guid.TryParse(qmRaw, out var qmGuid))
+            {
+                try { var qe = await store.GetAsync(qmGuid, ct); if (qe != null) qualityTier = Str(qe.Data, "quality_tier"); }
+                catch { }
+            }
+            else qualityTier = qmRaw;
+
             agents.Add(new AgentInfo(
                 item.Id.ToString(),
                 item.Slug,
@@ -110,8 +126,8 @@ public sealed class AgentDirectory(IEntityStore store, NovaConfigStore config)
                 Str(data, "capabilities"),
                 Str(data, "memory_instructions"),
                 Str(data, "status") ?? "active",
-                Str(data, "provider"),
-                Str(data, "quality_mode")));
+                providerRaw,
+                qualityTier));
         }
         return agents;
     }
