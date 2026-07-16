@@ -34,8 +34,6 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   const [tiers, setTiers] = useState<QualityTierInfo[]>(FALLBACK_TIERS)
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [selectedProvider, setSelectedProvider] = useState<string | undefined>()
-  const [userPickedProvider, setUserPickedProvider] = useState(false)
-  const [userPickedTier, setUserPickedTier] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -44,8 +42,6 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
       setFilter("")
       setHighlighted(0)
       setQualityTier("standard")
-      setUserPickedProvider(false)
-      setUserPickedTier(false)
       return
     }
     setLoading(true)
@@ -84,12 +80,14 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
 
   const highlightedAgent = filtered[highlighted]
   useEffect(() => {
-    if (!highlightedAgent) return
-    if (!userPickedTier && highlightedAgent.qualityMode)
-      setQualityTier(highlightedAgent.qualityMode)
-    if (!userPickedProvider && highlightedAgent.provider && providers.some(p => p.slug === highlightedAgent.provider))
-      setSelectedProvider(highlightedAgent.provider)
+    if (highlightedAgent) applyAgentDefaults(highlightedAgent)
   }, [highlightedAgent?.id])
+
+  function applyAgentDefaults(agent: AgentInfo) {
+    if (agent.qualityMode) setQualityTier(agent.qualityMode)
+    if (agent.provider && providers.some(p => p.slug === agent.provider))
+      setSelectedProvider(agent.provider)
+  }
 
   if (!open) return null
 
@@ -157,8 +155,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
             <button
               key={agent.id}
               disabled={starting}
-              onMouseEnter={() => setHighlighted(i)}
-              onClick={() => selectAgent(agent.id)}
+              onClick={() => { if (highlighted === i && !starting) selectAgent(agent.id); else setHighlighted(i) }}
               onKeyDown={agents.length <= 1 ? onInputKeyDown : undefined}
               autoFocus={agents.length <= 1 && i === 0}
               className={`w-full text-left px-4 py-3 transition-colors border-b border-border-subtle last:border-b-0 ${
@@ -195,7 +192,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
                   {providers.map(p => (
                     <DropdownMenuItem
                       key={p.slug}
-                      onClick={() => { setSelectedProvider(p.slug); setUserPickedProvider(true) }}
+                      onClick={() => setSelectedProvider(p.slug)}
                       className={selectedProvider === p.slug ? "text-primary" : ""}
                     >
                       <i className={(p.icon ?? "ph-bold ph-plug") + " size-4 text-center"} />
@@ -215,7 +212,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
                 {tiers.map(tier => (
                   <DropdownMenuItem
                     key={tier.slug}
-                    onClick={() => { setQualityTier(tier.slug); setUserPickedTier(true) }}
+                    onClick={() => setQualityTier(tier.slug)}
                     className={qualityTier === tier.slug ? "text-primary" : ""}
                   >
                     <i className={tier.icon + " size-4 text-center"} style={{ color: tier.color }} />
@@ -225,12 +222,21 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 text-sm text-text-muted hover:text-contrast transition-colors"
-          >
-            Cancel
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="px-3 py-1.5 text-sm text-text-muted hover:text-contrast transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              disabled={starting || filtered.length === 0}
+              onClick={() => { if (highlightedAgent) selectAgent(highlightedAgent.id) }}
+              className="px-4 py-1.5 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              Go
+            </button>
+          </div>
         </div>
       </div>
     </div>
