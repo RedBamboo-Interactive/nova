@@ -204,7 +204,7 @@ function ConfigDisplay({ config }: { config: Record<string, unknown> }) {
 }
 
 function getIcon(a: Automation): string {
-  if (a.icon) return a.icon.startsWith("fa-") ? `ph-bold ${a.icon}` : a.icon
+  if (a.icon) return a.icon
   return (actionMeta[a.actionType] ?? { icon: "ph-bold ph-gear" }).icon
 }
 
