@@ -75,6 +75,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<DiscussionStore>(),
                 sp.GetRequiredService<IDiscussions>(),
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+                sp.GetRequiredService<IAssets>(),
                 sp.GetRequiredService<RedComputeClient>(),
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredService<AgentWorkspaces>(),

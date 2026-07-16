@@ -46,10 +46,13 @@ export interface EventType {
 }
 
 export interface MessagePartDto {
-  type: "text" | "tool_use" | "tool_result" | "audio" | "event_data"
+  type: "text" | "tool_use" | "tool_result" | "audio" | "event_data" | "image"
   content: string
   toolName?: string
   toolInput?: string
+  url?: string
+  base64?: string
+  mediaType?: string
 }
 
 export interface ClaudeStreamEvent {

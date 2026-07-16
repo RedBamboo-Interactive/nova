@@ -145,10 +145,13 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
       parts: m.parts
         .filter((p) => p.type !== "event_data")
         .map((p): MessagePart => ({
-          type: p.type === "tool_use" || p.type === "tool_result" ? p.type : p.type === "audio" ? "audio" : "text",
-          content: p.content,
+          type: p.type === "tool_use" || p.type === "tool_result" ? p.type : p.type === "audio" ? "audio" : p.type === "image" ? "image" : "text",
+          content: p.content ?? "",
           toolName: p.toolName,
           toolInput: p.toolInput,
+          url: p.url,
+          base64: p.base64,
+          mediaType: p.mediaType,
         })),
       timestamp: m.timestamp,
       senderAgentId: m.senderAgentId,

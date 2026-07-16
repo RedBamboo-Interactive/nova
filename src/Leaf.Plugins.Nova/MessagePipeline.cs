@@ -25,6 +25,7 @@ public sealed class MessagePipeline(
     DiscussionStore store,
     IDiscussions discussions,
     IEntityStore entities,
+    IAssets assets,
     RedComputeClient redCompute,
     AgentDirectory agents,
     AgentWorkspaces workspaces,
@@ -257,12 +258,18 @@ public sealed class MessagePipeline(
 
         if (hasImages)
         {
-            // Persisted with the transcript uid — one logical message, one identity.
+            var parts = new List<object>();
+            foreach (var img in images!)
+            {
+                var bytes = Convert.FromBase64String(img.Base64);
+                using var ms = new MemoryStream(bytes);
+                var asset = await assets.UploadAsync(ms, "image", img.MediaType, ct);
+                parts.Add(new { type = "image", assetId = asset.AssetId, url = asset.Url, mediaType = img.MediaType });
+            }
+
             await store.PostMessageAsync(discussion.EntityId, "user", content, new JsonObject
             {
-                ["parts_json"] = JsonSerializer.Serialize(
-                    images!.Select(img => new { type = "image", mediaType = img.MediaType, base64 = img.Base64 }),
-                    JsonOptions),
+                ["parts_json"] = JsonSerializer.Serialize(parts, JsonOptions),
                 ["source"] = "user-message",
                 ["uid"] = messageUid ?? Guid.NewGuid().ToString("N"),
             }, userId, ct);

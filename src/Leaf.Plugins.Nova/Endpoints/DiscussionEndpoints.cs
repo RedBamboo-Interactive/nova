@@ -789,6 +789,22 @@ public static class DiscussionEndpoints
                             };
                         }
 
+                        if (type == "image")
+                        {
+                            var url = p.TryGetProperty("url", out var u) ? u.GetString() : null;
+                            var assetId = p.TryGetProperty("assetId", out var a) ? a.GetString() : null;
+                            var base64 = p.TryGetProperty("base64", out var b) ? b.GetString() : null;
+                            var mediaType = p.TryGetProperty("mediaType", out var mt) ? mt.GetString() : "image/png";
+
+                            return (object)new
+                            {
+                                type,
+                                url = url ?? (assetId != null ? $"/api/assets/{assetId}" : null),
+                                base64,
+                                mediaType,
+                            };
+                        }
+
                         return (object)new
                         {
                             type,
