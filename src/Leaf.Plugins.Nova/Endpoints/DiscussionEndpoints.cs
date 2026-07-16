@@ -227,7 +227,7 @@ public static class DiscussionEndpoints
             return Results.Ok(live);
         });
 
-        group.MapGet("/discussions/search", async (HttpContext ctx, DiscussionStore store, IDiscussions discussions) =>
+        group.MapGet("/discussions/search", async (HttpContext ctx, DiscussionStore store, ISearch search) =>
         {
             var q = ctx.Request.Query["q"].FirstOrDefault();
             if (string.IsNullOrWhiteSpace(q))
@@ -237,50 +237,69 @@ public static class DiscussionEndpoints
             if (ctx.Request.Query.TryGetValue("limit", out var lv) && int.TryParse(lv, out var parsed))
                 limit = Math.Clamp(parsed, 1, 100);
 
-            const int snippetLen = 120;
-
-            var matches = await discussions.SearchMessagesAsync(q);
-            var userId = UserId(ctx);
-            var byId = (await store.ListAsync())
-                .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
-                .ToDictionary(d => d.Id);
-
-            var grouped = matches
-                .Select(m => (Message: m, DiscussionId: m.Metadata["discussion_id"]?.GetValue<string>()))
-                .Where(x => x.DiscussionId != null && byId.ContainsKey(x.DiscussionId))
-                .GroupBy(x => x.DiscussionId!)
-                .Take(limit)
-                .ToList();
-
-            var results = grouped.Select(g =>
+            // Thin adapter over the kernel conversation search. Two streams cover a
+            // discussion's content: nova-messages (events, proactive posts, image
+            // messages — keyed by the discussion entity) and session-messages (the
+            // actual transcript, keyed by the ai-session entity and mapped back to
+            // the discussion through its session_id).
+            var result = await search.SearchConversationsAsync(new ConversationSearchQuery
             {
-                byId.TryGetValue(g.Key, out var disc);
-                var snippets = g.Take(3).Select(x =>
-                {
-                    var text = x.Message.Content;
-                    if (string.IsNullOrEmpty(text))
-                    {
-                        var partsJson = x.Message.Metadata["parts_json"]?.GetValue<string>();
-                        if (partsJson != null) text = ExtractTextFromParts(partsJson);
-                    }
-                    return new
-                    {
-                        role = x.Message.Role,
-                        timestamp = x.Message.CreatedAt.UtcDateTime,
-                        snippet = ExtractSnippet(text, q, snippetLen),
-                    };
-                });
-
-                return new
-                {
-                    discussionId = g.Key,
-                    title = disc?.Title,
-                    status = disc?.Status,
-                    lastActivity = disc?.LastActivity,
-                    matchCount = g.Count(),
-                    snippets,
-                };
+                Query = q,
+                Streams = ["nova-messages", "session-messages"],
+                Limit = 100,
+                SnippetsPerConversation = 3,
             });
+
+            var userId = UserId(ctx);
+            var accessible = (await store.ListAsync())
+                .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
+                .ToList();
+            var byEntityId = accessible.ToDictionary(d => d.EntityId);
+            var bySessionId = new Dictionary<string, DiscussionRead>();
+            foreach (var d in accessible)
+                if (d.SessionId != null && !bySessionId.ContainsKey(d.SessionId))
+                    bySessionId[d.SessionId] = d;
+
+            // Kernel groups arrive best-ranked first; a discussion hit in both streams
+            // merges into one result. Non-Nova conversations (other apps' sessions or
+            // discussions) simply don't resolve and are skipped.
+            var merged = new Dictionary<string, (DiscussionRead Discussion, int MatchCount, List<ConversationSearchHit> Hits)>();
+            foreach (var g in result.Groups)
+            {
+                DiscussionRead? disc = null;
+                if (g.EntityId is { } eid && byEntityId.TryGetValue(eid, out var direct))
+                    disc = direct;
+                else if (g.Entity is { TypeSlug: "ai-session" }
+                    && g.Entity.Data["session_id"]?.GetValue<string>() is { } sid
+                    && bySessionId.TryGetValue(sid, out var viaSession))
+                    disc = viaSession;
+                if (disc == null) continue;
+
+                if (merged.TryGetValue(disc.Id, out var existing))
+                    merged[disc.Id] = (disc, existing.MatchCount + g.HitCount, [.. existing.Hits, .. g.Hits]);
+                else
+                    merged[disc.Id] = (disc, g.HitCount, g.Hits.ToList());
+            }
+
+            var results = merged.Values
+                .Take(limit)
+                .Select(m => new
+                {
+                    discussionId = m.Discussion.Id,
+                    title = m.Discussion.Title,
+                    status = m.Discussion.Status,
+                    lastActivity = m.Discussion.LastActivity,
+                    matchCount = m.MatchCount,
+                    snippets = m.Hits
+                        .OrderByDescending(h => h.CreatedAt)
+                        .Take(3)
+                        .Select(h => new
+                        {
+                            role = h.Role ?? "",
+                            timestamp = h.CreatedAt.UtcDateTime,
+                            snippet = h.Snippet.Replace("**", ""),
+                        }),
+                });
 
             return Results.Ok(new { query = q, results });
         });
@@ -820,35 +839,4 @@ public static class DiscussionEndpoints
         return [new { type = (string?)"text", content = (string?)content, toolName = (string?)null, toolInput = (string?)null }];
     }
 
-    private static string ExtractTextFromParts(string partsJson)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(partsJson);
-            var texts = doc.RootElement.EnumerateArray()
-                .Where(p => p.GetProperty("type").GetString() == "text"
-                         && p.TryGetProperty("content", out _))
-                .Select(p => p.GetProperty("content").GetString())
-                .Where(t => !string.IsNullOrWhiteSpace(t));
-            return string.Join(" ", texts);
-        }
-        catch { return ""; }
-    }
-
-    private static string ExtractSnippet(string? text, string query, int maxLen)
-    {
-        if (string.IsNullOrEmpty(text)) return "";
-
-        var idx = text.IndexOf(query, StringComparison.OrdinalIgnoreCase);
-        if (idx < 0) return text.Length > maxLen ? text[..maxLen] + "..." : text;
-
-        var start = Math.Max(0, idx - maxLen / 3);
-        var end = Math.Min(text.Length, start + maxLen);
-        start = Math.Max(0, end - maxLen);
-
-        var snippet = text[start..end];
-        if (start > 0) snippet = "..." + snippet;
-        if (end < text.Length) snippet += "...";
-        return snippet;
-    }
 }
