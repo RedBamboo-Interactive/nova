@@ -220,7 +220,7 @@ export function ChatView() {
   )
 
   const sidebarHeader = (
-    <PanelHeader title={multiAgent ? undefined : "Discussions"}>
+    <PanelHeader title="Discussions">
       {multiAgent && (
         <AgentPicker
           agents={agents}
@@ -275,7 +275,7 @@ export function ChatView() {
   const activeAgent = activeDiscussion ? getAgent(activeDiscussion.agentId) : undefined
   const { opacity: avatarOpacity } = useAvatarStyle()
   const { showAvatar: avatarEnabled } = useLocalSettings()
-  const showAvatar = avatarEnabled && activeDiscussion && activeMessages.some(m => m.role === "assistant")
+  const showAvatar = avatarEnabled && !!activeDiscussion
   const [outfitBrowserOpen, setOutfitBrowserOpen] = useState(false)
   const [avatarVersion, setAvatarVersion] = useState(0)
   useEffect(() => {

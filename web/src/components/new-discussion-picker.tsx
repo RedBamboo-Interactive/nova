@@ -34,6 +34,8 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   const [tiers, setTiers] = useState<QualityTierInfo[]>(FALLBACK_TIERS)
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [selectedProvider, setSelectedProvider] = useState<string | undefined>()
+  const [userPickedProvider, setUserPickedProvider] = useState(false)
+  const [userPickedTier, setUserPickedTier] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -42,32 +44,54 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
       setFilter("")
       setHighlighted(0)
       setQualityTier("standard")
+      setUserPickedProvider(false)
+      setUserPickedTier(false)
       return
     }
     setLoading(true)
-    api.get<{ tiers: QualityTierInfo[] }>("/ai-session/quality-modes")
-      .then(data => { if (data.tiers?.length) setTiers(data.tiers) })
-      .catch(() => {})
-    api.get<ProviderInfo[]>("/ai-session/providers/configured")
+    const tiersP = api.get<{ tiers: QualityTierInfo[] }>("/ai-session/quality-modes")
+      .then(data => { if (data.tiers?.length) setTiers(data.tiers); return data.tiers ?? [] })
+      .catch(() => [] as QualityTierInfo[])
+    const providersP = api.get<ProviderInfo[]>("/ai-session/providers/configured")
       .then(data => {
         if (Array.isArray(data) && data.length > 0) {
           setProviders(data)
-          const def = data.find(p => p.isDefault)
-          if (def) setSelectedProvider(def.slug)
+          return data
         }
+        return [] as ProviderInfo[]
       })
-      .catch(() => {})
-    api.get<AgentInfo[]>("/api/apps/nova/agents")
-      .then(list => setAgents(list))
-      .catch(() => setAgents([]))
-      .finally(() => setLoading(false))
-  }, [open])
+      .catch(() => [] as ProviderInfo[])
+    const agentsP = api.get<AgentInfo[]>("/api/apps/nova/agents")
+      .catch(() => [] as AgentInfo[])
 
-  if (!open) return null
+    Promise.all([agentsP, providersP, tiersP]).then(([agentList, provList]) => {
+      setAgents(agentList)
+      const first = agentList[0]
+      if (first?.qualityMode) setQualityTier(first.qualityMode)
+      if (first?.provider && provList.some(p => p.slug === first.provider))
+        setSelectedProvider(first.provider)
+      else {
+        const def = provList.find(p => p.isDefault)
+        if (def) setSelectedProvider(def.slug)
+      }
+      setLoading(false)
+    })
+  }, [open])
 
   const filtered = agents.filter(a =>
     a.name.toLowerCase().includes(filter.toLowerCase())
   )
+
+  const highlightedAgent = filtered[highlighted]
+  useEffect(() => {
+    if (!highlightedAgent) return
+    if (!userPickedTier && highlightedAgent.qualityMode)
+      setQualityTier(highlightedAgent.qualityMode)
+    if (!userPickedProvider && highlightedAgent.provider && providers.some(p => p.slug === highlightedAgent.provider))
+      setSelectedProvider(highlightedAgent.provider)
+  }, [highlightedAgent?.id])
+
+  if (!open) return null
 
   const selectAgent = (agentId: string) => {
     setStarting(true)
@@ -171,7 +195,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
                   {providers.map(p => (
                     <DropdownMenuItem
                       key={p.slug}
-                      onClick={() => setSelectedProvider(p.slug)}
+                      onClick={() => { setSelectedProvider(p.slug); setUserPickedProvider(true) }}
                       className={selectedProvider === p.slug ? "text-primary" : ""}
                     >
                       <i className={(p.icon ?? "ph-bold ph-plug") + " size-4 text-center"} />
@@ -191,7 +215,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
                 {tiers.map(tier => (
                   <DropdownMenuItem
                     key={tier.slug}
-                    onClick={() => setQualityTier(tier.slug)}
+                    onClick={() => { setQualityTier(tier.slug); setUserPickedTier(true) }}
                     className={qualityTier === tier.slug ? "text-primary" : ""}
                   >
                     <i className={tier.icon + " size-4 text-center"} style={{ color: tier.color }} />

@@ -23,6 +23,8 @@ export interface AgentInfo {
   description: string | null
   status: string
   avatarUrl: string
+  provider?: string | null
+  qualityMode?: string | null
 }
 
 export interface DiscussionMessage {

@@ -16,7 +16,8 @@ public sealed record AgentInfo(
     string? Capabilities,
     string? MemoryInstructions,
     string Status,
-    string? Provider = null);
+    string? Provider = null,
+    string? QualityMode = null);
 
 /// <summary>
 /// Cached view of the kernel's <c>agent</c> entities (the agent SYSTEM stays kernel —
@@ -109,7 +110,8 @@ public sealed class AgentDirectory(IEntityStore store, NovaConfigStore config)
                 Str(data, "capabilities"),
                 Str(data, "memory_instructions"),
                 Str(data, "status") ?? "active",
-                Str(data, "provider")));
+                Str(data, "provider"),
+                Str(data, "quality_mode")));
         }
         return agents;
     }

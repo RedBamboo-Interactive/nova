@@ -28,6 +28,8 @@ public static class AgentEndpoints
                 description = a.Description,
                 status = a.Status,
                 avatarUrl = AgentDirectory.BuildAvatarUrl(a.AvatarFilename) ?? "/nova-avatar.png",
+                provider = a.Provider,
+                qualityMode = a.QualityMode,
             }));
         });
 
