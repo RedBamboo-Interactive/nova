@@ -197,6 +197,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
     public static object ToInfo(DiscussionRead d) => new
     {
         id = d.Id,
+        entityId = d.EntityId,
         title = d.Title,
         sessionId = d.SessionId,
         status = d.Status,

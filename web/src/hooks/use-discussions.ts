@@ -754,15 +754,21 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   const rotateDiscussion = useCallback(async (id: string) => {
     try {
-      await api.post<{ archived: DiscussionInfo; created: DiscussionInfo }>(`/api/apps/nova/discussions/${id}/rotate`)
+      const disc = discussions.find((d) => d.id === id)
+      if (disc?.type === "heartbeat" && disc.agentId) {
+        await api.post(`/api/apps/nova/heartbeat/${disc.agentId}/rotate`)
+      } else {
+        await api.post<{ archived: DiscussionInfo; created: DiscussionInfo }>(`/api/apps/nova/discussions/${id}/rotate`)
+      }
       setDiscussions((prev) => prev.filter((d) => d.id !== id))
       setMessages((prev) => { const next = { ...prev }; delete next[id]; return next })
       loadedRef.current.delete(id)
-      toast({ variant: "success", title: "Timeline rotated", description: "Fresh LIVE discussion created" })
+      const label = disc?.type === "heartbeat" ? "Heartbeat" : "LIVE"
+      toast({ variant: "success", title: `${label} rotated`, description: `Fresh ${label} discussion created` })
     } catch (err) {
       toast({ variant: "error", title: "Failed to rotate", description: err instanceof Error ? err.message : "Unknown error" })
     }
-  }, [toast])
+  }, [toast, discussions])
 
   const renameDiscussion = useCallback(async (id: string, title: string) => {
     await api.put(`/api/apps/nova/discussions/${id}/title`, { title })

@@ -42,7 +42,6 @@ public static class HeartbeatEndpoints
                         ["status"] = discussion.Status,
                         ["sessionId"] = discussion.SessionId,
                         ["lastTickAt"] = raw?.Data["hb_last_tick_at"]?.DeepClone(),
-                        ["dayClosedAt"] = raw?.Data["hb_day_closed_at"]?.DeepClone(),
                     };
                 }
 
@@ -58,12 +57,17 @@ public static class HeartbeatEndpoints
             return Results.Ok(result);
         });
 
-        // The goodnight automation can close the day explicitly instead of waiting
-        // for LIVE rotation or the 02:55 fallback.
+        group.MapPost("/heartbeat/{agentId}/rotate", async (string agentId, HeartbeatService heartbeat) =>
+        {
+            var fresh = await heartbeat.RotateAsync(agentId, "manual-reset");
+            return Results.Ok(new { ok = true, discussionId = fresh?.Id });
+        });
+
+        // Alias: goodnight automation calls end-of-day, same as rotate.
         group.MapPost("/heartbeat/{agentId}/end-of-day", async (string agentId, HeartbeatService heartbeat) =>
         {
-            await heartbeat.RunEndOfDayAsync(agentId, "goodnight");
-            return Results.Ok(new { ok = true });
+            var fresh = await heartbeat.RotateAsync(agentId, "goodnight");
+            return Results.Ok(new { ok = true, discussionId = fresh?.Id });
         });
     }
 }

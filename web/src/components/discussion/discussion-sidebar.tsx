@@ -68,7 +68,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         title={discussion.title || "Live"}
         subtitle={
           <span className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-accent-teal animate-pulse shrink-0" />
+            <i className={`ph-bold ph-broadcast text-[10px] text-accent-teal ${discussion.status === "thinking" ? "animate-pulse" : ""}`} />
             <span style={{ color: "var(--color-accent-teal)" }}>Live</span>
           </span>
         }
@@ -85,8 +85,8 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
     )
   }, [activeDiscussionId, onSelect, onRotate, getAgent, multiAgent])
 
-  // Heartbeat: a place you visit, not one that calls you — no unread pill, no
-  // trailing actions. The spinner doubles as the tick-in-progress indicator.
+  // Heartbeat: a place you visit, not one that calls you — no unread pill,
+  // rotate button on hover (same pattern as LIVE). Spinner = tick-in-progress.
   const renderHeartbeatItem = useCallback((discussion: DiscussionInfo) => {
     const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
     return (
@@ -116,17 +116,24 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         title={discussion.title || "Heartbeat"}
         subtitle={
           <span className="flex items-center gap-1.5">
-            <span
-              className={`w-1.5 h-1.5 rounded-full bg-accent-gold shrink-0 ${discussion.status === "thinking" ? "animate-pulse" : "opacity-60"}`}
-            />
+            <i className={`ph-bold ph-heartbeat text-[10px] ${discussion.status === "thinking" ? "text-accent-gold animate-pulse" : "text-accent-gold/60"}`} />
             <span style={{ color: "var(--color-accent-gold)" }}>
               {discussion.status === "thinking" ? "Heartbeat · tick running" : "Heartbeat"}
             </span>
           </span>
         }
+        trailing={
+          <button
+            onClick={(e) => { e.stopPropagation(); onRotate(discussion.id) }}
+            className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-accent-gold transition-all"
+            title="Reset heartbeat"
+          >
+            <i className="ph-bold ph-arrows-clockwise text-xs" />
+          </button>
+        }
       />
     )
-  }, [activeDiscussionId, onSelect, getAgent, multiAgent])
+  }, [activeDiscussionId, onSelect, onRotate, getAgent, multiAgent])
 
   const renderChatItem = useCallback((discussion: DiscussionInfo) => {
     const alive = discussion.status !== "archived" && discussion.status !== "stopped"

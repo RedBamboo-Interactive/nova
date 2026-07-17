@@ -13,6 +13,7 @@ public class DelegateRequest
 {
     public string? SessionId { get; set; }
     public string? ProjectPath { get; set; }
+    public string? Agent { get; set; }
     public string Prompt { get; set; } = "";
     public string? DiscussionId { get; set; }
     public bool? Navigate { get; set; }
@@ -32,13 +33,34 @@ public static class DelegateEndpoints
     public static void Map(RouteGroupBuilder group)
     {
         group.MapPost("/delegate", async (HttpContext ctx, DelegateRequest request, RedComputeClient redCompute, NovaConfigStore config,
+            AgentDirectory agentDir, AgentWorkspaces workspaces,
             [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
         {
             bool isContinuation = !string.IsNullOrWhiteSpace(request.SessionId);
-            if (!isContinuation && string.IsNullOrWhiteSpace(request.ProjectPath))
-                return Results.BadRequest(new { error = "Either sessionId or projectPath is required" });
             if (string.IsNullOrWhiteSpace(request.Prompt))
                 return Results.BadRequest(new { error = "prompt is required" });
+
+            // Resolve agent if specified: provides workspace, provider, quality defaults.
+            AgentInfo? resolvedAgent = null;
+            if (!isContinuation && !string.IsNullOrWhiteSpace(request.Agent))
+            {
+                var agents = await agentDir.GetAgentsAsync(ct: ctx.RequestAborted);
+                resolvedAgent = agents.FirstOrDefault(a =>
+                    a.Id == request.Agent || a.Slug == request.Agent);
+                if (resolvedAgent == null)
+                    return Results.Json(new { error = "agent_not_found", message = $"Agent '{request.Agent}' not found" }, statusCode: 404);
+
+                var ws = await workspaces.GetAsync(resolvedAgent.Id, ctx.RequestAborted);
+                ws.GenerateClaudeMd();
+
+                request.ProjectPath ??= resolvedAgent.WorkspacePath;
+                request.Provider ??= resolvedAgent.Provider;
+                if (string.IsNullOrWhiteSpace(request.Model) && string.IsNullOrWhiteSpace(request.QualityMode))
+                    request.QualityMode = resolvedAgent.QualityMode;
+            }
+
+            if (!isContinuation && string.IsNullOrWhiteSpace(request.ProjectPath))
+                return Results.BadRequest(new { error = "Either sessionId, projectPath, or agent is required" });
 
             // 1. Create session on RedCompute (skip if continuing an existing session)
             string sessionId;
@@ -152,6 +174,7 @@ public static class DelegateEndpoints
                 promptSent,
                 callbackRegistered,
                 continued = isContinuation,
+                agent = resolvedAgent?.Name,
             });
         });
     }

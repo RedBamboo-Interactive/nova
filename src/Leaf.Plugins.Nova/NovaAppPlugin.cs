@@ -144,17 +144,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
         var nova = agentEntities.FirstOrDefault(a => a.Slug == "nova");
         agents.NovaAgentId = nova?.Id.ToString();
 
-        // Ensure the LIVE timeline discussion exists for Nova.
-        if (agents.NovaAgentId != null)
-        {
-            var discussionStore = host.GetRequiredService<DiscussionStore>();
-            var all = await discussionStore.ListAsync(agents.NovaAgentId, ct);
-            if (!all.Any(d => d.Type == "live" && d.AgentId == agents.NovaAgentId && !DiscussionStatus.IsClosed(d.Status)))
-                await discussionStore.CreateAsync($"{nova!.Name} Live", agents.NovaAgentId, "local-user", "live", ct: ct);
-        }
-
-        // Heartbeat provisioning follows agent config (heartbeat.enabled); config
-        // edits are picked up here on boot or via POST /heartbeat/reconcile.
+        // LIVE + heartbeat provisioning follows agent config (data.live,
+        // data.heartbeat.enabled); picked up here on boot or via POST /heartbeat/reconcile.
         var heartbeat = host.GetRequiredService<HeartbeatService>();
         _ = Task.Run(async () =>
         {

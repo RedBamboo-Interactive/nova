@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useDeferredValue } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, Switch } from "@redbamboo/ui"
-import { ChatPanel, ContextIndicator, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent } from "@redbamboo/chat"
+import { ChatPanel, ContextIndicator, ShareDialog, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent } from "@redbamboo/chat"
 import { useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
@@ -15,6 +15,7 @@ import { useAgents } from "../hooks/use-agents"
 import { useReactions } from "../hooks/use-reactions"
 import { useDisc, useNovaPendingContext } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
+import { useShare } from "../hooks/use-share"
 import { setSettings } from "../lib/settings-store"
 
 const speechBackend = createNovaSpeechBackend()
@@ -131,6 +132,8 @@ export function ChatView() {
 
   const pendingContext = useNovaPendingContext()
   const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming, activeDiscussion)
+  const share = useShare(activeDiscussion?.entityId)
+  const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [mobileTab, setMobileTab] = useState(0)
 
   const { wrapMessage, clear: clearContext } = pendingContext
@@ -194,6 +197,12 @@ export function ChatView() {
     setConfidential(activeDiscussionId, checked)
   }, [activeDiscussionId, setConfidential])
 
+  const handleShare = useCallback(() => {
+    share.reset()
+    share.createShare()
+    setShareDialogOpen(true)
+  }, [share])
+
   const chatHeader = activeDiscussion && (
     <PanelHeader
       leading={
@@ -203,6 +212,16 @@ export function ChatView() {
         />
       }
     >
+      {!activeDiscussion.confidential && (
+        <button
+          onClick={handleShare}
+          className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
+          title="Share conversation"
+        >
+          <i className="ph-bold ph-share-network text-xs" />
+          <span>Share</span>
+        </button>
+      )}
       <ContextIndicator stats={sessionStats} messages={activeMessages}>
         <div className="flex items-center justify-between py-1.5 border-t border-overlay-6 pt-3">
           <div className="flex items-center gap-2">
@@ -410,6 +429,13 @@ export function ChatView() {
         agentId={activeDiscussion?.agentId}
       />
     )}
+    <ShareDialog
+      open={shareDialogOpen}
+      onOpenChange={setShareDialogOpen}
+      shareUrl={share.shareUrl}
+      loading={share.loading}
+      error={share.error}
+    />
     </div>
   )
 }

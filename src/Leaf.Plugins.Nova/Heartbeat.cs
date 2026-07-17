@@ -51,7 +51,7 @@ public sealed record HeartbeatConfig(
 /// behind it, ticked by a <c>system:heartbeat:{agent}</c> automation. This service
 /// owns provisioning (agent config → automation + discussion), the day boundary
 /// (end-of-day tick → handoff → session reset), and the per-tick state kept on the
-/// heartbeat discussion entity (<c>hb_last_tick_at</c>, <c>hb_day_closed_at</c>).
+/// heartbeat discussion entity (<c>hb_last_tick_at</c>).
 /// </summary>
 public sealed class HeartbeatService(
     IEntityStore entities,
@@ -63,10 +63,6 @@ public sealed class HeartbeatService(
     AgentDirectory agents)
 {
     public const string DiscussionType = "heartbeat";
-
-    /// <summary>A goodnight this recent means the day is closed; the gap survives a
-    /// post-midnight goodnight without eating the next morning's ticks.</summary>
-    private static readonly TimeSpan DayClosedWindow = TimeSpan.FromHours(5);
 
     private static string AutomationSlug(string agentSlug) => $"system-heartbeat-{agentSlug}";
 
@@ -84,25 +80,34 @@ public sealed class HeartbeatService(
 
         foreach (var agent in agentEntities)
         {
+            var agentId = agent.Id.ToString();
+
+            // ── LIVE discussion: enabled by agent data.live == true ──
+            var liveEnabled = agent.Data["live"] is JsonValue lv && lv.TryGetValue<bool>(out var lb) && lb;
+            var existingLive = (await store.ListAsync(agentId, ct))
+                .FirstOrDefault(d => d.Type == "live" && !DiscussionStatus.IsClosed(d.Status));
+
+            if (liveEnabled && existingLive == null)
+                await store.CreateAsync($"{agent.Name} Live", agentId, "local-user", "live", ct: ct);
+
+            // ── Heartbeat: enabled by agent data.heartbeat.enabled ──
             var config = HeartbeatConfig.Parse(agent.Data);
             var automation = await entities.GetBySlugAsync(AutomationSlug(agent.Slug), ct);
-            var discussion = await GetDiscussionAsync(agent.Id.ToString(), ct);
+            var discussion = await GetDiscussionAsync(agentId, ct);
 
             if (config is { Enabled: true })
             {
-                // Full-data upsert: schedule and agent ref are derived state; the run
-                // loop reseeds next_run on its own when it finds none.
                 await entities.UpsertBySlugAsync("automation", AutomationSlug(agent.Slug),
                     $"system:heartbeat:{agent.Slug}", new JsonObject
                     {
                         ["enabled"] = true,
                         ["schedule"] = config.Schedule,
                         ["action_type"] = HeartbeatTickHandler.Type,
-                        ["agent"] = agent.Id.ToString(),
+                        ["agent"] = agentId,
                         ["timeout"] = (config.TickWaitMinutes + 5) * 60,
                     }, ct);
 
-                discussion ??= await store.CreateAsync($"{agent.Name} Heartbeat", agent.Id.ToString(),
+                discussion ??= await store.CreateAsync($"{agent.Name} Heartbeat", agentId,
                     "local-user", DiscussionType, config.QualityTier, ct: ct);
 
                 ((JsonArray)result["provisioned"]!).Add(new JsonObject
@@ -139,26 +144,22 @@ public sealed class HeartbeatService(
         if (agentId == null) return;
         _ = Task.Run(async () =>
         {
-            try { await RunEndOfDayAsync(agentId, "live-rotation"); }
+            try { await RotateAsync(agentId, "live-rotation"); }
             catch { /* fallback tick at 02:55 closes the day if this failed */ }
         });
     }
 
     /// <summary>
-    /// End-of-day sequence: final tick prompting the handoff write, wait for the
-    /// session to finish, stop + dismiss it, clear it off the discussion, stamp the
-    /// day closed, and drop a day marker into the timeline. The discussion itself
-    /// persists — only the session resets.
+    /// End-of-day / reset: archive the current heartbeat discussion (with its
+    /// session) and create a fresh one. Same pattern as LIVE rotation. The old
+    /// discussion stays in archives; the handoff file carries the watch-list.
     /// </summary>
-    public async Task RunEndOfDayAsync(string agentId, string reason, CancellationToken ct = default)
+    public async Task<DiscussionRead?> RotateAsync(string agentId, string reason, CancellationToken ct = default)
     {
         var discussion = await GetDiscussionAsync(agentId, ct);
-        if (discussion == null) return;
+        if (discussion == null) return null;
 
-        var raw = await entities.GetAsync(discussion.EntityId, ct);
-        if (raw == null) return;
-        if (WithinDayClosedWindow(raw.Data)) return; // already closed tonight
-
+        // Send a final "write the handoff" tick if the session is alive.
         if (discussion.SessionId is { } sessionId)
         {
             var probe = await redCompute.ProbeSessionAsync(sessionId, ct);
@@ -173,24 +174,15 @@ public sealed class HeartbeatService(
             await redCompute.DismissAsync(sessionId, ct);
         }
 
-        await store.PatchAsync(discussion.EntityId, new JsonObject
-        {
-            ["session_id"] = null,
-            ["hb_day_closed_at"] = DateTimeOffset.UtcNow.ToString("O"),
-        }, ct: ct);
-        await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped, ct);
+        // Archive the old discussion, create a fresh one.
+        await lifecycle.BeginArchiveAsync(discussion, ct);
 
-        await store.PostMessageAsync(discussion.EntityId, "assistant",
-            $"Day closed ({reason}). Session reset — handoff in memory/meta/heartbeat-handoff.md.",
-            new JsonObject { ["source"] = "event:system", ["uid"] = Guid.NewGuid().ToString("N") }, ct: ct);
-    }
+        var agentEntity = await entities.GetAsync(Guid.Parse(agentId), ct);
+        var config = agentEntity != null ? HeartbeatConfig.Parse(agentEntity.Data) : null;
+        var agentName = agentEntity?.Name ?? "Agent";
 
-    public static bool WithinDayClosedWindow(JsonObject discussionData)
-    {
-        var closedAt = discussionData["hb_day_closed_at"] is JsonValue v
-            && v.TryGetValue<string>(out var s)
-            && DateTimeOffset.TryParse(s, out var t) ? t : (DateTimeOffset?)null;
-        return closedAt != null && DateTimeOffset.UtcNow - closedAt.Value < DayClosedWindow;
+        return await store.CreateAsync($"{agentName} Heartbeat", agentId,
+            "local-user", DiscussionType, config?.QualityTier ?? "deep", ct: ct);
     }
 
     // ── Tick support (used by the action handler) ───────────────────
@@ -225,7 +217,6 @@ public sealed class HeartbeatService(
         await store.PatchAsync(discussion.EntityId, new JsonObject
         {
             ["session_id"] = sessionId,
-            ["hb_day_closed_at"] = null,
         }, ct: ct);
         return (sessionId, true);
     }
@@ -345,18 +336,14 @@ public sealed class HeartbeatTickHandler(
 
         var localNow = DateTimeOffset.Now;
 
-        // The 02:55 firing is the end-of-day fallback, never a regular tick: close
-        // the day if no goodnight/rotation signal did, otherwise stay quiet.
+        // The 02:55 firing is the end-of-day fallback: rotate if no
+        // goodnight/LIVE-rotation signal did. The fresh discussion won't have
+        // hb_last_tick_at, so the morning tick at 06:55 picks it up naturally.
         if (localNow.Hour == 2)
         {
-            if (HeartbeatService.WithinDayClosedWindow(raw.Data))
-                return Skip("night — day already closed");
-            await heartbeat.RunEndOfDayAsync(agentId, "fallback-0255", ct);
-            return new JsonObject { ["summary"] = "end-of-day fallback executed", ["discussionId"] = discussion.Id };
+            await heartbeat.RotateAsync(agentId, "fallback-0255", ct);
+            return new JsonObject { ["summary"] = "end-of-day fallback: rotated", ["discussionId"] = discussion.Id };
         }
-
-        if (HeartbeatService.WithinDayClosedWindow(raw.Data))
-            return Skip("day closed — next tick after the window opens the morning");
 
         if (discussion.Status == DiscussionStatus.Thinking)
             return Skip("previous tick still processing");

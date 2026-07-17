@@ -1,5 +1,6 @@
 export interface DiscussionInfo {
   id: string
+  entityId: string
   title: string | null
   sessionId: string | null
   /** "archiving" = archive intent committed server-side, session stop not yet
