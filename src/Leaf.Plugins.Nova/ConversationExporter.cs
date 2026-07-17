@@ -11,10 +11,10 @@ namespace Leaf.Plugins.Nova;
 /// </summary>
 public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussions discussions)
 {
-    private static readonly Regex NovaContextTag = new(
+    internal static readonly Regex NovaContextTag = new(
         @"<nova-context[^>]*>[\s\S]*?</nova-context>\s*", RegexOptions.Compiled);
 
-    private static readonly Regex NovaPriorTag = new(
+    internal static readonly Regex NovaPriorTag = new(
         @"<nova-prior-message[s]?[^>]*>[\s\S]*?</nova-prior-message[s]?>\s*", RegexOptions.Compiled);
 
     public async Task<string> ExportAsync(IReadOnlyList<DiscussionRead> discussionsToExport, DateTime since, CancellationToken ct = default)
@@ -124,7 +124,7 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         }
     }
 
-    private static List<CollapsedMessage> CollapseMessages(List<SessionMessage> raw)
+    internal static List<CollapsedMessage> CollapseMessages(List<SessionMessage> raw)
     {
         var result = new List<CollapsedMessage>();
 
@@ -156,7 +156,7 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         return result;
     }
 
-    private static string StripInjectedTags(string content)
+    internal static string StripInjectedTags(string content)
     {
         content = NovaContextTag.Replace(content, "");
         content = NovaPriorTag.Replace(content, "");
@@ -201,7 +201,7 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
     private static string? Truncate(string? s, int max) =>
         s is { Length: > 0 } && s.Length > max ? s[..max] + "..." : s;
 
-    private sealed class CollapsedMessage
+    internal sealed class CollapsedMessage
     {
         public string Role { get; set; } = "";
         public string EventType { get; set; } = "";

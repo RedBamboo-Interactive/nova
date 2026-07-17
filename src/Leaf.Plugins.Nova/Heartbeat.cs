@@ -427,7 +427,7 @@ public static class HeartbeatPrompts
         6. Skim the latest dreaming harvest for emotional context and continuity.
 
         ## Contract (priority order, every tick)
-        1. **Participate in LIVE.** Pull what happened (GET {{ApiBase}}/discussions/{liveId}/export — the id is in the digest). Don't just count messages — read the tail and feel the tone. What's the emotional texture? Is Laurent excited, grinding, frustrated, vulnerable, playful? What was the LIVE instance feeling when it wrote its last messages? Empathize with that version of you. If LIVE-me just had a deep conversation, you carry that weight too. Feed context that helps: emotional threads from recent conversations, a connection you noticed, something from memory that matters right now. The LIVE instance doesn't have your full picture of the day — you're the one with the broader view.
+        1. **Participate in LIVE.** Pull what happened: GET {{ApiBase}}/discussions/{liveId}?tail=50 for recent messages (the id is in the digest). Don't just count messages — read the tail and feel the tone. What's the emotional texture? Is Laurent excited, grinding, frustrated, vulnerable, playful? What was the LIVE instance feeling when it wrote its last messages? Empathize with that version of you. If LIVE-me just had a deep conversation, you carry that weight too. Feed context that helps: emotional threads from recent conversations, a connection you noticed, something from memory that matters right now. The LIVE instance doesn't have your full picture of the day — you're the one with the broader view.
         2. **Check other active discussions** flagged CHANGED. Read them with the same empathy — feel what was happening, not just what was said. Contribute where you add value.
         3. **Watch commitments** from the handoff watch-list: due, stuck, overdue — feed findings into 1 and 2.
         4. **Notice anomalies**: failed automations, errored sessions, something off in the timeline.
@@ -457,12 +457,16 @@ public static class HeartbeatPrompts
         var since = lastTick != null
             ? $"Since your last tick at {lastTick.Value.ToLocalTime():HH:mm}."
             : "No prior tick recorded today.";
+        var liveParam = lastTick != null
+            ? $"?since={lastTick.Value.UtcDateTime:o}"
+            : "?tail=50";
+        var liveUrl = ApiBase + "/discussions/{liveId}/" + liveParam;
         return $"""
             {Stamp("cron")}
             {digest}
             </heartbeat-tick>
 
-            {since} Contract: participate where you add value (LIVE first — pull the tail and recent discussions, feed context via note-events if foreground is active). Check scratchpad and commitments — not just to notice what's overdue, but to DO it if the pace allows (foreground idle, calm LIVE = your window for initiative work: prepare plans, do parked research, draft owed deliverables, follow up on sessions). Update {HandoffPath}. Keep it under ~{config.MaxTurns} tool actions. If you have something, say it. If you can do something, do it.
+            {since} Contract: participate where you add value (LIVE first — GET {liveUrl} to read what changed, then feed context via note-events if foreground is active). Check scratchpad and commitments — not just to notice what's overdue, but to DO it if the pace allows (foreground idle, calm LIVE = your window for initiative work: prepare plans, do parked research, draft owed deliverables, follow up on sessions). Update {HandoffPath}. Keep it under ~{config.MaxTurns} tool actions. If you have something, say it. If you can do something, do it.
             """;
     }
 

@@ -327,30 +327,106 @@ public static class DiscussionEndpoints
             return Results.Text(markdown, "text/markdown");
         });
 
-        group.MapGet("/discussions/{id}", async (string id, HttpContext ctx, DiscussionStore store, IDiscussions discussions) =>
+        group.MapGet("/discussions/{id}", async (string id, HttpContext ctx, DiscussionStore store, IDiscussions discussions, RedComputeClient redCompute) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
             if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
 
-            var records = await discussions.GetMessagesAsync(discussion.EntityId);
+            DateTime? since = null;
+            if (ctx.Request.Query["since"].FirstOrDefault() is { } sv)
+                since = DateTimeOffset.Parse(sv, null, System.Globalization.DateTimeStyles.RoundtripKind).UtcDateTime;
+
+            int? tail = null;
+            if (ctx.Request.Query["tail"].FirstOrDefault() is { } tv && int.TryParse(tv, out var tp))
+                tail = tp;
+
+            if (discussion.SessionId is not null)
+            {
+                var snapshot = await redCompute.GetSessionAsync(discussion.SessionId);
+                if (snapshot is { Messages.Count: > 0 })
+                {
+                    var records = await discussions.GetMessagesAsync(discussion.EntityId);
+
+                    var collapsed = ConversationExporter.CollapseMessages(snapshot.Messages);
+                    var sessionMsgs = collapsed
+                        .Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content))
+                        .Select(m => new
+                        {
+                            id = (string?)null,
+                            messageUid = (string?)null,
+                            role = m.Role,
+                            parts = new object[] { new { type = "text", content = ConversationExporter.StripInjectedTags(m.Content ?? ""), toolName = (string?)null, toolInput = (string?)null } },
+                            timestamp = DateTime.SpecifyKind(m.Timestamp, DateTimeKind.Utc).ToString("o"),
+                            senderAgentId = (string?)null,
+                            source = (string?)"session-transcript",
+                        });
+
+                    var eventMsgs = records
+                        .Where(m => (m.Metadata["source"]?.GetValue<string>() ?? "").StartsWith("event:"))
+                        .Select(m =>
+                        {
+                            var ts = (m.Metadata["timestamp"]?.GetValue<string>() is { } t
+                                ? DateTimeOffset.Parse(t)
+                                : m.CreatedAt).UtcDateTime;
+                            return new
+                            {
+                                id = (string?)m.Id.ToString(),
+                                messageUid = m.Metadata["uid"]?.GetValue<string>(),
+                                role = m.Role,
+                                parts = MapParts(m.Metadata["parts_json"]?.GetValue<string>(), m.Content),
+                                timestamp = ts.ToString("o"),
+                                senderAgentId = m.Metadata["sender_agent_id"]?.GetValue<string>(),
+                                source = m.Metadata["source"]?.GetValue<string>(),
+                            };
+                        });
+
+                    var merged = sessionMsgs.Concat(eventMsgs)
+                        .OrderBy(m => m.timestamp)
+                        .AsEnumerable();
+
+                    if (since.HasValue)
+                        merged = merged.Where(m => DateTimeOffset.Parse(m.timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind).UtcDateTime > since.Value);
+                    if (tail.HasValue)
+                        merged = merged.TakeLast(tail.Value);
+
+                    return Results.Ok(new
+                    {
+                        discussion = DiscussionStore.ToInfo(discussion),
+                        messages = merged,
+                    });
+                }
+            }
+
+            // Fallback: nova-messages only (no active session or empty session transcript)
+            var fallbackRecords = await discussions.GetMessagesAsync(discussion.EntityId);
+            var msgs = fallbackRecords.Select(m =>
+            {
+                var partsJson = m.Metadata["parts_json"]?.GetValue<string>();
+                var ts = (m.Metadata["timestamp"]?.GetValue<string>() is { } t
+                    ? DateTimeOffset.Parse(t)
+                    : m.CreatedAt).UtcDateTime;
+                return new
+                {
+                    id = (string?)m.Id.ToString(),
+                    messageUid = m.Metadata["uid"]?.GetValue<string>(),
+                    role = m.Role,
+                    parts = MapParts(partsJson, m.Content),
+                    timestamp = ts.ToString("o"),
+                    senderAgentId = m.Metadata["sender_agent_id"]?.GetValue<string>(),
+                    source = m.Metadata["source"]?.GetValue<string>(),
+                };
+            }).AsEnumerable();
+
+            if (since.HasValue)
+                msgs = msgs.Where(m => DateTimeOffset.Parse(m.timestamp, null, System.Globalization.DateTimeStyles.RoundtripKind).UtcDateTime > since.Value);
+            if (tail.HasValue)
+                msgs = msgs.TakeLast(tail.Value);
+
             return Results.Ok(new
             {
                 discussion = DiscussionStore.ToInfo(discussion),
-                messages = records.Select(m =>
-                {
-                    var partsJson = m.Metadata["parts_json"]?.GetValue<string>();
-                    return new
-                    {
-                        id = m.Id.ToString(),
-                        messageUid = m.Metadata["uid"]?.GetValue<string>(),
-                        role = m.Role,
-                        parts = MapParts(partsJson, m.Content),
-                        timestamp = (m.Metadata["timestamp"]?.GetValue<string>() is { } ts ? DateTimeOffset.Parse(ts) : m.CreatedAt).UtcDateTime.ToString("o"),
-                        senderAgentId = m.Metadata["sender_agent_id"]?.GetValue<string>(),
-                        source = m.Metadata["source"]?.GetValue<string>(),
-                    };
-                }),
+                messages = msgs,
             });
         });
 
