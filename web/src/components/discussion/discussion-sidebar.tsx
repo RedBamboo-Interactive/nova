@@ -27,14 +27,16 @@ function isUnread(d: DiscussionInfo): boolean {
 }
 
 export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, getAgent, multiAgent }: Props) {
-  const { live, chat } = useMemo(() => {
+  const { live, heartbeat, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
+    const heartbeat: DiscussionInfo[] = []
     const chat: DiscussionInfo[] = []
     for (const d of discussions) {
       if (d.type === "live") live.push(d)
+      else if (d.type === "heartbeat") heartbeat.push(d)
       else chat.push(d)
     }
-    return { live, chat }
+    return { live, heartbeat, chat }
   }, [discussions])
 
   const renderLiveItem = useCallback((discussion: DiscussionInfo) => {
@@ -82,6 +84,49 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
     )
   }, [activeDiscussionId, onSelect, onRotate, getAgent, multiAgent])
+
+  // Heartbeat: a place you visit, not one that calls you — no unread pill, no
+  // trailing actions. The spinner doubles as the tick-in-progress indicator.
+  const renderHeartbeatItem = useCallback((discussion: DiscussionInfo) => {
+    const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
+    return (
+      <ItemListRow
+        selected={discussion.id === activeDiscussionId}
+        onClick={() => onSelect(discussion.id)}
+        icon={
+          agent ? (
+            <>
+              <img
+                src={agent.avatarUrl}
+                alt={agent.name}
+                className="absolute inset-0 w-full h-full rounded-lg object-cover"
+                onError={(e) => { e.currentTarget.style.display = "none" }}
+              />
+              <div className="absolute -bottom-1 right-0 scale-75 origin-bottom-right">
+                <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
+              </div>
+            </>
+          ) : (
+            <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
+          )
+        }
+        className={[
+          agent ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
+        ].filter(Boolean).join(" ")}
+        title={discussion.title || "Heartbeat"}
+        subtitle={
+          <span className="flex items-center gap-1.5">
+            <span
+              className={`w-1.5 h-1.5 rounded-full bg-accent-gold shrink-0 ${discussion.status === "thinking" ? "animate-pulse" : "opacity-60"}`}
+            />
+            <span style={{ color: "var(--color-accent-gold)" }}>
+              {discussion.status === "thinking" ? "Heartbeat · tick running" : "Heartbeat"}
+            </span>
+          </span>
+        }
+      />
+    )
+  }, [activeDiscussionId, onSelect, getAgent, multiAgent])
 
   const renderChatItem = useCallback((discussion: DiscussionInfo) => {
     const alive = discussion.status !== "archived" && discussion.status !== "stopped"
@@ -151,12 +196,14 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {live.length > 0 && (
+      {(live.length > 0 || heartbeat.length > 0) && (
         <div className="shrink-0">
+          {/* One ItemList: it's an h-full ScrollArea, so stacking two in this
+              shrink-0 container makes them overlay each other. */}
           <ItemList
-            items={live}
+            items={[...live, ...heartbeat]}
             keyFn={(d) => d.id}
-            renderItem={renderLiveItem}
+            renderItem={(d) => d.type === "live" ? renderLiveItem(d) : renderHeartbeatItem(d)}
           />
           {chat.length > 0 && (
             <div className="border-b border-overlay-6 mx-3" />

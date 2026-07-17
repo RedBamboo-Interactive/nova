@@ -301,6 +301,7 @@ export function ChatView() {
         sessionId={activeDiscussionId}
         draftStorageKey="nova-drafts"
         disabled={activeDiscussion.status === "archived" || activeDiscussion.status === "stopped"}
+        hideComposer={activeDiscussion.type === "heartbeat"}
         pendingQuestion={pendingQuestion}
         onAnswerQuestion={handleAnswerQuestion}
         onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}

@@ -20,7 +20,10 @@ public sealed class EventInjector(
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public async Task InjectAsync(
+    /// <summary>Returns true when the event was forwarded into a live session;
+    /// false for system events, session-less discussions, or a failed send. The
+    /// message itself is persisted to the discussion stream in every case.</summary>
+    public async Task<bool> InjectAsync(
         DiscussionRead discussion, string content, string? type, string? source,
         string? senderAgentId = null, string? replyToDiscussionId = null,
         JsonElement? metadata = null, string? userId = null, CancellationToken ct = default)
@@ -59,28 +62,30 @@ public sealed class EventInjector(
             ["metadata"] = metadata is { } m ? JsonNode.Parse(m.GetRawText()) : null,
         }, ct);
 
-        if (discussion.SessionId is not null && role != "system")
-        {
-            if (senderAgentId is not null && replyToDiscussionId is not null)
-            {
-                try
-                {
-                    var callbackUrl = $"http://127.0.0.1:18804/api/apps/nova/callbacks/agent-response?replyTo={replyToDiscussionId}&agentId={discussion.AgentId}";
-                    await redCompute.RegisterCallbackAsync(discussion.SessionId, callbackUrl, force: true, ct);
-                }
-                catch { }
-            }
+        if (discussion.SessionId is null || role == "system") return false;
 
+        if (senderAgentId is not null && replyToDiscussionId is not null)
+        {
             try
             {
-                // The transcript copy carries the same uid as the stream record —
-                // one logical event, one identity.
-                object messageBody = senderAgentId is not null
-                    ? new { content, messageUid = uid, metadata = new { senderAgentId, senderName = await agents.GetAgentNameAsync(senderAgentId, ct) } }
-                    : new { content, messageUid = uid };
-                await redCompute.SendMessageAsync(discussion.SessionId, messageBody, ct);
+                var callbackUrl = $"http://127.0.0.1:18804/api/apps/nova/callbacks/agent-response?replyTo={replyToDiscussionId}&agentId={discussion.AgentId}";
+                await redCompute.RegisterCallbackAsync(discussion.SessionId, callbackUrl, force: true, ct);
             }
             catch { }
+        }
+
+        try
+        {
+            // The transcript copy carries the same uid as the stream record —
+            // one logical event, one identity.
+            object messageBody = senderAgentId is not null
+                ? new { content, messageUid = uid, metadata = new { senderAgentId, senderName = await agents.GetAgentNameAsync(senderAgentId, ct) } }
+                : new { content, messageUid = uid };
+            return await redCompute.SendMessageAsync(discussion.SessionId, messageBody, ct) != null;
+        }
+        catch
+        {
+            return false;
         }
     }
 }

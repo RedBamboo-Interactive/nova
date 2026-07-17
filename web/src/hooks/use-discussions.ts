@@ -258,8 +258,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
     setLoadingDiscussionId(id)
     loadedRef.current.add(id)
     try {
-      if (disc?.type === "live" && disc?.sessionId) {
-        // LIVE: merge session messages (chat) with Nova API messages (events)
+      if ((disc?.type === "live" || disc?.type === "heartbeat") && disc?.sessionId) {
+        // LIVE + heartbeat: merge session messages (chat) with Nova API messages
+        // (events — tick digests are events in the heartbeat's stream)
         let sessionMsgs: MessageBlock[] = []
         try {
           const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)

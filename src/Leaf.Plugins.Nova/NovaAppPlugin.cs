@@ -69,7 +69,29 @@ public sealed class NovaAppPlugin : ILeafPlugin
             new DeviceResolver(sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
         services.AddSingleton(sp =>
             new ConversationExporter(sp.GetRequiredService<RedComputeClient>(), sp.GetRequiredService<IDiscussions>()));
+        services.AddSingleton<IShareEnricher>(sp =>
+            new NovaShareEnricher(
+                sp.GetRequiredService<DiscussionStore>(),
+                sp.GetRequiredService<AgentDirectory>(),
+                sp.GetRequiredService<RedComputeClient>(),
+                sp.GetRequiredService<IDiscussions>()));
         services.AddSingleton<LivePoller>();
+        services.AddSingleton(sp =>
+            new HeartbeatService(
+                sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+                sp.GetRequiredService<DiscussionStore>(),
+                sp.GetRequiredService<DiscussionLifecycle>(),
+                sp.GetRequiredService<MessagePipeline>(),
+                sp.GetRequiredService<RedComputeClient>(),
+                sp.GetRequiredService<EventInjector>(),
+                sp.GetRequiredService<AgentDirectory>()));
+        // Automation action "heartbeat-tick" — one tick of the per-agent heartbeat.
+        services.AddSingleton<IAutomationActionHandler>(sp =>
+            new HeartbeatTickHandler(
+                sp.GetRequiredService<HeartbeatService>(),
+                sp.GetRequiredService<DiscussionStore>(),
+                sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+                sp.GetRequiredService<EventInjector>()));
         services.AddSingleton(sp =>
             new MessagePipeline(
                 sp.GetRequiredService<DiscussionStore>(),
@@ -91,6 +113,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
         DelegateEndpoints.Map(group);
         CallbackEndpoints.Map(group);
         AgentEndpoints.Map(group);
+        HeartbeatEndpoints.Map(group);
         MiscEndpoints.Map(group);
     }
 
@@ -129,6 +152,15 @@ public sealed class NovaAppPlugin : ILeafPlugin
             if (!all.Any(d => d.Type == "live" && d.AgentId == agents.NovaAgentId && !DiscussionStatus.IsClosed(d.Status)))
                 await discussionStore.CreateAsync($"{nova!.Name} Live", agents.NovaAgentId, "local-user", "live", ct: ct);
         }
+
+        // Heartbeat provisioning follows agent config (heartbeat.enabled); config
+        // edits are picked up here on boot or via POST /heartbeat/reconcile.
+        var heartbeat = host.GetRequiredService<HeartbeatService>();
+        _ = Task.Run(async () =>
+        {
+            try { await heartbeat.ReconcileAsync(); }
+            catch { /* reconcile endpoint retries on demand */ }
+        }, CancellationToken.None);
 
         // Steam credentials for the LIVE poller: migrate from the standalone app's
         // config.json once, if the singleton doesn't carry them yet.

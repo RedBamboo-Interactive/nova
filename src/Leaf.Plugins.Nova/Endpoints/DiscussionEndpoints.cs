@@ -101,6 +101,9 @@ public static class DiscussionEndpoints
             var userId = UserId(ctx);
             var discussions = (await store.ListAsync())
                 .Where(d => !DiscussionStatus.IsClosed(d.Status) && d.SessionId != null)
+                // Heartbeat discussions never count as pending: no unread pill, no
+                // badge — the heartbeat is a place you visit, not one that calls you.
+                .Where(d => d.Type != HeartbeatService.DiscussionType)
                 .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
                 .ToList();
 
@@ -191,11 +194,11 @@ public static class DiscussionEndpoints
             var agentId = createReq?.AgentId ?? agents.NovaAgentId;
             var type = createReq?.Type ?? "chat";
 
-            if (type == "live")
+            if (type is "live" or HeartbeatService.DiscussionType)
             {
-                var existing = (await store.ListAsync()).Any(d => d.Type == "live" && d.AgentId == agentId && !DiscussionStatus.IsClosed(d.Status));
+                var existing = (await store.ListAsync()).Any(d => d.Type == type && d.AgentId == agentId && !DiscussionStatus.IsClosed(d.Status));
                 if (existing)
-                    return Results.Json(new { error = "A LIVE discussion already exists for this agent" }, statusCode: 409);
+                    return Results.Json(new { error = $"A {type.ToUpperInvariant()} discussion already exists for this agent" }, statusCode: 409);
             }
 
             var discussion = await store.CreateAsync(null, agentId, UserId(ctx), type,
@@ -469,6 +472,9 @@ public static class DiscussionEndpoints
             if (discussion.Type == "live")
                 return Results.Json(new { error = "Live discussions cannot be archived" }, statusCode: 400);
 
+            if (discussion.Type == HeartbeatService.DiscussionType)
+                return Results.Json(new { error = "Heartbeat discussions are managed by the agent config — disable the heartbeat to remove it" }, statusCode: 400);
+
             if (DiscussionStatus.IsClosed(discussion.Status))
                 return Results.Ok(DiscussionStore.ToInfo(discussion)); // idempotent
 
@@ -518,7 +524,7 @@ public static class DiscussionEndpoints
             return Results.Ok(new { cleared = true, discussion = DiscussionStore.ToInfo(discussion with { SessionId = null, MessageCount = 1 }) });
         });
 
-        group.MapPost("/discussions/{id}/rotate", async (string id, HttpContext ctx, DiscussionStore store, AgentDirectory agents, DiscussionLifecycle lifecycle, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, MessagePipeline pipeline, DiscussionActivity activity) =>
+        group.MapPost("/discussions/{id}/rotate", async (string id, HttpContext ctx, DiscussionStore store, AgentDirectory agents, DiscussionLifecycle lifecycle, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, MessagePipeline pipeline, DiscussionActivity activity, HeartbeatService heartbeat) =>
         {
             // "live" resolves to Nova's current LIVE discussion — the system:live-rotation
             // http-action automation calls this form because it cannot resolve the id itself.
@@ -547,6 +553,10 @@ public static class DiscussionEndpoints
                 ["agentId"] = fresh.AgentId,
             });
 
+            // LIVE rotation is the heartbeat's day boundary: end-of-day tick,
+            // handoff, session reset (§5 of the heartbeat design).
+            heartbeat.OnLiveRotated(fresh.AgentId);
+
             pipeline.BeginSessionCreation(fresh);
 
             return Results.Ok(new
@@ -556,9 +566,15 @@ public static class DiscussionEndpoints
             });
         });
 
-        group.MapPost("/discussions/{id}/event", async (string id, DiscussionEventRequest request, HttpContext ctx, DiscussionStore store, EventInjector injector) =>
+        group.MapPost("/discussions/{id}/event", async (string id, DiscussionEventRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, EventInjector injector) =>
         {
-            var discussion = await store.GetAsync(id);
+            // "live" resolves to the current LIVE discussion — the heartbeat posts
+            // its note-events through this form since the LIVE id rotates daily.
+            var discussion = id == "live"
+                ? (await store.ListAsync()).FirstOrDefault(d =>
+                    d.Type == "live" && !DiscussionStatus.IsClosed(d.Status)
+                    && (agents.NovaAgentId == null || d.AgentId == null || d.AgentId == agents.NovaAgentId))
+                : await store.GetAsync(id);
             if (discussion is null) return NotFound();
             if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
 

@@ -5,7 +5,9 @@ export interface DiscussionInfo {
   /** "archiving" = archive intent committed server-side, session stop not yet
    * confirmed. Treated exactly like "archived" everywhere in the UI. */
   status: "idle" | "thinking" | "stopped" | "archiving" | "archived"
-  type: "chat" | "live"
+  /** "heartbeat" = the agent's standing background-participant discussion:
+   * LIVE-rendered, no chat input, no unread/badge accounting. */
+  type: "chat" | "live" | "heartbeat"
   createdAt: string
   lastActivity: string
   messageCount: number
