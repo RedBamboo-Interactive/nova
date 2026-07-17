@@ -1,8 +1,9 @@
 import { useCallback, useRef, useMemo, createContext, useContext } from "react"
-import { useNavigate, useRoutes } from "react-router-dom"
+import { useNavigate, useRoutes, useLocation } from "react-router-dom"
 import {
   useWsSubscribe,
   useAskNovaReceiver, usePendingNovaContext,
+  usePluginBreadcrumbs,
   type AskNovaContext, type PendingNovaContext,
 } from "@redbamboo/utility"
 import { ToastProvider } from "@redbamboo/ui"
@@ -71,6 +72,8 @@ function NovaAppInner() {
 
   const appCtx = useMemo<AppContext>(() => ({ disc, pendingContext }), [disc, pendingContext])
   const element = useRoutes(routes)
+  const { pathname } = useLocation()
+  usePluginBreadcrumbs(routes, "/apps/nova", pathname)
 
   return (
     <>
