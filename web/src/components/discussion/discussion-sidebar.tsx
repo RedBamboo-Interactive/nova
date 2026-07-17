@@ -65,13 +65,13 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         className={[
           agent ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
         ].filter(Boolean).join(" ")}
-        title={discussion.title || "Live"}
-        subtitle={
+        title={
           <span className="flex items-center gap-1.5">
             <i className={`ph-bold ph-broadcast text-[10px] text-accent-teal ${discussion.status === "thinking" ? "animate-pulse" : ""}`} />
             <span style={{ color: "var(--color-accent-teal)" }}>Live</span>
           </span>
         }
+        subtitle={formatRelative(discussion.lastActivity)}
         trailing={
           <button
             onClick={(e) => { e.stopPropagation(); onRotate(discussion.id) }}
@@ -113,8 +113,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         className={[
           agent ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
         ].filter(Boolean).join(" ")}
-        title={discussion.title || "Heartbeat"}
-        subtitle={
+        title={
           <span className="flex items-center gap-1.5">
             <i className={`ph-bold ph-heartbeat text-[10px] ${discussion.status === "thinking" ? "text-accent-gold animate-pulse" : "text-accent-gold/60"}`} />
             <span style={{ color: "var(--color-accent-gold)" }}>
@@ -122,6 +121,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             </span>
           </span>
         }
+        subtitle={formatRelative(discussion.lastActivity)}
         trailing={
           <button
             onClick={(e) => { e.stopPropagation(); onRotate(discussion.id) }}
