@@ -46,13 +46,16 @@ public static class AgentEndpoints
             var agentId = ctx.Request.Query.TryGetValue("agentId", out var aid) && !string.IsNullOrEmpty(aid.ToString())
                 ? aid.ToString() : agents.NovaAgentId;
             if (agentId == null || !Guid.TryParse(agentId, out var agentGuid))
-                return Results.Ok(new { baseAvatarUrl = "/nova-avatar.png", currentOverride = (string?)null, outfits = Array.Empty<object>() });
+                return Results.Ok(new { baseAvatarUrl = "/nova-avatar.png", currentOverride = (string?)null, outfits = Array.Empty<object>(), hasMore = false });
+
+            var limit = ctx.Request.Query.TryGetValue("limit", out var lv) && int.TryParse(lv, out var lp) ? Math.Clamp(lp, 1, 100) : 20;
+            var offset = ctx.Request.Query.TryGetValue("offset", out var ov) && int.TryParse(ov, out var op) ? Math.Max(0, op) : 0;
 
             try
             {
                 var agent = await entities.GetAsync(agentGuid);
                 if (agent == null)
-                    return Results.Ok(new { baseAvatarUrl = "/nova-avatar.png", currentOverride = (string?)null, outfits = Array.Empty<object>() });
+                    return Results.Ok(new { baseAvatarUrl = "/nova-avatar.png", currentOverride = (string?)null, outfits = Array.Empty<object>(), hasMore = false });
 
                 var baseAvRaw = Str(agent.Data, "avatar");
                 var baseAvatarUrl = baseAvRaw != null
@@ -65,11 +68,14 @@ public static class AgentEndpoints
                 {
                     TypeSlug = "outfit",
                     DataEquals = new Dictionary<string, object?> { ["agent"] = agentId },
-                    Limit = 30,
+                    Limit = limit + 1,
+                    Offset = offset,
                 });
 
+                var hasMore = items.Count > limit;
+
                 var outfits = items
-                    .OrderByDescending(o => o.CreatedAt)
+                    .Take(limit)
                     .Select(o => (object)new
                     {
                         id = o.Id.ToString(),
@@ -83,11 +89,11 @@ public static class AgentEndpoints
                     })
                     .ToList();
 
-                return Results.Ok(new { baseAvatarUrl, currentOverride, outfits });
+                return Results.Ok(new { baseAvatarUrl, currentOverride, outfits, hasMore });
             }
             catch
             {
-                return Results.Ok(new { baseAvatarUrl = "/nova-avatar.png", currentOverride = (string?)null, outfits = Array.Empty<object>() });
+                return Results.Ok(new { baseAvatarUrl = "/nova-avatar.png", currentOverride = (string?)null, outfits = Array.Empty<object>(), hasMore = false });
             }
         });
 
