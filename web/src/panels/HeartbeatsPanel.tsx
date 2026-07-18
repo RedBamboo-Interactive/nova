@@ -436,9 +436,15 @@ export function AutomationsPanel() {
     )
   }, [selectedName, handleSelect, handleDelete])
 
-  const visibleAutomations = isNovaSelected ? automations : []
-  const visibleUser = isNovaSelected ? userAutomations : []
-  const visibleSystem = isNovaSelected ? systemAutomations : []
+  const matchesAgent = (a: Automation) => {
+    if (!agentFilter) return true
+    if (agentFilter === defaultAgentId)
+      return !a.agentId || a.agentId === defaultAgentId
+    return a.agentId === agentFilter
+  }
+  const visibleAutomations = automations.filter(matchesAgent)
+  const visibleUser = userAutomations.filter(matchesAgent)
+  const visibleSystem = systemAutomations.filter(matchesAgent)
 
   const sidebar = (
     <>
