@@ -283,7 +283,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
             // Blocks sharing an id are the same logical message cross-posted
             // to both stores (message uid); the timestamp+prefix key covers
             // records that predate the uid rollout.
-            const key = `${m.timestamp}:${m.parts[0]?.content?.slice(0, 50)}`
+            const dedupContent = m.role === "user" ? stripContextXml(m.parts[0]?.content ?? "") : (m.parts[0]?.content ?? "")
+            const key = `${m.timestamp}:${dedupContent.slice(0, 50)}`
             if (seen.has(m.id) || seen.has(key)) return false
             seen.add(m.id)
             seen.add(key)
@@ -592,6 +593,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
         if (prev.some((d) => d.id === discussionId)) return prev
         const newDisc: DiscussionInfo = {
           id: discussionId,
+          // The WS event doesn't carry the entity id; share stays disabled for
+          // this placeholder until the next discussions refresh fills it in.
+          entityId: "",
           title: null,
           sessionId: null,
           status: (status ?? "idle") as DiscussionInfo["status"],
