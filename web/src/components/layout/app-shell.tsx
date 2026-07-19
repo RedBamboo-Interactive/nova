@@ -1,26 +1,9 @@
 import { useState, useEffect, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
-import {
-  ResizablePanelGroup,
-  ResizablePanel,
-  ResizableHandle,
-} from "@redbamboo/ui"
 import { useCommand } from "@redbamboo/utility"
-import { SettingsPanel } from "../../components/layout/settings-panel"
 import { SearchOverlay } from "../../components/discussion/search-overlay"
 import { NewDiscussionPicker } from "../../components/new-discussion-picker"
 import { useDisc } from "../../App"
-
-function SettingsCommand({ onSettings }: { onSettings: () => void }) {
-  useCommand("nova-toggle-settings", {
-    label: "Toggle Nova Settings",
-    description: "Show or hide the Nova settings side panel",
-    group: "Nova",
-    keywords: ["preferences", "config", "docker", "nova"],
-    action: onSettings,
-  })
-  return null
-}
 
 /**
  * Discussion commands live at the Nova shell level so Ctrl+N etc. work from any
@@ -154,7 +137,6 @@ interface Props {
  * This component provides conversation search, settings panel, and discussion commands.
  */
 export function AppShell({ children }: Props) {
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const navigate = useNavigate()
@@ -162,15 +144,12 @@ export function AppShell({ children }: Props) {
 
   const openPicker = useCallback(() => setPickerOpen(true), [])
 
-  const toggleSettings = useCallback(() => setSettingsOpen((prev) => !prev), [])
   useEffect(() => {
-    window.addEventListener("nova-toggle-settings", toggleSettings)
     window.addEventListener("nova:open-new-discussion", openPicker)
     return () => {
-      window.removeEventListener("nova-toggle-settings", toggleSettings)
       window.removeEventListener("nova:open-new-discussion", openPicker)
     }
-  }, [toggleSettings, openPicker])
+  }, [openPicker])
 
   const handlePickerSelect = useCallback(async (agentId: string, qualityTier: string, provider?: string) => {
     const d = await createDiscussion(agentId, qualityTier, provider)
@@ -181,7 +160,6 @@ export function AppShell({ children }: Props) {
     <div className="flex flex-col h-full min-h-0">
       <DiscussionCommands navigate={navigate} onNewDiscussion={openPicker} />
       <SearchCommand onOpen={() => setSearchOpen(true)} />
-      <SettingsCommand onSettings={() => setSettingsOpen((prev) => !prev)} />
       <NewDiscussionPicker
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
@@ -196,19 +174,7 @@ export function AppShell({ children }: Props) {
           }}
         />
       )}
-      {settingsOpen ? (
-        <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
-          <ResizablePanel defaultSize={75} minSize={30}>
-            <main className="h-full overflow-hidden">{children}</main>
-          </ResizablePanel>
-          <ResizableHandle withHandle />
-          <ResizablePanel defaultSize={25} minSize={15}>
-            <SettingsPanel onClose={() => setSettingsOpen(false)} />
-          </ResizablePanel>
-        </ResizablePanelGroup>
-      ) : (
-        <main className="flex-1 min-h-0 overflow-hidden">{children}</main>
-      )}
+      <main className="flex-1 min-h-0 overflow-hidden">{children}</main>
     </div>
   )
 }
