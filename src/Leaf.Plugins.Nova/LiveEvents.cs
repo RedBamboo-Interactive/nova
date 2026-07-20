@@ -52,6 +52,7 @@ public sealed class EventInjector(
                 ["uid"] = uid,
             }, userId, ct), ct);
 
+        var timestamp = DateTimeOffset.UtcNow.ToString("O");
         await events.PublishAsync("discussion.event", new JsonObject
         {
             ["discussionId"] = discussion.Id,
@@ -60,6 +61,7 @@ public sealed class EventInjector(
             ["source"] = source ?? "automation",
             ["senderAgentId"] = senderAgentId,
             ["metadata"] = metadata is { } m ? JsonNode.Parse(m.GetRawText()) : null,
+            ["timestamp"] = timestamp,
         }, ct);
 
         if (discussion.SessionId is null || role == "system") return false;

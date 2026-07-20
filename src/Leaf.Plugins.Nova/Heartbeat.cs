@@ -475,6 +475,8 @@ public static class HeartbeatPrompts
 
             {since} You're still here. This is your async work window. Check in with LIVE (GET {liveUrl}), feel what's happening. Check CHANGED discussions with {liveParam}. But also: what were you working on? What's on the scratchpad? What did you mean to do last tick but didn't? Pick something and do it. Write code, update docs, prepare a plan, research something, follow up on a session. Tell LIVE-me what you did. Update {HandoffPath}. ~{config.MaxTurns} tool actions max.
 
+            **Action-item capture.** Scan recent conversations for commitments, promises, or "do X tomorrow/Monday/later" requests from Laurent. If you find one that hasn't been persisted (not in coaching-day entity, not in memory/meta/pending-agenda.md), write it NOW. This is the safety net, conversations are ephemeral, this file is not. Check memory/meta/pending-agenda.md and consume items that have already been added to a coaching-day entity.
+
             If nothing on that list pulls at you but something else does, follow that instead. The tick is a window for agency, not a script to execute.
             """;
     }

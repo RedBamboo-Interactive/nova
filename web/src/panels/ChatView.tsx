@@ -319,11 +319,11 @@ export function ChatView() {
         onInterrupt={handleInterrupt}
         sessionId={activeDiscussionId}
         draftStorageKey="nova-drafts"
-        disabled={activeDiscussion.status === "archived" || activeDiscussion.status === "stopped"}
+        disabled={activeDiscussion.status === "archived" || (activeDiscussion.status === "stopped" && activeDiscussion.type !== "live")}
         hideComposer={activeDiscussion.type === "heartbeat"}
         pendingQuestion={pendingQuestion}
         onAnswerQuestion={handleAnswerQuestion}
-        onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
+        onResume={activeDiscussion.status === "stopped" && activeDiscussion.type !== "live" ? handleResume : undefined}
         placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}
         header={<>{chatHeader}{upstreamBanner}</>}
         speechBackend={speechBackend}

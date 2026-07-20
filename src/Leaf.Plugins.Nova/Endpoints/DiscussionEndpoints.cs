@@ -728,6 +728,7 @@ public static class DiscussionEndpoints
                 ["content"] = request.Content,
                 ["audioUrl"] = request.AudioUrl,
                 ["senderAgentId"] = request.SenderAgentId,
+                ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
             });
 
             _ = activity.OnNovaMessage(id, discussion.Title, request.Content, discussion.Confidential);

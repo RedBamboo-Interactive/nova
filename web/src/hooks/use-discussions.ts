@@ -25,6 +25,9 @@ function isEventMessage(m: MessageBlock): boolean {
   return /<nova-event\s/.test(text)
 }
 
+const byTimestamp = (a: MessageBlock, b: MessageBlock) =>
+  new Date(a.timestamp ?? 0).getTime() - new Date(b.timestamp ?? 0).getTime()
+
 type EventResolver = (source: string) => EventType
 
 function formatEventMessage(m: MessageBlock, resolve?: EventResolver): MessageBlock {
@@ -49,6 +52,7 @@ function formatEventMessage(m: MessageBlock, resolve?: EventResolver): MessageBl
 }
 
 function cleanMessages(blocks: MessageBlock[], resolve?: EventResolver): MessageBlock[] {
+  blocks = [...blocks].sort(byTimestamp)
   const result: MessageBlock[] = []
   let eventGroup: MessageBlock[] = []
 
@@ -290,7 +294,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             seen.add(key)
             return true
           })
-          .sort((a, b) => new Date(a.timestamp ?? 0).getTime() - new Date(b.timestamp ?? 0).getTime())
+          .sort(byTimestamp)
 
         setMessages((prev) => ({ ...prev, [id]: cleanMessages(merged, eventResolver) }))
         return
@@ -431,8 +435,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
     const fail = () => {
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
+      const failStatus = disc.type === "live" ? "idle" as const : "stopped" as const
       setDiscussions((prev) =>
-        prev.map((d) => d.id === discussionId ? { ...d, status: "stopped" as const } : d)
+        prev.map((d) => d.id === discussionId ? { ...d, status: failStatus } : d)
       )
     }
 
@@ -537,7 +542,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
         const known = discussionsRef.current.find((d) => d.id === discId)
         if (!known || isClosed(known.status) || pendingArchivesRef.current.has(discId)) return
         const isStopped = session.status === "Stopped" || session.status === "Error"
-        const discStatus = isStopped ? "stopped" as const : "idle" as const
+        const isLiveDisc = known.type === "live"
+        const discStatus = (isStopped && !isLiveDisc) ? "stopped" as const : "idle" as const
         const now = new Date().toISOString()
         const isViewing = activeIdRef.current === discId
         setDiscussions((prev) =>
@@ -552,7 +558,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             }
           })
         )
-        if (isStopped) {
+        if (isStopped && !isLiveDisc) {
           api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
         } else {
           api.put(`/api/apps/nova/discussions/${discId}/activity`).catch(() => {})
@@ -582,10 +588,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setPendingQuestions((prev) => ({ ...prev, [discId]: null }))
       const known = discussionsRef.current.find((d) => d.id === discId)
       const closed = !known || isClosed(known.status) || pendingArchivesRef.current.has(discId)
+      const isLive = known?.type === "live"
       setDiscussions((prev) =>
-        prev.map((d) => d.id === discId && !isClosed(d.status) ? { ...d, status: "stopped" as const } : d)
+        prev.map((d) => d.id === discId && !isClosed(d.status) ? { ...d, status: isLive ? "idle" as const : "stopped" as const } : d)
       )
-      if (!closed) api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
+      if (!closed && !isLive) api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
     } else if (event.type === "discussion.created") {
       const { discussionId, agentId, status, type } = event.data as { discussionId: string; agentId?: string; status?: string; type?: string }
       if (!discussionId) return
@@ -609,8 +616,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return [newDisc, ...prev]
       })
     } else if (event.type === "discussion.event") {
-      const { discussionId, content, source, senderAgentId, metadata } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; metadata?: Record<string, unknown> | null }
+      const { discussionId, content, source, senderAgentId, metadata, timestamp: serverTs } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; metadata?: Record<string, unknown> | null; timestamp?: string }
       if (!discussionId) return
+      const ts = serverTs ?? new Date().toISOString()
       setMessages((prev) => {
         const current = prev[discussionId] ?? []
         const sourceKey = source ? `event:${source}` : "event:system"
@@ -619,7 +627,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         const eventType = eventResolver?.(sourceKey)
         const eventPart: import("@redbamboo/chat").MessagePart = {
           type: "tool_use", toolName: `event:${key}`,
-          toolInput: JSON.stringify({ event: cleaned, icon: eventType?.icon ?? null, color: eventType?.color ?? null, data: metadata ?? null, timestamp: new Date().toISOString() }),
+          toolInput: JSON.stringify({ event: cleaned, icon: eventType?.icon ?? null, color: eventType?.color ?? null, data: metadata ?? null, timestamp: ts }),
           content: cleaned,
         }
 
@@ -635,22 +643,21 @@ export function useDiscussions(eventResolver?: EventResolver) {
           id: `event-${Date.now()}`,
           role: "assistant",
           parts: [eventPart],
-          timestamp: new Date().toISOString(),
+          timestamp: ts,
           senderAgentId,
           metadata: { source: sourceKey },
         }
 
-        // If last block is assistant and still streaming, insert event before it
+        // If last block is assistant and still streaming, sort non-streaming blocks and pin streaming at end
         if (last && last.role === "assistant" && !last.metadata?.source && last.parts.some(p => p.isPartial)) {
-          const updated = [...current]
-          updated.splice(updated.length - 1, 0, newBlock)
-          return { ...prev, [discussionId]: updated }
+          const sorted = [...current.slice(0, -1), newBlock].sort(byTimestamp)
+          return { ...prev, [discussionId]: [...sorted, last] }
         }
 
-        return { ...prev, [discussionId]: [...current, newBlock] }
+        return { ...prev, [discussionId]: [...current, newBlock].sort(byTimestamp) }
       })
     } else if (event.type === "discussion.nova-message") {
-      const { discussionId, content, audioUrl, senderAgentId } = event.data as { discussionId: string; content: string; audioUrl?: string; senderAgentId?: string }
+      const { discussionId, content, audioUrl, senderAgentId, timestamp: serverTs } = event.data as { discussionId: string; content: string; audioUrl?: string; senderAgentId?: string; timestamp?: string }
       if (!discussionId) return
       setMessages((prev) => {
         const current = prev[discussionId] ?? []
@@ -660,10 +667,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
           id: `nova-msg-${Date.now()}`,
           role: "assistant",
           parts,
-          timestamp: new Date().toISOString(),
+          timestamp: serverTs ?? new Date().toISOString(),
           senderAgentId,
         }
-        return { ...prev, [discussionId]: [...current, newBlock] }
+        return { ...prev, [discussionId]: [...current, newBlock].sort(byTimestamp) }
       })
     } else if (event.type === "discussion.cleared") {
       const { discussionId } = event.data as { discussionId: string }
