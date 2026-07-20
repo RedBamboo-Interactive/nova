@@ -55,12 +55,14 @@ public sealed record HeartbeatConfig(
 /// </summary>
 public sealed class HeartbeatService(
     IEntityStore entities,
+    IDiscussions discussions,
     DiscussionStore store,
     DiscussionLifecycle lifecycle,
     MessagePipeline pipeline,
     RedComputeClient redCompute,
     EventInjector injector,
-    AgentDirectory agents)
+    AgentDirectory agents,
+    LocationService location)
 {
     public const string DiscussionType = "heartbeat";
 
@@ -253,7 +255,47 @@ public sealed class HeartbeatService(
             ? $"Most recent discussion activity: {(int)(now.UtcDateTime - newestActivity.Value).TotalMinutes} minutes ago."
             : "No discussion activity on record.";
 
-        return string.Join("\n", lines) + "\n" + presence;
+        var sb = new System.Text.StringBuilder();
+        sb.Append(string.Join("\n", lines));
+        sb.Append('\n');
+        sb.Append(presence);
+
+        // Inject current location so the heartbeat knows where Laurent is right now.
+        var loc = location.Latest;
+        if (loc != null)
+        {
+            var zone = loc.Zone ?? loc.PlaceName ?? $"{loc.Latitude:F4}, {loc.Longitude:F4}";
+            sb.Append($"\nCurrent location: {zone}");
+        }
+
+        // Inject recent LIVE events so the heartbeat has the same awareness as the
+        // LIVE discussion: location changes, device switches, automation results, etc.
+        var liveDisc = all.FirstOrDefault(d => d.Type == "live");
+        if (liveDisc != null)
+        {
+            var liveMessages = await discussions.GetMessagesAsync(liveDisc.EntityId, ct: ct);
+            var since = lastTick?.UtcDateTime ?? now.AddHours(-1).UtcDateTime;
+            var recentEvents = liveMessages
+                .Where(m => (m.Metadata["source"]?.GetValue<string>() ?? "").StartsWith("event:"))
+                .Where(m => m.CreatedAt.UtcDateTime >= since)
+                .TakeLast(20)
+                .ToList();
+
+            if (recentEvents.Count > 0)
+            {
+                sb.Append("\n\nRecent events since last tick:");
+                foreach (var ev in recentEvents)
+                {
+                    var source = ev.Metadata["source"]?.GetValue<string>() ?? "";
+                    if (source.StartsWith("event:")) source = source[6..];
+                    var age = now.UtcDateTime - ev.CreatedAt.UtcDateTime;
+                    var ageText = age.TotalMinutes < 60 ? $"{(int)age.TotalMinutes}m ago" : $"{(int)age.TotalHours}h ago";
+                    sb.Append($"\n- [{source}] {ev.Content} ({ageText})");
+                }
+            }
+        }
+
+        return sb.ToString();
     }
 
     public async Task WaitForSessionIdleAsync(string sessionId, TimeSpan bound, CancellationToken ct = default)
@@ -342,7 +384,7 @@ public sealed class HeartbeatTickHandler(
         if (localNow.Hour == 2)
         {
             await heartbeat.RotateAsync(agentId, "fallback-0255", ct);
-            return new JsonObject { ["summary"] = "end-of-day fallback: rotated", ["discussionId"] = discussion.Id };
+            return new JsonObject { ["summary"] = "end-of-day fallback: rotated", ["discussionId"] = discussion.Id, ["silent"] = true };
         }
 
         if (discussion.Status == DiscussionStatus.Thinking)
@@ -391,6 +433,7 @@ public sealed class HeartbeatTickHandler(
             ["discussionId"] = discussion.Id,
             ["sessionId"] = sessionId,
             ["morning"] = isNew,
+            ["silent"] = true,
         };
     }
 
@@ -398,6 +441,7 @@ public sealed class HeartbeatTickHandler(
     {
         ["summary"] = $"skipped: {reason}",
         ["skipped"] = true,
+        ["silent"] = true,
     };
 }
 

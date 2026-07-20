@@ -79,12 +79,14 @@ public sealed class NovaAppPlugin : ILeafPlugin
         services.AddSingleton(sp =>
             new HeartbeatService(
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+                sp.GetRequiredService<IDiscussions>(),
                 sp.GetRequiredService<DiscussionStore>(),
                 sp.GetRequiredService<DiscussionLifecycle>(),
                 sp.GetRequiredService<MessagePipeline>(),
                 sp.GetRequiredService<RedComputeClient>(),
                 sp.GetRequiredService<EventInjector>(),
-                sp.GetRequiredService<AgentDirectory>()));
+                sp.GetRequiredService<AgentDirectory>(),
+                sp.GetRequiredService<LocationService>()));
         // Automation action "heartbeat-tick" — one tick of the per-agent heartbeat.
         services.AddSingleton<IAutomationActionHandler>(sp =>
             new HeartbeatTickHandler(
