@@ -357,7 +357,7 @@ public static class DiscussionEndpoints
                             messageUid = (string?)null,
                             role = m.Role,
                             parts = new object[] { new { type = "text", content = ConversationExporter.StripInjectedTags(m.Content ?? ""), toolName = (string?)null, toolInput = (string?)null } },
-                            timestamp = DateTime.SpecifyKind(m.Timestamp, DateTimeKind.Utc).ToString("o"),
+                            timestamp = m.Timestamp.ToString("o"),
                             senderAgentId = (string?)null,
                             source = (string?)"session-transcript",
                         });

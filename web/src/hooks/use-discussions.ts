@@ -274,7 +274,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
         let apiMsgs: MessageBlock[] = []
         try {
           const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}`)
-          if (data.messages?.length) apiMsgs = toChatMessages(data.messages)
+          if (data.messages?.length) {
+            // The API already merges session-transcript messages with event
+            // messages, but we load the raw session above for full fidelity
+            // (tool calls, thinking blocks, etc.). Only take event messages
+            // from the API to avoid duplicates with the raw transcript.
+            apiMsgs = toChatMessages(data.messages.filter((m) => m.source !== "session-transcript"))
+          }
         } catch {}
 
         const seen = new Set<string>()
@@ -288,9 +294,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
             // to both stores (message uid); the timestamp+prefix key covers
             // records that predate the uid rollout.
             const dedupContent = m.role === "user" ? stripContextXml(m.parts[0]?.content ?? "") : (m.parts[0]?.content ?? "")
-            const key = `${m.timestamp}:${dedupContent.slice(0, 50)}`
-            if (seen.has(m.id) || seen.has(key)) return false
-            seen.add(m.id)
+            const normTs = m.timestamp.replace(/\+00:00$/, "Z")
+            const key = `${normTs}:${dedupContent.slice(0, 50)}`
+            if ((m.id != null && seen.has(m.id)) || seen.has(key)) return false
+            if (m.id != null) seen.add(m.id)
             seen.add(key)
             return true
           })
@@ -565,18 +572,23 @@ export function useDiscussions(eventResolver?: EventResolver) {
           if (isViewing) {
             api.put(`/api/apps/nova/discussions/${discId}/read`).catch(() => {})
           }
-          const syncTitle = (name: string) => {
-            setDiscussions((prev) =>
-              prev.map((d) => d.id === discId ? { ...d, title: name } : d)
-            )
-            api.put(`/api/apps/nova/discussions/${discId}/title`, { title: name }).catch(() => {})
-          }
-          if (session.title) {
-            syncTitle(session.title)
-          } else {
-            api.get<{ session: { title?: string } }>(`/ai-session/sessions/${session.id}`)
-              .then((data) => { if (data.session?.title) syncTitle(data.session.title) })
-              .catch(() => {})
+          // LIVE and heartbeat discussions own their titles — don't let
+          // session auto-titles overwrite them (the session title drifts to
+          // whatever topic was last discussed, which is confusing).
+          if (!isLiveDisc && known.type !== "heartbeat") {
+            const syncTitle = (name: string) => {
+              setDiscussions((prev) =>
+                prev.map((d) => d.id === discId ? { ...d, title: name } : d)
+              )
+              api.put(`/api/apps/nova/discussions/${discId}/title`, { title: name }).catch(() => {})
+            }
+            if (session.title) {
+              syncTitle(session.title)
+            } else {
+              api.get<{ session: { title?: string } }>(`/ai-session/sessions/${session.id}`)
+                .then((data) => { if (data.session?.title) syncTitle(data.session.title) })
+                .catch(() => {})
+            }
           }
         }
       }

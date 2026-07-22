@@ -210,7 +210,7 @@ public sealed class RedComputeClient
                     Role = el.GetProperty("role").GetString() ?? "unknown",
                     EventType = el.TryGetProperty("eventType", out var et) ? et.GetString() ?? "text" : "text",
                     Content = el.TryGetProperty("content", out var c) ? c.GetString() : null,
-                    Timestamp = el.TryGetProperty("timestamp", out var ts) ? ts.GetDateTime() : DateTime.MinValue,
+                    Timestamp = el.TryGetProperty("timestamp", out var ts) ? ts.GetDateTimeOffset().UtcDateTime : DateTime.MinValue,
                 });
             }
         }
