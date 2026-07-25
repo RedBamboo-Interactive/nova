@@ -643,16 +643,28 @@ export function useDiscussions(eventResolver?: EventResolver) {
           content: cleaned,
         }
 
-        // Merge into the last block if it's already an event group
-        const last = current[current.length - 1]
-        if (last && last.metadata?.source && (last.metadata.source as string).startsWith("event:")) {
+        // processStreamEvent() only ever extends the *last* block, so an in-flight
+        // assistant block has to stay pinned at the end — which pushes the event
+        // group it belongs after one slot back. Merge into that displaced group
+        // rather than only inspecting the last block, otherwise every event of a
+        // burst becomes its own block and renders as one dot per row.
+        const lastIdx = current.length - 1
+        const last = current[lastIdx]
+        const streamingLast = !!last && last.role === "assistant" && !last.metadata?.source
+          && last.parts.some((p) => p.isPartial)
+        const targetIdx = streamingLast ? lastIdx - 1 : lastIdx
+        const target = targetIdx >= 0 ? current[targetIdx] : undefined
+
+        if (target && typeof target.metadata?.source === "string" && target.metadata.source.startsWith("event:")) {
           const updated = [...current]
-          updated[updated.length - 1] = { ...last, parts: [...last.parts, eventPart] }
+          updated[targetIdx] = { ...target, parts: [...target.parts, eventPart] }
           return { ...prev, [discussionId]: updated }
         }
 
-        const newBlock: import("@redbamboo/chat").MessageBlock = {
-          id: `event-${Date.now()}`,
+        const newBlock: MessageBlock = {
+          // Date.now() alone collides for events landing in the same millisecond,
+          // and a duplicate React key drops blocks from the list.
+          id: `event-${ts}-${current.length}`,
           role: "assistant",
           parts: [eventPart],
           timestamp: ts,
@@ -660,13 +672,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
           metadata: { source: sourceKey },
         }
 
-        // If last block is assistant and still streaming, sort non-streaming blocks and pin streaming at end
-        if (last && last.role === "assistant" && !last.metadata?.source && last.parts.some(p => p.isPartial)) {
-          const sorted = [...current.slice(0, -1), newBlock].sort(byTimestamp)
-          return { ...prev, [discussionId]: [...sorted, last] }
+        // Splice, never re-sort: a pinned streaming block is timestamped when it
+        // opened, so sorting drops the events that arrived during it back below —
+        // making the whole group visibly jump across the message on the next event.
+        return {
+          ...prev,
+          [discussionId]: streamingLast
+            ? [...current.slice(0, lastIdx), newBlock, last!]
+            : [...current, newBlock],
         }
-
-        return { ...prev, [discussionId]: [...current, newBlock].sort(byTimestamp) }
       })
     } else if (event.type === "discussion.nova-message") {
       const { discussionId, content, audioUrl, senderAgentId, timestamp: serverTs } = event.data as { discussionId: string; content: string; audioUrl?: string; senderAgentId?: string; timestamp?: string }
