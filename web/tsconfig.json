@@ -28,5 +28,10 @@
     },
     "types": ["vite/client"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests run on node:test via `npm test`, outside the browser bundle. Typing
+  // them would need @types/node, which also injects Node globals into the app
+  // program and changes DOM types such as setTimeout's return. Keep the app
+  // program browser-only; the tests assert at runtime.
+  "exclude": ["src/**/*.test.ts"]
 }

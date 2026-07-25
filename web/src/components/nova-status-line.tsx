@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { MorphSpinner, getSpinnerColor } from "@redbamboo/chat"
+import { MorphSpinner, getSpinnerColor, isEventBlock } from "@redbamboo/chat"
 import type { MessageBlock } from "@redbamboo/chat"
 
 const toolLabels: Record<string, { icon: string; label: string }> = {
@@ -18,7 +18,10 @@ const toolLabels: Record<string, { icon: string; label: string }> = {
 function getStatusFromMessages(messages: MessageBlock[]): { icon: string; label: string } | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const block = messages[i]!
-    if (block.role !== "assistant") continue
+    // Ambient event groups trail the in-flight block and would otherwise match
+    // the generic tool_use branch below, reporting "Working..." for a weather
+    // update instead of what Nova is actually doing.
+    if (block.role !== "assistant" || isEventBlock(block)) continue
 
     for (let j = block.parts.length - 1; j >= 0; j--) {
       const part = block.parts[j]!

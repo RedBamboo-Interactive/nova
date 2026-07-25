@@ -5,6 +5,7 @@ import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, Eve
 import type { MessageBlock, MessagePart, PendingQuestion, ChatEvent, ImageAttachment } from "@redbamboo/chat"
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
+import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
 
 function isClosed(status: string | undefined): boolean {
   return status === "archived" || status === "archiving"
@@ -18,114 +19,40 @@ function stripContextXml(content: string): string {
     .trim()
 }
 
-function isEventMessage(m: MessageBlock): boolean {
-  const source = m.metadata?.source as string | undefined
-  if (source?.startsWith("event:")) return true
-  const text = m.parts[0]?.content ?? ""
-  return /<nova-event\s/.test(text)
-}
-
-const byTimestamp = (a: MessageBlock, b: MessageBlock) =>
-  new Date(a.timestamp ?? 0).getTime() - new Date(b.timestamp ?? 0).getTime()
-
 type EventResolver = (source: string) => EventType
 
-function formatEventMessage(m: MessageBlock, resolve?: EventResolver): MessageBlock {
-  const source = (m.metadata?.source as string | undefined) ?? "event:system"
-  const key = source.replace(/^event:/, "").split(":")[0] ?? "system"
-  const text = m.parts[0]?.content ?? ""
-  const cleaned = text.replace(/<nova-event[^>]*>([\s\S]*?)<\/nova-event>/g, "$1").trim() || text
-  const eventType = resolve?.(source)
-  const data = (m.metadata?.eventData as Record<string, unknown> | undefined) ?? null
-  return {
-    ...m,
-    role: "assistant",
-    parts: [{
-      type: "tool_use",
-      toolName: `event:${key}`,
-      // timestamp rides per-part: event groups merge blocks, keeping only the
-      // first message's block timestamp.
-      toolInput: JSON.stringify({ event: cleaned, icon: eventType?.icon ?? null, color: eventType?.color ?? null, data, timestamp: m.timestamp }),
-      content: cleaned,
-    }],
-  }
+/**
+ * Nova wraps every outgoing user message in context XML; the transcript shows
+ * only the part the human typed. Returns null for a message that was pure
+ * context and has nothing left to display.
+ */
+function stripContextBlocks(m: MessageBlock): MessageBlock | null {
+  const textPart = m.parts.find((p) => p.type === "text")
+  if (!textPart?.content || !textPart.content.includes("<nova-")) return m
+  const cleaned = stripContextXml(textPart.content)
+  if (cleaned === textPart.content) return m
+  if (!cleaned) return null
+  return { ...m, parts: m.parts.map((p) => p === textPart ? { ...p, content: cleaned } : p) }
 }
 
+/** Strip Nova's context wrappers, then apply the frieze ordering rule. */
 function cleanMessages(blocks: MessageBlock[], resolve?: EventResolver): MessageBlock[] {
-  blocks = [...blocks].sort(byTimestamp)
-  const result: MessageBlock[] = []
-  let eventGroup: MessageBlock[] = []
-
-  const makeEventBlock = () => {
-    if (eventGroup.length === 0) return null
-    const parts = eventGroup.map((m) => formatEventMessage(m, resolve).parts[0]!)
-    const block: MessageBlock = { ...eventGroup[0]!, role: "assistant", parts }
-    eventGroup = []
-    return block
-  }
-
-  const flushEvents = () => {
-    const block = makeEventBlock()
-    if (block) result.push(block)
-  }
-
-  for (const m of blocks) {
-    if (isEventMessage(m)) {
-      eventGroup.push(m)
+  const prepared: MessageBlock[] = []
+  for (const block of blocks) {
+    // Event detection has to run first: stripContextXml() unwraps <nova-event>
+    // tags, which is one of the two markers identifying a legacy event message.
+    if (isRawEventMessage(block)) {
+      prepared.push(block)
       continue
     }
-    // Only flush events before user messages, not between consecutive assistant blocks
-    if (m.role === "user") {
-      flushEvents()
-    } else if (eventGroup.length > 0 && m.role === "assistant") {
-      // Events between assistant blocks: hold them, insert before this assistant run
-      const lastResult = result[result.length - 1]
-      if (!lastResult || lastResult.role !== "assistant") {
-        flushEvents()
-      }
-      // else: keep accumulating, will flush before next user message or at end
+    if (block.role !== "user") {
+      prepared.push(block)
+      continue
     }
-    if (m.role === "user") {
-      const textPart = m.parts.find((p) => p.type === "text")
-      if (!textPart?.content || !textPart.content.includes("<nova-")) { result.push(m); continue }
-      const cleaned = stripContextXml(textPart.content)
-      if (cleaned === textPart.content) { result.push(m); continue }
-      if (!cleaned) continue
-      result.push({
-        ...m,
-        parts: m.parts.map((p) => p === textPart ? { ...p, content: cleaned } : p),
-      })
-    } else {
-      result.push(m)
-    }
+    const cleaned = stripContextBlocks(block)
+    if (cleaned) prepared.push(cleaned)
   }
-  flushEvents()
-
-  // Post-process: move event blocks that ended up between assistant blocks to before the assistant run
-  const final: MessageBlock[] = []
-  for (let i = 0; i < result.length; i++) {
-    const block = result[i]!
-    const isEvent = block.parts.every((p) => p.toolName?.startsWith("event:"))
-    const hasMoreAssistantContent = result.slice(i + 1).some(b =>
-      b.role === "assistant" && !b.parts.every(p => p.toolName?.startsWith("event:"))
-    )
-    if (isEvent && final.length > 0 && final[final.length - 1]!.role === "assistant" && hasMoreAssistantContent) {
-      // Find where this assistant run started
-      let insertAt = final.length - 1
-      while (insertAt > 0 && final[insertAt - 1]!.role === "assistant" && !final[insertAt - 1]!.parts.every((p) => p.toolName?.startsWith("event:"))) {
-        insertAt--
-      }
-      // Merge with existing event block at that position if present
-      if (insertAt > 0 && final[insertAt - 1]!.parts.every((p) => p.toolName?.startsWith("event:"))) {
-        final[insertAt - 1] = { ...final[insertAt - 1]!, parts: [...final[insertAt - 1]!.parts, ...block.parts] }
-      } else {
-        final.splice(insertAt, 0, block)
-      }
-    } else {
-      final.push(block)
-    }
-  }
-  return final
+  return orderMessages(prepared, resolve)
 }
 
 function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
@@ -631,57 +558,16 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const { discussionId, content, source, senderAgentId, metadata, timestamp: serverTs } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; metadata?: Record<string, unknown> | null; timestamp?: string }
       if (!discussionId) return
       const ts = serverTs ?? new Date().toISOString()
-      setMessages((prev) => {
-        const current = prev[discussionId] ?? []
-        const sourceKey = source ? `event:${source}` : "event:system"
-        const key = source?.split(":")[0] ?? "system"
-        const cleaned = content.replace(/<nova-event[^>]*>([\s\S]*?)<\/nova-event>/g, "$1").trim() || content
-        const eventType = eventResolver?.(sourceKey)
-        const eventPart: import("@redbamboo/chat").MessagePart = {
-          type: "tool_use", toolName: `event:${key}`,
-          toolInput: JSON.stringify({ event: cleaned, icon: eventType?.icon ?? null, color: eventType?.color ?? null, data: metadata ?? null, timestamp: ts }),
-          content: cleaned,
-        }
-
-        // processStreamEvent() only ever extends the *last* block, so an in-flight
-        // assistant block has to stay pinned at the end — which pushes the event
-        // group it belongs after one slot back. Merge into that displaced group
-        // rather than only inspecting the last block, otherwise every event of a
-        // burst becomes its own block and renders as one dot per row.
-        const lastIdx = current.length - 1
-        const last = current[lastIdx]
-        const streamingLast = !!last && last.role === "assistant" && !last.metadata?.source
-          && last.parts.some((p) => p.isPartial)
-        const targetIdx = streamingLast ? lastIdx - 1 : lastIdx
-        const target = targetIdx >= 0 ? current[targetIdx] : undefined
-
-        if (target && typeof target.metadata?.source === "string" && target.metadata.source.startsWith("event:")) {
-          const updated = [...current]
-          updated[targetIdx] = { ...target, parts: [...target.parts, eventPart] }
-          return { ...prev, [discussionId]: updated }
-        }
-
-        const newBlock: MessageBlock = {
-          // Date.now() alone collides for events landing in the same millisecond,
-          // and a duplicate React key drops blocks from the list.
-          id: `event-${ts}-${current.length}`,
-          role: "assistant",
-          parts: [eventPart],
+      setMessages((prev) => ({
+        ...prev,
+        [discussionId]: appendEvent(prev[discussionId] ?? [], {
+          source: source ? `event:${source}` : "event:system",
+          content,
+          data: metadata ?? null,
           timestamp: ts,
           senderAgentId,
-          metadata: { source: sourceKey },
-        }
-
-        // Splice, never re-sort: a pinned streaming block is timestamped when it
-        // opened, so sorting drops the events that arrived during it back below —
-        // making the whole group visibly jump across the message on the next event.
-        return {
-          ...prev,
-          [discussionId]: streamingLast
-            ? [...current.slice(0, lastIdx), newBlock, last!]
-            : [...current, newBlock],
-        }
-      })
+        }, eventResolver),
+      }))
     } else if (event.type === "discussion.nova-message") {
       const { discussionId, content, audioUrl, senderAgentId, timestamp: serverTs } = event.data as { discussionId: string; content: string; audioUrl?: string; senderAgentId?: string; timestamp?: string }
       if (!discussionId) return

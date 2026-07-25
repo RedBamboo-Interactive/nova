@@ -16,7 +16,7 @@
     "dev": "vite build --watch",
     "build:pkg": "vite build",
     "lint": "echo ok",
-    "test": "echo ok"
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@redbamboo/chat": "link:../../redbamboo-packages/packages/chat",
