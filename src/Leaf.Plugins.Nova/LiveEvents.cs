@@ -78,11 +78,19 @@ public sealed class EventInjector(
 
         try
         {
+            // Events reach the session as role "user" (see above), which makes a heartbeat note
+            // indistinguishable from Laurent typing. Nova then answers it in the discussion he
+            // reads. Tag the session copy so she can tell an internal note from him talking.
+            // The discussion-stream copy posted above stays untagged, so the UI is unaffected.
+            var taggedContent = content.TrimStart().StartsWith("<nova-event", StringComparison.Ordinal)
+                ? content
+                : $"<nova-event source=\"{source ?? "automation"}\">\n{content}\n</nova-event>";
+
             // The transcript copy carries the same uid as the stream record —
             // one logical event, one identity.
             object messageBody = senderAgentId is not null
-                ? new { content, messageUid = uid, metadata = new { senderAgentId, senderName = await agents.GetAgentNameAsync(senderAgentId, ct) } }
-                : new { content, messageUid = uid };
+                ? new { content = taggedContent, messageUid = uid, metadata = new { senderAgentId, senderName = await agents.GetAgentNameAsync(senderAgentId, ct) } }
+                : new { content = taggedContent, messageUid = uid };
             return await redCompute.SendMessageAsync(discussion.SessionId, messageBody, ct) != null;
         }
         catch
