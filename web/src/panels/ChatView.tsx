@@ -91,6 +91,8 @@ export function ChatView() {
     activeDiscussionId,
     activeMessages,
     isStreaming,
+    isInterrupting,
+    isResumePending,
     isSpawning,
     pendingQuestion,
     selectDiscussion,
@@ -315,6 +317,8 @@ export function ChatView() {
       <ChatPanel
         messages={deferredMessages}
         isStreaming={isStreaming}
+        interrupting={isInterrupting}
+        resumePending={isResumePending}
         onSend={handleSend}
         onInterrupt={handleInterrupt}
         sessionId={activeDiscussionId}

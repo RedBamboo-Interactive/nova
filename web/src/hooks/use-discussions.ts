@@ -98,6 +98,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const [messages, setMessages] = useState<Record<string, MessageBlock[]>>({})
   const [streaming, setStreaming] = useState<Record<string, boolean>>({})
   const [pendingQuestions, setPendingQuestions] = useState<Record<string, PendingQuestion | null>>({})
+  const [interrupting, setInterrupting] = useState<Record<string, boolean>>({})
+  // True once the backend reports a discussion's CLI process was force-killed
+  // and is being replaced, until the follow-up status/error lands. isStreaming
+  // is already false by then, but a queued message isn't safe to send yet —
+  // see @redbamboo/chat's process-stream-event.ts "killed" handling.
+  const [resumePending, setResumePending] = useState<Record<string, boolean>>({})
+  const resumePendingRef = useRef(resumePending)
+  resumePendingRef.current = resumePending
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
   const [isSpawning, setIsSpawning] = useState(false)
   const [upstreamConnected, setUpstreamConnected] = useState(true)
@@ -107,6 +115,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const activeDiscussion = discussions.find((d) => d.id === activeDiscussionId) ?? null
   const activeMessages = activeDiscussionId ? messages[activeDiscussionId] ?? [] : []
   const isStreaming = activeDiscussionId ? streaming[activeDiscussionId] ?? false : false
+  const isInterrupting = activeDiscussionId ? interrupting[activeDiscussionId] ?? false : false
+  const isResumePending = activeDiscussionId ? resumePending[activeDiscussionId] ?? false : false
   const activePendingQuestion = activeDiscussionId ? pendingQuestions[activeDiscussionId] ?? null : null
 
   const activeIdRef = useRef(activeDiscussionId)
@@ -117,6 +127,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
   // setState updater's side effect is not reliable (updaters may run later).
   const discussionsRef = useRef(discussions)
   discussionsRef.current = discussions
+  const pendingQuestionsRef = useRef(pendingQuestions)
+  pendingQuestionsRef.current = pendingQuestions
   // Archive intents in flight (and confirmed): a stale list refresh racing the
   // DELETE must not resurrect these rows.
   const pendingArchivesRef = useRef<Set<string>>(new Set())
@@ -351,6 +363,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }))
 
     setStreaming((prev) => ({ ...prev, [discussionId]: true }))
+    setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
+    setResumePending((prev) => ({ ...prev, [discussionId]: false }))
     setDiscussions((prev) =>
       prev.map((d) => d.id === discussionId ? { ...d, status: "thinking" as const } : d)
     )
@@ -445,6 +459,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     if (!disc?.sessionId) return
     setPendingQuestions((prev) => ({ ...prev, [discussionId]: null }))
     setStreaming((prev) => ({ ...prev, [discussionId]: true }))
+    setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
+    setResumePending((prev) => ({ ...prev, [discussionId]: false }))
     try {
       await api.post(`/ai-session/sessions/${disc.sessionId}/answer`, { answer })
     } catch {
@@ -470,6 +486,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (!discId) return
       if (session.status !== "Active") {
         setStreaming((prev) => ({ ...prev, [discId]: false }))
+        setInterrupting((prev) => ({ ...prev, [discId]: false }))
+        setResumePending((prev) => ({ ...prev, [discId]: false }))
         // Closed (archived/archiving) discussions are terminal: never echo
         // session events back to the server for them. Checked via the ref —
         // a setState updater's side effect is not guaranteed to have run here.
@@ -518,6 +536,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
             }
           }
         }
+      } else if (!pendingQuestionsRef.current[discId]) {
+        // Active means a turn is running even when this client didn't start
+        // it — an automation, the heartbeat, or the same discussion open on
+        // his phone. Without this there is no path back to streaming=true, so
+        // the composer looks idle and the message queue drains straight into a
+        // live turn. A pending question is the exception: the turn is Active
+        // but blocked on the user, and answers go through onAnswerQuestion.
+        setStreaming((prev) => ({ ...prev, [discId]: true }))
       }
     } else if (event.type === "session.ended") {
       const { id } = event.data as { id: string }
@@ -525,6 +551,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (!discId) return
       setStreaming((prev) => ({ ...prev, [discId]: false }))
       setPendingQuestions((prev) => ({ ...prev, [discId]: null }))
+      setInterrupting((prev) => ({ ...prev, [discId]: false }))
+      setResumePending((prev) => ({ ...prev, [discId]: false }))
       const known = discussionsRef.current.find((d) => d.id === discId)
       const closed = !known || isClosed(known.status) || pendingArchivesRef.current.has(discId)
       const isLive = known?.type === "live"
@@ -590,6 +618,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setMessages((prev) => ({ ...prev, [discussionId]: [] }))
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
       setPendingQuestions((prev) => ({ ...prev, [discussionId]: null }))
+      setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
+      setResumePending((prev) => ({ ...prev, [discussionId]: false }))
       loadedRef.current.delete(discussionId)
       loadMessages(discussionId)
     } else if (event.type === "discussion.rotated") {
@@ -618,13 +648,21 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
       setMessages((prev) => {
         const current = prev[discId] ?? []
-        const result = processStreamEvent(current, true, chatEvent)
+        const result = processStreamEvent(current, true, chatEvent, resumePendingRef.current[discId] ?? false)
         setStreaming((p) => ({ ...p, [discId]: result.isStreaming }))
+        setInterrupting((p) => ({ ...p, [discId]: result.interrupting }))
+        setResumePending((p) => ({ ...p, [discId]: result.resumePending }))
         if (result.pendingQuestion) {
           setPendingQuestions((p) => ({ ...p, [discId]: result.pendingQuestion }))
-        } else if (chatEvent.type === "status") {
+        } else if (chatEvent.type === "status" && chatEvent.content !== "interrupting") {
+          // "interrupting" is transitional (see process-stream-event.ts) — the
+          // turn hasn't actually ended, so an in-flight pending question is
+          // still real and must not be cleared out from under it.
           setPendingQuestions((p) => ({ ...p, [discId]: null }))
-          if (!result.isStreaming) {
+          // Likewise, "killed" is terminal but NOT safe/idle yet — the process
+          // is being replaced, and the discussion list must not advertise it
+          // as available until the follow-up status says so.
+          if (!result.isStreaming && !result.resumePending) {
             setDiscussions((p) =>
               p.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
             )
@@ -639,6 +677,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     setUpstreamConnected(false)
     setStreaming({})
     setPendingQuestions({})
+    setInterrupting({})
+    setResumePending({})
   }, [])
 
   const handleUpstreamReconnect = useCallback(() => {
@@ -709,6 +749,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     activeDiscussionId,
     activeMessages,
     isStreaming,
+    isInterrupting,
+    isResumePending,
     isSpawning,
     pendingQuestion: activePendingQuestion,
     selectDiscussion,
