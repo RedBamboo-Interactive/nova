@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useDeferredValue } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, Switch } from "@redbamboo/ui"
-import { ChatPanel, ContextIndicator, ShareDialog, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent } from "@redbamboo/chat"
+import { ChatPanel, ContextIndicator, ShareDialog, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload } from "@redbamboo/chat"
 import { useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
@@ -95,6 +95,7 @@ export function ChatView() {
     isResumePending,
     isSpawning,
     pendingQuestion,
+    questionOutcome,
     selectDiscussion,
     sendMessage,
     interruptDiscussion,
@@ -160,9 +161,11 @@ export function ChatView() {
     interruptDiscussion(activeDiscussionId)
   }, [activeDiscussionId, interruptDiscussion])
 
-  const handleAnswerQuestion = useCallback((answer: string) => {
+  // `answer` is the readable form; `payload` is what actually goes on the wire
+  // (the picked labels, or freeform text typed instead of picking).
+  const handleAnswerQuestion = useCallback((answer: string, payload?: QuestionAnswerPayload) => {
     if (!activeDiscussionId) return
-    answerQuestion(activeDiscussionId, answer)
+    answerQuestion(activeDiscussionId, answer, payload)
   }, [activeDiscussionId, answerQuestion])
 
   const handleResume = useCallback(async () => {
@@ -287,7 +290,7 @@ export function ChatView() {
       <>
         <ReactionPills reactions={msgReactions} onToggle={handleToggle} />
         <div className="opacity-0 [@media(hover:hover)]:group-hover/msg:opacity-100 group-data-[actions]/msg:opacity-100 transition-opacity duration-150">
-          <AddReactionButton onAdd={handleAdd} />
+          <AddReactionButton onAdd={handleAdd} align={block.role === "user" ? "right" : "left"} />
         </div>
       </>
     )
@@ -326,6 +329,7 @@ export function ChatView() {
         disabled={activeDiscussion.status === "archived" || (activeDiscussion.status === "stopped" && activeDiscussion.type !== "live")}
         hideComposer={activeDiscussion.type === "heartbeat"}
         pendingQuestion={pendingQuestion}
+        questionOutcome={questionOutcome}
         onAnswerQuestion={handleAnswerQuestion}
         onResume={activeDiscussion.status === "stopped" && activeDiscussion.type !== "live" ? handleResume : undefined}
         placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}

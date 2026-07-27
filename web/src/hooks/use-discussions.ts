@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect, useRef, useMemo, startTransition } from "react"
 import { useToast } from "@redbamboo/ui"
-import { api } from "../lib/api"
+import { api, ApiError } from "../lib/api"
 import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
-import type { MessageBlock, MessagePart, PendingQuestion, ChatEvent, ImageAttachment } from "@redbamboo/chat"
+import type { MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment } from "@redbamboo/chat"
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
@@ -98,6 +98,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const [messages, setMessages] = useState<Record<string, MessageBlock[]>>({})
   const [streaming, setStreaming] = useState<Record<string, boolean>>({})
   const [pendingQuestions, setPendingQuestions] = useState<Record<string, PendingQuestion | null>>({})
+  // How each discussion's last question ended, so a resolved card can say
+  // "timed out" rather than the flat "Answered" it used to claim regardless.
+  const [questionOutcomes, setQuestionOutcomes] = useState<Record<string, QuestionOutcome | null>>({})
+  // processStreamEvent is pure — the question lifecycle has to be threaded back
+  // in on every event, and from a ref so it is current inside the updater.
+  const questionStatesRef = useRef<Record<string, QuestionState>>({})
   const [interrupting, setInterrupting] = useState<Record<string, boolean>>({})
   // True once the backend reports a discussion's CLI process was force-killed
   // and is being replaced, until the follow-up status/error lands. isStreaming
@@ -118,6 +124,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const isInterrupting = activeDiscussionId ? interrupting[activeDiscussionId] ?? false : false
   const isResumePending = activeDiscussionId ? resumePending[activeDiscussionId] ?? false : false
   const activePendingQuestion = activeDiscussionId ? pendingQuestions[activeDiscussionId] ?? null : null
+  const activeQuestionOutcome = activeDiscussionId ? questionOutcomes[activeDiscussionId] ?? null : null
 
   const activeIdRef = useRef(activeDiscussionId)
   activeIdRef.current = activeDiscussionId
@@ -129,6 +136,19 @@ export function useDiscussions(eventResolver?: EventResolver) {
   discussionsRef.current = discussions
   const pendingQuestionsRef = useRef(pendingQuestions)
   pendingQuestionsRef.current = pendingQuestions
+
+  /**
+   * Take down a discussion's question card. `outcome` records *why* it went —
+   * a card torn down by the session dying was never answered, and labelling
+   * that "Answered" is the bug this whole path exists to stop repeating.
+   * Pass null when the history itself is gone and there is nothing to label.
+   */
+  const clearQuestion = useCallback((discussionId: string, outcome: QuestionOutcome | null) => {
+    questionStatesRef.current = { ...questionStatesRef.current, [discussionId]: { pending: null, outcome } }
+    setPendingQuestions((prev) => ({ ...prev, [discussionId]: null }))
+    setQuestionOutcomes((prev) => ({ ...prev, [discussionId]: outcome }))
+  }, [])
+
   // Archive intents in flight (and confirmed): a stale list refresh racing the
   // DELETE must not resurrect these rows.
   const pendingArchivesRef = useRef<Set<string>>(new Set())
@@ -454,19 +474,45 @@ export function useDiscussions(eventResolver?: EventResolver) {
     } catch { /* best effort */ }
   }, [discussions])
 
-  const answerQuestion = useCallback(async (discussionId: string, answer: string) => {
+  /**
+   * Two different things wear the name "answer" here.
+   *
+   * When the session is parked on an AskUserQuestion the CLI is blocked on a
+   * control request, and only `/question` (echoing the live requestId from the
+   * `question` stream event) unblocks it — a conversation turn would sit in the
+   * queue behind the parked tool call. Without a requestId, either because the
+   * backend never sent one or because the page was reloaded and the transient
+   * event can't be replayed, `/answer` is still the right and only channel.
+   */
+  const answerQuestion = useCallback(async (discussionId: string, answer: string, payload?: QuestionAnswerPayload) => {
     const disc = discussions.find((d) => d.id === discussionId)
     if (!disc?.sessionId) return
-    setPendingQuestions((prev) => ({ ...prev, [discussionId]: null }))
+    const requestId = payload?.requestId ?? pendingQuestionsRef.current[discussionId]?.requestId ?? null
+    clearQuestion(discussionId, "answered")
     setStreaming((prev) => ({ ...prev, [discussionId]: true }))
     setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
     setResumePending((prev) => ({ ...prev, [discussionId]: false }))
     try {
-      await api.post(`/ai-session/sessions/${disc.sessionId}/answer`, { answer })
-    } catch {
+      if (requestId) {
+        // No payload means the caller had nothing structured to say (the
+        // hands-free path speaks its answer) — that is the freeform channel.
+        const body: Record<string, unknown> = { requestId }
+        if (payload?.decline) { body.decline = true; body.reason = payload.reason }
+        else if (payload?.answers?.length) body.answers = payload.answers
+        else body.response = payload?.response ?? answer
+        await api.post(`/ai-session/sessions/${disc.sessionId}/question`, body)
+      } else {
+        await api.post(`/ai-session/sessions/${disc.sessionId}/answer`, { answer })
+      }
+    } catch (err) {
+      // 409 request_not_pending: the question timed out, was cancelled, or was
+      // answered from another client while this card was still on screen. The
+      // card is already gone, which is the correct outcome — the accompanying
+      // question_resolved event carries the real reason. Nothing to report.
+      if (err instanceof ApiError && err.status === 409) return
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
     }
-  }, [discussions])
+  }, [discussions, clearQuestion])
 
   const resumeDiscussion = useCallback(async (discussionId: string) => {
     const disc = discussions.find((d) => d.id === discussionId)
@@ -550,7 +596,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const discId = sessionToDiscussion.get(id)
       if (!discId) return
       setStreaming((prev) => ({ ...prev, [discId]: false }))
-      setPendingQuestions((prev) => ({ ...prev, [discId]: null }))
+      // A card still up when the session died was never answered.
+      clearQuestion(discId, pendingQuestionsRef.current[discId] ? "session_ended" : questionStatesRef.current[discId]?.outcome ?? null)
       setInterrupting((prev) => ({ ...prev, [discId]: false }))
       setResumePending((prev) => ({ ...prev, [discId]: false }))
       const known = discussionsRef.current.find((d) => d.id === discId)
@@ -617,7 +664,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (!discussionId) return
       setMessages((prev) => ({ ...prev, [discussionId]: [] }))
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
-      setPendingQuestions((prev) => ({ ...prev, [discussionId]: null }))
+      clearQuestion(discussionId, null)
       setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
       setResumePending((prev) => ({ ...prev, [discussionId]: false }))
       loadedRef.current.delete(discussionId)
@@ -634,6 +681,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const discId = sessionToDiscussion.get(sessionId)
       if (!discId) return
 
+      // Copied field by field rather than spread, so keep this in step with
+      // ChatEvent: anything missed here is silently dropped, and `requestId` in
+      // particular is the only handle on a parked question — without it the
+      // answer has nothing to echo back and the session stays blocked.
       const chatEvent: ChatEvent = {
         type: evt.type as ChatEvent["type"],
         content: evt.content ?? null,
@@ -644,39 +695,42 @@ export function useDiscussions(eventResolver?: EventResolver) {
         toolResult: evt.toolResult ?? null,
         messageId: evt.messageId ?? null,
         messageUid: evt.messageUid ?? null,
+        requestId: evt.requestId ?? null,
       }
 
       setMessages((prev) => {
         const current = prev[discId] ?? []
-        const result = processStreamEvent(current, true, chatEvent, resumePendingRef.current[discId] ?? false)
+        const result = processStreamEvent(current, true, chatEvent, resumePendingRef.current[discId] ?? false, questionStatesRef.current[discId])
         setStreaming((p) => ({ ...p, [discId]: result.isStreaming }))
         setInterrupting((p) => ({ ...p, [discId]: result.interrupting }))
         setResumePending((p) => ({ ...p, [discId]: result.resumePending }))
-        if (result.pendingQuestion) {
-          setPendingQuestions((p) => ({ ...p, [discId]: result.pendingQuestion }))
-        } else if (chatEvent.type === "status" && chatEvent.content !== "interrupting") {
-          // "interrupting" is transitional (see process-stream-event.ts) — the
-          // turn hasn't actually ended, so an in-flight pending question is
-          // still real and must not be cleared out from under it.
-          setPendingQuestions((p) => ({ ...p, [discId]: null }))
-          // Likewise, "killed" is terminal but NOT safe/idle yet — the process
-          // is being replaced, and the discussion list must not advertise it
-          // as available until the follow-up status says so.
-          if (!result.isStreaming && !result.resumePending) {
-            setDiscussions((p) =>
-              p.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
-            )
-          }
+        // The lifecycle is owned by processStreamEvent now — it knows that
+        // "interrupting" is transitional and must not drop a live question, and
+        // that only a question_resolved says how one actually ended. Mirror it
+        // wholesale rather than second-guessing it here.
+        questionStatesRef.current = { ...questionStatesRef.current, [discId]: result.question }
+        setPendingQuestions((p) => ({ ...p, [discId]: result.question.pending }))
+        setQuestionOutcomes((p) => ({ ...p, [discId]: result.question.outcome }))
+        // "killed" is terminal but NOT safe/idle yet — the process is being
+        // replaced, and the discussion list must not advertise it as available
+        // until the follow-up status says so.
+        if (chatEvent.type === "status" && chatEvent.content !== "interrupting"
+            && !result.isStreaming && !result.resumePending) {
+          setDiscussions((p) =>
+            p.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
+          )
         }
         return { ...prev, [discId]: result.messages }
       })
     }
-  }, [sessionToDiscussion])
+  }, [sessionToDiscussion, clearQuestion])
 
   const handleUpstreamDisconnect = useCallback(() => {
     setUpstreamConnected(false)
     setStreaming({})
+    questionStatesRef.current = {}
     setPendingQuestions({})
+    setQuestionOutcomes({})
     setInterrupting({})
     setResumePending({})
   }, [])
@@ -753,6 +807,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     isResumePending,
     isSpawning,
     pendingQuestion: activePendingQuestion,
+    questionOutcome: activeQuestionOutcome,
     selectDiscussion,
     createDiscussion,
     sendMessage,

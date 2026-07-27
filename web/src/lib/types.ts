@@ -61,6 +61,12 @@ export interface MessagePartDto {
 }
 
 export interface ClaudeStreamEvent {
+  /**
+   * Open-ended on purpose: the backend keeps adding event kinds (most recently
+   * the "question" / "question_resolved" control pair) and a narrower union
+   * here would only push the drop one layer down, into the mapping in
+   * use-discussions.
+   */
   type: string
   content?: string | null
   toolName?: string | null
@@ -68,6 +74,12 @@ export interface ClaudeStreamEvent {
   toolResult?: string | null
   messageId?: string | null
   messageUid?: string | null
+  /**
+   * Correlation id for a tool call the session is parked on, carried by
+   * "question" and echoed by "question_resolved". Live-only — it is not
+   * persisted, so a reloaded conversation never has one.
+   */
+  requestId?: string | null
 }
 
 export interface WsEvent {

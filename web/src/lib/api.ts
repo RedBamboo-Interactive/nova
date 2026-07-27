@@ -12,6 +12,19 @@ function getDeviceId(): string {
 
 const _deviceId = typeof localStorage !== "undefined" ? getDeviceId() : null
 
+/**
+ * Carries the HTTP status and the server's machine-readable `error` code
+ * alongside the message. Callers that need to tell one failure from another —
+ * e.g. a 409 `request_not_pending`, which is an expected race rather than a
+ * problem to surface — can branch on those instead of matching on prose.
+ */
+export class ApiError extends Error {
+  constructor(public status: number, public code: string, message: string) {
+    super(message)
+    this.name = "ApiError"
+  }
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {}
   if (body) headers["Content-Type"] = "application/json"
@@ -24,7 +37,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(err.error ?? res.statusText)
+    // The message stays what it always was, so existing `err.message` toasts
+    // read the same; the status/code ride along for callers that need them.
+    throw new ApiError(res.status, err.error ?? "", err.error ?? res.statusText)
   }
   return res.json() as Promise<T>
 }
