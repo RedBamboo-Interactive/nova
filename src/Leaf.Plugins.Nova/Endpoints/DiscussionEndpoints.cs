@@ -354,7 +354,11 @@ public static class DiscussionEndpoints
                         .Select(m => new
                         {
                             id = (string?)null,
-                            messageUid = (string?)null,
+                            // Carried through so API callers (agents reacting via
+                            // /reactions) can address the same message the UI does.
+                            // Null for records predating the uid rollout -- better
+                            // than synthesising a key that would not match.
+                            messageUid = m.MessageUid,
                             role = m.Role,
                             parts = new object[] { new { type = "text", content = ConversationExporter.StripInjectedTags(m.Content ?? ""), toolName = (string?)null, toolInput = (string?)null } },
                             timestamp = m.Timestamp.ToString("o"),
@@ -809,7 +813,10 @@ public static class DiscussionEndpoints
         if (string.IsNullOrWhiteSpace(request.Emoji) || string.IsNullOrWhiteSpace(request.MessageKey))
             return Results.BadRequest(new { error = "Emoji and messageKey are required" });
 
-        var isAgent = !remove && !string.IsNullOrEmpty(request.AgentId);
+        // Applies to removes too: the aggregation key is (messageKey, emoji,
+        // actorId), so attributing an agent's remove to the user would never
+        // cancel its add and agent reactions would be permanent.
+        var isAgent = !string.IsNullOrEmpty(request.AgentId);
         var actorId = isAgent ? request.AgentId! : userId ?? "anonymous";
         var actorName = isAgent ? (request.AgentName ?? "Agent") : (ctx.User.FindFirstValue("name") ?? "User");
         var actorType = isAgent ? "agent" : "user";

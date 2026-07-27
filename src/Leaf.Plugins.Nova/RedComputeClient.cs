@@ -10,6 +10,13 @@ public sealed class SessionMessage
     public string EventType { get; set; } = "";
     public string? Content { get; set; }
     public DateTime Timestamp { get; set; }
+
+    /// <summary>
+    /// Provider-neutral message uid. RedCompute mints one per turn, so every
+    /// record in an assistant run shares it -- it is the key the chat UI uses as
+    /// a block id, and therefore the key reactions are stored against.
+    /// </summary>
+    public string? MessageUid { get; set; }
 }
 
 /// <summary>Point-in-time view of a RedCompute session: status, title, and raw messages.</summary>

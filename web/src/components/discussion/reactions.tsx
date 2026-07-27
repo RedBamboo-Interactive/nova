@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react"
+import { Icon } from "@redbamboo/ui"
 import type { ReactionGroup } from "../../hooks/use-reactions"
 import { api } from "../../lib/api"
 
@@ -56,8 +57,11 @@ function emojiIconLookup(items: ReactionEmoji[]): Map<string, ReactionEmoji> {
   return map
 }
 
+// `item.icon` is entity data, so it can hold icon strings from before the
+// Phosphor migration. <Icon> normalizes those; rendering a raw <i> here would
+// emit dead FontAwesome classes and draw nothing at all.
 function ReactionIcon({ item, size = 11 }: { item: ReactionEmoji; size?: number }) {
-  return <i className={item.icon} style={{ fontSize: size, ...(item.color ? { color: item.color } : undefined) }} />
+  return <Icon name={item.icon} style={{ fontSize: size, ...(item.color ? { color: item.color } : undefined) }} />
 }
 
 function LookupReactionIcon({ emoji, lookup, size }: { emoji: string; lookup: Map<string, ReactionEmoji>; size?: number }) {
@@ -93,7 +97,12 @@ export function ReactionPills({ reactions, onToggle }: { reactions: ReactionGrou
   )
 }
 
-export function AddReactionButton({ onAdd }: { onAdd: (emoji: string) => void }) {
+/**
+ * `align` follows the side the action row sits on: user messages put the row at
+ * the right edge (flex-row-reverse on mobile, left-full on desktop), so a
+ * left-anchored 186px popover would open off the side of the screen.
+ */
+export function AddReactionButton({ onAdd, align = "left" }: { onAdd: (emoji: string) => void; align?: "left" | "right" }) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const items = useReactionEmoji()
 
@@ -109,6 +118,7 @@ export function AddReactionButton({ onAdd }: { onAdd: (emoji: string) => void })
       {pickerOpen && (
         <EmojiPicker
           items={items}
+          align={align}
           onSelect={(emoji) => { onAdd(emoji); setPickerOpen(false) }}
           onClose={() => setPickerOpen(false)}
         />
@@ -119,25 +129,30 @@ export function AddReactionButton({ onAdd }: { onAdd: (emoji: string) => void })
 
 interface EmojiPickerProps {
   items: ReactionEmoji[]
+  align: "left" | "right"
   onSelect: (emoji: string) => void
   onClose: () => void
 }
 
-function EmojiPicker({ items, onSelect, onClose }: EmojiPickerProps) {
+function EmojiPicker({ items, align, onSelect, onClose }: EmojiPickerProps) {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
+    const handler = (e: Event) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose()
     }
     document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
+    document.addEventListener("touchstart", handler)
+    return () => {
+      document.removeEventListener("mousedown", handler)
+      document.removeEventListener("touchstart", handler)
+    }
   }, [onClose])
 
   return (
     <div
       ref={ref}
-      className="absolute left-0 bottom-full mb-1 bg-surface-elevated rounded-lg border border-border-subtle shadow-lg p-2 z-50 msg-enter-ai"
+      className={`absolute ${align === "right" ? "right-0" : "left-0"} bottom-full mb-1 bg-surface-elevated rounded-lg border border-border-subtle shadow-lg p-2 z-50 msg-enter-ai`}
     >
       <div className="grid grid-cols-6 gap-0.5 w-[186px]">
         {items.map((item) => (

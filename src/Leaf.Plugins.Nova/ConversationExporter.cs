@@ -150,6 +150,9 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
                 EventType = msg.EventType,
                 Content = content,
                 Timestamp = msg.Timestamp,
+                // First record of the run wins, matching how the chat UI derives
+                // a block id in rebuildBlocks().
+                MessageUid = msg.MessageUid,
             });
         }
 
@@ -208,5 +211,6 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         public string? Content { get; set; }
         public DateTime Timestamp { get; set; }
         public string? Source { get; set; }
+        public string? MessageUid { get; set; }
     }
 }
