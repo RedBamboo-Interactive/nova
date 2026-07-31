@@ -149,6 +149,68 @@ export function useDiscussions(eventResolver?: EventResolver) {
     setQuestionOutcomes((prev) => ({ ...prev, [discussionId]: outcome }))
   }, [])
 
+  /**
+   * Put a discussion back into the "nothing is running" state. The three flags
+   * move together — every terminal path already sets all three, and leaving one
+   * behind is what strands the message queue (`resumePending` and a live
+   * question are both drain vetoes in @redbamboo/chat's shouldDrain).
+   */
+  const clearStreamingLatch = useCallback((discussionId: string) => {
+    setStreaming((prev) => ({ ...prev, [discussionId]: false }))
+    setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
+    setResumePending((prev) => ({ ...prev, [discussionId]: false }))
+  }, [])
+
+  // A local send latches `streaming` true optimistically, before the server has
+  // had time to flip the session to Active. A reconcile landing inside that
+  // window would read "not Active", clear the latch, and make the composer look
+  // idle mid-turn — which is the exact state the message queue exists to avoid.
+  // So a discussion that sent recently is left alone.
+  const SEND_GRACE_MS = 10_000
+  const lastSendAtRef = useRef<Record<string, number>>({})
+
+  /**
+   * Re-derive `streaming` from the server for anything still latched true.
+   *
+   * The flag is otherwise fed purely by pushed events, so a single one that
+   * never arrives — a websocket that went stale while the tab was backgrounded,
+   * or an event dropped at the `sessionToDiscussion` lookup because the
+   * discussion list had not caught up with a new session id — leaves it stuck
+   * true with nothing able to clear it. The composer then shows "Responding…"
+   * over an idle session and the message queue holds indefinitely.
+   *
+   * Only ever clears. A turn this client did not start is announced by
+   * `session.updated`, which is the path that sets the flag.
+   */
+  const reconcileStreaming = useCallback(async () => {
+    if (!Object.values(streamingRef.current).some(Boolean)) return
+    let active: Set<string>
+    try {
+      const list = await api.get<{ id: string; status: string }[]>("/ai-session/sessions?limit=200")
+      active = new Set((list ?? []).filter((s) => s.status === "Active").map((s) => s.id))
+    } catch { return }
+    const now = Date.now()
+    for (const d of discussionsRef.current) {
+      if (!d.sessionId || !streamingRef.current[d.id]) continue
+      if (active.has(d.sessionId)) continue
+      if (now - (lastSendAtRef.current[d.id] ?? 0) < SEND_GRACE_MS) continue
+      clearStreamingLatch(d.id)
+    }
+  }, [clearStreamingLatch])
+
+  // The two moments this client has reason to distrust its own event history:
+  // coming back to a tab that may have been suspended, and a socket that just
+  // reconnected (handled in handleUpstreamReconnect).
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === "visible") reconcileStreaming() }
+    document.addEventListener("visibilitychange", onVisible)
+    window.addEventListener("focus", onVisible)
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible)
+      window.removeEventListener("focus", onVisible)
+    }
+  }, [reconcileStreaming])
+
   // Archive intents in flight (and confirmed): a stale list refresh racing the
   // DELETE must not resurrect these rows.
   const pendingArchivesRef = useRef<Set<string>>(new Set())
@@ -382,6 +444,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       [discussionId]: [...(prev[discussionId] ?? []), userMsg],
     }))
 
+    lastSendAtRef.current[discussionId] = Date.now()
     setStreaming((prev) => ({ ...prev, [discussionId]: true }))
     setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
     setResumePending((prev) => ({ ...prev, [discussionId]: false }))
@@ -470,9 +533,19 @@ export function useDiscussions(eventResolver?: EventResolver) {
     const disc = discussions.find((d) => d.id === discussionId)
     if (!disc?.sessionId) return
     try {
-      await api.post(`/ai-session/sessions/${disc.sessionId}/interrupt`)
+      const res = await api.post<{ interrupted: boolean; reason?: string }>(
+        `/ai-session/sessions/${disc.sessionId}/interrupt`
+      )
+      // A refused interrupt ("NotActive") means the server has no running turn
+      // — and it emits no stream event to say so, because from its side nothing
+      // happened. `streaming` is a latch fed only by pushed events, so if one
+      // was ever missed there is otherwise nothing left to clear it: the
+      // composer shows "Responding…" over an idle session and the message queue
+      // holds forever, with stop as the only escape hatch and stop doing
+      // nothing. Believe the server and unlatch here.
+      if (!res?.interrupted) clearStreamingLatch(discussionId)
     } catch { /* best effort */ }
-  }, [discussions])
+  }, [discussions, clearStreamingLatch])
 
   /**
    * Two different things wear the name "answer" here.
@@ -489,6 +562,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     if (!disc?.sessionId) return
     const requestId = payload?.requestId ?? pendingQuestionsRef.current[discussionId]?.requestId ?? null
     clearQuestion(discussionId, "answered")
+    lastSendAtRef.current[discussionId] = Date.now()
     setStreaming((prev) => ({ ...prev, [discussionId]: true }))
     setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
     setResumePending((prev) => ({ ...prev, [discussionId]: false }))
@@ -516,14 +590,24 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   const resumeDiscussion = useCallback(async (discussionId: string) => {
     const disc = discussions.find((d) => d.id === discussionId)
-    if (!disc?.sessionId) return
+    if (!disc) return
     try {
-      await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
-      setDiscussions((prev) =>
-        prev.map((d) => d.id === discussionId ? { ...d, status: "idle" as const } : d)
+      const result = await api.post<{ sessionId: string | null; status: "idle" }>(
+        `/api/apps/nova/discussions/${discussionId}/resume`
       )
-    } catch { /* resume failed — stays stopped */ }
-  }, [discussions])
+      setDiscussions((prev) =>
+        prev.map((d) => d.id === discussionId
+          ? { ...d, sessionId: result.sessionId, status: result.status }
+          : d)
+      )
+    } catch (err) {
+      toast({
+        variant: "error",
+        title: "Failed to restart discussion",
+        description: err instanceof Error ? err.message : "Unknown error",
+      })
+    }
+  }, [discussions, toast])
 
   const handleWsEvent = useCallback((event: WsEvent) => {
     if (event.type === "session.updated") {
@@ -739,7 +823,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
     setUpstreamConnected(true)
     refreshDiscussions()
     reloadActiveMessages(true)
-  }, [refreshDiscussions, reloadActiveMessages])
+    // Anything that stayed latched while the socket was down has to be settled
+    // against the server: the events that would have cleared it were emitted
+    // into a connection nobody was holding.
+    reconcileStreaming()
+  }, [refreshDiscussions, reloadActiveMessages, reconcileStreaming])
 
   const archiveDiscussion = useCallback(async (id: string) => {
     const disc = discussionsRef.current.find((d) => d.id === id)

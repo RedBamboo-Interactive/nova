@@ -543,6 +543,49 @@ public static class DiscussionEndpoints
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Status = result ?? discussion.Status }));
         });
 
+        group.MapPost("/discussions/{id}/resume", async (string id, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
+        {
+            var discussion = await store.GetAsync(id);
+            if (discussion is null) return NotFound();
+            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (DiscussionStatus.IsClosed(discussion.Status))
+                return Results.Json(new { error = "closed", message = "Archived discussions cannot be resumed" }, statusCode: 409);
+
+            // A delivery discussion can be populated through nova-message before
+            // its provider receives a turn. The attached RedCompute row is then
+            // only an empty shell: there is no provider conversation/thread to
+            // resume. Detach it and let SendAsync lazily create the configured
+            // provider session on the user's first reply; that path already
+            // replays the persisted nova-message into the fresh session.
+            if (discussion.SessionId is null)
+            {
+                var status = await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Idle);
+                return Results.Ok(new { sessionId = (string?)null, status = status ?? discussion.Status, initialized = false });
+            }
+
+            var probe = await redCompute.ProbeSessionForResumeAsync(discussion.SessionId);
+            if (!probe.Reachable)
+                return Results.Json(new { error = "redcompute_unavailable", message = "RedCompute could not be reached" }, statusCode: 503);
+
+            if (!probe.Exists || string.IsNullOrWhiteSpace(probe.ProviderSessionId))
+            {
+                var oldSessionId = discussion.SessionId;
+                await store.PatchAsync(discussion.EntityId, new JsonObject
+                {
+                    ["session_id"] = null,
+                    ["status"] = DiscussionStatus.Idle,
+                });
+                await redCompute.DismissAsync(oldSessionId);
+                return Results.Ok(new { sessionId = (string?)null, status = DiscussionStatus.Idle, initialized = false });
+            }
+
+            if (!await redCompute.ResumeAsync(discussion.SessionId))
+                return Results.Json(new { error = "resume_failed", message = "The provider session could not be resumed" }, statusCode: 502);
+
+            var resumedStatus = await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Idle);
+            return Results.Ok(new { sessionId = discussion.SessionId, status = resumedStatus ?? discussion.Status, initialized = true });
+        });
+
         group.MapDelete("/discussions/{id}", async (string id, HttpContext ctx, DiscussionStore store, DiscussionLifecycle lifecycle, DiscussionActivity activity) =>
         {
             var discussion = await store.GetAsync(id);

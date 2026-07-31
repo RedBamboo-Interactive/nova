@@ -164,6 +164,40 @@ public sealed class RedComputeClient
     public sealed record SessionProbe(bool Reachable, string? Status);
 
     /// <summary>
+    /// Provider-neutral state needed by the discussion resume path. A persisted
+    /// RedCompute shell can exist before its provider has created a resumable
+    /// conversation/thread; <c>ProviderSessionId</c> is the contract-level signal
+    /// that distinguishes the two.
+    /// </summary>
+    public sealed record SessionResumeProbe(bool Reachable, bool Exists, string? ProviderSessionId);
+
+    public async Task<SessionResumeProbe> ProbeSessionForResumeAsync(string sessionId, CancellationToken ct = default)
+    {
+        try
+        {
+            var resp = await _http.GetAsync($"/ai-session/sessions/{sessionId}", ct);
+            if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+                return new(true, false, null);
+            if (!resp.IsSuccessStatusCode)
+                return new(false, false, null);
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            if (!doc.RootElement.TryGetProperty("session", out var session))
+                return new(true, false, null);
+
+            var providerSessionId = session.TryGetProperty("providerSessionId", out var providerId)
+                && providerId.ValueKind == JsonValueKind.String
+                    ? providerId.GetString()
+                    : null;
+            return new(true, true, providerSessionId);
+        }
+        catch
+        {
+            return new(false, false, null);
+        }
+    }
+
+    /// <summary>
     /// Status probe that distinguishes "RedCompute unreachable" from "session gone".
     /// The archive finalizer needs the difference: a 404 proves no process is running,
     /// while a transport error means the stop is unverified and must be retried.
