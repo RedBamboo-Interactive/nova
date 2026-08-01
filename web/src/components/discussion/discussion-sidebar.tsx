@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo } from "react"
 import { ItemList, ItemListRow } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
 import type { DiscussionInfo, AgentInfo } from "../../lib/types"
+import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 
 const statusColor: Record<string, string> = {
   thinking: "var(--color-accent-gold)",
@@ -27,23 +28,22 @@ function isUnread(d: DiscussionInfo): boolean {
 }
 
 export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, getAgent, multiAgent }: Props) {
-  const { live, heartbeat, chat } = useMemo(() => {
+  const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
+  const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
-    const heartbeat: DiscussionInfo[] = []
     const chat: DiscussionInfo[] = []
     for (const d of discussions) {
       if (d.type === "live") live.push(d)
-      else if (d.type === "heartbeat") heartbeat.push(d)
-      else chat.push(d)
+      else if (d.type === "chat") chat.push(d)
     }
-    return { live, heartbeat, chat }
+    return { live, chat }
   }, [discussions])
 
   const renderLiveItem = useCallback((discussion: DiscussionInfo) => {
     const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
     return (
       <ItemListRow
-        selected={discussion.id === activeDiscussionId}
+        selected={discussion.id === sidebarSelectionId}
         onClick={() => onSelect(discussion.id)}
         icon={
           agent ? (
@@ -83,57 +83,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         }
       />
     )
-  }, [activeDiscussionId, onSelect, onRotate, getAgent, multiAgent])
-
-  // Heartbeat: a place you visit, not one that calls you — no unread pill,
-  // rotate button on hover (same pattern as LIVE). Spinner = tick-in-progress.
-  const renderHeartbeatItem = useCallback((discussion: DiscussionInfo) => {
-    const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
-    return (
-      <ItemListRow
-        selected={discussion.id === activeDiscussionId}
-        onClick={() => onSelect(discussion.id)}
-        icon={
-          agent ? (
-            <>
-              <img
-                src={agent.avatarUrl}
-                alt={agent.name}
-                className="absolute inset-0 w-full h-full rounded-lg object-cover"
-                onError={(e) => { e.currentTarget.style.display = "none" }}
-              />
-              <div className="absolute -bottom-1 right-0 scale-75 origin-bottom-right">
-                <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
-              </div>
-            </>
-          ) : (
-            <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
-          )
-        }
-        className={[
-          agent ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
-        ].filter(Boolean).join(" ")}
-        title={
-          <span className="flex items-center gap-1.5">
-            <i className={`ph-bold ph-heartbeat text-[10px] ${discussion.status === "thinking" ? "text-accent-gold animate-pulse" : "text-accent-gold/60"}`} />
-            <span style={{ color: "var(--color-accent-gold)" }}>
-              {discussion.status === "thinking" ? "Heartbeat · tick running" : "Heartbeat"}
-            </span>
-          </span>
-        }
-        subtitle={formatRelative(discussion.lastActivity)}
-        trailing={
-          <button
-            onClick={(e) => { e.stopPropagation(); onRotate(discussion.id) }}
-            className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-accent-gold transition-all"
-            title="Reset heartbeat"
-          >
-            <i className="ph-bold ph-arrows-clockwise text-xs" />
-          </button>
-        }
-      />
-    )
-  }, [activeDiscussionId, onSelect, onRotate, getAgent, multiAgent])
+  }, [sidebarSelectionId, onSelect, onRotate, getAgent, multiAgent])
 
   const renderChatItem = useCallback((discussion: DiscussionInfo) => {
     const alive = discussion.status !== "archived" && discussion.status !== "stopped"
@@ -203,14 +153,12 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {(live.length > 0 || heartbeat.length > 0) && (
+      {live.length > 0 && (
         <div className="shrink-0">
-          {/* One ItemList: it's an h-full ScrollArea, so stacking two in this
-              shrink-0 container makes them overlay each other. */}
           <ItemList
-            items={[...live, ...heartbeat]}
+            items={live}
             keyFn={(d) => d.id}
-            renderItem={(d) => d.type === "live" ? renderLiveItem(d) : renderHeartbeatItem(d)}
+            renderItem={renderLiveItem}
           />
           {chat.length > 0 && (
             <div className="border-b border-overlay-6 mx-3" />

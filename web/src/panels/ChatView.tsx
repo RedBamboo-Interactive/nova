@@ -17,6 +17,7 @@ import { useDisc, useNovaPendingContext } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
 import { useShare } from "../hooks/use-share"
 import { setSettings } from "../lib/settings-store"
+import { findLiveHeartbeatPair } from "../lib/live-heartbeat"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -208,13 +209,69 @@ export function ChatView() {
     setShareDialogOpen(true)
   }, [share])
 
+  const liveHeartbeatPair = findLiveHeartbeatPair(discussions, activeDiscussion)
+
+  const liveHeartbeatTabs = liveHeartbeatPair && (
+    <div
+      role="tablist"
+      aria-label="Live views"
+      className="flex shrink-0 items-center gap-1 rounded-md bg-overlay-6 p-0.5 text-[12px]"
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return
+        const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+        const current = tabs.indexOf(event.target as HTMLButtonElement)
+        if (current < 0) return
+        event.preventDefault()
+        const nextIndex = event.key === "Home" ? 0
+          : event.key === "End" ? tabs.length - 1
+          : event.key === "ArrowRight" ? (current + 1) % tabs.length
+          : (current - 1 + tabs.length) % tabs.length
+        const next = tabs[nextIndex]
+        const discussionId = next?.dataset.discussionId
+        if (next && discussionId) {
+          next.focus()
+          handleSelectDiscussion(discussionId)
+        }
+      }}
+    >
+      <button
+        role="tab"
+        aria-selected={activeDiscussion?.type === "live"}
+        tabIndex={activeDiscussion?.type === "live" ? 0 : -1}
+        data-discussion-id={liveHeartbeatPair.live.id}
+        onClick={() => handleSelectDiscussion(liveHeartbeatPair.live.id)}
+        className={`flex items-center gap-1 rounded px-2 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-teal-a50 ${activeDiscussion?.type === "live" ? "bg-overlay-10" : "opacity-60 hover:opacity-100 hover:bg-overlay-6"}`}
+        style={{ color: "var(--color-accent-teal)" }}
+      >
+        <i className={`ph-bold ph-broadcast text-[10px] ${liveHeartbeatPair.live.status === "thinking" ? "animate-pulse" : ""}`} />
+        <span>Live</span>
+      </button>
+      <span aria-hidden="true" className="text-text-disabled">|</span>
+      <button
+        role="tab"
+        aria-selected={activeDiscussion?.type === "heartbeat"}
+        aria-label={liveHeartbeatPair.heartbeat.status === "thinking" ? "Heartbeat, tick running" : "Heartbeat"}
+        tabIndex={activeDiscussion?.type === "heartbeat" ? 0 : -1}
+        data-discussion-id={liveHeartbeatPair.heartbeat.id}
+        onClick={() => handleSelectDiscussion(liveHeartbeatPair.heartbeat.id)}
+        className={`flex items-center gap-1 rounded px-2 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-gold-a50 ${activeDiscussion?.type === "heartbeat" ? "bg-accent-gold-a20" : "opacity-60 hover:opacity-100 hover:bg-overlay-6"}`}
+        style={{ color: "var(--color-accent-gold)" }}
+      >
+        <i className={`ph-bold ph-heartbeat text-[10px] ${liveHeartbeatPair.heartbeat.status === "thinking" ? "animate-pulse" : ""}`} />
+        <span>Heartbeat</span>
+      </button>
+    </div>
+  )
+
   const chatHeader = activeDiscussion && (
     <PanelHeader
       leading={
-        <EditableTitle
-          title={activeDiscussion.title || "New discussion"}
-          onRename={(title) => renameDiscussion(activeDiscussion.id, title)}
-        />
+        liveHeartbeatTabs ? <div className="flex flex-1 min-w-0">{liveHeartbeatTabs}</div> : (
+          <EditableTitle
+            title={activeDiscussion.title || "New discussion"}
+            onRename={(title) => renameDiscussion(activeDiscussion.id, title)}
+          />
+        )
       }
     >
       {!activeDiscussion.confidential && (
