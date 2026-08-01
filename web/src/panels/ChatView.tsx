@@ -2,12 +2,11 @@ import { useState, useCallback, useEffect, useDeferredValue, useMemo } from "rea
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, Switch } from "@redbamboo/ui"
 import { ChatPanel, ContextIndicator, ShareDialog, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type UploadedAttachment } from "@redbamboo/chat"
-import { useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
+import { PluginExtensionSlot, useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
 import { AgentPicker } from "../components/agent-picker"
 import { NovaStatusLine } from "../components/nova-status-line"
-import { OutfitBrowser } from "../components/outfit-browser"
 import { ReactionPills, AddReactionButton } from "../components/discussion/reactions"
 import { createNovaSpeechBackend } from "../lib/speech"
 import { useLocalSettings } from "../hooks/use-local-settings"
@@ -441,7 +440,6 @@ export function ChatView() {
   const { opacity: avatarOpacity } = useAvatarStyle()
   const { showAvatar: avatarEnabled } = useLocalSettings()
   const showAvatar = avatarEnabled && !!activeDiscussion
-  const [outfitBrowserOpen, setOutfitBrowserOpen] = useState(false)
   const [avatarVersion, setAvatarVersion] = useState(0)
   useEffect(() => {
     const handler = () => setAvatarVersion(v => v + 1)
@@ -514,11 +512,9 @@ export function ChatView() {
   return (
     <div className="relative h-full w-full">
       {showAvatar && (
-        <button
-          onClick={() => setOutfitBrowserOpen(true)}
-          className="absolute top-4 left-1/2 -translate-x-1/2 w-[80px] h-[80px] z-20 rounded-full overflow-hidden md:hidden p-1.5 cursor-pointer group"
+        <div
+          className="absolute top-4 left-1/2 -translate-x-1/2 w-[80px] h-[80px] z-20 rounded-full overflow-hidden md:hidden p-1.5"
           style={{ backgroundColor: "var(--background)" }}
-          title="Browse outfits"
         >
           <img
             src={avatarSrc}
@@ -526,10 +522,16 @@ export function ChatView() {
             className="w-full h-full rounded-full object-cover object-top"
             style={{ opacity: avatarOpacity }}
           />
-          <div className="absolute inset-1.5 rounded-full bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-            <i className="ph-bold ph-t-shirt text-white/0 group-hover:text-white/70 text-xs transition-colors" />
-          </div>
-        </button>
+          <PluginExtensionSlot
+            targetPluginId="nova"
+            slotId="chat-avatar-overlay"
+            context={{
+              agentId: activeDiscussion?.agentId ?? null,
+              discussionId: activeDiscussionId,
+              variant: "mobile",
+            }}
+          />
+        </div>
       )}
       <MasterDetailLayout
         layoutKey="nova-discussions"
@@ -552,11 +554,9 @@ export function ChatView() {
             />
           </div>
           {showAvatar && (
-            <button
-              onClick={() => setOutfitBrowserOpen(true)}
-              className="flex justify-center px-3 pb-5 pt-2 w-full cursor-pointer group"
+            <div
+              className="flex justify-center px-3 pb-5 pt-2 w-full"
               style={{ opacity: avatarOpacity }}
-              title="Browse outfits"
             >
               <div className="relative w-full max-w-[256px] aspect-square rounded-full overflow-hidden" style={{ backgroundColor: "var(--background)" }}>
                 <img
@@ -564,23 +564,22 @@ export function ChatView() {
                   alt=""
                   className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
                 />
-                <div className="absolute inset-0 rounded-full bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                  <i className="ph-bold ph-t-shirt text-white/0 group-hover:text-white/70 text-lg transition-colors" />
-                </div>
+                <PluginExtensionSlot
+                  targetPluginId="nova"
+                  slotId="chat-avatar-overlay"
+                  context={{
+                    agentId: activeDiscussion?.agentId ?? null,
+                    discussionId: activeDiscussionId,
+                    variant: "sidebar",
+                  }}
+                />
               </div>
-            </button>
+            </div>
           )}
         </>
       }
       detail={chatArea}
     />
-    {outfitBrowserOpen && (
-      <OutfitBrowser
-        onClose={() => setOutfitBrowserOpen(false)}
-        discussionId={activeDiscussionId}
-        agentId={activeDiscussion?.agentId}
-      />
-    )}
     <ShareDialog
       open={shareDialogOpen}
       onOpenChange={setShareDialogOpen}

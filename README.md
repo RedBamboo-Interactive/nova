@@ -3,6 +3,10 @@
 AI companion chat for the Leaf kernel (RedLeaf) — multi-agent discussions,
 delegation, and voice.
 
+Nova exposes the `nova` capability and a declared `chat-avatar-overlay`
+frontend slot. Optional experiences such as Outfits depend on that capability
+and contribute UI through the slot without becoming part of Nova itself.
+
 ## Layout
 
 - `plugin.json` — plugin manifest (id `nova`)

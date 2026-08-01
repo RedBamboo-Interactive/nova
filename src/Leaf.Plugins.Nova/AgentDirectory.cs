@@ -25,15 +25,33 @@ public sealed record AgentInfo(
 /// this only reads it). Also resolves each agent's on-disk workspace path and its
 /// effective avatar (outfit override first, base avatar second).
 /// </summary>
-public sealed class AgentDirectory(IEntityStore store, NovaConfigStore config)
+public sealed class AgentDirectory : IDisposable
 {
+    private readonly IEntityStore store;
+    private readonly NovaConfigStore config;
+    private readonly IDisposable _avatarChangedSubscription;
     private List<AgentInfo> _agents = [];
     private DateTime _lastRefresh = DateTime.MinValue;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
 
+    public AgentDirectory(IEntityStore store, NovaConfigStore config, IPluginEvents events)
+    {
+        this.store = store;
+        this.config = config;
+        _avatarChangedSubscription = events.Subscribe(
+            "agent.avatar-changed",
+            _ =>
+            {
+                _lastRefresh = DateTime.MinValue;
+                return Task.CompletedTask;
+            });
+    }
+
     /// <summary>Entity id of the Nova agent (slug <c>nova</c>), set at plugin startup.</summary>
     public string? NovaAgentId { get; set; }
+
+    public void Dispose() => _avatarChangedSubscription.Dispose();
 
     public async Task<List<AgentInfo>> GetAgentsAsync(bool forceRefresh = false, CancellationToken ct = default)
     {

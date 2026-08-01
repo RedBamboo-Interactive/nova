@@ -11,7 +11,7 @@ namespace Leaf.Plugins.Nova;
 
 /// <summary>
 /// Nova-the-APP as a Leaf plugin: the chat/discussion UI and its glue endpoints
-/// (send, delegate, ask, callbacks, journal, outfits, location). Nova-the-AGENT —
+/// (send, delegate, ask, callbacks, journal, location). Nova-the-AGENT —
 /// the agent entity, workspace VFS mount, memory, dreaming automations — is a kernel
 /// capability and deliberately NOT here.
 /// </summary>
@@ -35,7 +35,10 @@ public sealed class NovaAppPlugin : ILeafPlugin
             new NovaConfigStore(sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
         services.AddSingleton<RedComputeClient>();
         services.AddSingleton(sp =>
-            new AgentDirectory(sp.GetRequiredKeyedService<IEntityStore>(PluginId), sp.GetRequiredService<NovaConfigStore>()));
+            new AgentDirectory(
+                sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+                sp.GetRequiredService<NovaConfigStore>(),
+                sp.GetRequiredKeyedService<IPluginEvents>(PluginId)));
         services.AddSingleton(sp =>
             new AgentWorkspaces(sp.GetRequiredService<AgentDirectory>()));
         services.AddSingleton(sp =>
@@ -141,7 +144,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
         }
 
         // Resolve Nova's agent entity (kernel-seeded). The agent system is kernel-level;
-        // the app only needs the id for defaults (new discussions, LIVE timeline, outfits).
+        // the app only needs the id for defaults (new discussions and LIVE timeline).
         var agentEntities = await store.QueryAsync(new EntityQuery { TypeSlug = "agent", Limit = 50 }, ct);
         var nova = agentEntities.FirstOrDefault(a => a.Slug == "nova");
         agents.NovaAgentId = nova?.Id.ToString();

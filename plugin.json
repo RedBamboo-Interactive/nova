@@ -17,6 +17,12 @@
       { "id": "pulse", "name": "Pulse", "icon": "ph-bold ph-heartbeat", "path": "pulse", "order": 2 },
       { "id": "journal", "name": "Journal", "icon": "ph-bold ph-book", "path": "journal", "order": 3 }
     ],
+    "slots": [
+      {
+        "id": "chat-avatar-overlay",
+        "description": "Optional action layered over an agent avatar in the Nova chat UI"
+      }
+    ],
     "settings": {}
   },
   "permissions": [

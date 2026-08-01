@@ -1,0 +1,11 @@
+[
+  {
+    "typeSlug": "capability",
+    "slug": "nova",
+    "name": "Nova",
+    "data": {
+      "category": "app",
+      "description": "Nova companion chat, agent discussions, and declared Nova frontend extension slots. Plugins requiring this capability boot after Nova and are disabled when Nova is unavailable."
+    }
+  }
+]
