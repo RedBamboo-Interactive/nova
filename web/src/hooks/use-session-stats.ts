@@ -7,6 +7,7 @@ interface RedComputeSession {
   status?: string
   startedAt?: string
   costUsd?: number
+  costEstimated?: boolean
   messageCount?: number
   outputTokens?: number
   cachedInputTokens?: number
@@ -67,6 +68,7 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
       status: sessionData.status,
       startedAt: sessionData.startedAt,
       costUsd: sessionData.costUsd,
+      costEstimated: sessionData.costEstimated,
       messageCount: sessionData.messageCount,
       outputTokens: sessionData.outputTokens,
       cachedInputTokens: sessionData.cachedInputTokens,
