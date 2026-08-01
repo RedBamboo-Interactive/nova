@@ -74,6 +74,7 @@ export interface ClaudeStreamEvent {
   toolName?: string | null
   toolInput?: unknown
   toolResult?: string | null
+  payloadRef?: import("@redbamboo/chat").TranscriptPayloadRef | null
   messageId?: string | null
   messageUid?: string | null
   /**

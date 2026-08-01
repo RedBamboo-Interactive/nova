@@ -827,6 +827,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           ? evt.toolInput
           : evt.toolInput ? JSON.stringify(evt.toolInput) : null,
         toolResult: evt.toolResult ?? null,
+        payloadRef: evt.payloadRef ?? null,
         messageId: evt.messageId ?? null,
         messageUid: evt.messageUid ?? null,
         requestId: evt.requestId ?? null,

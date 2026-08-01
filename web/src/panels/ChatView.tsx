@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useDeferredValue, useMemo } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, Switch } from "@redbamboo/ui"
-import { ChatPanel, ContextIndicator, ShareDialog, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type UploadedAttachment } from "@redbamboo/chat"
+import { ChatPanel, ContextIndicator, ShareDialog, fetchTranscriptPayload, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { PluginExtensionSlot, useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
@@ -125,6 +125,17 @@ export function ChatView() {
   } = disc
 
   const deferredMessages = useDeferredValue(activeMessages)
+  const payloadSessionId = activeDiscussion?.sessionId ?? null
+  const loadTranscriptPayload = useCallback<TranscriptPayloadLoader>((ref, range, signal) => {
+    if (!payloadSessionId) return Promise.reject(new Error("This discussion has no active session"))
+    const url = `/ai-session/sessions/${encodeURIComponent(payloadSessionId)}/messages/${ref.recordId}/output`
+    return fetchTranscriptPayload(url, ref, range, signal)
+  }, [payloadSessionId])
+  const getTranscriptPayloadDownloadUrl = useCallback((ref: TranscriptPayloadRef) =>
+    payloadSessionId
+      ? `/ai-session/sessions/${encodeURIComponent(payloadSessionId)}/messages/${ref.recordId}/output?download=true`
+      : "#",
+  [payloadSessionId])
 
   useEffect(() => {
     if (urlDiscussionId && urlDiscussionId !== activeDiscussionId) {
@@ -480,6 +491,8 @@ export function ChatView() {
         resolveImageSrc={resolveImageSrc}
         resolveFileLink={resolveFileLink}
         resolveEventLink={resolveEventLink}
+        loadTranscriptPayload={loadTranscriptPayload}
+        getTranscriptPayloadDownloadUrl={getTranscriptPayloadDownloadUrl}
         assistantAvatar={avatarSrc}
         resolveAgentInfo={resolveAgentInfo}
         renderStatusLine={renderStatusLine}
