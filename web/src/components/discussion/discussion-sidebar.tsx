@@ -5,8 +5,8 @@ import type { DiscussionInfo, AgentInfo } from "../../lib/types"
 import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 
 const statusColor: Record<string, string> = {
-  thinking: "var(--color-accent-gold)",
-  idle: "var(--color-accent-teal)",
+  thinking: "var(--color-domain-imagination)",
+  idle: "var(--color-domain-presence)",
   stopped: "var(--color-text-disabled)",
   archived: "var(--color-text-disabled)",
 }
@@ -67,15 +67,15 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         ].filter(Boolean).join(" ")}
         title={
           <span className="flex items-center gap-1.5">
-            <i className={`ph-bold ph-broadcast text-[10px] text-accent-teal ${discussion.status === "thinking" ? "animate-pulse" : ""}`} />
-            <span style={{ color: "var(--color-accent-teal)" }}>Live</span>
+            <i className={`ph-bold ph-broadcast text-[10px] text-domain-presence ${discussion.status === "thinking" ? "animate-pulse" : ""}`} />
+            <span style={{ color: "var(--color-domain-presence)" }}>Live</span>
           </span>
         }
         subtitle={formatRelative(discussion.lastActivity)}
         trailing={
           <button
             onClick={(e) => { e.stopPropagation(); onRotate(discussion.id) }}
-            className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-accent-teal transition-all"
+            className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-domain-presence transition-all"
             title="Rotate timeline"
           >
             <i className="ph-bold ph-arrows-clockwise text-xs" />
@@ -127,7 +127,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           discussion.status !== "archived" ? (
             <div className="flex items-center gap-1.5">
               {unread && (
-                <span className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
+                <span className="w-2 h-2 rounded-full bg-domain-presence shrink-0" />
               )}
               <button
                 onClick={(e) => { e.stopPropagation(); onArchive(discussion.id) }}

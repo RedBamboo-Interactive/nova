@@ -832,15 +832,56 @@ public static class DiscussionEndpoints
 
         group.MapGet("/event-types", async ([FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities) =>
         {
-            var items = await entities.QueryAsync(new EntityQuery { TypeSlug = "event-type", Limit = 100 });
-            var types = items.Select(item => new
+            var items = await entities.QueryAsync(new EntityQuery { TypeSlug = "event-type", Limit = 1000 });
+            var colors = await entities.QueryAsync(new EntityQuery { TypeSlug = "color", Limit = 1000 });
+
+            static string? StringValue(LeafEntity entity, string key)
+                => entity.Data[key] is JsonValue value && value.TryGetValue<string>(out var text)
+                    ? text
+                    : null;
+
+            var colorByReference = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var color in colors)
             {
-                key = item.Data["key"]?.GetValue<string>(),
-                name = item.Name,
-                icon = item.Data["icon"]?.GetValue<string>(),
-                color = item.Data["color"]?.GetValue<string>(),
-                description = item.Data["description"]?.GetValue<string>(),
-            }).Where(t => t.key != null);
+                var hex = StringValue(color, "hex");
+                if (string.IsNullOrWhiteSpace(hex)) continue;
+                colorByReference[color.Id.ToString()] = hex;
+                colorByReference[color.Slug] = hex;
+            }
+
+            string? ResolveColor(LeafEntity entity)
+            {
+                var reference = StringValue(entity, "color");
+                if (string.IsNullOrWhiteSpace(reference)) return null;
+                return colorByReference.TryGetValue(reference, out var hex) ? hex : reference;
+            }
+
+            // Historical API-created event types can coexist with their canonical
+            // system seed. Prefer event-type-{key}, then system ownership, so callers
+            // always receive one stable definition for a source.
+            var types = items
+                .Select(item => new { Item = item, Key = StringValue(item, "key") })
+                .Where(entry => !string.IsNullOrWhiteSpace(entry.Key))
+                .GroupBy(entry => entry.Key!, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(entry => string.Equals(
+                        entry.Item.Slug,
+                        $"event-type-{group.Key}",
+                        StringComparison.OrdinalIgnoreCase))
+                    .ThenByDescending(entry => string.Equals(
+                        entry.Item.CreatedBy,
+                        "system",
+                        StringComparison.OrdinalIgnoreCase))
+                    .ThenBy(entry => entry.Item.CreatedAt)
+                    .First())
+                .Select(entry => new
+                {
+                    key = entry.Key,
+                    name = entry.Item.Name,
+                    icon = StringValue(entry.Item, "icon"),
+                    color = ResolveColor(entry.Item),
+                    description = StringValue(entry.Item, "description"),
+                });
             return Results.Ok(types);
         });
     }

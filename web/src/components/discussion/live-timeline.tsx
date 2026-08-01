@@ -151,7 +151,7 @@ export function LiveTimeline({ messages, isStreaming, onSend, onInterrupt, resol
                     className={[
                       "rounded-lg px-3 py-2 text-sm",
                       isAssistant
-                        ? "border-l-2 border-accent-teal bg-overlay-4"
+                        ? "border-l-2 border-domain-presence bg-overlay-4"
                         : "border-l-2 border-overlay-15 bg-overlay-4",
                     ].join(" ")}
                   >
@@ -163,7 +163,7 @@ export function LiveTimeline({ messages, isStreaming, onSend, onInterrupt, resol
                         {formatTime(entry.timestamp)}
                       </span>
                       {entry.isStreaming && (
-                        <i className="ph-fill ph-circle text-[6px] text-accent-teal animate-pulse" />
+                        <i className="ph-fill ph-circle text-[6px] text-domain-presence animate-pulse" />
                       )}
                     </div>
                     <div className="prose-sm">
@@ -179,12 +179,12 @@ export function LiveTimeline({ messages, isStreaming, onSend, onInterrupt, resol
 
           {/* Now indicator */}
           <div className="flex items-center gap-3 py-3">
-            <div className="h-px flex-1 bg-accent-teal/30" />
+            <div className="h-px flex-1 bg-domain-presence/30" />
             <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-accent-teal animate-pulse" />
-              <span className="text-[11px] text-accent-teal font-medium">Now</span>
+              <span className="w-2 h-2 rounded-full bg-domain-presence animate-pulse" />
+              <span className="text-[11px] text-domain-presence font-medium">Now</span>
             </div>
-            <div className="h-px flex-1 bg-accent-teal/30" />
+            <div className="h-px flex-1 bg-domain-presence/30" />
           </div>
 
           <div ref={bottomRef} />
