@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom"
 import { useCommand } from "@redbamboo/utility"
 import { SearchOverlay } from "../../components/discussion/search-overlay"
 import { NewDiscussionPicker } from "../../components/new-discussion-picker"
+import { useLocalSettings } from "../../hooks/use-local-settings"
+import { getAdjacentSidebarDiscussion } from "../../lib/discussion-navigation"
 import { useDisc } from "../../App"
 
 /**
@@ -19,6 +21,7 @@ function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: st
     resumeDiscussion,
     interruptDiscussion,
   } = useDisc()
+  const { agentFilter } = useLocalSettings()
 
   useCommand("nova-new-discussion", {
     label: "New Discussion",
@@ -36,9 +39,7 @@ function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: st
     shortcut: "Alt+ArrowDown",
     keywords: ["switch", "cycle", "next", "tab"],
     action: () => {
-      if (discussions.length === 0) return
-      const idx = discussions.findIndex((d) => d.id === activeDiscussionId)
-      const next = discussions[(idx + 1) % discussions.length]
+      const next = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, 1, agentFilter)
       if (next) navigate(`/apps/nova/chat/${next.id}`)
     },
   })
@@ -50,9 +51,7 @@ function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: st
     shortcut: "Alt+ArrowUp",
     keywords: ["switch", "cycle", "previous", "prev", "tab"],
     action: () => {
-      if (discussions.length === 0) return
-      const idx = discussions.findIndex((d) => d.id === activeDiscussionId)
-      const prev = discussions[(idx - 1 + discussions.length) % discussions.length]
+      const prev = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, -1, agentFilter)
       if (prev) navigate(`/apps/nova/chat/${prev.id}`)
     },
   })

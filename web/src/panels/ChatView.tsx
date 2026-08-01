@@ -18,6 +18,7 @@ import { useSessionStats } from "../hooks/use-session-stats"
 import { useShare } from "../hooks/use-share"
 import { setSettings } from "../lib/settings-store"
 import { findLiveHeartbeatPair } from "../lib/live-heartbeat"
+import { getSidebarDiscussionOrder } from "../lib/discussion-navigation"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -134,9 +135,7 @@ export function ChatView() {
   const settings = useLocalSettings()
   const agentFilter = settings.agentFilter
 
-  const filteredDiscussions = agentFilter
-    ? discussions.filter((d) => d.agentId === agentFilter)
-    : discussions
+  const filteredDiscussions = getSidebarDiscussionOrder(discussions, agentFilter)
 
   const pendingContext = useNovaPendingContext()
   const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming, activeDiscussion)
