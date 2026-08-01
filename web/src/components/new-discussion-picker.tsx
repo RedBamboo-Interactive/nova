@@ -6,17 +6,22 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  Icon,
 } from "@redbamboo/ui"
 
-interface QualityTierInfo { slug: string; label: string; color: string; icon: string }
-interface ProviderInfo { slug: string; name: string; backend: string; icon?: string; isDefault: boolean; defaultModel?: string; hasApiKey: boolean; description?: string }
-
-const FALLBACK_TIERS: QualityTierInfo[] = [
-  { slug: "fast",     label: "Fast",     color: "#22d3ee", icon: "ph-bold ph-rabbit"     },
-  { slug: "standard", label: "Standard", color: "#a78bfa", icon: "ph-bold ph-lightning"  },
-  { slug: "deep",     label: "Deep",     color: "#fb923c", icon: "ph-bold ph-brain"      },
-  { slug: "research", label: "Research", color: "#f43f5e", icon: "ph-bold ph-microscope" },
-]
+interface QualityTierInfo { slug: string; label: string; color?: string; icon?: string; isDefault: boolean }
+interface ProviderInfo {
+  slug: string
+  name: string
+  backend: string
+  icon?: string
+  iconSvgPath?: string
+  color?: string
+  isDefault: boolean
+  defaultModel?: string
+  hasApiKey: boolean
+  description?: string
+}
 
 interface Props {
   open: boolean
@@ -30,8 +35,8 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   const [filter, setFilter] = useState("")
   const [starting, setStarting] = useState(false)
   const [highlighted, setHighlighted] = useState(0)
-  const [qualityTier, setQualityTier] = useState("standard")
-  const [tiers, setTiers] = useState<QualityTierInfo[]>(FALLBACK_TIERS)
+  const [qualityTier, setQualityTier] = useState("")
+  const [tiers, setTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [selectedProvider, setSelectedProvider] = useState<string | undefined>()
   const listRef = useRef<HTMLDivElement>(null)
@@ -41,7 +46,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
       setStarting(false)
       setFilter("")
       setHighlighted(0)
-      setQualityTier("standard")
+      setQualityTier("")
       return
     }
     setLoading(true)
@@ -60,10 +65,13 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
     const agentsP = api.get<AgentInfo[]>("/api/apps/nova/agents")
       .catch(() => [] as AgentInfo[])
 
-    Promise.all([agentsP, providersP, tiersP]).then(([agentList, provList]) => {
+    Promise.all([agentsP, providersP, tiersP]).then(([agentList, provList, tierList]) => {
       setAgents(agentList)
       const first = agentList[0]
-      if (first?.qualityMode) setQualityTier(first.qualityMode)
+      if (first?.qualityMode && tierList.some(t => t.slug === first.qualityMode))
+        setQualityTier(first.qualityMode)
+      else
+        setQualityTier(tierList.find(t => t.isDefault)?.slug ?? tierList[0]?.slug ?? "")
       if (first?.provider && provList.some(p => p.slug === first.provider))
         setSelectedProvider(first.provider)
       else {
@@ -84,7 +92,8 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   }, [highlightedAgent?.id])
 
   function applyAgentDefaults(agent: AgentInfo) {
-    if (agent.qualityMode) setQualityTier(agent.qualityMode)
+    if (agent.qualityMode && tiers.some(t => t.slug === agent.qualityMode))
+      setQualityTier(agent.qualityMode)
     if (agent.provider && providers.some(p => p.slug === agent.provider))
       setSelectedProvider(agent.provider)
   }
@@ -123,7 +132,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
     }
   }
 
-  const selectedTier = tiers.find(t => t.slug === qualityTier) ?? tiers[1]!
+  const selectedTier = tiers.find(t => t.slug === qualityTier)
   const selectedProv = providers.find(p => p.slug === selectedProvider)
 
   return (
@@ -184,9 +193,14 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
             {providers.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium text-text-muted hover:text-text hover:bg-overlay-5 transition-colors cursor-pointer">
-                  <i className={(selectedProv?.icon ?? "ph-bold ph-plug") + " text-[10px]"} />
+                  <Icon
+                    name={selectedProv?.icon}
+                    svgPath={selectedProv?.iconSvgPath}
+                    className="text-[10px]"
+                    style={{ color: selectedProv?.color }}
+                  />
                   <span>{selectedProv?.name ?? "Provider"}</span>
-                  <i className="ph-bold ph-caret-down text-[8px] opacity-50" />
+                  <Icon name="ph-bold ph-caret-down" className="text-[8px] opacity-50" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" sideOffset={4}>
                   {providers.map(p => (
@@ -195,18 +209,23 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
                       onClick={() => setSelectedProvider(p.slug)}
                       className={selectedProvider === p.slug ? "text-primary" : ""}
                     >
-                      <i className={(p.icon ?? "ph-bold ph-plug") + " size-4 text-center"} />
+                      <Icon
+                        name={p.icon}
+                        svgPath={p.iconSvgPath}
+                        className="size-4 text-center"
+                        style={{ color: p.color }}
+                      />
                       {p.name}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            <DropdownMenu>
+            {selectedTier && <DropdownMenu>
               <DropdownMenuTrigger className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium text-text-muted hover:text-text hover:bg-overlay-5 transition-colors cursor-pointer">
-                <i className={selectedTier.icon + " text-[10px]"} style={{ color: selectedTier.color }} />
+                <Icon name={selectedTier.icon} className="text-[10px]" style={{ color: selectedTier.color }} />
                 <span>{selectedTier.label}</span>
-                <i className="ph-bold ph-caret-down text-[8px] opacity-50" />
+                <Icon name="ph-bold ph-caret-down" className="text-[8px] opacity-50" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" sideOffset={4}>
                 {tiers.map(tier => (
@@ -215,12 +234,12 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
                     onClick={() => setQualityTier(tier.slug)}
                     className={qualityTier === tier.slug ? "text-primary" : ""}
                   >
-                    <i className={tier.icon + " size-4 text-center"} style={{ color: tier.color }} />
+                    <Icon name={tier.icon} className="size-4 text-center" style={{ color: tier.color }} />
                     {tier.label}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
-            </DropdownMenu>
+            </DropdownMenu>}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -230,7 +249,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
               Cancel
             </button>
             <button
-              disabled={starting || filtered.length === 0}
+              disabled={starting || filtered.length === 0 || !selectedTier}
               onClick={() => { if (highlightedAgent) selectAgent(highlightedAgent.id) }}
               className="px-4 py-1.5 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
             >
