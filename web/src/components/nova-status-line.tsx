@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { MorphSpinner, getSpinnerColor, isEventBlock } from "@redbamboo/chat"
+import { MorphSpinner, getEffectiveToolName, getSpinnerColor, isEventBlock } from "@redbamboo/chat"
 import type { MessageBlock } from "@redbamboo/chat"
 
 const toolLabels: Record<string, { icon: string; label: string }> = {
@@ -31,11 +31,12 @@ function getStatusFromMessages(messages: MessageBlock[]): { icon: string; label:
       }
 
       if (part.type === "tool_use" && part.toolName) {
+        const effectiveName = getEffectiveToolName(part.toolName, part.toolInput)
         const memoryPath = part.toolInput?.includes("memory/") || part.toolInput?.includes("memory\\")
-        if (memoryPath && (part.toolName === "Read" || part.toolName === "Glob" || part.toolName === "Grep")) {
+        if (memoryPath && (effectiveName === "Read" || effectiveName === "Glob" || effectiveName === "Grep")) {
           return { icon: "ph-bold ph-brain", label: "Remembering..." }
         }
-        if (memoryPath && (part.toolName === "Write" || part.toolName === "Edit")) {
+        if (memoryPath && (effectiveName === "Write" || effectiveName === "Edit")) {
           return { icon: "ph-bold ph-brain", label: "Memorizing..." }
         }
 
@@ -44,7 +45,7 @@ function getStatusFromMessages(messages: MessageBlock[]): { icon: string; label:
           return { icon: "ph-bold ph-lightning", label: "Automating..." }
         }
 
-        const known = toolLabels[part.toolName]
+        const known = effectiveName ? toolLabels[effectiveName] : undefined
         if (known) return known
 
         return { icon: "ph-bold ph-gear", label: "Working..." }
