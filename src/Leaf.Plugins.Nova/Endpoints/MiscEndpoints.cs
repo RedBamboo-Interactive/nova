@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -69,6 +70,27 @@ public static class MiscEndpoints
             var agentId = ctx.Request.Query["agent"].FirstOrDefault();
             var workspace = await workspaces.GetAsync(agentId);
             return Results.Ok(new { files = workspace.GetManifest() });
+        });
+
+        group.MapPost("/workspace/reveal", async (HttpContext ctx, AgentWorkspaces workspaces) =>
+        {
+            if (!OperatingSystem.IsWindows())
+                return Results.BadRequest(new { error = "Opening a workspace folder is only supported on Windows" });
+
+            var agentId = ctx.Request.Query["agent"].FirstOrDefault();
+            var workspace = await workspaces.GetAsync(agentId, ctx.RequestAborted);
+
+            try
+            {
+                var psi = new ProcessStartInfo { FileName = "explorer.exe", UseShellExecute = false };
+                psi.ArgumentList.Add(workspace.WorkspacePath);
+                Process.Start(psi);
+                return Results.Ok(new { success = true, path = workspace.WorkspacePath });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = $"Could not open the workspace folder: {ex.Message}" });
+            }
         });
 
         group.MapGet("/memory/file", async (HttpContext ctx, AgentWorkspaces workspaces) =>

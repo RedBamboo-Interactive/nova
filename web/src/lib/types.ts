@@ -26,6 +26,7 @@ export interface AgentInfo {
   description: string | null
   status: string
   avatarUrl: string
+  workspaceId?: string | null
   provider?: string | null
   qualityMode?: string | null
 }

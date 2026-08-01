@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { MasterDetailLayout, PanelHeader, ScrollArea, ItemListRow, Badge } from "@redbamboo/ui"
+import { MasterDetailLayout, PanelHeader, ScrollArea, ItemListRow, Badge, Button, useToast } from "@redbamboo/ui"
 import { MarkdownRenderer } from "@redbamboo/chat"
 import { useBreadcrumbLabel } from "@redbamboo/utility"
 import { api } from "../lib/api"
@@ -16,10 +16,12 @@ export function MemoryPanel() {
   const [content, setContent] = useState("")
   const [mobileTab, setMobileTab] = useState(0)
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set())
-  const { agents } = useAgents()
+  const { agents, defaultAgentId } = useAgents()
+  const { toast } = useToast()
   const settings = useLocalSettings()
   const agentFilter = settings.agentFilter
   const multiAgent = agents.length > 1
+  const selectedAgent = agents.find((agent) => agent.id === (agentFilter ?? defaultAgentId))
 
   // On the index route the host's /apps/nova/* splat ("journal") leaks through
   // the merged params — only a deeper path is an actual file selection.
@@ -56,6 +58,23 @@ export function MemoryPanel() {
     setMobileTab(1)
   }, [navigate])
 
+  const handleRevealWorkspace = useCallback(async () => {
+    const query = agentFilter ? `?agent=${encodeURIComponent(agentFilter)}` : ""
+    try {
+      await api.post(`/api/apps/nova/workspace/reveal${query}`)
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "Could not open workspace",
+        description: error instanceof Error ? error.message : "Unknown error",
+      })
+    }
+  }, [agentFilter, toast])
+
+  const handleOpenEntityWorkspace = useCallback(() => {
+    if (selectedAgent?.workspaceId) navigate(`/workspace/${selectedAgent.workspaceId}`)
+  }, [navigate, selectedAgent?.workspaceId])
+
   const grouped = files.reduce<Record<string, string[]>>((acc, file) => {
     const dir = file.split("/").slice(0, -1).join("/") || "root"
     ;(acc[dir] ??= []).push(file)
@@ -64,7 +83,7 @@ export function MemoryPanel() {
 
   const sidebar = (
     <>
-      <PanelHeader title={multiAgent ? undefined : "Journal"}>
+      <PanelHeader title="Journal">
         {multiAgent && (
           <AgentPicker
             agents={agents}
@@ -73,6 +92,25 @@ export function MemoryPanel() {
             showAll
           />
         )}
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={() => void handleRevealWorkspace()}
+          title="Open workspace folder in Windows Explorer"
+          aria-label="Open workspace folder in Windows Explorer"
+        >
+          <i className="ph-bold ph-folder-open text-xs" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={handleOpenEntityWorkspace}
+          disabled={!selectedAgent?.workspaceId}
+          title="Entity-backed VFS — open in Workspace"
+          aria-label="Entity-backed VFS — open in Workspace"
+        >
+          <i className="ph-bold ph-database text-xs" />
+        </Button>
       </PanelHeader>
       <ScrollArea className="flex-1">
         {files.length === 0 ? (

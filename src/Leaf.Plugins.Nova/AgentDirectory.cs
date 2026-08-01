@@ -11,6 +11,7 @@ public sealed record AgentInfo(
     string? Description,
     string? AvatarFilename,
     string WorkspacePath,
+    string? WorkspaceId,
     string? Identity,
     string? OutputProtocol,
     string? Capabilities,
@@ -92,6 +93,16 @@ public sealed class AgentDirectory(IEntityStore store, NovaConfigStore config)
             var data = item.Data;
             var avatarFilename = await ResolveAvatarAsync(data, ct);
 
+            var workspaceRef = Str(data, "workspace");
+            LeafEntity? workspace = null;
+            if (!string.IsNullOrWhiteSpace(workspaceRef))
+            {
+                workspace = Guid.TryParse(workspaceRef, out var workspaceGuid)
+                    ? await store.GetAsync(workspaceGuid, ct)
+                    : await store.GetBySlugAsync(workspaceRef, ct);
+            }
+            var workspaceId = workspace?.TypeSlug == "page" ? workspace.Id.ToString() : null;
+
             var workspacePath = item.Slug == "nova" && novaWorkspaceOverride != null
                 ? novaWorkspaceOverride
                 : Path.Combine(
@@ -121,6 +132,7 @@ public sealed class AgentDirectory(IEntityStore store, NovaConfigStore config)
                 Str(data, "description"),
                 avatarFilename,
                 workspacePath,
+                workspaceId,
                 Str(data, "identity"),
                 Str(data, "output_protocol"),
                 Str(data, "capabilities"),
