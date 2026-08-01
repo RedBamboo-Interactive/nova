@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Leaf.Sdk.Services;
 
@@ -44,6 +45,7 @@ public sealed class NovaSessionActionHandler(
         workspace.GenerateClaudeMd();
 
         var ownerId = Str(data, "owner_id") ?? automation.CreatedBy;
+        var isCodex = agent.Provider?.StartsWith("codex", StringComparison.OrdinalIgnoreCase) == true;
 
         // Pre-create the delivery discussion and tell the session about it — same
         // contract the standalone app's automations relied on.
@@ -51,7 +53,7 @@ public sealed class NovaSessionActionHandler(
         if (Bool(config, "preCreateDiscussion"))
             preCreated = await discussions.CreateAsync(null, agent.Id, ownerId, "chat", ct: ct);
 
-        var fullPrompt = ComposePrompt(automation.Name, agent, preCreated, prompt);
+        var fullPrompt = ComposePrompt(automation.Name, agent, preCreated, prompt, isCodex);
 
         var timeout = IntOr(config, "timeout") ?? 3600;
         var body = new Dictionary<string, object?>
@@ -63,6 +65,8 @@ public sealed class NovaSessionActionHandler(
             ["allowedTools"] = DefaultTools,
             ["maxTurns"] = 50,
             ["timeout"] = timeout,
+            ["sandbox"] = isCodex ? "danger-full-access" : null,
+            ["networkAccess"] = isCodex,
         };
 
         var result = await redCompute.ExecuteAsync(body, $"Nova: {automation.Name}", ownerId, timeout, ct);
@@ -70,6 +74,14 @@ public sealed class NovaSessionActionHandler(
             throw new InvalidOperationException(result.Error ?? "AI session reported failure");
 
         var summary = string.IsNullOrWhiteSpace(result.Text) ? "(no output)" : result.Text;
+        var silent = false;
+        if (isCodex)
+        {
+            if (!TryParseAutomationResult(result.Text, out var contractSuccess, out summary, out silent))
+                throw new InvalidOperationException("Codex automation returned no valid result contract");
+            if (!contractSuccess)
+                throw new InvalidOperationException(summary);
+        }
 
         if (Str(data, "report_to_discussion_id") is { } reportTo)
         {
@@ -83,6 +95,7 @@ public sealed class NovaSessionActionHandler(
             ["summary"] = summary,
             ["sessionId"] = result.SessionId,
             ["discussionId"] = preCreated?.Id,
+            ["silent"] = silent,
         };
     }
 
@@ -97,7 +110,7 @@ public sealed class NovaSessionActionHandler(
         return agents.NovaAgentId != null ? await agents.GetAgentAsync(agents.NovaAgentId, ct) : null;
     }
 
-    private static string ComposePrompt(string automationName, AgentInfo agent, DiscussionRead? preCreated, string prompt)
+    private static string ComposePrompt(string automationName, AgentInfo agent, DiscussionRead? preCreated, string prompt, bool isCodex)
     {
         // /ai-session/execute takes a single prompt — fold the agent identity in ahead
         // of the task, then the run context, then the task itself. CLAUDE.md in the
@@ -127,7 +140,55 @@ public sealed class NovaSessionActionHandler(
         }
 
         parts.Add(prompt);
+        if (isCodex)
+        {
+            parts.Add("""
+                AUTOMATION RESULT CONTRACT: Your final response must be exactly one JSON object
+                with this shape: {"success":true|false,"summary":"concise result","silent":false}.
+                Set success=false when a required check or action was blocked, denied, or incomplete.
+                A deliberate skip after verifying its condition counts as success.
+                """);
+        }
         return string.Join("\n\n---\n\n", parts);
+    }
+
+    private static bool TryParseAutomationResult(string? text, out bool success, out string summary, out bool silent)
+    {
+        success = false;
+        summary = "Codex automation returned an empty result";
+        silent = false;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        var candidate = text.Trim();
+        if (candidate.StartsWith("```", StringComparison.Ordinal))
+        {
+            var firstNewline = candidate.IndexOf('\n');
+            var lastFence = candidate.LastIndexOf("```", StringComparison.Ordinal);
+            if (firstNewline >= 0 && lastFence > firstNewline)
+                candidate = candidate[(firstNewline + 1)..lastFence].Trim();
+        }
+
+        try
+        {
+            using var contract = JsonDocument.Parse(candidate);
+            var root = contract.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("success", out var successProp)
+                || successProp.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
+                || !root.TryGetProperty("summary", out var summaryProp)
+                || summaryProp.ValueKind != JsonValueKind.String)
+                return false;
+
+            success = successProp.GetBoolean();
+            summary = summaryProp.GetString() ?? "(no output)";
+            silent = root.TryGetProperty("silent", out var silentProp)
+                && silentProp.ValueKind == JsonValueKind.True;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static string? Str(JsonObject data, string key)
