@@ -17,10 +17,21 @@ import { useDisc, useNovaPendingContext } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
 import { useShare } from "../hooks/use-share"
 import { setSettings } from "../lib/settings-store"
+import { api } from "../lib/api"
 import { findLiveHeartbeatPair } from "../lib/live-heartbeat"
 import { getSidebarDiscussionOrder } from "../lib/discussion-navigation"
 
 const speechBackend = createNovaSpeechBackend()
+
+interface QualityTierInfo { slug: string; label: string; color?: string; icon?: string }
+interface ProviderInfo {
+  slug: string
+  name: string
+  backend: string
+  icon?: string
+  iconSvgPath?: string
+  color?: string
+}
 
 function useAvatarStyle() {
   const [opacity, setOpacity] = useState(0.9)
@@ -146,6 +157,17 @@ export function ChatView() {
   const share = useShare(activeDiscussion?.entityId)
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [mobileTab, setMobileTab] = useState(0)
+  const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
+  const [providers, setProviders] = useState<ProviderInfo[]>([])
+
+  useEffect(() => {
+    api.get<{ tiers: QualityTierInfo[] }>("/ai-session/quality-modes")
+      .then(data => setQualityTiers(data.tiers ?? []))
+      .catch(() => {})
+    api.get<ProviderInfo[]>("/ai-session/providers/configured")
+      .then(data => setProviders(Array.isArray(data) ? data : []))
+      .catch(() => {})
+  }, [])
 
   const { wrapMessage, clear: clearContext } = pendingContext
   const handleSend = useCallback((content: string, images?: ImageAttachment[], options?: SendOptions) => {
@@ -291,7 +313,19 @@ export function ChatView() {
           <span>Share</span>
         </button>
       )}
-      <ContextIndicator stats={sessionStats} messages={activeMessages}>
+      <ContextIndicator
+        stats={sessionStats}
+        messages={activeMessages}
+        qualityTierOptions={qualityTiers.map(t => ({ value: t.slug, label: t.label, color: t.color, icon: t.icon }))}
+        providerOptions={providers.map(p => ({
+          value: p.slug,
+          aliases: [p.backend],
+          label: p.name,
+          color: p.color,
+          icon: p.icon,
+          iconSvgPath: p.iconSvgPath,
+        }))}
+      >
         <div className="flex items-center justify-between py-1.5 border-t border-overlay-6 pt-3">
           <div className="flex items-center gap-2">
             <i className="ph-bold ph-lock-simple text-xs text-text-muted" />

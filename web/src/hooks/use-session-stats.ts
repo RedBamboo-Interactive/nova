@@ -3,6 +3,9 @@ import type { SessionStats } from "@redbamboo/chat"
 import { api } from "../lib/api"
 
 interface RedComputeSession {
+  provider?: string
+  providerEntity?: string
+  qualityTier?: string
   model?: string
   status?: string
   startedAt?: string
@@ -20,6 +23,8 @@ interface RedComputeSession {
 interface DiscussionRef {
   id: string
   title: string | null
+  provider?: string | null
+  qualityTier?: string | null
 }
 
 export function useSessionStats(sessionId: string | null | undefined, isStreaming: boolean, discussion?: DiscussionRef | null): SessionStats | null {
@@ -75,6 +80,9 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
       contextTokens: sessionData.contextTokens,
       contextWindow: sessionData.contextWindow,
       effort: sessionData.effort,
+      provider: discussion?.provider ?? sessionData.provider,
+      providerEntity: discussion?.provider ?? sessionData.providerEntity,
+      qualityTier: discussion?.qualityTier ?? sessionData.qualityTier,
     }
-  }, [sessionData, sessionId, discussion?.id, discussion?.title])
+  }, [sessionData, sessionId, discussion?.id, discussion?.title, discussion?.provider, discussion?.qualityTier])
 }
