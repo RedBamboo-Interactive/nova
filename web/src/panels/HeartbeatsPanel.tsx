@@ -448,7 +448,7 @@ export function AutomationsPanel() {
 
   const sidebar = (
     <>
-      <PanelHeader title={multiAgent ? undefined : "Pulse"}>
+      <PanelHeader title="Pulse">
         {multiAgent && (
           <AgentPicker
             agents={agents}
