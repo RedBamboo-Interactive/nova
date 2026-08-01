@@ -1,33 +1,8 @@
 import { useState, useEffect } from "react"
-import { SettingRow, SectionHeader, Button } from "@redbamboo/ui"
+import { SettingRow, SectionHeader, Button, Switch } from "@redbamboo/ui"
 import { useLocalSettings } from "../hooks/use-local-settings"
 import { setSettings as setLocalSettings } from "../lib/settings-store"
 import { useSettings } from "../hooks/use-settings"
-
-function Toggle({
-  checked,
-  onChange,
-}: {
-  checked: boolean
-  onChange: (v: boolean) => void
-}) {
-  return (
-    <button
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-        checked ? "bg-primary" : "bg-overlay-12"
-      }`}
-    >
-      <span
-        className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform ${
-          checked ? "translate-x-4" : "translate-x-0"
-        }`}
-      />
-    </button>
-  )
-}
 
 export function NovaSettingsPanel() {
   const localSettings = useLocalSettings()
@@ -47,17 +22,17 @@ export function NovaSettingsPanel() {
     <div>
       <SectionHeader>Appearance</SectionHeader>
       <SettingRow label="Show avatar">
-        <Toggle
+        <Switch
           checked={localSettings.showAvatar}
-          onChange={(v) => setLocalSettings({ showAvatar: v })}
+          onCheckedChange={(v) => setLocalSettings({ showAvatar: v })}
         />
       </SettingRow>
 
       <SectionHeader>Docker</SectionHeader>
       <SettingRow label="Containerize AI sessions" hint="Run delegated AI sessions inside a Docker container for isolation.">
-        <Toggle
+        <Switch
           checked={dockerEnabled}
-          onChange={async (v) => {
+          onCheckedChange={async (v) => {
             setDockerEnabled(v)
             if (!v) {
               setDockerImage("")
