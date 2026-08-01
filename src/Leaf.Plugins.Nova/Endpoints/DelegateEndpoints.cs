@@ -17,7 +17,6 @@ public class DelegateRequest
     public string Prompt { get; set; } = "";
     public string? DiscussionId { get; set; }
     public bool? Navigate { get; set; }
-    public string? DockerImage { get; set; }
     public string? Model { get; set; }
     public string? QualityMode { get; set; }
     public string? Provider { get; set; }
@@ -32,7 +31,7 @@ public static class DelegateEndpoints
 {
     public static void Map(RouteGroupBuilder group)
     {
-        group.MapPost("/delegate", async (HttpContext ctx, DelegateRequest request, RedComputeClient redCompute, NovaConfigStore config,
+        group.MapPost("/delegate", async (HttpContext ctx, DelegateRequest request, RedComputeClient redCompute,
             AgentDirectory agentDir, AgentWorkspaces workspaces,
             [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
         {
@@ -83,11 +82,7 @@ public static class DelegateEndpoints
             {
                 try
                 {
-                    var appConfig = await config.GetAsync();
-                    var dockerImage = request.DockerImage ?? appConfig.DockerImage;
-
                     var createBody = new Dictionary<string, object?> { ["projectPath"] = request.ProjectPath };
-                    if (dockerImage != null) createBody["dockerImage"] = dockerImage;
                     if (!string.IsNullOrWhiteSpace(request.Provider))
                         createBody["provider"] = request.Provider;
                     if (!string.IsNullOrWhiteSpace(request.Model))

@@ -133,11 +133,10 @@ public sealed class NovaAppPlugin : ILeafPlugin
         var existing = await store.QueryAsync(new EntityQuery { TypeSlug = NovaConfigStore.TypeSlug, Limit = 1 }, ct);
         if (existing.Count == 0)
         {
-            var (dockerImage, qualityMode, workspacePath) = ReadLegacyConfig();
+            var (qualityMode, workspacePath) = ReadLegacyConfig();
             await store.UpsertBySlugAsync(NovaConfigStore.TypeSlug, NovaConfigStore.Slug, "Nova App Config",
                 new JsonObject
                 {
-                    ["docker_image"] = dockerImage,
                     ["default_quality_mode"] = qualityMode ?? "standard",
                     ["workspace_path"] = workspacePath,
                 }, ct);
@@ -204,24 +203,23 @@ public sealed class NovaAppPlugin : ILeafPlugin
         }
     }
 
-    private static (string? DockerImage, string? QualityMode, string? WorkspacePath) ReadLegacyConfig()
+    private static (string? QualityMode, string? WorkspacePath) ReadLegacyConfig()
     {
         try
         {
             var path = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Nova", "config.json");
-            if (!File.Exists(path)) return (null, null, null);
+            if (!File.Exists(path)) return (null, null);
 
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             var root = doc.RootElement;
             return (
-                root.TryGetProperty("DockerImage", out var d) ? d.GetString() : null,
                 root.TryGetProperty("DefaultQualityMode", out var q) ? q.GetString() : null,
                 root.TryGetProperty("WorkspacePath", out var w) ? w.GetString() : null);
         }
         catch
         {
-            return (null, null, null);
+            return (null, null);
         }
     }
 }

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -18,11 +17,6 @@ public class MemoryFileRequest
 {
     public string Path { get; set; } = "";
     public string Content { get; set; } = "";
-}
-
-public class DockerSettingsRequest
-{
-    public string? Image { get; set; }
 }
 
 /// <summary>Location, journal/memory files, settings, and local media serving.</summary>
@@ -133,28 +127,11 @@ public static class MiscEndpoints
             var c = await config.GetAsync();
             return Results.Ok(new
             {
-                docker = new
-                {
-                    enabled = !string.IsNullOrEmpty(c.DockerImage),
-                    image = c.DockerImage,
-                },
                 general = new
                 {
                     defaultQualityMode = c.DefaultQualityMode,
                     workspacePath = c.WorkspacePath,
                 },
-            });
-        });
-
-        group.MapPut("/settings/docker", async (DockerSettingsRequest request, NovaConfigStore config) =>
-        {
-            var image = string.IsNullOrWhiteSpace(request.Image) ? null : request.Image.Trim();
-            await config.PatchAsync(new JsonObject { ["docker_image"] = image });
-            return Results.Ok(new
-            {
-                success = true,
-                enabled = image != null,
-                image,
             });
         });
 

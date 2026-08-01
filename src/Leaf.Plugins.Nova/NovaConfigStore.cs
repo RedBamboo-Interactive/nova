@@ -5,7 +5,6 @@ namespace Leaf.Plugins.Nova;
 
 public sealed record NovaAppConfig(
     Guid EntityId,
-    string? DockerImage,
     string DefaultQualityMode,
     string? WorkspacePath);
 
@@ -27,7 +26,6 @@ public sealed class NovaConfigStore(IEntityStore store)
             ?? throw new InvalidOperationException("nova-config singleton is missing — OnStartupAsync did not run");
         return new NovaAppConfig(
             e.Id,
-            Str(e.Data, "docker_image"),
             Str(e.Data, "default_quality_mode") ?? "standard",
             Str(e.Data, "workspace_path"));
     }
