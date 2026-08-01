@@ -5,7 +5,7 @@ import type { DiscussionInfo, AgentInfo } from "../../lib/types"
 import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 
 const statusColor: Record<string, string> = {
-  thinking: "var(--color-domain-imagination)",
+  thinking: "var(--color-accent-gold)",
   idle: "var(--color-accent-teal)",
   stopped: "var(--color-text-disabled)",
   archived: "var(--color-text-disabled)",
