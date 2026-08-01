@@ -15,6 +15,13 @@ public sealed class ImageAttachmentDto
     public string Base64 { get; set; } = "";
 }
 
+public sealed class InputPartDto
+{
+    public string Type { get; set; } = "";
+    public string? Text { get; set; }
+    public string? AttachmentId { get; set; }
+}
+
 /// <summary>
 /// The shared message-send pipeline: lazily creates the RedCompute session, replays
 /// pending injected context, enriches the content with the cross-discussion
@@ -88,9 +95,26 @@ public sealed class MessagePipeline(
         return await redCompute.CreateSessionAsync(body, ownerId, "Nova:agent", ct);
     }
 
-    public async Task<SendMessageOutcome> SendAsync(
+    public Task<SendMessageOutcome> SendAsync(
         DiscussionRead discussion, string? userId,
         string content, ImageAttachmentDto[]? images, ResolvedDevice device, string input,
+        double? latitude = null, double? longitude = null, CancellationToken ct = default)
+        => SendCoreAsync(discussion, userId, content, images, null, device, input, latitude, longitude, ct);
+
+    public Task<SendMessageOutcome> SendInputAsync(
+        DiscussionRead discussion, string? userId,
+        InputPartDto[] parts, ResolvedDevice device, string input,
+        double? latitude = null, double? longitude = null, CancellationToken ct = default)
+    {
+        var content = string.Join("\n", parts
+            .Where(part => string.Equals(part.Type, "text", StringComparison.OrdinalIgnoreCase))
+            .Select(part => part.Text ?? ""));
+        return SendCoreAsync(discussion, userId, content, null, parts, device, input, latitude, longitude, ct);
+    }
+
+    private async Task<SendMessageOutcome> SendCoreAsync(
+        DiscussionRead discussion, string? userId,
+        string content, ImageAttachmentDto[]? images, InputPartDto[]? inputParts, ResolvedDevice device, string input,
         double? latitude = null, double? longitude = null, CancellationToken ct = default)
     {
         var sessionId = discussion.SessionId;
@@ -229,8 +253,36 @@ public sealed class MessagePipeline(
         var enrichedContent = contextBlock + priorBlock + "\n" + content;
 
         string? messageUid = null;
-        var sendResult = await redCompute.SendMessageDetailedAsync(
-            sessionId, new { content = enrichedContent, images }, ct);
+        object requestBody;
+        if (inputParts is { Length: > 0 })
+        {
+            var typedInput = new List<object>();
+            var enriched = false;
+            foreach (var part in inputParts)
+            {
+                if (string.Equals(part.Type, "text", StringComparison.OrdinalIgnoreCase))
+                {
+                    typedInput.Add(new { type = "text", text = enriched
+                        ? part.Text ?? ""
+                        : contextBlock + priorBlock + "\n" + (part.Text ?? "") });
+                    enriched = true;
+                }
+                else if (string.Equals(part.Type, "attachment", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(part.AttachmentId))
+                {
+                    typedInput.Add(new { type = "attachment", attachmentId = part.AttachmentId });
+                }
+            }
+            if (!enriched)
+                typedInput.Insert(0, new { type = "text", text = contextBlock + priorBlock });
+            requestBody = new { input = typedInput };
+        }
+        else
+        {
+            requestBody = new { content = enrichedContent, images };
+        }
+
+        var sendResult = await redCompute.SendMessageDetailedAsync(sessionId, requestBody, ct, userId);
         if (!sendResult.Success)
         {
             return new(false, sessionId,
@@ -243,14 +295,21 @@ public sealed class MessagePipeline(
             && payload.TryGetProperty("messageUid", out var muEl))
             messageUid = muEl.GetString();
 
+        JsonElement[] claimedAttachments = [];
+        if (sendResult.Payload is { ValueKind: JsonValueKind.Object } attachmentPayload
+            && attachmentPayload.TryGetProperty("attachments", out var attachmentArray)
+            && attachmentArray.ValueKind == JsonValueKind.Array)
+            claimedAttachments = attachmentArray.EnumerateArray().Select(item => item.Clone()).ToArray();
+
         var hasImages = images is { Length: > 0 };
+        var hasAttachments = claimedAttachments.Length > 0;
         var patch = new JsonObject
         {
             ["last_activity"] = new DateTimeOffset(now).ToString("O"),
             ["last_context_json"] = NovaContextBuilder.SerializeSnapshot(currentSnapshot),
         };
         // One count bump per user message: the image path gets it from PostAsync below.
-        if (!hasImages)
+        if (!hasImages && !hasAttachments)
             patch["message_count"] = discussion.MessageCount + 1;
         if (discussion.InjectedContext != null)
             patch["injected_context"] = null;
@@ -258,7 +317,28 @@ public sealed class MessagePipeline(
             patch["session_id"] = sessionId;
         await store.PatchAsync(discussion.EntityId, patch, ct: ct);
 
-        if (hasImages)
+        if (hasAttachments)
+        {
+            var parts = claimedAttachments.Select(attachment => new
+            {
+                type = "attachment",
+                id = attachment.GetProperty("id").GetString(),
+                kind = attachment.GetProperty("kind").GetString(),
+                name = attachment.GetProperty("name").GetString(),
+                mediaType = attachment.GetProperty("mediaType").GetString(),
+                size = attachment.GetProperty("size").GetInt64(),
+                sha256 = attachment.TryGetProperty("sha256", out var hash) ? hash.GetString() : null,
+                downloadUrl = attachment.GetProperty("downloadUrl").GetString(),
+            }).ToArray();
+
+            await store.PostMessageAsync(discussion.EntityId, "user", content, new JsonObject
+            {
+                ["parts_json"] = JsonSerializer.Serialize(parts, JsonOptions),
+                ["source"] = "user-message",
+                ["uid"] = messageUid ?? Guid.NewGuid().ToString("N"),
+            }, userId, ct);
+        }
+        else if (hasImages)
         {
             var parts = new List<object>();
             foreach (var img in images!)

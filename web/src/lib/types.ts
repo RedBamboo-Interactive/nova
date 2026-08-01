@@ -59,6 +59,7 @@ export interface MessagePartDto {
   url?: string
   base64?: string
   mediaType?: string
+  attachments?: import("@redbamboo/chat").UploadedAttachment[]
 }
 
 export interface ClaudeStreamEvent {

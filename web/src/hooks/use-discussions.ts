@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo, startTransition } fr
 import { useToast } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
-import type { MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment } from "@redbamboo/chat"
+import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, UploadedAttachment } from "@redbamboo/chat"
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
@@ -83,6 +83,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
           url: p.url,
           base64: p.base64,
           mediaType: p.mediaType,
+          attachments: p.attachments,
         })),
       timestamp: m.timestamp,
       senderAgentId: m.senderAgentId,
@@ -433,14 +434,22 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
   }, [])
 
-  const sendMessage = useCallback(async (discussionId: string, content: string, images?: ImageAttachment[], inputMethod?: string) => {
+  const deliverMessage = useCallback(async (
+    discussionId: string,
+    content: string,
+    images?: ImageAttachment[],
+    inputMethod?: string,
+    input?: ChatInputPart[],
+    attachments?: UploadedAttachment[],
+    throwOnFailure = false,
+  ) => {
     const disc = discussions.find((d) => d.id === discussionId)
     if (!disc) return
 
     const userMsg: MessageBlock = {
       id: crypto.randomUUID(),
       role: "user",
-      parts: [{ type: "text", content, images }],
+      parts: [{ type: "text", content, images, attachments }],
       timestamp: new Date().toISOString(),
     }
     setMessages((prev) => ({
@@ -460,7 +469,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const displayContent = content
         .replace(/<nova-context[\s\S]*?<\/nova-context>\s*/g, "")
         .replace(/<nova-prior-messages?[\s\S]*?<\/nova-prior-messages?>\s*/g, "")
-        .trim()
+        .trim() || attachments?.map(attachment => attachment.name).join(", ") || (images?.length ? "Image" : "New discussion")
       const title = displayContent.length > 60 ? displayContent.slice(0, 59) + "…" : displayContent
       setDiscussions((prev) =>
         prev.map((d) => d.id === discussionId ? { ...d, title } : d)
@@ -469,6 +478,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
 
     const fail = () => {
+      if (throwOnFailure) {
+        setMessages((previous) => ({
+          ...previous,
+          [discussionId]: (previous[discussionId] ?? []).filter(message => message.id !== userMsg.id),
+        }))
+      }
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
       const failStatus = disc.type === "live" ? "idle" as const : "stopped" as const
       setDiscussions((prev) =>
@@ -502,7 +517,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     const gpsPayload = gps ? { latitude: gps.latitude, longitude: gps.longitude } : {}
 
     try {
-      const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/apps/nova/discussions/${discussionId}/message`, { content, images, inputMethod, ...gpsPayload })
+      const body = input ? { input, inputMethod, ...gpsPayload } : { content, images, inputMethod, ...gpsPayload }
+      const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/apps/nova/discussions/${discussionId}/message`, body)
       updateSessionId(res)
       backfillMessage(res.metadata, res.messageUid)
       return
@@ -510,21 +526,28 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (err instanceof ApiError && err.status < 500) {
         fail()
         toast({ variant: "error", title: "Message not sent", description: err.message })
+        if (throwOnFailure) throw err
         return
       }
-      if (!disc.sessionId) { fail(); return }
+      if (!disc.sessionId) {
+        fail()
+        if (throwOnFailure) throw err
+        return
+      }
     }
 
     try {
       await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
     } catch {
       fail()
+      if (throwOnFailure) throw new Error("The session could not be resumed")
       return
     }
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/apps/nova/discussions/${discussionId}/message`, { content, images, inputMethod, ...gpsPayload })
+        const body = input ? { input, inputMethod, ...gpsPayload } : { content, images, inputMethod, ...gpsPayload }
+        const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/apps/nova/discussions/${discussionId}/message`, body)
         updateSessionId(res)
         backfillMessage(res.metadata, res.messageUid)
         return
@@ -532,6 +555,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         if (err instanceof ApiError && err.status < 500) {
           fail()
           toast({ variant: "error", title: "Message not sent", description: err.message })
+          if (throwOnFailure) throw err
           return
         }
         if (attempt < 2) {
@@ -539,9 +563,21 @@ export function useDiscussions(eventResolver?: EventResolver) {
           continue
         }
         fail()
+        if (throwOnFailure) throw err
       }
     }
   }, [discussions, toast])
+
+  const sendMessage = useCallback((discussionId: string, content: string, images?: ImageAttachment[], inputMethod?: string) =>
+    deliverMessage(discussionId, content, images, inputMethod, undefined, undefined, true), [deliverMessage])
+
+  const sendInput = useCallback((discussionId: string, input: ChatInputPart[], attachments: UploadedAttachment[], inputMethod?: string) => {
+    const content = input
+      .filter((part): part is Extract<ChatInputPart, { type: "text" }> => part.type === "text")
+      .map(part => part.text)
+      .join("\n")
+    return deliverMessage(discussionId, content, undefined, inputMethod, input, attachments, true)
+  }, [deliverMessage])
 
   const interruptDiscussion = useCallback(async (discussionId: string) => {
     const disc = discussions.find((d) => d.id === discussionId)
@@ -914,6 +950,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     clearDiscussionSelection,
     createDiscussion,
     sendMessage,
+    sendInput,
     interruptDiscussion,
     answerQuestion,
     archiveDiscussion,

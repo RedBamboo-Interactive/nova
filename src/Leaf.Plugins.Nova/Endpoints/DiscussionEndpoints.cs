@@ -50,6 +50,7 @@ public class DiscussionMessageRequest
 {
     public string Content { get; set; } = "";
     public ImageAttachmentDto[]? Images { get; set; }
+    public InputPartDto[]? Input { get; set; }
     public string? InputMethod { get; set; }
     public double? Latitude { get; set; }
     public double? Longitude { get; set; }
@@ -806,8 +807,10 @@ public static class DiscussionEndpoints
             var userId = UserId(ctx);
             if (!OwnerScope.CanAccess(discussion.OwnerId, userId)) return Forbidden();
 
-            if (string.IsNullOrWhiteSpace(request.Content) && (request.Images == null || request.Images.Length == 0))
-                return Results.BadRequest(new { error = "Content or at least one image is required" });
+            if (string.IsNullOrWhiteSpace(request.Content)
+                && (request.Images == null || request.Images.Length == 0)
+                && (request.Input == null || request.Input.Length == 0))
+                return Results.BadRequest(new { error = "Content or at least one attachment is required" });
 
             var ua = ctx.Request.Headers.UserAgent.ToString();
             var browserId = ctx.Request.Headers.TryGetValue("X-Device-Id", out var did) ? did.ToString() : null;
@@ -815,16 +818,21 @@ public static class DiscussionEndpoints
 
             live.NoteDevice(resolved);
 
-            var outcome = await pipeline.SendAsync(
-                discussion, userId, request.Content, request.Images, resolved,
-                request.InputMethod ?? "typed", request.Latitude, request.Longitude);
+            var outcome = request.Input is { Length: > 0 }
+                ? await pipeline.SendInputAsync(
+                    discussion, userId, request.Input, resolved,
+                    request.InputMethod ?? "typed", request.Latitude, request.Longitude)
+                : await pipeline.SendAsync(
+                    discussion, userId, request.Content, request.Images, resolved,
+                    request.InputMethod ?? "typed", request.Latitude, request.Longitude);
 
             if (!outcome.Success)
             {
                 var statusCode = outcome.ErrorCode switch
                 {
                     "invalid_images" or "invalid_image" or "unsupported_image_type" or "missing_content" => 400,
-                    "image_attachments_not_supported" => 422,
+                    "image_attachments_not_supported" or "file_attachments_not_supported" => 422,
+                    "attachment_not_found" or "attachment_expired" or "attachment_forbidden" or "invalid_attachment" or "attachment_limit_exceeded" => 422,
                     _ => 502,
                 };
                 return Results.Json(new
@@ -835,7 +843,9 @@ public static class DiscussionEndpoints
             }
 
             _ = activity.OnUserMessage(id, discussion.Title,
-                string.IsNullOrWhiteSpace(request.Content) ? "[image]" : request.Content, discussion.Confidential);
+                string.IsNullOrWhiteSpace(request.Content)
+                    ? request.Input is { Length: > 0 } ? "[attachment]" : "[image]"
+                    : request.Content, discussion.Confidential);
             return Results.Ok(new { success = true, sessionId = outcome.SessionId, metadata = outcome.Metadata, messageUid = outcome.MessageUid });
         });
 
@@ -1050,6 +1060,30 @@ public static class DiscussionEndpoints
                                 url = url ?? (assetId != null ? $"/api/assets/{assetId}" : null),
                                 base64,
                                 mediaType,
+                            };
+                        }
+
+                        if (type == "attachment")
+                        {
+                            return (object)new
+                            {
+                                type = "text",
+                                content = "",
+                                toolName = (string?)null,
+                                toolInput = (string?)null,
+                                attachments = new[]
+                                {
+                                    new
+                                    {
+                                        id = p.TryGetProperty("id", out var id) ? id.GetString() : null,
+                                        kind = p.TryGetProperty("kind", out var kind) ? kind.GetString() : "file",
+                                        name = p.TryGetProperty("name", out var name) ? name.GetString() : "attachment",
+                                        mediaType = p.TryGetProperty("mediaType", out var mediaType) ? mediaType.GetString() : "application/octet-stream",
+                                        size = p.TryGetProperty("size", out var size) ? size.GetInt64() : 0,
+                                        sha256 = p.TryGetProperty("sha256", out var sha) ? sha.GetString() : null,
+                                        downloadUrl = p.TryGetProperty("downloadUrl", out var download) ? download.GetString() : null,
+                                    },
+                                },
                             };
                         }
 

@@ -1,7 +1,7 @@
-import { useState, useCallback, useEffect, useDeferredValue } from "react"
+import { useState, useCallback, useEffect, useDeferredValue, useMemo } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, Switch } from "@redbamboo/ui"
-import { ChatPanel, ContextIndicator, ShareDialog, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload } from "@redbamboo/chat"
+import { ChatPanel, ContextIndicator, ShareDialog, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type UploadedAttachment } from "@redbamboo/chat"
 import { useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
@@ -112,6 +112,7 @@ export function ChatView() {
     selectDiscussion,
     clearDiscussionSelection,
     sendMessage,
+    sendInput,
     interruptDiscussion,
     answerQuestion,
     archiveDiscussion,
@@ -170,19 +171,61 @@ export function ChatView() {
   }, [])
 
   const { wrapMessage, clear: clearContext } = pendingContext
+  const attachmentTransport = useMemo<AttachmentTransport>(() => ({
+    async upload(file) {
+      const form = new FormData()
+      form.append("file", file, file.name)
+      const response = await fetch("/ai-session/input-attachments", { method: "POST", credentials: "include", body: form })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ message: response.statusText }))
+        throw new Error(error.message ?? error.error ?? response.statusText)
+      }
+      return response.json() as Promise<UploadedAttachment>
+    },
+    async delete(attachmentId) {
+      const response = await fetch(`/ai-session/input-attachments/${encodeURIComponent(attachmentId)}`, { method: "DELETE", credentials: "include" })
+      if (!response.ok && response.status !== 404) throw new Error("The attachment could not be removed")
+    },
+    getDownloadUrl(attachment) { return attachment.downloadUrl },
+  }), [])
   const handleSend = useCallback((content: string, images?: ImageAttachment[], options?: SendOptions) => {
     if (!activeDiscussionId) return
     const wrapped = wrapMessage(content, images)
-    sendMessage(activeDiscussionId, wrapped.text, wrapped.images, options?.inputMethod)
+    const sending = sendMessage(activeDiscussionId, wrapped.text, wrapped.images, options?.inputMethod)
     clearContext()
+    return sending
   }, [activeDiscussionId, sendMessage, wrapMessage, clearContext])
+
+  const handleSendInput = useCallback(async (input: ChatInputPart[], attachments: UploadedAttachment[], options?: SendOptions) => {
+    if (!activeDiscussionId) return
+    const text = input
+      .filter((part): part is Extract<ChatInputPart, { type: "text" }> => part.type === "text")
+      .map(part => part.text)
+      .join("\n")
+    const wrapped = wrapMessage(text)
+    const contextAttachments: UploadedAttachment[] = []
+    for (const image of wrapped.images ?? []) {
+      const blob = await fetch(`data:${image.mediaType};base64,${image.base64}`).then(response => response.blob())
+      contextAttachments.push(await attachmentTransport.upload(new File([blob], "context-image", { type: image.mediaType })))
+    }
+    const allAttachments = [...contextAttachments, ...attachments]
+    const wrappedInput: ChatInputPart[] = [{ type: "text", text: wrapped.text }]
+    wrappedInput.push(...allAttachments.map(attachment => ({ type: "attachment" as const, attachmentId: attachment.id })))
+    try {
+      await sendInput(activeDiscussionId, wrappedInput, allAttachments, options?.inputMethod)
+      clearContext()
+    } catch (error) {
+      for (const attachment of contextAttachments) void attachmentTransport.delete(attachment.id).catch(() => {})
+      throw error
+    }
+  }, [activeDiscussionId, attachmentTransport, clearContext, sendInput, wrapMessage])
 
   useEffect(() => {
     const ctx = pendingContext.context
     if (!ctx?.question || !activeDiscussionId) return
     const text = formatContextMessage(ctx, ctx.question)
     const images = ctx.screenshot ? [ctx.screenshot] : undefined
-    sendMessage(activeDiscussionId, text, images)
+    void sendMessage(activeDiscussionId, text, images).catch(() => {})
     clearContext()
   }, [pendingContext.context, activeDiscussionId, sendMessage, clearContext])
 
@@ -421,6 +464,9 @@ export function ChatView() {
         interrupting={isInterrupting}
         resumePending={isResumePending}
         onSend={handleSend}
+        onSendInput={handleSendInput}
+        attachmentTransport={attachmentTransport}
+        enableFileAttachments
         onInterrupt={handleInterrupt}
         sessionId={activeDiscussionId}
         draftStorageKey="nova-drafts"

@@ -211,6 +211,10 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
                     case "image":
                         AppendImagePart(sb, part);
                         break;
+
+                    case "attachment":
+                        AppendAttachmentPart(sb, part);
+                        break;
                 }
             }
         }
@@ -229,13 +233,14 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
             using var doc = JsonDocument.Parse(partsJson);
             foreach (var part in doc.RootElement.EnumerateArray())
             {
-                if (part.TryGetProperty("type", out var type) && type.GetString() == "image")
-                    AppendImagePart(sb, part);
+                if (!part.TryGetProperty("type", out var type)) continue;
+                if (type.GetString() == "image") AppendImagePart(sb, part);
+                if (type.GetString() == "attachment") AppendAttachmentPart(sb, part);
             }
         }
         catch
         {
-            sb.AppendLine("[image attachment could not be parsed]");
+            sb.AppendLine("[attachment could not be parsed]");
         }
     }
 
@@ -247,6 +252,22 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         sb.AppendLine(reference is not null
             ? $"![attached image]({reference})"
             : "[image attachment]");
+    }
+
+    private static void AppendAttachmentPart(StringBuilder sb, JsonElement part)
+    {
+        var name = part.TryGetProperty("name", out var n) ? n.GetString() : "attachment";
+        var kind = part.TryGetProperty("kind", out var k) ? k.GetString() : "file";
+        var url = part.TryGetProperty("downloadUrl", out var d) ? d.GetString() : null;
+        if (url is null)
+        {
+            sb.AppendLine($"[attachment: {name}]");
+            return;
+        }
+        if (kind == "image")
+            sb.AppendLine($"![{name}]({url})");
+        else
+            sb.AppendLine($"[{name}]({url}{(url.Contains('?') ? "&" : "?")}download=true)");
     }
 
     private static string? Truncate(string? s, int max) =>

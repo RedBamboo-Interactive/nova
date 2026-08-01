@@ -110,11 +110,17 @@ public sealed class RedComputeClient
 
     /// <summary>Send a user message while preserving RedCompute's status and machine-readable error.</summary>
     public async Task<SendMessageResult> SendMessageDetailedAsync(
-        string sessionId, object body, CancellationToken ct = default)
+        string sessionId, object body, CancellationToken ct = default, string? userId = null)
     {
         try
         {
-            var resp = await _http.PostAsJsonAsync($"/ai-session/sessions/{sessionId}/message", body, JsonOptions, ct);
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"/ai-session/sessions/{sessionId}/message")
+            {
+                Content = JsonContent.Create(body, options: JsonOptions),
+            };
+            request.Headers.Add("X-User-Id", string.IsNullOrWhiteSpace(userId) ? "local-user" : userId);
+            request.Headers.Add("X-Caller-Info", "Nova:agent");
+            var resp = await _http.SendAsync(request, ct);
             var raw = await resp.Content.ReadAsStringAsync(ct);
             JsonElement? payload = null;
             try
