@@ -98,6 +98,7 @@ export function ChatView() {
     pendingQuestion,
     questionOutcome,
     selectDiscussion,
+    clearDiscussionSelection,
     sendMessage,
     interruptDiscussion,
     answerQuestion,
@@ -117,8 +118,11 @@ export function ChatView() {
     if (urlDiscussionId && urlDiscussionId !== activeDiscussionId) {
       selectDiscussion(urlDiscussionId)
       setMobileTab(1)
+    } else if (!urlDiscussionId && activeDiscussionId) {
+      clearDiscussionSelection()
+      setMobileTab(0)
     }
-  }, [urlDiscussionId, activeDiscussionId, selectDiscussion])
+  }, [urlDiscussionId, activeDiscussionId, selectDiscussion, clearDiscussionSelection])
 
   useBreadcrumbLabel(
     urlDiscussionId ? `/apps/nova/chat/${urlDiscussionId}` : undefined,

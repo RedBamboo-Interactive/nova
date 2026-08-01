@@ -389,6 +389,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
     })
   }, [loadMessages])
 
+  const clearDiscussionSelection = useCallback(() => {
+    setActiveDiscussionId(null)
+  }, [])
+
   const visibleDiscussions = useMemo(
     () => discussions.filter((d) => !isClosed(d.status)),
     [discussions],
@@ -897,6 +901,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     pendingQuestion: activePendingQuestion,
     questionOutcome: activeQuestionOutcome,
     selectDiscussion,
+    clearDiscussionSelection,
     createDiscussion,
     sendMessage,
     interruptDiscussion,
