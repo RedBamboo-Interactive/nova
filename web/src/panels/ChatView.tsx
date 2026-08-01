@@ -244,8 +244,8 @@ export function ChatView() {
         tabIndex={activeDiscussion?.type === "live" ? 0 : -1}
         data-discussion-id={liveHeartbeatPair.live.id}
         onClick={() => handleSelectDiscussion(liveHeartbeatPair.live.id)}
-        className={`flex items-center gap-1 rounded px-2 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-domain-presence ${activeDiscussion?.type === "live" ? "bg-domain-presence/20" : "opacity-60 hover:opacity-100 hover:bg-overlay-6"}`}
-        style={{ color: "var(--color-domain-presence)" }}
+        className={`flex items-center gap-1 rounded px-2 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-live-a50 ${activeDiscussion?.type === "live" ? "bg-status-live-a20" : "opacity-60 hover:opacity-100 hover:bg-overlay-6"}`}
+        style={{ color: "var(--color-status-live)" }}
       >
         <i className={`ph-bold ph-broadcast text-[10px] ${liveHeartbeatPair.live.status === "thinking" ? "animate-pulse" : ""}`} />
         <span>Live</span>
@@ -258,8 +258,8 @@ export function ChatView() {
         tabIndex={activeDiscussion?.type === "heartbeat" ? 0 : -1}
         data-discussion-id={liveHeartbeatPair.heartbeat.id}
         onClick={() => handleSelectDiscussion(liveHeartbeatPair.heartbeat.id)}
-        className={`flex items-center gap-1 rounded px-2 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-domain-presence ${activeDiscussion?.type === "heartbeat" ? "bg-domain-presence/20" : "opacity-60 hover:opacity-100 hover:bg-overlay-6"}`}
-        style={{ color: "var(--color-domain-presence)" }}
+        className={`flex items-center gap-1 rounded px-2 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-gold-a50 ${activeDiscussion?.type === "heartbeat" ? "bg-accent-gold-a20" : "opacity-60 hover:opacity-100 hover:bg-overlay-6"}`}
+        style={{ color: "var(--color-accent-gold)" }}
       >
         <i className={`ph-bold ph-heartbeat text-[10px] ${liveHeartbeatPair.heartbeat.status === "thinking" ? "animate-pulse" : ""}`} />
         <span>Heartbeat</span>
