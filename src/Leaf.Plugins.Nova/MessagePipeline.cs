@@ -229,16 +229,18 @@ public sealed class MessagePipeline(
         var enrichedContent = contextBlock + priorBlock + "\n" + content;
 
         string? messageUid = null;
-        var sendResult = await redCompute.SendMessageAsync(sessionId, new { content = enrichedContent, images }, ct);
-        if (sendResult is null)
+        var sendResult = await redCompute.SendMessageDetailedAsync(
+            sessionId, new { content = enrichedContent, images }, ct);
+        if (!sendResult.Success)
         {
-            return new(false, sessionId, "redcompute_unavailable",
-                "RedCompute could not deliver the message to the session.");
+            return new(false, sessionId,
+                sendResult.ErrorCode ?? "redcompute_unavailable",
+                sendResult.ErrorMessage ?? "RedCompute could not deliver the message to the session.");
         }
         // RedCompute mints the message uid at ingestion; carry it so Nova's copy of this
         // message and the frontend's optimistic block share the transcript record's identity.
-        if (sendResult.Value.ValueKind == JsonValueKind.Object
-            && sendResult.Value.TryGetProperty("messageUid", out var muEl))
+        if (sendResult.Payload is { ValueKind: JsonValueKind.Object } payload
+            && payload.TryGetProperty("messageUid", out var muEl))
             messageUid = muEl.GetString();
 
         var hasImages = images is { Length: > 0 };

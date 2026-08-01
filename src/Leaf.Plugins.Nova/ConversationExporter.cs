@@ -56,16 +56,22 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
             .ToList();
 
         if (snapshot is { Messages.Count: > 0 })
-            AppendSessionExport(sb, disc, snapshot.Messages, localEvents);
+            AppendSessionExport(sb, disc, snapshot.Messages, records, localEvents);
         else
             AppendLocalExport(sb, disc, records);
     }
 
     private static void AppendSessionExport(StringBuilder sb, DiscussionRead disc,
-        List<SessionMessage> raw, List<DiscussionMessage> localEvents)
+        List<SessionMessage> raw, IReadOnlyList<DiscussionMessage> records,
+        List<DiscussionMessage> localEvents)
     {
         var collapsed = CollapseMessages(raw);
         var textMessages = collapsed.Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content)).ToList();
+        var userAttachmentsByUid = records
+            .Where(m => m.Metadata["source"]?.GetValue<string>() == "user-message")
+            .Where(m => !string.IsNullOrWhiteSpace(m.Metadata["uid"]?.GetValue<string>()))
+            .GroupBy(m => m.Metadata["uid"]!.GetValue<string>())
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(m => m.CreatedAt).First());
 
         var eventEntries = localEvents.Select(e => new CollapsedMessage
         {
@@ -98,6 +104,9 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
                 var role = msg.Role == "user" ? "user" : "nova";
                 sb.AppendLine($"**{role}** ({msg.Timestamp:HH:mm}):");
                 sb.AppendLine(msg.Content);
+                if (msg.Role == "user" && msg.MessageUid is not null
+                    && userAttachmentsByUid.TryGetValue(msg.MessageUid, out var saved))
+                    AppendImageParts(sb, saved.Metadata["parts_json"]?.GetValue<string>());
             }
             sb.AppendLine();
         }
@@ -115,7 +124,13 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
             sb.AppendLine($"**{role}** ({msg.CreatedAt:HH:mm}):");
 
             var partsJson = msg.Metadata["parts_json"]?.GetValue<string>();
-            if (!string.IsNullOrEmpty(partsJson))
+            if (msg.Metadata["source"]?.GetValue<string>() == "user-message")
+            {
+                if (!string.IsNullOrWhiteSpace(msg.Content))
+                    sb.AppendLine(msg.Content);
+                AppendImageParts(sb, partsJson);
+            }
+            else if (!string.IsNullOrEmpty(partsJson))
                 AppendParts(sb, partsJson);
             else
                 sb.AppendLine(msg.Content);
@@ -192,6 +207,10 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
                     case "tool_result":
                         sb.AppendLine($"[result: {Truncate(content, 200)}]");
                         break;
+
+                    case "image":
+                        AppendImagePart(sb, part);
+                        break;
                 }
             }
         }
@@ -199,6 +218,35 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         {
             sb.AppendLine("[parts could not be parsed]");
         }
+    }
+
+    internal static void AppendImageParts(StringBuilder sb, string? partsJson)
+    {
+        if (string.IsNullOrEmpty(partsJson)) return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(partsJson);
+            foreach (var part in doc.RootElement.EnumerateArray())
+            {
+                if (part.TryGetProperty("type", out var type) && type.GetString() == "image")
+                    AppendImagePart(sb, part);
+            }
+        }
+        catch
+        {
+            sb.AppendLine("[image attachment could not be parsed]");
+        }
+    }
+
+    private static void AppendImagePart(StringBuilder sb, JsonElement part)
+    {
+        var url = part.TryGetProperty("url", out var u) ? u.GetString() : null;
+        var assetId = part.TryGetProperty("assetId", out var a) ? a.GetString() : null;
+        var reference = url ?? (assetId is not null ? $"/api/assets/{assetId}" : null);
+        sb.AppendLine(reference is not null
+            ? $"![attached image]({reference})"
+            : "[image attachment]");
     }
 
     private static string? Truncate(string? s, int max) =>

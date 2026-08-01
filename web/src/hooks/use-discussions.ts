@@ -506,7 +506,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
       updateSessionId(res)
       backfillMessage(res.metadata, res.messageUid)
       return
-    } catch {
+    } catch (err) {
+      if (err instanceof ApiError && err.status < 500) {
+        fail()
+        toast({ variant: "error", title: "Message not sent", description: err.message })
+        return
+      }
       if (!disc.sessionId) { fail(); return }
     }
 
@@ -523,7 +528,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
         updateSessionId(res)
         backfillMessage(res.metadata, res.messageUid)
         return
-      } catch {
+      } catch (err) {
+        if (err instanceof ApiError && err.status < 500) {
+          fail()
+          toast({ variant: "error", title: "Message not sent", description: err.message })
+          return
+        }
         if (attempt < 2) {
           await new Promise((r) => setTimeout(r, 1000))
           continue
@@ -531,7 +541,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         fail()
       }
     }
-  }, [discussions])
+  }, [discussions, toast])
 
   const interruptDiscussion = useCallback(async (discussionId: string) => {
     const disc = discussions.find((d) => d.id === discussionId)

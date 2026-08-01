@@ -104,13 +104,52 @@ public sealed class RedComputeClient
         return new ExecuteResult(success, text, error, sessionId);
     }
 
-    /// <summary>Send a user message. Returns the raw response element (carries <c>messageUid</c>, <c>sent</c>).</summary>
+    public sealed record SendMessageResult(
+        bool Success, JsonElement? Payload, int StatusCode,
+        string? ErrorCode = null, string? ErrorMessage = null);
+
+    /// <summary>Send a user message while preserving RedCompute's status and machine-readable error.</summary>
+    public async Task<SendMessageResult> SendMessageDetailedAsync(
+        string sessionId, object body, CancellationToken ct = default)
+    {
+        try
+        {
+            var resp = await _http.PostAsJsonAsync($"/ai-session/sessions/{sessionId}/message", body, JsonOptions, ct);
+            var raw = await resp.Content.ReadAsStringAsync(ct);
+            JsonElement? payload = null;
+            try
+            {
+                using var doc = JsonDocument.Parse(raw);
+                payload = doc.RootElement.Clone();
+            }
+            catch { }
+
+            if (resp.IsSuccessStatusCode)
+                return new(true, payload, (int)resp.StatusCode);
+
+            var errorCode = payload is { ValueKind: JsonValueKind.Object } p
+                && p.TryGetProperty("error", out var error)
+                && error.ValueKind == JsonValueKind.String
+                    ? error.GetString()
+                    : null;
+            var errorMessage = payload is { ValueKind: JsonValueKind.Object } m
+                && m.TryGetProperty("message", out var message)
+                && message.ValueKind == JsonValueKind.String
+                    ? message.GetString()
+                    : errorCode;
+            return new(false, payload, (int)resp.StatusCode, errorCode, errorMessage);
+        }
+        catch (Exception ex)
+        {
+            return new(false, null, 0, "redcompute_unavailable", ex.Message);
+        }
+    }
+
+    /// <summary>Compatibility wrapper for callers that only need success and the response payload.</summary>
     public async Task<JsonElement?> SendMessageAsync(string sessionId, object body, CancellationToken ct = default)
     {
-        var resp = await _http.PostAsJsonAsync($"/ai-session/sessions/{sessionId}/message", body, JsonOptions, ct);
-        if (!resp.IsSuccessStatusCode) return null;
-        try { return await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions, ct); }
-        catch { return default(JsonElement); }
+        var result = await SendMessageDetailedAsync(sessionId, body, ct);
+        return result.Success ? result.Payload : null;
     }
 
     public async Task<bool> InjectAsync(string sessionId, object body, CancellationToken ct = default)

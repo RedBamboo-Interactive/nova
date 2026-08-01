@@ -37,9 +37,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
-    // The message stays what it always was, so existing `err.message` toasts
-    // read the same; the status/code ride along for callers that need them.
-    throw new ApiError(res.status, err.error ?? "", err.error ?? res.statusText)
+    // Prefer the server's human-readable message while preserving its stable
+    // machine code for callers that need to branch on the failure.
+    throw new ApiError(res.status, err.error ?? "", err.message ?? err.error ?? res.statusText)
   }
   return res.json() as Promise<T>
 }

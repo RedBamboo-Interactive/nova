@@ -347,23 +347,37 @@ public static class DiscussionEndpoints
                 if (snapshot is { Messages.Count: > 0 })
                 {
                     var records = await discussions.GetMessagesAsync(discussion.EntityId);
+                    var userAttachmentsByUid = records
+                        .Where(m => m.Metadata["source"]?.GetValue<string>() == "user-message")
+                        .Where(m => !string.IsNullOrWhiteSpace(m.Metadata["uid"]?.GetValue<string>()))
+                        .GroupBy(m => m.Metadata["uid"]!.GetValue<string>())
+                        .ToDictionary(g => g.Key, g => g.OrderByDescending(m => m.CreatedAt).First());
 
                     var collapsed = ConversationExporter.CollapseMessages(snapshot.Messages);
                     var sessionMsgs = collapsed
                         .Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content))
-                        .Select(m => new
+                        .Select(m =>
                         {
-                            id = (string?)null,
-                            // Carried through so API callers (agents reacting via
-                            // /reactions) can address the same message the UI does.
-                            // Null for records predating the uid rollout -- better
-                            // than synthesising a key that would not match.
-                            messageUid = m.MessageUid,
-                            role = m.Role,
-                            parts = new object[] { new { type = "text", content = ConversationExporter.StripInjectedTags(m.Content ?? ""), toolName = (string?)null, toolInput = (string?)null } },
-                            timestamp = m.Timestamp.ToString("o"),
-                            senderAgentId = (string?)null,
-                            source = (string?)"session-transcript",
+                            var content = ConversationExporter.StripInjectedTags(m.Content ?? "");
+                            var saved = m.Role == "user" && m.MessageUid is not null
+                                ? userAttachmentsByUid.GetValueOrDefault(m.MessageUid)
+                                : null;
+                            return new
+                            {
+                                id = (string?)null,
+                                // Carried through so API callers (agents reacting via
+                                // /reactions) can address the same message the UI does.
+                                // Null for records predating the uid rollout -- better
+                                // than synthesising a key that would not match.
+                                messageUid = m.MessageUid,
+                                role = m.Role,
+                                parts = saved is not null
+                                    ? MapUserMessageParts(saved.Metadata["parts_json"]?.GetValue<string>(), content)
+                                    : MapParts(null, content),
+                                timestamp = m.Timestamp.ToString("o"),
+                                senderAgentId = (string?)null,
+                                source = (string?)"session-transcript",
+                            };
                         });
 
                     var eventMsgs = records
@@ -407,6 +421,7 @@ public static class DiscussionEndpoints
             var msgs = fallbackRecords.Select(m =>
             {
                 var partsJson = m.Metadata["parts_json"]?.GetValue<string>();
+                var isUserMessage = m.Metadata["source"]?.GetValue<string>() == "user-message";
                 var ts = (m.Metadata["timestamp"]?.GetValue<string>() is { } t
                     ? DateTimeOffset.Parse(t)
                     : m.CreatedAt).UtcDateTime;
@@ -415,7 +430,9 @@ public static class DiscussionEndpoints
                     id = (string?)m.Id.ToString(),
                     messageUid = m.Metadata["uid"]?.GetValue<string>(),
                     role = m.Role,
-                    parts = MapParts(partsJson, m.Content),
+                    parts = isUserMessage
+                        ? MapUserMessageParts(partsJson, m.Content)
+                        : MapParts(partsJson, m.Content),
                     timestamp = ts.ToString("o"),
                     senderAgentId = m.Metadata["sender_agent_id"]?.GetValue<string>(),
                     source = m.Metadata["source"]?.GetValue<string>(),
@@ -803,7 +820,19 @@ public static class DiscussionEndpoints
                 request.InputMethod ?? "typed", request.Latitude, request.Longitude);
 
             if (!outcome.Success)
-                return Results.Json(new { error = outcome.ErrorMessage, code = outcome.ErrorCode }, statusCode: 502);
+            {
+                var statusCode = outcome.ErrorCode switch
+                {
+                    "invalid_images" or "invalid_image" or "unsupported_image_type" or "missing_content" => 400,
+                    "image_attachments_not_supported" => 422,
+                    _ => 502,
+                };
+                return Results.Json(new
+                {
+                    error = outcome.ErrorCode ?? "delivery_failed",
+                    message = outcome.ErrorMessage ?? "The message could not be delivered",
+                }, statusCode: statusCode);
+            }
 
             _ = activity.OnUserMessage(id, discussion.Title,
                 string.IsNullOrWhiteSpace(request.Content) ? "[image]" : request.Content, discussion.Confidential);
@@ -966,6 +995,22 @@ public static class DiscussionEndpoints
                 .ToArray();
         }
         return result;
+    }
+
+    internal static object[] MapUserMessageParts(string? partsJson, string content)
+    {
+        if (string.IsNullOrEmpty(partsJson))
+            return MapParts(null, content);
+
+        var attachments = MapParts(partsJson, "");
+        if (string.IsNullOrWhiteSpace(content))
+            return attachments;
+
+        return
+        [
+            new { type = (string?)"text", content = (string?)content, toolName = (string?)null, toolInput = (string?)null },
+            .. attachments,
+        ];
     }
 
     private static object[] MapParts(string? partsJson, string content)
