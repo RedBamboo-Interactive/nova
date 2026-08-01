@@ -127,7 +127,11 @@ export function ChatView() {
 
   useBreadcrumbLabel(
     urlDiscussionId ? `/apps/nova/chat/${urlDiscussionId}` : undefined,
-    activeDiscussion?.title || "New Discussion",
+    activeDiscussion?.type === "live"
+      ? "Live"
+      : activeDiscussion?.type === "heartbeat"
+        ? "Heartbeat"
+        : activeDiscussion?.title || "New Discussion",
   )
 
   const { agents, getAgent } = useAgents()
