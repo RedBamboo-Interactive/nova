@@ -32,9 +32,9 @@ export function useNovaPendingContext(): PendingNovaContext {
 
 function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<DiscussionsHook> }) {
   useWsSubscribe((event) => {
-    if (event.type === "upstream.disconnected") {
+    if (event.type === "upstream.disconnected" || event.type === "websocket.disconnected") {
       discRef.current.handleUpstreamDisconnect()
-    } else if (event.type === "upstream.connected") {
+    } else if (event.type === "upstream.connected" || event.type === "websocket.connected") {
       discRef.current.handleUpstreamReconnect()
     } else {
       if (event.type === "agent.avatar-changed") window.dispatchEvent(new Event("nova:avatar-changed"))
