@@ -624,10 +624,11 @@ public static class DiscussionEndpoints
             if (agent == null)
                 return Results.Json(new { error = "missing_agent", message = "The discussion has no linked Agent entity" }, statusCode: 422);
             var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, discussion.OwnerId, ctx.RequestAborted);
-            var provenance = NovaComputeProvenance.Create(agent, beneficiary,
+            var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
                 $"/api/apps/nova/discussions/{id}/resume",
                 [new ComputeContextReference("discussion", id),
-                 new ComputeContextReference("session", discussion.SessionId)], method: "POST");
+                 new ComputeContextReference("session", discussion.SessionId)], method: "POST",
+                ct: ctx.RequestAborted);
             if (!await redCompute.ResumeAsync(discussion.SessionId, provenance, ctx.RequestAborted))
                 return Results.Json(new { error = "resume_failed", message = "The provider session could not be resumed" }, statusCode: 502);
 

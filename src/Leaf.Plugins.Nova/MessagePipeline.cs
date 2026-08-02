@@ -103,8 +103,8 @@ public sealed class MessagePipeline(
         var context = new List<ComputeContextReference>();
         if (discussionId != null) context.Add(new ComputeContextReference("discussion", discussionId));
         if (additionalContext != null) context.AddRange(additionalContext);
-        var provenance = NovaComputeProvenance.Create(agent, beneficiary, entrypointRoute, context,
-            correlationId: correlationId, parentJobId: parentJobId);
+        var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
+            entrypointRoute, context, correlationId: correlationId, parentJobId: parentJobId, ct: ct);
         return await redCompute.CreateSessionAsync(body, ownerId, "Nova:agent", provenance, ct);
     }
 
@@ -299,10 +299,10 @@ public sealed class MessagePipeline(
         if (agent == null)
             return new(false, sessionId, "missing_agent", "The discussion has no linked Agent entity.");
         var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, discussion.OwnerId, ct);
-        var provenance = NovaComputeProvenance.Create(agent, beneficiary,
+        var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
             $"/api/apps/nova/discussions/{discussion.Id}/message",
             [new ComputeContextReference("discussion", discussion.Id),
-             new ComputeContextReference("session", sessionId)], method: "POST");
+             new ComputeContextReference("session", sessionId)], method: "POST", ct: ct);
         var sendResult = await redCompute.SendMessageDetailedAsync(sessionId, requestBody, ct, provenance);
         if (!sendResult.Success)
         {

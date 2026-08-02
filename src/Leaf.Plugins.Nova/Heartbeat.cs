@@ -360,7 +360,7 @@ public sealed class HeartbeatService(
                 if (agent != null)
                 {
                     var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, discussion.OwnerId, ct);
-                    var provenance = NovaComputeProvenance.Create(agent, beneficiary,
+                    var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
                         "heartbeat:resume",
                         [
                             new ComputeContextReference("discussion", discussion.Id),
@@ -368,7 +368,7 @@ public sealed class HeartbeatService(
                             new ComputeContextReference("heartbeat", discussion.Id),
                         ], entrypointKind: "automation",
                         correlationId: correlationId,
-                        parentJobId: parentJobId?.ToString());
+                        parentJobId: parentJobId?.ToString(), ct: ct);
                     if (await redCompute.ResumeAsync(existing, provenance, ct))
                         return (existing, false);
                 }

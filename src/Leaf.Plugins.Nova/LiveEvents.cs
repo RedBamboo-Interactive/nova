@@ -121,11 +121,11 @@ public sealed class EventInjector(
             var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
             if (agent == null) return false;
             var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, discussion.OwnerId, ct);
-            var provenance = NovaComputeProvenance.Create(agent, beneficiary,
+            var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
                 $"/api/apps/nova/discussions/{discussion.Id}/event",
                 [new ComputeContextReference("discussion", discussion.Id),
                  new ComputeContextReference("session", discussion.SessionId),
-                 new ComputeContextReference("event", uid, NameSnapshot: source)], method: "POST");
+                 new ComputeContextReference("event", uid, NameSnapshot: source)], method: "POST", ct: ct);
             return await redCompute.SendMessageAsync(discussion.SessionId, messageBody, ct, provenance) != null;
         }
         catch

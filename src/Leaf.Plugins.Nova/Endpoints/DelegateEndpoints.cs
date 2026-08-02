@@ -92,10 +92,10 @@ public static class DelegateEndpoints
                     && s.TryGetProperty("status", out var st) ? st.GetString() : null;
                 if (status is "Stopped" or "Error")
                 {
-                    var resumeProvenance = NovaComputeProvenance.Create(resolvedAgent, beneficiary,
+                    var resumeProvenance = await NovaComputeProvenance.CreateAsync(entities, resolvedAgent, beneficiary,
                         "/api/apps/nova/delegate",
                         [.. baseContext, new ComputeContextReference("session", sessionId)],
-                        method: "POST");
+                        method: "POST", ct: ctx.RequestAborted);
                     if (!await redCompute.ResumeAsync(sessionId, resumeProvenance, ctx.RequestAborted))
                         return Results.Json(new { error = "resume_failed", message = $"Session '{sessionId}' could not be resumed" }, statusCode: 502);
                 }
@@ -112,8 +112,9 @@ public static class DelegateEndpoints
                     else
                         createBody["qualityTier"] = string.IsNullOrWhiteSpace(request.QualityMode) ? "standard" : request.QualityMode;
 
-                    var createProvenance = NovaComputeProvenance.Create(resolvedAgent, beneficiary,
-                        "/api/apps/nova/delegate", baseContext, method: "POST");
+                    var createProvenance = await NovaComputeProvenance.CreateAsync(
+                        entities, resolvedAgent, beneficiary,
+                        "/api/apps/nova/delegate", baseContext, method: "POST", ct: ctx.RequestAborted);
                     var created = await redCompute.CreateSessionAsync(createBody, ownerId, "Nova:delegate",
                         createProvenance, ctx.RequestAborted);
                     if (created == null)
@@ -132,10 +133,11 @@ public static class DelegateEndpoints
             {
                 try
                 {
-                    var messageProvenance = NovaComputeProvenance.Create(resolvedAgent, beneficiary,
+                    var messageProvenance = await NovaComputeProvenance.CreateAsync(
+                        entities, resolvedAgent, beneficiary,
                         "/api/apps/nova/delegate",
                         [.. baseContext, new ComputeContextReference("session", sessionId)],
-                        method: "POST");
+                        method: "POST", ct: ctx.RequestAborted);
                     var result = await redCompute.SendMessageAsync(sessionId,
                         new { content = request.Prompt }, ctx.RequestAborted, messageProvenance);
                     if (result is { ValueKind: JsonValueKind.Object }

@@ -21,7 +21,8 @@ public sealed class NovaSessionActionHandler(
     AgentWorkspaces workspaces,
     DiscussionStore discussions,
     EventInjector injector,
-    RedComputeClient redCompute) : IAutomationActionHandler
+    RedComputeClient redCompute,
+    IEntityStore entities) : IAutomationActionHandler
 {
     private static readonly string[] DefaultTools =
         ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebFetch", "WebSearch", "TodoWrite"];
@@ -76,11 +77,11 @@ public sealed class NovaSessionActionHandler(
         };
         if (preCreated != null)
             provenanceContext.Add(new("discussion", preCreated.Id));
-        var provenance = NovaComputeProvenance.Create(agent, context.Beneficiary,
+        var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, context.Beneficiary,
             $"automation:{automation.Id}:nova-session", provenanceContext,
             entrypointKind: "automation", method: "POST",
             correlationId: context.CorrelationId,
-            parentJobId: context.AttemptJobId.ToString());
+            parentJobId: context.AttemptJobId.ToString(), ct: ct);
         var result = await redCompute.ExecuteAsync(body, $"Nova: {automation.Name}",
             context.Beneficiary.Id, timeout, provenance, ct,
             idempotencyKey: $"automation:{context.AttemptJobId:N}:nova-session");

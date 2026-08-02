@@ -66,7 +66,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<AgentWorkspaces>(),
                 sp.GetRequiredService<DiscussionStore>(),
                 sp.GetRequiredService<EventInjector>(),
-                sp.GetRequiredService<RedComputeClient>()));
+                sp.GetRequiredService<RedComputeClient>(),
+                sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
         services.AddSingleton<LocationService>();
         services.AddSingleton<GeoLocationService>();
         services.AddSingleton(sp =>
