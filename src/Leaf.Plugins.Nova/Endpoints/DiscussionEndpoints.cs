@@ -16,6 +16,7 @@ public class CreateDiscussionRequest
     public string? Type { get; set; }
     public string? QualityTier { get; set; }
     public string? Provider { get; set; }
+    public bool DeferSession { get; set; }
 }
 
 public class DiscussionTitleRequest
@@ -216,7 +217,11 @@ public static class DiscussionEndpoints
             if (discussion.Type != "live")
                 _ = live.PostAsync("discussion", $"New discussion: \"{discussion.Title ?? "untitled"}\"");
 
-            pipeline.BeginSessionCreation(discussion);
+            // Delivery discussions populated through nova-message do not need an
+            // empty provider session. Create it on the first user reply instead,
+            // when MessagePipeline can also replay the persisted assistant post.
+            if (createReq?.DeferSession != true)
+                pipeline.BeginSessionCreation(discussion);
 
             return Results.Ok(DiscussionStore.ToInfo(discussion));
         });

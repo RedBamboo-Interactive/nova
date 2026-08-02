@@ -537,7 +537,17 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
 
     try {
-      await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
+      const resumed = await api.post<{ sessionId: string | null; status: "idle" }>(
+        `/api/apps/nova/discussions/${discussionId}/resume`
+      )
+      if (resumed.sessionId !== disc.sessionId) {
+        setDiscussions((prev) =>
+          prev.map((d) => d.id === discussionId
+            ? { ...d, sessionId: resumed.sessionId, status: resumed.status }
+            : d
+          )
+        )
+      }
     } catch {
       fail()
       if (throwOnFailure) throw new Error("The session could not be resumed")
