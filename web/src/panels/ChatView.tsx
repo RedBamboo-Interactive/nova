@@ -300,11 +300,16 @@ export function ChatView() {
         value === "heartbeat" ? liveHeartbeatPair.heartbeat.id : liveHeartbeatPair.live.id,
       )}
       className="shrink-0"
+      style={{ height: "100%" }}
     >
-      <TabsList variant="line" aria-label="Live views" className="h-8">
+      <TabsList
+        variant="line"
+        aria-label="Live views"
+        style={{ height: "100%", padding: 0 }}
+      >
         <TabsTrigger
           value="live"
-          className="after:inset-x-1 after:bottom-[-5px] after:h-0.5 after:rounded-full data-active:after:bg-primary"
+          style={{ height: "100%" }}
         >
           <i
             aria-hidden="true"
@@ -312,11 +317,14 @@ export function ChatView() {
             style={{ color: "var(--color-status-live)" }}
           />
           Live
+          {activeDiscussion?.type === "live" && (
+            <span aria-hidden="true" className="absolute inset-x-1 bottom-[-2px] h-0.5 rounded-full bg-primary" />
+          )}
         </TabsTrigger>
         <TabsTrigger
           value="heartbeat"
           aria-label={liveHeartbeatPair.heartbeat.status === "thinking" ? "Heartbeat, tick running" : "Heartbeat"}
-          className="after:inset-x-1 after:bottom-[-5px] after:h-0.5 after:rounded-full data-active:after:bg-primary"
+          style={{ height: "100%" }}
         >
           <i
             aria-hidden="true"
@@ -324,6 +332,9 @@ export function ChatView() {
             style={{ color: "var(--color-accent-gold)" }}
           />
           Heartbeat
+          {activeDiscussion?.type === "heartbeat" && (
+            <span aria-hidden="true" className="absolute inset-x-1 bottom-[-2px] h-0.5 rounded-full bg-primary" />
+          )}
         </TabsTrigger>
       </TabsList>
     </Tabs>
@@ -332,7 +343,7 @@ export function ChatView() {
   const chatHeader = activeDiscussion && (
     <PanelHeader
       leading={
-        liveHeartbeatTabs ? <div className="flex flex-1 min-w-0">{liveHeartbeatTabs}</div> : (
+        liveHeartbeatTabs ? <div className="flex flex-1 min-w-0 self-stretch">{liveHeartbeatTabs}</div> : (
           <EditableTitle
             title={activeDiscussion.title || "New discussion"}
             onRename={(title) => renameDiscussion(activeDiscussion.id, title)}
