@@ -17,6 +17,7 @@ public class CreateDiscussionRequest
     public string? QualityTier { get; set; }
     public string? Provider { get; set; }
     public bool DeferSession { get; set; }
+    public string? IdempotencyKey { get; set; }
 }
 
 public class DiscussionTitleRequest
@@ -45,6 +46,7 @@ public class NovaMessageRequest
     public string? Title { get; set; }
     public string? AudioUrl { get; set; }
     public string? SenderAgentId { get; set; }
+    public string? IdempotencyKey { get; set; }
 }
 
 public class DiscussionMessageRequest
@@ -203,8 +205,22 @@ public static class DiscussionEndpoints
                     return Results.Json(new { error = $"A {type.ToUpperInvariant()} discussion already exists for this agent" }, statusCode: 409);
             }
 
-            var discussion = await store.CreateAsync(null, agentId, UserId(ctx), type,
-                createReq?.QualityTier, createReq?.Provider);
+            DiscussionRead discussion;
+            var created = true;
+            if (!string.IsNullOrWhiteSpace(createReq?.IdempotencyKey))
+            {
+                (discussion, created) = await store.GetOrCreateIdempotentAsync(
+                    createReq.IdempotencyKey, agentId, UserId(ctx), type,
+                    createReq.QualityTier, createReq.Provider, ctx.RequestAborted);
+            }
+            else
+            {
+                discussion = await store.CreateAsync(null, agentId, UserId(ctx), type,
+                    createReq?.QualityTier, createReq?.Provider, ctx.RequestAborted);
+            }
+
+            if (!created)
+                return Results.Ok(DiscussionStore.ToInfo(discussion));
 
             await events.PublishAsync("discussion.created", new JsonObject
             {
@@ -566,7 +582,9 @@ public static class DiscussionEndpoints
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Status = result ?? discussion.Status }));
         });
 
-        group.MapPost("/discussions/{id}/resume", async (string id, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
+        group.MapPost("/discussions/{id}/resume", async (string id, HttpContext ctx,
+            DiscussionStore store, RedComputeClient redCompute, AgentDirectory agents,
+            IEntityStore entities) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
@@ -602,7 +620,15 @@ public static class DiscussionEndpoints
                 return Results.Ok(new { sessionId = (string?)null, status = DiscussionStatus.Idle, initialized = false });
             }
 
-            if (!await redCompute.ResumeAsync(discussion.SessionId))
+            var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ctx.RequestAborted) : null;
+            if (agent == null)
+                return Results.Json(new { error = "missing_agent", message = "The discussion has no linked Agent entity" }, statusCode: 422);
+            var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, discussion.OwnerId, ctx.RequestAborted);
+            var provenance = NovaComputeProvenance.Create(agent, beneficiary,
+                $"/api/apps/nova/discussions/{id}/resume",
+                [new ComputeContextReference("discussion", id),
+                 new ComputeContextReference("session", discussion.SessionId)], method: "POST");
+            if (!await redCompute.ResumeAsync(discussion.SessionId, provenance, ctx.RequestAborted))
                 return Results.Json(new { error = "resume_failed", message = "The provider session could not be resumed" }, statusCode: 502);
 
             var resumedStatus = await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Idle);
@@ -672,15 +698,41 @@ public static class DiscussionEndpoints
 
         group.MapPost("/discussions/{id}/rotate", async (string id, HttpContext ctx, DiscussionStore store, AgentDirectory agents, DiscussionLifecycle lifecycle, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, MessagePipeline pipeline, DiscussionActivity activity, HeartbeatService heartbeat) =>
         {
+            var idempotencyKey = ctx.Request.Headers["Idempotency-Key"].FirstOrDefault();
             // "live" resolves to Nova's current LIVE discussion — the system:live-rotation
             // http-action automation calls this form because it cannot resolve the id itself.
+            var candidates = id == "live" ? await store.ListAsync() : null;
             var discussion = id == "live"
-                ? (await store.ListAsync()).FirstOrDefault(d =>
+                ? candidates!.FirstOrDefault(d =>
                     d.Type == "live" && !DiscussionStatus.IsClosed(d.Status)
                     && (agents.NovaAgentId == null || d.AgentId == null || d.AgentId == agents.NovaAgentId))
                 : await store.GetAsync(id);
+            if (discussion is null && id == "live" && !string.IsNullOrWhiteSpace(idempotencyKey))
+            {
+                // Recover the narrow crash window after the old LIVE was marked
+                // archiving but before the replacement entity was created.
+                discussion = candidates!.FirstOrDefault(d => d.Type == "live"
+                    && (agents.NovaAgentId == null || d.AgentId == null
+                        || d.AgentId == agents.NovaAgentId));
+            }
             if (discussion is null) return NotFound();
             if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+
+            if (!string.IsNullOrWhiteSpace(idempotencyKey))
+            {
+                var prior = await store.GetByCreationIdempotencyKeyAsync(
+                    $"live-rotation:{idempotencyKey}", ctx.RequestAborted);
+                if (prior is not null)
+                {
+                    pipeline.BeginSessionCreation(prior);
+                    heartbeat.OnLiveRotated(prior.AgentId, idempotencyKey);
+                    return Results.Ok(new
+                    {
+                        reused = true,
+                        created = DiscussionStore.ToInfo(prior),
+                    });
+                }
+            }
 
             if (discussion.Type != "live")
                 return Results.Json(new { error = "Only LIVE discussions can be rotated" }, statusCode: 400);
@@ -690,7 +742,18 @@ public static class DiscussionEndpoints
             await lifecycle.BeginArchiveAsync(discussion);
             _ = activity.OnArchived(discussion.Id, discussion.Title, discussion.Confidential);
 
-            var fresh = await store.CreateAsync(null, discussion.AgentId, discussion.OwnerId, "live");
+            DiscussionRead fresh;
+            if (!string.IsNullOrWhiteSpace(idempotencyKey))
+            {
+                (fresh, _) = await store.GetOrCreateIdempotentAsync(
+                    $"live-rotation:{idempotencyKey}", discussion.AgentId,
+                    discussion.OwnerId, "live", ct: ctx.RequestAborted);
+            }
+            else
+            {
+                fresh = await store.CreateAsync(null, discussion.AgentId,
+                    discussion.OwnerId, "live", ct: ctx.RequestAborted);
+            }
 
             await events.PublishAsync("discussion.rotated", new JsonObject
             {
@@ -701,7 +764,7 @@ public static class DiscussionEndpoints
 
             // LIVE rotation is the heartbeat's day boundary: end-of-day tick,
             // handoff, session reset (§5 of the heartbeat design).
-            heartbeat.OnLiveRotated(fresh.AgentId);
+            heartbeat.OnLiveRotated(fresh.AgentId, idempotencyKey);
 
             pipeline.BeginSessionCreation(fresh);
 
@@ -752,14 +815,29 @@ public static class DiscussionEndpoints
                 });
             }
 
-            var uid = Guid.NewGuid().ToString("N");
-            await store.PostMessageAsync(discussion.EntityId, "assistant", request.Content, new JsonObject
+            var uid = string.IsNullOrWhiteSpace(request.IdempotencyKey)
+                ? Guid.NewGuid().ToString("N")
+                : Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(request.IdempotencyKey)));
+            var messageMetadata = new JsonObject
             {
                 ["parts_json"] = partsJson,
                 ["source"] = "nova-message",
                 ["sender_agent_id"] = request.SenderAgentId,
                 ["uid"] = uid,
-            }, UserId(ctx));
+            };
+            if (!string.IsNullOrWhiteSpace(request.IdempotencyKey))
+            {
+                var created = await store.PostMessageIdempotentAsync(discussion.EntityId,
+                    "assistant", request.Content, messageMetadata, request.IdempotencyKey,
+                    UserId(ctx), ctx.RequestAborted);
+                if (!created) return Results.Ok(new { success = true, reused = true });
+            }
+            else
+            {
+                await store.PostMessageAsync(discussion.EntityId, "assistant", request.Content,
+                    messageMetadata, UserId(ctx), ctx.RequestAborted);
+            }
 
             var patch = new JsonObject { ["injected_context"] = request.Content };
             string? namePatch = null;

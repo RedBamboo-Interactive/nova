@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using Leaf.Sdk.Services;
 
 namespace Leaf.Plugins.Nova;
 
@@ -29,7 +30,7 @@ public sealed record SessionSnapshot(string? Status, string? Title, List<Session
 /// client needs raw session control (inject, callbacks, interrupt) the SDK interface
 /// does not model anyway.
 /// </summary>
-public sealed class RedComputeClient
+public sealed class RedComputeClient(IComputeGateway gateway)
 {
     public const string BaseUrl = "http://127.0.0.1:18800";
 
@@ -44,38 +45,32 @@ public sealed class RedComputeClient
         Timeout = TimeSpan.FromSeconds(30),
     };
 
-    // One-shot /ai-session/execute calls block for the whole session; the per-call
-    // linked CancelAfter governs the timeout, not the client (same as the kernel's
-    // AutomationService dispatch client).
-    private readonly HttpClient _executeHttp = new()
-    {
-        BaseAddress = new Uri(BaseUrl),
-        Timeout = Timeout.InfiniteTimeSpan,
-    };
-
-    public async Task<string?> CreateSessionAsync(Dictionary<string, object?> body, string? userId, string callerInfo = "Nova:agent", CancellationToken ct = default)
+    public async Task<string?> CreateSessionAsync(Dictionary<string, object?> body, string? userId,
+        string callerInfo = "Nova:agent", ComputeProvenance? provenance = null, CancellationToken ct = default)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
         {
             Content = JsonContent.Create(body, options: JsonOptions),
         };
         req.Headers.Add("X-Caller-Info", callerInfo);
-        req.Headers.Add("X-User-Id", string.IsNullOrWhiteSpace(userId) ? "local-user" : userId);
-        var resp = await _http.SendAsync(req, ct);
+        var resp = await gateway.SendAsync(req, provenance, ct);
         if (!resp.IsSuccessStatusCode) return null;
 
         var session = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions, ct);
         return session.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
     }
 
-    public sealed record ExecuteResult(bool Success, string? Text, string? Error, string? SessionId);
+    public sealed record ExecuteResult(
+        bool Success, string? Text, string? Error, string? SessionId, Guid? JobId);
 
     /// <summary>
     /// One-shot blocking execution via /ai-session/execute — used by automation runs.
     /// The call returns when the session completes (or <paramref name="timeoutSeconds"/>
     /// plus a small grace period elapses).
     /// </summary>
-    public async Task<ExecuteResult> ExecuteAsync(object body, string jobName, string? userId, int timeoutSeconds, CancellationToken ct = default)
+    public async Task<ExecuteResult> ExecuteAsync(object body, string jobName, string? userId,
+        int timeoutSeconds, ComputeProvenance? provenance = null, CancellationToken ct = default,
+        string? idempotencyKey = null)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/execute")
         {
@@ -83,16 +78,22 @@ public sealed class RedComputeClient
         };
         req.Headers.Add("X-Job-Name", jobName);
         req.Headers.Add("X-Caller-Info", "Nova:automation");
-        req.Headers.Add("X-User-Id", string.IsNullOrWhiteSpace(userId) ? "local-user" : userId);
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+            req.Headers.TryAddWithoutValidation("X-Idempotency-Key", idempotencyKey);
 
         using var callCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds + 120));
 
-        var resp = await _executeHttp.SendAsync(req, callCts.Token);
+        var resp = await gateway.SendAsync(req, provenance, callCts.Token);
         var raw = await resp.Content.ReadAsStringAsync(callCts.Token);
+        var jobId = resp.Headers.TryGetValues("X-Job-Id", out var jobValues)
+            && Guid.TryParse(jobValues.FirstOrDefault(), out var parsedJobId)
+                ? parsedJobId : (Guid?)null;
 
         if (!resp.IsSuccessStatusCode)
-            return new ExecuteResult(false, null, $"RedCompute HTTP {(int)resp.StatusCode}: {raw[..Math.Min(raw.Length, 300)]}", null);
+            return new ExecuteResult(false, null,
+                $"RedCompute HTTP {(int)resp.StatusCode}: {raw[..Math.Min(raw.Length, 300)]}",
+                null, jobId);
 
         using var doc = JsonDocument.Parse(raw);
         var root = doc.RootElement;
@@ -101,7 +102,7 @@ public sealed class RedComputeClient
         var error = root.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
         var sessionId = root.TryGetProperty("sessionId", out var sid) && sid.ValueKind == JsonValueKind.String ? sid.GetString() : null;
 
-        return new ExecuteResult(success, text, error, sessionId);
+        return new ExecuteResult(success, text, error, sessionId, jobId);
     }
 
     public sealed record SendMessageResult(
@@ -110,7 +111,8 @@ public sealed class RedComputeClient
 
     /// <summary>Send a user message while preserving RedCompute's status and machine-readable error.</summary>
     public async Task<SendMessageResult> SendMessageDetailedAsync(
-        string sessionId, object body, CancellationToken ct = default, string? userId = null)
+        string sessionId, object body, CancellationToken ct = default,
+        ComputeProvenance? provenance = null)
     {
         try
         {
@@ -118,9 +120,8 @@ public sealed class RedComputeClient
             {
                 Content = JsonContent.Create(body, options: JsonOptions),
             };
-            request.Headers.Add("X-User-Id", string.IsNullOrWhiteSpace(userId) ? "local-user" : userId);
             request.Headers.Add("X-Caller-Info", "Nova:agent");
-            var resp = await _http.SendAsync(request, ct);
+            var resp = await gateway.SendAsync(request, provenance, ct);
             var raw = await resp.Content.ReadAsStringAsync(ct);
             JsonElement? payload = null;
             try
@@ -152,9 +153,10 @@ public sealed class RedComputeClient
     }
 
     /// <summary>Compatibility wrapper for callers that only need success and the response payload.</summary>
-    public async Task<JsonElement?> SendMessageAsync(string sessionId, object body, CancellationToken ct = default)
+    public async Task<JsonElement?> SendMessageAsync(string sessionId, object body,
+        CancellationToken ct = default, ComputeProvenance? provenance = null)
     {
-        var result = await SendMessageDetailedAsync(sessionId, body, ct);
+        var result = await SendMessageDetailedAsync(sessionId, body, ct, provenance);
         return result.Success ? result.Payload : null;
     }
 
@@ -176,9 +178,10 @@ public sealed class RedComputeClient
         return resp.IsSuccessStatusCode;
     }
 
-    public async Task<bool> ResumeAsync(string sessionId, CancellationToken ct = default)
+    public async Task<bool> ResumeAsync(string sessionId, ComputeProvenance? provenance = null, CancellationToken ct = default)
     {
-        var resp = await _http.PostAsync($"/ai-session/sessions/{sessionId}/resume", null, ct);
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/ai-session/sessions/{sessionId}/resume");
+        var resp = await gateway.SendAsync(request, provenance, ct);
         return resp.IsSuccessStatusCode;
     }
 
@@ -201,6 +204,18 @@ public sealed class RedComputeClient
         {
             return null;
         }
+    }
+
+    public async Task<Guid?> GetSessionJobIdAsync(string sessionId, CancellationToken ct = default)
+    {
+        using var session = await GetSessionRawAsync(sessionId, ct);
+        if (session is null) return null;
+        var root = session.RootElement;
+        if (root.TryGetProperty("jobId", out var job)
+            && job.ValueKind == JsonValueKind.String
+            && Guid.TryParse(job.GetString(), out var jobId))
+            return jobId;
+        return null;
     }
 
     /// <summary>Result of <see cref="ProbeSessionAsync"/>: <c>Reachable</c> false means we

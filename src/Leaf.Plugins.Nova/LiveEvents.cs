@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -16,7 +18,8 @@ public sealed class EventInjector(
     IDiscussions discussions,
     IPluginEvents events,
     RedComputeClient redCompute,
-    AgentDirectory agents)
+    AgentDirectory agents,
+    IEntityStore entities)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -26,7 +29,9 @@ public sealed class EventInjector(
     public async Task<bool> InjectAsync(
         DiscussionRead discussion, string content, string? type, string? source,
         string? senderAgentId = null, string? replyToDiscussionId = null,
-        JsonElement? metadata = null, string? userId = null, CancellationToken ct = default)
+        JsonElement? metadata = null, string? userId = null,
+        string? idempotencyKey = null, bool redeliverOnReuse = false,
+        CancellationToken ct = default)
     {
         var role = type is "assistant" or "system" ? type : "user";
         var sourceTag = $"event:{source ?? "automation"}";
@@ -42,27 +47,49 @@ public sealed class EventInjector(
             partsJson = JsonSerializer.Serialize(parts, JsonOptions);
         }
 
-        var uid = Guid.NewGuid().ToString("N");
-        await DiscussionEntityGate.RunAsync(discussion.EntityId, () =>
-            discussions.PostAsync(discussion.EntityId, role, content, new JsonObject
+        var uid = string.IsNullOrWhiteSpace(idempotencyKey)
+            ? Guid.NewGuid().ToString("N")
+            : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey)));
+        var persisted = await DiscussionEntityGate.RunAsync(discussion.EntityId, async () =>
+        {
+            if (!string.IsNullOrWhiteSpace(idempotencyKey))
+            {
+                var existing = await discussions.GetMessagesAsync(discussion.EntityId, ct: ct);
+                if (existing.Any(message => message.Metadata["idempotency_key"] is JsonValue value
+                    && value.TryGetValue<string>(out var key)
+                    && string.Equals(key, idempotencyKey, StringComparison.Ordinal)))
+                    return false;
+            }
+            await discussions.PostAsync(discussion.EntityId, role, content, new JsonObject
             {
                 ["parts_json"] = partsJson,
                 ["source"] = sourceTag,
                 ["sender_agent_id"] = senderAgentId,
                 ["uid"] = uid,
-            }, userId, ct), ct);
-
-        var timestamp = DateTimeOffset.UtcNow.ToString("O");
-        await events.PublishAsync("discussion.event", new JsonObject
-        {
-            ["discussionId"] = discussion.Id,
-            ["sessionId"] = discussion.SessionId,
-            ["content"] = content,
-            ["source"] = source ?? "automation",
-            ["senderAgentId"] = senderAgentId,
-            ["metadata"] = metadata is { } m ? JsonNode.Parse(m.GetRawText()) : null,
-            ["timestamp"] = timestamp,
+                ["idempotency_key"] = idempotencyKey,
+            }, userId, ct);
+            return true;
         }, ct);
+        // Most callers only need the durable discussion copy and can treat reuse as
+        // success. Heartbeat opts into redelivery because a crash may have happened
+        // after persistence but before the session accepted the tick; that path is
+        // explicitly classified at-least-once.
+        if (!persisted && !redeliverOnReuse) return true;
+
+        if (persisted)
+        {
+            var timestamp = DateTimeOffset.UtcNow.ToString("O");
+            await events.PublishAsync("discussion.event", new JsonObject
+            {
+                ["discussionId"] = discussion.Id,
+                ["sessionId"] = discussion.SessionId,
+                ["content"] = content,
+                ["source"] = source ?? "automation",
+                ["senderAgentId"] = senderAgentId,
+                ["metadata"] = metadata is { } m ? JsonNode.Parse(m.GetRawText()) : null,
+                ["timestamp"] = timestamp,
+            }, ct);
+        }
 
         if (discussion.SessionId is null || role == "system") return false;
 
@@ -91,7 +118,15 @@ public sealed class EventInjector(
             object messageBody = senderAgentId is not null
                 ? new { content = taggedContent, messageUid = uid, metadata = new { senderAgentId, senderName = await agents.GetAgentNameAsync(senderAgentId, ct) } }
                 : new { content = taggedContent, messageUid = uid };
-            return await redCompute.SendMessageAsync(discussion.SessionId, messageBody, ct) != null;
+            var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
+            if (agent == null) return false;
+            var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, discussion.OwnerId, ct);
+            var provenance = NovaComputeProvenance.Create(agent, beneficiary,
+                $"/api/apps/nova/discussions/{discussion.Id}/event",
+                [new ComputeContextReference("discussion", discussion.Id),
+                 new ComputeContextReference("session", discussion.SessionId),
+                 new ComputeContextReference("event", uid, NameSnapshot: source)], method: "POST");
+            return await redCompute.SendMessageAsync(discussion.SessionId, messageBody, ct, provenance) != null;
         }
         catch
         {

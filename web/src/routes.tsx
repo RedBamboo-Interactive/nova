@@ -23,8 +23,8 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <AutomationsPanel /> },
       {
-        path: ":automationName",
-        handle: { crumb: (p: Record<string, string>) => p.automationName },
+        path: ":automationId",
+        handle: { crumb: (p: Record<string, string>) => p.automationId },
         element: <AutomationsPanel />,
       },
     ],

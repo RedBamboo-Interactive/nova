@@ -47,13 +47,15 @@ public sealed class MessagePipeline(
     /// <summary>Kick off background session creation for a fresh discussion.</summary>
     public void BeginSessionCreation(DiscussionRead discussion)
     {
+        if (discussion.SessionId is not null) return;
         var discId = discussion.Id;
-        _pendingSessions[discId] = Task.Run(async () =>
+        _pendingSessions.GetOrAdd(discId, _discussionKey => Task.Run(async () =>
         {
             try
             {
                 var sessionId = await TryCreateSessionAsync(discussion.AgentId, discussion.OwnerId,
-                    discussion.QualityTier, discussion.Provider);
+                    discussion.QualityTier, discussion.Provider,
+                    discussionId: discussion.Id);
                 if (sessionId is null)
                 {
                     await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped);
@@ -71,11 +73,14 @@ public sealed class MessagePipeline(
                 return null;
             }
             finally { _pendingSessions.TryRemove(discId, out _); }
-        });
+        }));
     }
 
     public async Task<string?> TryCreateSessionAsync(string? agentId, string? ownerId,
-        string? qualityTierOverride = null, string? providerOverride = null, CancellationToken ct = default)
+        string? qualityTierOverride = null, string? providerOverride = null, CancellationToken ct = default,
+        string? discussionId = null, string entrypointRoute = "/api/apps/nova/discussions/{id}/messages",
+        IReadOnlyList<ComputeContextReference>? additionalContext = null,
+        string? correlationId = null, string? parentJobId = null)
     {
         var workspace = await workspaces.GetAsync(agentId, ct);
         workspace.GenerateClaudeMd();
@@ -92,7 +97,15 @@ public sealed class MessagePipeline(
         if (effectiveProvider != null)
             body["provider"] = effectiveProvider;
 
-        return await redCompute.CreateSessionAsync(body, ownerId, "Nova:agent", ct);
+        var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
+        if (agent == null) return null;
+        var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ct);
+        var context = new List<ComputeContextReference>();
+        if (discussionId != null) context.Add(new ComputeContextReference("discussion", discussionId));
+        if (additionalContext != null) context.AddRange(additionalContext);
+        var provenance = NovaComputeProvenance.Create(agent, beneficiary, entrypointRoute, context,
+            correlationId: correlationId, parentJobId: parentJobId);
+        return await redCompute.CreateSessionAsync(body, ownerId, "Nova:agent", provenance, ct);
     }
 
     public Task<SendMessageOutcome> SendAsync(
@@ -128,7 +141,7 @@ public sealed class MessagePipeline(
             try
             {
                 sessionId = await TryCreateSessionAsync(discussion.AgentId, discussion.OwnerId,
-                    discussion.QualityTier, discussion.Provider, ct);
+                    discussion.QualityTier, discussion.Provider, ct, discussion.Id);
             }
             catch
             {
@@ -282,7 +295,15 @@ public sealed class MessagePipeline(
             requestBody = new { content = enrichedContent, images };
         }
 
-        var sendResult = await redCompute.SendMessageDetailedAsync(sessionId, requestBody, ct, userId);
+        var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
+        if (agent == null)
+            return new(false, sessionId, "missing_agent", "The discussion has no linked Agent entity.");
+        var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, discussion.OwnerId, ct);
+        var provenance = NovaComputeProvenance.Create(agent, beneficiary,
+            $"/api/apps/nova/discussions/{discussion.Id}/message",
+            [new ComputeContextReference("discussion", discussion.Id),
+             new ComputeContextReference("session", sessionId)], method: "POST");
+        var sendResult = await redCompute.SendMessageDetailedAsync(sessionId, requestBody, ct, provenance);
         if (!sendResult.Success)
         {
             return new(false, sessionId,

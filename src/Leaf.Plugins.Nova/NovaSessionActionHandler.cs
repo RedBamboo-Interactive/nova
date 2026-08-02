@@ -44,14 +44,15 @@ public sealed class NovaSessionActionHandler(
         var workspace = await workspaces.GetAsync(agent.Id, ct);
         workspace.GenerateClaudeMd();
 
-        var ownerId = Str(data, "owner_id") ?? automation.CreatedBy;
         var isCodex = agent.Provider?.StartsWith("codex", StringComparison.OrdinalIgnoreCase) == true;
 
         // Pre-create the delivery discussion and tell the session about it — same
         // contract the standalone app's automations relied on.
         DiscussionRead? preCreated = null;
         if (Bool(config, "preCreateDiscussion"))
-            preCreated = await discussions.CreateAsync(null, agent.Id, ownerId, "chat", ct: ct);
+            preCreated = await discussions.GetOrCreateAutomationDeliveryAsync(
+                context.AttemptJobId, agent.Id,
+                context.Beneficiary.Kind == "user" ? context.Beneficiary.Id : "system", ct);
 
         var fullPrompt = ComposePrompt(automation.Name, agent, preCreated, prompt, isCodex);
 
@@ -69,7 +70,20 @@ public sealed class NovaSessionActionHandler(
             ["networkAccess"] = isCodex,
         };
 
-        var result = await redCompute.ExecuteAsync(body, $"Nova: {automation.Name}", ownerId, timeout, ct);
+        var provenanceContext = new List<ComputeContextReference>
+        {
+            new("automation", automation.Id.ToString(), automation.Id.ToString(), automation.Name),
+        };
+        if (preCreated != null)
+            provenanceContext.Add(new("discussion", preCreated.Id));
+        var provenance = NovaComputeProvenance.Create(agent, context.Beneficiary,
+            $"automation:{automation.Id}:nova-session", provenanceContext,
+            entrypointKind: "automation", method: "POST",
+            correlationId: context.CorrelationId,
+            parentJobId: context.AttemptJobId.ToString());
+        var result = await redCompute.ExecuteAsync(body, $"Nova: {automation.Name}",
+            context.Beneficiary.Id, timeout, provenance, ct,
+            idempotencyKey: $"automation:{context.AttemptJobId:N}:nova-session");
         if (!result.Success)
             throw new InvalidOperationException(result.Error ?? "AI session reported failure");
 
@@ -87,16 +101,20 @@ public sealed class NovaSessionActionHandler(
         {
             var target = await discussions.GetAsync(reportTo, ct);
             if (target != null)
-                await injector.InjectAsync(target, summary, null, $"automation:{automation.Name}", ct: ct);
+                await injector.InjectAsync(target, summary, null, $"automation:{automation.Name}",
+                    idempotencyKey: $"automation:{context.AttemptJobId:N}:completion-report", ct: ct);
         }
 
-        return new JsonObject
+        var output = new JsonObject
         {
             ["summary"] = summary,
             ["sessionId"] = result.SessionId,
             ["discussionId"] = preCreated?.Id,
             ["silent"] = silent,
         };
+        if (result.JobId is { } childJobId)
+            output["child_job_ids"] = new JsonArray(childJobId.ToString());
+        return output;
     }
 
     private async Task<AgentInfo?> ResolveAgentAsync(string? reference, CancellationToken ct)

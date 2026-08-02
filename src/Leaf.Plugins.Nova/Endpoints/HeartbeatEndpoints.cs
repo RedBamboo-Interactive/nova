@@ -30,6 +30,9 @@ public static class HeartbeatEndpoints
             {
                 var config = HeartbeatConfig.Parse(agent.Data);
                 if (config == null) continue;
+                var automation = config.AutomationId is { } automationId
+                    ? await entities.GetAsync(automationId)
+                    : null;
 
                 var discussion = await heartbeat.GetDiscussionAsync(agent.Id.ToString());
                 JsonObject? state = null;
@@ -48,8 +51,10 @@ public static class HeartbeatEndpoints
                 result.Add(new JsonObject
                 {
                     ["agent"] = agent.Slug,
-                    ["enabled"] = config.Enabled,
-                    ["schedule"] = config.Schedule,
+                    ["automationId"] = config.AutomationId?.ToString(),
+                    ["enabled"] = automation?.Data["enabled"]?.DeepClone(),
+                    ["schedule"] = automation?.Data["schedule"]?.DeepClone(),
+                    ["timezone"] = automation?.Data["timezone"]?.DeepClone(),
                     ["qualityTier"] = config.QualityTier,
                     ["heartbeat"] = state,
                 });

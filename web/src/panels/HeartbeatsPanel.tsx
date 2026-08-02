@@ -16,77 +16,77 @@ import { useAgents } from "../hooks/use-agents"
 import { AgentPicker } from "../components/agent-picker"
 import { setSettings } from "../lib/settings-store"
 
-// Kernel automation ENTITY, flattened. Automations moved to the kernel with the
-// Leaf migration — this panel is a viewer over /api/entities?type=automation plus
-// the kernel's manual-trigger endpoint.
 interface Automation {
   id: string
   name: string
+  slug: string
   description: string
-  schedule: string
   enabled: boolean
+  archivedAt?: string
+  archivedReason?: string
   removeOnTrigger: boolean
   icon?: string
-  agentId?: string
+  triggerKind: string
+  schedule?: string
+  timezone: string
+  misfirePolicy: string
   actionType: string
-  prompt?: string
   actionConfig?: Record<string, unknown>
   reportToDiscussionId?: string
+  definitionVersion: string
   lastRun?: string
   nextRun?: string
-  lastError?: string
+  lastStatus?: string
+  lastJobId?: string
   lastResult?: string
-  consecutiveFailures?: number
+  lastError?: string
+  consecutiveFailures: number
+  agentId?: string
+  agentName?: string
+  ownerApp?: string
+  ownerPlugin?: string
 }
 
-function parseEntityData(raw: unknown): Record<string, unknown> {
-  if (typeof raw === "string") {
-    try { return JSON.parse(raw) as Record<string, unknown> } catch { return {} }
-  }
-  return (raw as Record<string, unknown>) ?? {}
+interface AutomationRun {
+  jobId: string
+  status: string
+  attemptCount: number
+  queuedAt?: string
+  startedAt?: string
+  completedAt?: string
+  errorMessage?: string
+  resultJson?: string
+  durationMs?: number
+  costUsd?: number
 }
 
-function mapAutomationEntity(e: { id: string; name: string; data: unknown }): Automation {
-  const d = parseEntityData(e.data)
-  const str = (k: string) => (typeof d[k] === "string" ? (d[k] as string) : undefined)
-  return {
-    id: e.id,
-    name: e.name,
-    description: str("description") ?? "",
-    schedule: str("schedule") ?? "",
-    enabled: d.enabled !== false && d.enabled !== "false",
-    removeOnTrigger: d.remove_on_trigger === true || d.remove_on_trigger === "true",
-    icon: str("icon"),
-    agentId: str("agent"),
-    actionType: str("action_type") ?? "ai-session",
-    prompt: str("prompt"),
-    actionConfig: typeof d.action_config === "object" && d.action_config !== null
-      ? (d.action_config as Record<string, unknown>)
-      : undefined,
-    reportToDiscussionId: str("report_to_discussion_id"),
-    lastRun: str("last_run"),
-    nextRun: str("next_run"),
-    lastError: str("last_error"),
-    lastResult: str("last_result"),
-    consecutiveFailures: typeof d.consecutive_failures === "number" ? d.consecutive_failures : undefined,
-  }
+interface TriggerResult {
+  jobId: string
+  status: string
+  reused: boolean
 }
 
 const actionMeta: Record<string, { icon: string; label: string }> = {
-  "ai-session":     { icon: "ph-bold ph-brain",          label: "AI Session" },
-  "nova-session":   { icon: "ph-bold ph-brain",          label: "Nova Session" },
-  "http-check":     { icon: "ph-bold ph-broadcast",  label: "HTTP Watcher" },
-  "http-action":    { icon: "ph-bold ph-lightning",           label: "HTTP Action" },
-  "builtin:backup": { icon: "ph-bold ph-archive",    label: "System" },
+  "ai-session": { icon: "ph-bold ph-brain", label: "AI Session" },
+  "nova-session": { icon: "ph-bold ph-brain", label: "Nova Session" },
+  "heartbeat-tick": { icon: "ph-bold ph-heartbeat", label: "Agent Pulse" },
+  "flow-execution": { icon: "ph-bold ph-git-branch", label: "Workflow" },
+  "http-check": { icon: "ph-bold ph-broadcast", label: "HTTP Watcher" },
+  "http-action": { icon: "ph-bold ph-lightning", label: "HTTP Action" },
+  "wallpaper-generate": { icon: "ph-bold ph-image", label: "Wallpaper" },
+  "sonos-watchdog": { icon: "ph-bold ph-speaker-high", label: "Sonos Watchdog" },
+  "backup": { icon: "ph-bold ph-archive", label: "Database Backup" },
+  "builtin:backup": { icon: "ph-bold ph-archive", label: "Database Backup" },
 }
 
-function cronToHuman(cron: string): string {
+function cronToHuman(cron?: string, triggerKind = "cron"): string {
+  if (triggerKind === "manual" || !cron) return "Manual only"
   const parts = cron.trim().split(/\s+/)
 
   if (parts.length === 6) {
     const [sec, min, hour, dom, mon, dow] = parts
     if (sec?.startsWith("*/")) return `Every ${sec.slice(2)}s`
-    if (min === "*" && hour === "*") return `Every minute`
+    if (min === "*" && hour === "*") return "Every minute"
     return cronFiveToHuman([min!, hour!, dom!, mon!, dow!])
   }
 
@@ -115,7 +115,7 @@ function cronFiveToHuman([min, hour, dom, mon, dow]: [string, string, string, st
 
   if (dom === "*" && mon === "*" && dow !== "*") {
     const days = dow.split(",").map(d => DAY_NAMES[parseInt(d) % 7] ?? d).join(", ")
-    return timeStr ? `${days} at ${timeStr}` : `${days}`
+    return timeStr ? `${days} at ${timeStr}` : days
   }
 
   if (dom !== "*" && mon === "*" && dow === "*") {
@@ -131,21 +131,51 @@ function cronFiveToHuman([min, hour, dom, mon, dow]: [string, string, string, st
     return timeStr ? `${monthName} ${dom} at ${timeStr}` : `${monthName} ${dom}`
   }
 
-  if (dom === "*" && mon === "*" && dow === "*" && timeStr) {
-    return `Daily at ${timeStr}`
-  }
-
+  if (dom === "*" && mon === "*" && dow === "*" && timeStr) return `Daily at ${timeStr}`
   return `${min} ${hour} ${dom} ${mon} ${dow}`
 }
 
 function formatTime(iso?: string): string | null {
   if (!iso) return null
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return null
-  return d.toLocaleString(undefined, {
-    month: "short", day: "numeric",
-    hour: "2-digit", minute: "2-digit",
+  const date = new Date(iso)
+  if (isNaN(date.getTime())) return null
+  return date.toLocaleString(undefined, {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
   })
+}
+
+function formatDuration(ms?: number): string | null {
+  if (ms == null) return null
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`
+}
+
+function getIcon(automation: Automation): string {
+  if (automation.icon) return automation.icon
+  return (actionMeta[automation.actionType] ?? { icon: "ph-bold ph-gear" }).icon
+}
+
+function isSystemAutomation(automation: Automation): boolean {
+  return automation.name.startsWith("system:")
+    || automation.ownerApp === "redleaf"
+    || automation.ownerApp === "system"
+    || automation.actionType === "backup"
+    || automation.actionType === "builtin:backup"
+}
+
+function canRetire(automation: Automation): boolean {
+  if (automation.archivedAt || isSystemAutomation(automation)) return false
+  if (automation.actionType === "flow-execution") return false
+  return !automation.ownerApp || automation.ownerApp === "nova"
+}
+
+function statusIcon(status?: string): string {
+  if (status === "Completed") return "ph-check-circle text-green-500"
+  if (status === "Failed" || status === "TimedOut") return "ph-warning text-red-500"
+  if (status === "Skipped" || status === "Cancelled") return "ph-minus-circle text-text-disabled"
+  if (status === "Running") return "ph-spinner animate-spin text-amber-500"
+  return "ph-clock text-text-disabled"
 }
 
 const configLabels: Record<string, string> = {
@@ -157,30 +187,22 @@ const configLabels: Record<string, string> = {
 }
 
 function ConfigDisplay({ config }: { config: Record<string, unknown> }) {
-  const entries = Object.entries(config)
-
+  const entries = Object.entries(config).filter(([, value]) => value !== undefined && value !== null)
   return (
     <div className="space-y-2">
       {entries.map(([key, value]) => {
         const label = configLabels[key] ?? key
         const isLongText = typeof value === "string" && value.length > 80
-
-        if (typeof value === "object" && value !== null) {
+        if (typeof value === "object") {
           return (
             <div key={key}>
               <div className="text-[11px] text-text-muted mb-1">{label}</div>
-              <div className="bg-overlay-5 rounded-md px-3 py-2 text-xs grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                {Object.entries(value as Record<string, unknown>).map(([k, v]) => (
-                  <Fragment key={k}>
-                    <span className="text-text-muted">{k}</span>
-                    <span className="font-mono">{String(v)}</span>
-                  </Fragment>
-                ))}
-              </div>
+              <pre className="bg-overlay-5 rounded-md px-3 py-2 text-xs font-mono whitespace-pre-wrap overflow-auto">
+                {JSON.stringify(value, null, 2)}
+              </pre>
             </div>
           )
         }
-
         if (isLongText) {
           return (
             <div key={key}>
@@ -191,7 +213,6 @@ function ConfigDisplay({ config }: { config: Record<string, unknown> }) {
             </div>
           )
         }
-
         return (
           <div key={key} className="flex items-baseline gap-3 text-xs">
             <span className="text-text-muted shrink-0">{label}</span>
@@ -203,296 +224,290 @@ function ConfigDisplay({ config }: { config: Record<string, unknown> }) {
   )
 }
 
-function getIcon(a: Automation): string {
-  if (a.icon) return a.icon
-  return (actionMeta[a.actionType] ?? { icon: "ph-bold ph-gear" }).icon
+function RunHistory({ runs, loading }: { runs: AutomationRun[]; loading: boolean }) {
+  return (
+    <div>
+      <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
+        Compute attempts
+      </div>
+      {loading ? (
+        <div className="text-xs text-text-muted py-2">Loading attempts...</div>
+      ) : runs.length === 0 ? (
+        <div className="bg-overlay-5 rounded-md p-3 text-xs text-text-muted">No canonical attempts yet. Legacy history remains preserved in its original streams.</div>
+      ) : (
+        <div className="rounded-md border border-overlay-10 divide-y divide-overlay-10 overflow-hidden">
+          {runs.map(run => (
+            <a
+              key={run.jobId}
+              href={`/apps/compute-dashboard/jobs?select=${encodeURIComponent(run.jobId)}`}
+              className="flex items-center gap-3 px-3 py-2.5 hover:bg-overlay-5 transition-colors"
+            >
+              <i className={`ph-bold ${statusIcon(run.status)} text-sm`} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="font-medium">{run.status}</span>
+                  {run.attemptCount > 1 && <span className="text-text-muted">claim {run.attemptCount}</span>}
+                  {formatDuration(run.durationMs) && <span className="text-text-disabled">{formatDuration(run.durationMs)}</span>}
+                </div>
+                <div className="font-mono text-[10px] text-text-disabled truncate">{run.jobId}</div>
+              </div>
+              <span className="text-[11px] text-text-muted shrink-0">{formatTime(run.startedAt ?? run.queuedAt)}</span>
+              <i className="ph-bold ph-arrow-square-out text-xs text-text-disabled" />
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
-function AutomationDetail({ automation, onDelete, onTrigger, triggering }: {
+function AutomationDetail({ automation, runs, runsLoading, onRetire, onTrigger, triggering }: {
   automation: Automation
-  onDelete: () => void
+  runs: AutomationRun[]
+  runsLoading: boolean
+  onRetire: () => void
   onTrigger: () => void
   triggering: boolean
 }) {
   const meta = actionMeta[automation.actionType] ?? { icon: "ph-bold ph-gear", label: automation.actionType }
-  const isSystem = automation.name.startsWith("system:")
+  const system = isSystemAutomation(automation)
+  const managedByFlow = automation.actionType === "flow-execution"
 
   return (
     <div className="h-full flex flex-col">
-      <PanelHeader title={isSystem ? automation.name.replace("system:", "") : automation.name}>
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={onTrigger}
-          disabled={triggering}
-          title="Run this automation now (runs in the background)"
-        >
+      <PanelHeader title={system ? automation.name.replace("system:", "") : automation.name}>
+        <Button variant="ghost" size="xs" onClick={onTrigger} disabled={triggering || !!automation.archivedAt} title="Create a Compute attempt and run now">
           <i className={`ph-bold ${triggering ? "ph-spinner animate-spin" : "ph-play"} text-xs mr-1`} />
-          {triggering ? "Started" : "Run now"}
+          {triggering ? "Starting" : "Run now"}
         </Button>
-        {!isSystem && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={onDelete}
-            title="Delete automation"
-          >
-            <i className="ph-bold ph-trash text-xs" />
+        {canRetire(automation) && (
+          <Button variant="ghost" size="xs" onClick={onRetire} title="Disable and retain this versioned definition and its history">
+            <i className="ph-bold ph-archive text-xs mr-1" />
+            Retire
           </Button>
         )}
       </PanelHeader>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-5">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <i className={`${getIcon(automation)} text-sm text-primary`} />
           <span className="text-sm font-medium">{meta.label}</span>
-          {automation.enabled ? (
-            <Badge variant="default">Active</Badge>
-          ) : (
-            <Badge variant="secondary">Disabled</Badge>
-          )}
+          {automation.archivedAt ? <Badge variant="secondary">Retired</Badge>
+            : automation.enabled ? <Badge variant="default">Active</Badge>
+              : <Badge variant="secondary">Disabled</Badge>}
           {automation.removeOnTrigger && <Badge variant="secondary">One-shot</Badge>}
+          {managedByFlow && <Badge variant="outline">Managed by workflow</Badge>}
         </div>
 
-        {automation.description && (
-          <p className="text-sm text-text-muted leading-relaxed">{automation.description}</p>
-        )}
+        {automation.description && <p className="text-sm text-text-muted leading-relaxed">{automation.description}</p>}
+        {automation.archivedReason && <p className="text-xs text-text-muted">Retired: {automation.archivedReason}</p>}
 
         <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2.5 text-xs">
           <span className="text-text-muted">Schedule</span>
           <span>
-            {cronToHuman(automation.schedule)}
-            <span className="text-text-disabled ml-2">({automation.schedule})</span>
+            {cronToHuman(automation.schedule, automation.triggerKind)}
+            {automation.schedule && <span className="text-text-disabled ml-2">({automation.schedule})</span>}
           </span>
-
-          {automation.reportToDiscussionId && (
-            <>
-              <span className="text-text-muted">Reports to</span>
-              <span className="font-mono text-xs">Discussion {automation.reportToDiscussionId}</span>
-            </>
-          )}
-
-          {automation.lastRun && (
-            <>
-              <span className="text-text-muted">Last run</span>
-              <span>{formatTime(automation.lastRun)}</span>
-            </>
-          )}
-
-          {automation.nextRun && (
-            <>
-              <span className="text-text-muted">Next run</span>
-              <span>{formatTime(automation.nextRun)}</span>
-            </>
-          )}
+          <span className="text-text-muted">Timezone</span>
+          <span>{automation.timezone}</span>
+          <span className="text-text-muted">Misfires</span>
+          <span className="capitalize">{automation.misfirePolicy}</span>
+          {(automation.agentName || automation.agentId) && <>
+            <span className="text-text-muted">Agent</span>
+            <span>{automation.agentName ?? automation.agentId}</span>
+          </>}
+          {(automation.ownerApp || automation.ownerPlugin) && <>
+            <span className="text-text-muted">Owner</span>
+            <span>{automation.ownerPlugin ?? automation.ownerApp}</span>
+          </>}
+          {automation.reportToDiscussionId && <>
+            <span className="text-text-muted">Reports to</span>
+            <span className="font-mono">Discussion {automation.reportToDiscussionId}</span>
+          </>}
+          {automation.lastRun && <>
+            <span className="text-text-muted">Last run</span>
+            <span className="flex items-center gap-1.5">
+              <i className={`ph-bold ${statusIcon(automation.lastStatus)} text-xs`} />
+              {formatTime(automation.lastRun)}{automation.lastStatus ? `, ${automation.lastStatus}` : ""}
+            </span>
+          </>}
+          {automation.nextRun && !automation.archivedAt && <>
+            <span className="text-text-muted">Next run</span>
+            <span>{formatTime(automation.nextRun)}</span>
+          </>}
+          <span className="text-text-muted">Definition</span>
+          <span className="font-mono text-[10px] truncate" title={automation.definitionVersion}>{automation.definitionVersion}</span>
         </div>
 
-        {(automation.prompt || (automation.actionConfig && Object.keys(automation.actionConfig).length > 0)) && (
-          <div>
-            <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
-              Configuration
-            </div>
-            <ConfigDisplay config={{
-              ...(automation.prompt ? { prompt: automation.prompt } : {}),
-              ...automation.actionConfig,
-            }} />
-          </div>
+        {automation.lastJobId && (
+          <a href={`/apps/compute-dashboard/jobs?select=${encodeURIComponent(automation.lastJobId)}`} className="flex items-center gap-2 rounded-md bg-overlay-5 px-3 py-2 text-xs hover:bg-overlay-10">
+            <i className="ph-bold ph-fingerprint text-primary" />
+            <span>Latest Compute attempt</span>
+            <span className="font-mono text-text-muted truncate">{automation.lastJobId}</span>
+            <i className="ph-bold ph-arrow-square-out ml-auto" />
+          </a>
         )}
 
-        {automation.lastResult && !automation.lastError && (
+        {automation.actionConfig && Object.keys(automation.actionConfig).length > 0 && (
           <div>
-            <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
-              Last Result
-            </div>
-            <div className="bg-overlay-5 rounded-md p-3 space-y-2">
-              <div className="flex items-center gap-2 text-xs">
-                <i className="ph-bold ph-check-circle text-green-500" />
-                <span className="font-medium">Succeeded</span>
-                {automation.lastRun && (
-                  <span className="text-text-muted ml-auto">{formatTime(automation.lastRun)}</span>
-                )}
-              </div>
-              <div className="text-sm leading-relaxed markdown-body">
-                <MarkdownRenderer content={automation.lastResult} />
-              </div>
-            </div>
+            <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">Configuration</div>
+            <ConfigDisplay config={automation.actionConfig} />
           </div>
         )}
 
         {automation.lastError && (
           <div>
-            <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
-              Last Error
-            </div>
+            <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">Last error</div>
             <div className="bg-overlay-5 rounded-md p-3 space-y-2">
               <div className="flex items-center gap-2 text-xs">
                 <i className="ph-bold ph-warning text-amber-500" />
-                <span className="font-medium">
-                  {automation.consecutiveFailures ? `${automation.consecutiveFailures} consecutive failure(s)` : "Last run failed"}
-                </span>
+                <span className="font-medium">{automation.consecutiveFailures ? `${automation.consecutiveFailures} consecutive failure(s)` : "Last attempt failed"}</span>
               </div>
-              <div className="text-sm leading-relaxed markdown-body">
-                <MarkdownRenderer content={automation.lastError} />
-              </div>
+              <div className="text-sm leading-relaxed markdown-body"><MarkdownRenderer content={automation.lastError} /></div>
             </div>
           </div>
         )}
+
+        <RunHistory runs={runs} loading={runsLoading} />
       </div>
     </div>
   )
 }
 
 export function AutomationsPanel() {
-  const { automationName: urlAutomationName } = useParams()
+  const { automationId: urlAutomationId } = useParams()
   const navigate = useNavigate()
   const [automations, setAutomations] = useState<Automation[]>([])
+  const [runs, setRuns] = useState<AutomationRun[]>([])
+  const [runsLoading, setRunsLoading] = useState(false)
   const [mobileTab, setMobileTab] = useState(0)
+  const [triggering, setTriggering] = useState<string | null>(null)
   const { agents, defaultAgentId } = useAgents()
   const settings = useLocalSettings()
   const agentFilter = settings.agentFilter
   const multiAgent = agents.length > 1
   const isNovaSelected = !agentFilter || agentFilter === defaultAgentId
 
-  const selectedName = urlAutomationName ?? null
+  const selected = automations.find(a => a.id === urlAutomationId)
+    ?? automations.find(a => a.name === urlAutomationId || a.slug === urlAutomationId)
+    ?? null
 
   useBreadcrumbLabel(
-    urlAutomationName ? `/apps/nova/pulse/${urlAutomationName}` : undefined,
-    urlAutomationName ?? undefined,
+    urlAutomationId ? `/apps/nova/pulse/${urlAutomationId}` : undefined,
+    selected?.name ?? urlAutomationId,
   )
 
   const refresh = useCallback(async () => {
-    const data = await api.get<{ items: Array<{ id: string; name: string; data: unknown }> }>(
-      "/api/entities?type=automation&limit=200")
-    setAutomations(data.items.map(mapAutomationEntity))
+    const data = await api.get<{ items: Automation[] }>("/api/automations/status")
+    setAutomations(data.items)
   }, [])
 
-  useEffect(() => {
-    refresh()
-  }, [refresh])
-
-  const selected = automations.find((a) => a.name === selectedName) ?? null
-
-  const userAutomations = automations.filter((a) => !a.name.startsWith("system:"))
-  const systemAutomations = automations.filter((a) => a.name.startsWith("system:"))
-
-  const handleDelete = useCallback(async (a: Automation) => {
-    await api.delete(`/api/entities/${a.id}`)
-    if (selectedName === a.name) navigate("/apps/nova/pulse")
-    refresh()
-  }, [selectedName, refresh, navigate])
-
-  const [triggering, setTriggering] = useState<string | null>(null)
-  const handleTrigger = useCallback(async (a: Automation) => {
-    setTriggering(a.name)
+  const refreshRuns = useCallback(async (automationId: string) => {
+    setRunsLoading(true)
     try {
-      await api.post(`/api/automations/${a.id}/trigger`)
-    } catch { /* best effort — outcome lands on the entity's last_run/last_error */ }
-    setTimeout(() => {
-      setTriggering((prev) => (prev === a.name ? null : prev))
-      refresh()
-    }, 1500)
+      const data = await api.get<{ items: AutomationRun[] }>(`/api/automations/${automationId}/runs?limit=25`)
+      setRuns(data.items)
+    } catch {
+      setRuns([])
+    } finally {
+      setRunsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  useEffect(() => {
+    if (!selected) {
+      setRuns([])
+      return
+    }
+    if (urlAutomationId !== selected.id) {
+      navigate(`/apps/nova/pulse/${selected.id}`, { replace: true })
+      return
+    }
+    refreshRuns(selected.id)
+  }, [selected?.id, urlAutomationId, navigate, refreshRuns])
+
+  const handleRetire = useCallback(async (automation: Automation) => {
+    await api.patch(`/api/entities/${automation.id}`, {
+      data: {
+        enabled: false,
+        archived_at: new Date().toISOString(),
+        archived_reason: "Retired from Nova Pulse",
+      },
+    })
+    await refresh()
   }, [refresh])
 
-  const handleSelect = useCallback((name: string) => {
-    navigate(`/apps/nova/pulse/${encodeURIComponent(name)}`)
+  const handleTrigger = useCallback(async (automation: Automation) => {
+    setTriggering(automation.id)
+    try {
+      await api.post<TriggerResult>(`/api/automations/${automation.id}/trigger`)
+      await Promise.all([refresh(), refreshRuns(automation.id)])
+    } finally {
+      setTriggering(prev => prev === automation.id ? null : prev)
+    }
+  }, [refresh, refreshRuns])
+
+  const handleSelect = useCallback((automationId: string) => {
+    navigate(`/apps/nova/pulse/${automationId}`)
     setMobileTab(1)
   }, [navigate])
 
-  const renderRow = useCallback((a: Automation, isSystem = false) => {
-    const meta = actionMeta[a.actionType] ?? { icon: "ph-bold ph-gear", label: a.actionType }
+  const matchesAgent = (automation: Automation) => {
+    if (!agentFilter) return true
+    if (agentFilter === defaultAgentId) return !automation.agentId || automation.agentId === defaultAgentId
+    return automation.agentId === agentFilter
+  }
+
+  const visible = automations.filter(matchesAgent)
+  const active = visible.filter(a => !a.archivedAt && !isSystemAutomation(a))
+  const system = visible.filter(a => !a.archivedAt && isSystemAutomation(a))
+  const retired = visible.filter(a => !!a.archivedAt)
+
+  const renderRow = useCallback((automation: Automation, muted = false) => {
+    const meta = actionMeta[automation.actionType] ?? { icon: "ph-bold ph-gear", label: automation.actionType }
     return (
       <ItemListRow
-        selected={a.name === selectedName}
-        icon={
-          <i className={`${getIcon(a)} text-xs ${isSystem ? "text-text-muted" : a.enabled ? "text-primary" : "text-text-disabled"}`} />
-        }
-        title={isSystem ? a.name.replace("system:", "") : a.name}
-        subtitle={cronToHuman(a.schedule)}
-        badge={
-          !isSystem ? (
-            <>
-              <Badge variant="outline">{meta.label}</Badge>
-              {a.removeOnTrigger && <Badge variant="secondary">once</Badge>}
-            </>
-          ) : undefined
-        }
-        onClick={() => handleSelect(a.name)}
-        trailing={
-          !isSystem ? (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="opacity-0 group-hover/row:opacity-100 transition-opacity"
-              onClick={async (e) => {
-                e.stopPropagation()
-                handleDelete(a)
-              }}
-            >
-              <i className="ph-bold ph-x text-xs" />
-            </Button>
-          ) : undefined
-        }
+        selected={automation.id === selected?.id}
+        icon={<i className={`${getIcon(automation)} text-xs ${muted || !automation.enabled ? "text-text-disabled" : "text-primary"}`} />}
+        title={isSystemAutomation(automation) ? automation.name.replace("system:", "") : automation.name}
+        subtitle={cronToHuman(automation.schedule, automation.triggerKind)}
+        badge={<>
+          <Badge variant="outline">{meta.label}</Badge>
+          {automation.lastStatus && <Badge variant="secondary">{automation.lastStatus}</Badge>}
+        </>}
+        onClick={() => handleSelect(automation.id)}
       />
     )
-  }, [selectedName, handleSelect, handleDelete])
+  }, [selected?.id, handleSelect])
 
-  const matchesAgent = (a: Automation) => {
-    if (!agentFilter) return true
-    if (agentFilter === defaultAgentId)
-      return !a.agentId || a.agentId === defaultAgentId
-    return a.agentId === agentFilter
-  }
-  const visibleAutomations = automations.filter(matchesAgent)
-  const visibleUser = userAutomations.filter(matchesAgent)
-  const visibleSystem = systemAutomations.filter(matchesAgent)
+  const section = (label: string, items: Automation[], muted = false) => items.length > 0 && (
+    <>
+      <div className="text-[10px] font-medium text-text-disabled uppercase tracking-wider px-4 pt-3 pb-1">{label}</div>
+      {items.map(automation => <Fragment key={automation.id}>{renderRow(automation, muted)}</Fragment>)}
+    </>
+  )
 
   const sidebar = (
     <>
       <PanelHeader title="Pulse">
-        {multiAgent && (
-          <AgentPicker
-            agents={agents}
-            selectedId={agentFilter}
-            onSelect={(id) => setSettings({ agentFilter: id })}
-            showAll
-          />
-        )}
+        {multiAgent && <AgentPicker agents={agents} selectedId={agentFilter} onSelect={id => setSettings({ agentFilter: id })} showAll />}
       </PanelHeader>
       <ScrollArea className="flex-1">
-        {visibleAutomations.length === 0 ? (
+        {visible.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-text-muted">
             <div className="text-center">
               <i className="ph-bold ph-heartbeat text-2xl mb-3 opacity-30" />
               <p className="text-sm">No routines{!isNovaSelected ? " for this agent" : " yet"}</p>
-              {isNovaSelected && (
-                <p className="text-xs text-text-disabled mt-1">
-                  Ask Nova to set one up in chat
-                </p>
-              )}
+              {isNovaSelected && <p className="text-xs text-text-disabled mt-1">Ask Nova to set one up in chat</p>}
             </div>
           </div>
         ) : (
           <div className="flex flex-col">
-            {visibleUser.length > 0 && (
-              <>
-                <div className="text-[10px] font-medium text-text-disabled uppercase tracking-wider px-4 pt-3 pb-1">
-                  User
-                </div>
-                {visibleUser.map((a) => (
-                  <Fragment key={a.name}>{renderRow(a)}</Fragment>
-                ))}
-              </>
-            )}
-            {visibleSystem.length > 0 && (
-              <>
-                <div className="text-[10px] font-medium text-text-disabled uppercase tracking-wider px-4 pt-3 pb-1">
-                  System
-                </div>
-                {visibleSystem.map((a) => (
-                  <Fragment key={a.name}>{renderRow(a, true)}</Fragment>
-                ))}
-              </>
-            )}
+            {section("Automations", active)}
+            {section("System", system, true)}
+            {section("Retired", retired, true)}
           </div>
         )}
       </ScrollArea>
@@ -502,9 +517,11 @@ export function AutomationsPanel() {
   const detail = selected ? (
     <AutomationDetail
       automation={selected}
-      onDelete={() => handleDelete(selected)}
+      runs={runs}
+      runsLoading={runsLoading}
+      onRetire={() => handleRetire(selected)}
       onTrigger={() => handleTrigger(selected)}
-      triggering={triggering === selected.name}
+      triggering={triggering === selected.id}
     />
   ) : (
     <div className="h-full flex items-center justify-center text-text-muted">
@@ -520,7 +537,7 @@ export function AutomationsPanel() {
       layoutKey="nova-automations"
       mobileLabels={["Pulse", "Detail"]}
       mobileTab={mobileTab}
-      onMobileTabChange={(tab) => {
+      onMobileTabChange={tab => {
         setMobileTab(tab)
         if (tab === 0) navigate("/apps/nova/pulse")
       }}

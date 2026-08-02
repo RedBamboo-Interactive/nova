@@ -127,6 +127,88 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         return Map(entity)!;
     }
 
+    /// <summary>
+    /// Reuses the delivery discussion minted for one durable automation attempt. A
+    /// recovered lease must not create a second user-visible thread for the same run.
+    /// </summary>
+    public async Task<DiscussionRead> GetOrCreateAutomationDeliveryAsync(
+        Guid attemptJobId, string? agentId, string? ownerId, CancellationToken ct = default)
+    {
+        var key = attemptJobId.ToString();
+        var existing = await entities.QueryAsync(new EntityQuery
+        {
+            TypeSlug = "discussion",
+            DataEquals = new Dictionary<string, object?>
+            {
+                ["app"] = "nova",
+                ["automation_attempt_job_id"] = key,
+            },
+            Limit = 2,
+        }, ct);
+        var mapped = existing.Select(Map).FirstOrDefault(discussion => discussion is not null);
+        if (mapped is not null) return mapped;
+
+        var discussionId = Guid.NewGuid().ToString("N")[..8];
+        var data = new JsonObject
+        {
+            ["discussion_id"] = discussionId,
+            ["app"] = "nova",
+            ["owner_id"] = ownerId,
+            ["type"] = "chat",
+            ["automation_attempt_job_id"] = key,
+        };
+        var entity = await discussions.CreateAsync(null, agentId, data, ct);
+        return Map(entity)!;
+    }
+
+    public async Task<(DiscussionRead Discussion, bool Created)> GetOrCreateIdempotentAsync(
+        string idempotencyKey, string? agentId, string? ownerId, string type = "chat",
+        string? qualityTier = null, string? provider = null, CancellationToken ct = default)
+    {
+        var existing = await entities.QueryAsync(new EntityQuery
+        {
+            TypeSlug = "discussion",
+            DataEquals = new Dictionary<string, object?>
+            {
+                ["app"] = "nova",
+                ["creation_idempotency_key"] = idempotencyKey,
+            },
+            Limit = 2,
+        }, ct);
+        var mapped = existing.Select(Map).FirstOrDefault(discussion => discussion is not null);
+        if (mapped is not null) return (mapped, false);
+
+        var discussionId = Guid.NewGuid().ToString("N")[..8];
+        var data = new JsonObject
+        {
+            ["discussion_id"] = discussionId,
+            ["app"] = "nova",
+            ["owner_id"] = ownerId,
+            ["type"] = type,
+            ["creation_idempotency_key"] = idempotencyKey,
+        };
+        if (qualityTier != null) data["quality_tier"] = qualityTier;
+        if (provider != null) data["provider"] = provider;
+        var entity = await discussions.CreateAsync(null, agentId, data, ct);
+        return (Map(entity)!, true);
+    }
+
+    public async Task<DiscussionRead?> GetByCreationIdempotencyKeyAsync(
+        string idempotencyKey, CancellationToken ct = default)
+    {
+        var existing = await entities.QueryAsync(new EntityQuery
+        {
+            TypeSlug = "discussion",
+            DataEquals = new Dictionary<string, object?>
+            {
+                ["app"] = "nova",
+                ["creation_idempotency_key"] = idempotencyKey,
+            },
+            Limit = 1,
+        }, ct);
+        return existing.Select(Map).FirstOrDefault(discussion => discussion is not null);
+    }
+
     public Task PatchAsync(Guid entityId, JsonObject patch, string? name = null, CancellationToken ct = default)
         => DiscussionEntityGate.RunAsync(entityId, () => entities.PatchAsync(entityId, patch, name, ct), ct);
 
@@ -137,6 +219,21 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
     /// rewrites the discussion entity's data blob for message_count/last_activity).</summary>
     public Task PostMessageAsync(Guid entityId, string role, string content, JsonObject metadata, string? userId = null, CancellationToken ct = default)
         => DiscussionEntityGate.RunAsync(entityId, () => discussions.PostAsync(entityId, role, content, metadata, userId, ct), ct);
+
+    public Task<bool> PostMessageIdempotentAsync(Guid entityId, string role, string content,
+        JsonObject metadata, string idempotencyKey, string? userId = null,
+        CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync(entityId, async () =>
+        {
+            var existing = await discussions.GetMessagesAsync(entityId, ct: ct);
+            if (existing.Any(message => message.Metadata["idempotency_key"] is JsonValue value
+                && value.TryGetValue<string>(out var key)
+                && string.Equals(key, idempotencyKey, StringComparison.Ordinal)))
+                return false;
+            metadata["idempotency_key"] = idempotencyKey;
+            await discussions.PostAsync(entityId, role, content, metadata, userId, ct);
+            return true;
+        }, ct);
 
     /// <summary>
     /// The single write point for discussion status. Re-reads current state inside the

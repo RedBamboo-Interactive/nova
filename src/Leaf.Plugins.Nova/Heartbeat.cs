@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Leaf.Sdk;
@@ -6,13 +7,14 @@ using Leaf.Sdk.Services;
 namespace Leaf.Plugins.Nova;
 
 /// <summary>
-/// Per-agent heartbeat configuration, read from the agent entity's
-/// <c>data.heartbeat</c> block. Absent block or <c>enabled: false</c> means no
-/// heartbeat for that agent.
+/// Per-agent heartbeat behavior plus a reference to its canonical automation.
+/// Schedule and enabled state belong to that automation; legacy copies are read
+/// only long enough for reconciliation to migrate them.
 /// </summary>
 public sealed record HeartbeatConfig(
-    bool Enabled,
-    string Schedule,
+    Guid? AutomationId,
+    bool? LegacyEnabled,
+    string? LegacySchedule,
     string QualityTier,
     int TickWaitMinutes,
     int MaxTurns)
@@ -26,8 +28,11 @@ public sealed record HeartbeatConfig(
     {
         if (agentData["heartbeat"] is not JsonObject hb) return null;
         return new HeartbeatConfig(
-            Enabled: hb["enabled"] is JsonValue e && e.TryGetValue<bool>(out var b) && b,
-            Schedule: Str(hb, "schedule") ?? DefaultSchedule,
+            AutomationId: Guid.TryParse(Str(hb, "automation_id"), out var automationId)
+                ? automationId : null,
+            LegacyEnabled: hb["enabled"] is JsonValue e && e.TryGetValue<bool>(out var b)
+                ? b : null,
+            LegacySchedule: Str(hb, "schedule"),
             QualityTier: Str(hb, "quality_tier") ?? "deep",
             TickWaitMinutes: Int(hb, "tick_wait_minutes") ?? 15,
             MaxTurns: Int(hb, "max_turns") ?? 15);
@@ -65,20 +70,23 @@ public sealed class HeartbeatService(
     LocationService location)
 {
     public const string DiscussionType = "heartbeat";
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _rotationGates = new();
 
     private static string AutomationSlug(string agentSlug) => $"system-heartbeat-{agentSlug}";
 
     // ── Provisioning ────────────────────────────────────────────────
 
     /// <summary>
-    /// Bring automations + discussions in line with every agent's heartbeat config.
-    /// Enabled: upsert the system automation and ensure the standing discussion.
-    /// Disabled/absent: delete the automation and archive the discussion.
+    /// Link every agent heartbeat to one canonical automation. Legacy schedule and
+    /// enabled copies are consumed once, then removed from the agent config. Later
+    /// reconciliations never overwrite the automation definition.
     /// </summary>
     public async Task<JsonObject> ReconcileAsync(CancellationToken ct = default)
     {
         var result = new JsonObject { ["provisioned"] = new JsonArray(), ["tornDown"] = new JsonArray() };
         var agentEntities = await entities.QueryAsync(new EntityQuery { TypeSlug = "agent", Limit = 50 }, ct);
+        var users = await entities.QueryAsync(new EntityQuery { TypeSlug = "user", Limit = 2 }, ct);
+        var soleOwnerId = users.Count == 1 ? users[0].Id.ToString() : null;
 
         foreach (var agent in agentEntities)
         {
@@ -90,38 +98,66 @@ public sealed class HeartbeatService(
                 .FirstOrDefault(d => d.Type == "live" && !DiscussionStatus.IsClosed(d.Status));
 
             if (liveEnabled && existingLive == null)
-                await store.CreateAsync($"{agent.Name} Live", agentId, "local-user", "live", ct: ct);
+                await store.CreateAsync($"{agent.Name} Live", agentId, soleOwnerId ?? "system", "live", ct: ct);
 
             // ── Heartbeat: enabled by agent data.heartbeat.enabled ──
             var config = HeartbeatConfig.Parse(agent.Data);
-            var automation = await entities.GetBySlugAsync(AutomationSlug(agent.Slug), ct);
+            var automation = config?.AutomationId is { } automationId
+                ? await entities.GetAsync(automationId, ct)
+                : await entities.GetBySlugAsync(AutomationSlug(agent.Slug), ct);
+            if (automation is not null && (automation.TypeSlug != "automation"
+                || StrValue(automation.Data, "action_type") != HeartbeatTickHandler.Type
+                || StrValue(automation.Data, "agent") != agentId))
+                automation = await entities.GetBySlugAsync(AutomationSlug(agent.Slug), ct);
             var discussion = await GetDiscussionAsync(agentId, ct);
 
-            if (config is { Enabled: true })
+            if (config != null)
             {
-                await entities.UpsertBySlugAsync("automation", AutomationSlug(agent.Slug),
-                    $"system:heartbeat:{agent.Slug}", new JsonObject
-                    {
-                        ["enabled"] = true,
-                        ["schedule"] = config.Schedule,
-                        ["action_type"] = HeartbeatTickHandler.Type,
-                        ["agent"] = agentId,
-                        ["timeout"] = (config.TickWaitMinutes + 5) * 60,
-                    }, ct);
-
-                discussion ??= await store.CreateAsync($"{agent.Name} Heartbeat", agentId,
-                    "local-user", DiscussionType, config.QualityTier, ct: ct);
-
-                ((JsonArray)result["provisioned"]!).Add(new JsonObject
+                if (automation == null)
                 {
-                    ["agent"] = agent.Slug,
-                    ["discussionId"] = discussion.Id,
-                });
+                    var legacyEnabled = config.LegacyEnabled ?? false;
+                    var schedule = config.LegacySchedule ?? HeartbeatConfig.DefaultSchedule;
+                    automation = await entities.UpsertBySlugAsync("automation", AutomationSlug(agent.Slug),
+                        $"system:heartbeat:{agent.Slug}", CreateAutomationData(agentId, agent.Name,
+                            schedule, legacyEnabled, config, soleOwnerId), ct);
+                }
+
+                if (config.AutomationId != automation.Id
+                    || config.LegacyEnabled is not null || config.LegacySchedule is not null)
+                {
+                    var heartbeatData = agent.Data["heartbeat"]?.DeepClone() as JsonObject
+                        ?? new JsonObject();
+                    heartbeatData.Remove("enabled");
+                    heartbeatData.Remove("schedule");
+                    heartbeatData["automation_id"] = automation.Id.ToString();
+                    await entities.PatchAsync(agent.Id, new JsonObject
+                    {
+                        ["heartbeat"] = heartbeatData,
+                    }, ct: ct);
+                }
+
+                var enabled = IsEnabled(automation.Data);
+                if (enabled)
+                {
+                    discussion ??= await store.CreateAsync($"{agent.Name} Heartbeat", agentId,
+                        soleOwnerId ?? "system", DiscussionType, config.QualityTier, ct: ct);
+                    ((JsonArray)result["provisioned"]!).Add(new JsonObject
+                    {
+                        ["agent"] = agent.Slug,
+                        ["automationId"] = automation.Id.ToString(),
+                        ["discussionId"] = discussion.Id,
+                    });
+                }
+                else if (discussion != null)
+                {
+                    await lifecycle.BeginArchiveAsync(discussion, ct);
+                    ((JsonArray)result["tornDown"]!).Add(agent.Slug);
+                }
             }
             else
             {
                 if (automation != null)
-                    await entities.DeleteAsync(automation.Id, ct);
+                    await ArchiveAutomationAsync(automation, ct);
                 if (discussion != null)
                     await lifecycle.BeginArchiveAsync(discussion, ct);
                 if (automation != null || discussion != null)
@@ -130,6 +166,90 @@ public sealed class HeartbeatService(
         }
         return result;
     }
+
+    private static JsonObject CreateAutomationData(string agentId, string agentName,
+        string schedule, bool enabled, HeartbeatConfig config, string? ownerId)
+    {
+        var actionConfig = new JsonObject();
+        var beneficiary = ownerId is null
+            ? new JsonObject
+            {
+                ["kind"] = "system",
+                ["reason"] = $"Heartbeat for {agentName} has no verifiable user owner",
+            }
+            : new JsonObject { ["kind"] = "user", ["id"] = ownerId };
+        return new JsonObject
+        {
+            ["definition_schema"] = 1,
+            ["enabled"] = enabled,
+            ["schedule"] = schedule,
+            ["timezone"] = "Europe/Zurich",
+            ["action_type"] = HeartbeatTickHandler.Type,
+            ["action_config"] = actionConfig.DeepClone(),
+            ["agent"] = agentId,
+            ["owner_id"] = ownerId,
+            ["timeout"] = (config.TickWaitMinutes + 5) * 60,
+            ["trigger"] = new JsonObject
+            {
+                ["kind"] = "cron",
+                ["expression"] = schedule,
+                ["timezone"] = "Europe/Zurich",
+                ["misfire_policy"] = "skip",
+                ["grace_seconds"] = 120,
+                ["migration_policy"] = "canonical",
+                ["migration_reason"] = "Heartbeat schedule is authored as local wall-clock time",
+            },
+            ["action"] = new JsonObject
+            {
+                ["type"] = HeartbeatTickHandler.Type,
+                ["config"] = actionConfig.DeepClone(),
+                ["target"] = new JsonObject
+                {
+                    ["kind"] = "agent",
+                    ["entity_id"] = agentId,
+                    ["name"] = agentName,
+                },
+            },
+            ["execution_policy"] = new JsonObject
+            {
+                ["overlap"] = "forbid",
+                ["timeout_seconds"] = (config.TickWaitMinutes + 5) * 60,
+                ["lease_seconds"] = 300,
+                ["max_failures"] = 20,
+                ["retry_count"] = 0,
+                ["retry_delay_seconds"] = 30,
+                ["recovery"] = "at-least-once",
+                ["recovery_reason"] = "A crash between session delivery and its durable marker can redeliver one tick",
+            },
+            ["ownership"] = new JsonObject
+            {
+                ["app"] = "nova",
+                ["actor_agent"] = agentId,
+                ["beneficiary"] = beneficiary,
+            },
+        };
+    }
+
+    private async Task ArchiveAutomationAsync(LeafEntity automation, CancellationToken ct)
+    {
+        if (!IsEnabled(automation.Data)
+            && automation.Data["archived_reason"]?.GetValue<string>() == "heartbeat-reference-removed")
+            return;
+        await entities.PatchAsync(automation.Id, new JsonObject
+        {
+            ["enabled"] = false,
+            ["archived_at"] = DateTimeOffset.UtcNow,
+            ["archived_reason"] = "heartbeat-reference-removed",
+        }, ct: ct);
+    }
+
+    private static bool IsEnabled(JsonObject data)
+        => data["enabled"] is JsonValue enabled
+            && enabled.TryGetValue<bool>(out var value) && value;
+
+    private static string? StrValue(JsonObject data, string key)
+        => data[key] is JsonValue value && value.TryGetValue<string>(out var result)
+            ? result : null;
 
     public async Task<DiscussionRead?> GetDiscussionAsync(string agentId, CancellationToken ct = default)
     {
@@ -141,12 +261,13 @@ public sealed class HeartbeatService(
     // ── Day boundary ────────────────────────────────────────────────
 
     /// <summary>LIVE rotation is the day boundary; fire-and-forget from the rotate flow.</summary>
-    public void OnLiveRotated(string? agentId)
+    public void OnLiveRotated(string? agentId, string? idempotencyKey = null)
     {
         if (agentId == null) return;
         _ = Task.Run(async () =>
         {
-            try { await RotateAsync(agentId, "live-rotation"); }
+            try { await RotateAsync(agentId, "live-rotation",
+                idempotencyKey: idempotencyKey); }
             catch { /* fallback tick at 02:55 closes the day if this failed */ }
         });
     }
@@ -156,8 +277,24 @@ public sealed class HeartbeatService(
     /// session) and create a fresh one. Same pattern as LIVE rotation. The old
     /// discussion stays in archives; the handoff file carries the watch-list.
     /// </summary>
-    public async Task<DiscussionRead?> RotateAsync(string agentId, string reason, CancellationToken ct = default)
+    public async Task<DiscussionRead?> RotateAsync(string agentId, string reason,
+        CancellationToken ct = default, string? idempotencyKey = null)
     {
+        var gate = _rotationGates.GetOrAdd(agentId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try { return await RotateCoreAsync(agentId, reason, ct, idempotencyKey); }
+        finally { gate.Release(); }
+    }
+
+    private async Task<DiscussionRead?> RotateCoreAsync(string agentId, string reason,
+        CancellationToken ct, string? idempotencyKey)
+    {
+        var rotationKey = string.IsNullOrWhiteSpace(idempotencyKey)
+            ? null : $"heartbeat-rotation:{idempotencyKey}";
+        if (rotationKey is not null
+            && await store.GetByCreationIdempotencyKeyAsync(rotationKey, ct) is { } prior)
+            return prior;
+
         var discussion = await GetDiscussionAsync(agentId, ct);
         if (discussion == null) return null;
 
@@ -168,7 +305,10 @@ public sealed class HeartbeatService(
             if (probe is { Reachable: true, Status: "Active" or "Idle" or "Starting" })
             {
                 await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Thinking, ct);
-                await injector.InjectAsync(discussion, HeartbeatPrompts.EndOfDay(reason), null, "heartbeat-tick", ct: ct);
+                await injector.InjectAsync(discussion, HeartbeatPrompts.EndOfDay(reason), null,
+                    "heartbeat-tick", idempotencyKey: rotationKey is null
+                        ? null : $"{rotationKey}:handoff",
+                    redeliverOnReuse: rotationKey is not null, ct: ct);
                 await WaitForSessionIdleAsync(sessionId, TimeSpan.FromMinutes(6), ct);
             }
 
@@ -183,8 +323,14 @@ public sealed class HeartbeatService(
         var config = agentEntity != null ? HeartbeatConfig.Parse(agentEntity.Data) : null;
         var agentName = agentEntity?.Name ?? "Agent";
 
+        if (rotationKey is not null)
+        {
+            var (fresh, _) = await store.GetOrCreateIdempotentAsync(rotationKey, agentId,
+                discussion.OwnerId, DiscussionType, config?.QualityTier ?? "deep", ct: ct);
+            return fresh;
+        }
         return await store.CreateAsync($"{agentName} Heartbeat", agentId,
-            "local-user", DiscussionType, config?.QualityTier ?? "deep", ct: ct);
+            discussion.OwnerId, DiscussionType, config?.QualityTier ?? "deep", ct: ct);
     }
 
     // ── Tick support (used by the action handler) ───────────────────
@@ -195,7 +341,9 @@ public sealed class HeartbeatService(
     /// the tick should carry the morning briefing.
     /// </summary>
     public async Task<(string SessionId, bool IsNew)> EnsureSessionAsync(
-        DiscussionRead discussion, HeartbeatConfig config, CancellationToken ct = default)
+        DiscussionRead discussion, HeartbeatConfig config,
+        Guid? parentJobId = null, string? correlationId = null,
+        CancellationToken ct = default)
     {
         if (discussion.SessionId is { } existing)
         {
@@ -206,14 +354,41 @@ public sealed class HeartbeatService(
             if (probe.Status is "Active" or "Idle" or "Starting")
                 return (existing, false);
 
-            if (probe.Status is "Stopped" or "Error" && await redCompute.ResumeAsync(existing, ct))
-                return (existing, false);
+            if (probe.Status is "Stopped" or "Error")
+            {
+                var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
+                if (agent != null)
+                {
+                    var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, discussion.OwnerId, ct);
+                    var provenance = NovaComputeProvenance.Create(agent, beneficiary,
+                        "heartbeat:resume",
+                        [
+                            new ComputeContextReference("discussion", discussion.Id),
+                            new ComputeContextReference("automation", config.AutomationId?.ToString()),
+                            new ComputeContextReference("heartbeat", discussion.Id),
+                        ], entrypointKind: "automation",
+                        correlationId: correlationId,
+                        parentJobId: parentJobId?.ToString());
+                    if (await redCompute.ResumeAsync(existing, provenance, ct))
+                        return (existing, false);
+                }
+            }
             // Session is gone or unresumable — fall through to a fresh one.
         }
 
+        var freshAgent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
         var sessionId = await pipeline.TryCreateSessionAsync(
             discussion.AgentId, discussion.OwnerId,
-            discussion.QualityTier ?? config.QualityTier, ct: ct)
+            discussion.QualityTier ?? config.QualityTier, ct: ct,
+            discussionId: discussion.Id,
+            entrypointRoute: "heartbeat:create-session",
+            additionalContext:
+            [
+                new ComputeContextReference("automation", config.AutomationId?.ToString()),
+                new ComputeContextReference("heartbeat", discussion.Id),
+            ],
+            correlationId: correlationId,
+            parentJobId: parentJobId?.ToString())
             ?? throw new InvalidOperationException("RedCompute refused to create a heartbeat session");
 
         await store.PatchAsync(discussion.EntityId, new JsonObject
@@ -335,6 +510,9 @@ public sealed class HeartbeatService(
 
     public Task<string?> ProbeStatusAsync(string sessionId, CancellationToken ct = default)
         => redCompute.GetSessionStatusAsync(sessionId, ct);
+
+    public Task<Guid?> GetSessionJobIdAsync(string sessionId, CancellationToken ct = default)
+        => redCompute.GetSessionJobIdAsync(sessionId, ct);
 }
 
 /// <summary>
@@ -363,14 +541,15 @@ public sealed class HeartbeatTickHandler(
         var agentEntity = await entities.GetAsync(agentGuid, ct)
             ?? throw new InvalidOperationException($"Agent entity not found: {agentId}");
         var config = HeartbeatConfig.Parse(agentEntity.Data);
-        if (config is not { Enabled: true })
-            return Skip("heartbeat disabled on agent — run reconcile to tear down");
+        if (config is null || config.AutomationId != context.Automation.Id)
+            return Skip("agent heartbeat no longer references this automation");
 
         var agent = await heartbeat.ResolveAgentAsync(agentId, ct)
             ?? throw new InvalidOperationException($"Agent not active: {agentId}");
 
         var discussion = await heartbeat.GetDiscussionAsync(agentId, ct)
-            ?? await store.CreateAsync($"{agent.Name} Heartbeat", agentId, "local-user",
+            ?? await store.CreateAsync($"{agent.Name} Heartbeat", agentId,
+                context.Beneficiary.Kind == "user" ? context.Beneficiary.Id! : "system",
                 HeartbeatService.DiscussionType, config.QualityTier, ct: ct); // self-heal
 
         var raw = await entities.GetAsync(discussion.EntityId, ct)
@@ -383,14 +562,16 @@ public sealed class HeartbeatTickHandler(
         // hb_last_tick_at, so the morning tick at 06:55 picks it up naturally.
         if (localNow.Hour == 2)
         {
-            await heartbeat.RotateAsync(agentId, "fallback-0255", ct);
+            await heartbeat.RotateAsync(agentId, "fallback-0255", ct,
+                idempotencyKey: context.AttemptJobId.ToString("N"));
             return new JsonObject { ["summary"] = "end-of-day fallback: rotated", ["discussionId"] = discussion.Id, ["silent"] = true };
         }
 
         if (discussion.Status == DiscussionStatus.Thinking)
             return Skip("previous tick still processing");
 
-        var (sessionId, isNew) = await heartbeat.EnsureSessionAsync(discussion, config, ct);
+        var (sessionId, isNew) = await heartbeat.EnsureSessionAsync(discussion, config,
+            context.AttemptJobId, context.CorrelationId, ct);
         if (!isNew)
         {
             // A busy session means a prior tick or injected work is mid-flight —
@@ -411,7 +592,9 @@ public sealed class HeartbeatTickHandler(
 
         await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Thinking, ct);
         var delivered = await injector.InjectAsync(
-            discussion with { SessionId = sessionId }, prompt, null, "heartbeat-tick", ct: ct);
+            discussion with { SessionId = sessionId }, prompt, null, "heartbeat-tick",
+            idempotencyKey: $"automation:{context.AttemptJobId:N}:heartbeat-tick",
+            redeliverOnReuse: true, ct: ct);
         if (!delivered)
         {
             await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Idle, ct);
@@ -427,7 +610,7 @@ public sealed class HeartbeatTickHandler(
         await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Idle, ct);
 
         var tail = await heartbeat.GetLastAssistantTailAsync(sessionId, ct);
-        return new JsonObject
+        var output = new JsonObject
         {
             ["summary"] = tail ?? (isNew ? "morning tick sent" : "tick sent"),
             ["discussionId"] = discussion.Id,
@@ -435,6 +618,15 @@ public sealed class HeartbeatTickHandler(
             ["morning"] = isNew,
             ["silent"] = true,
         };
+        if (await heartbeat.GetSessionJobIdAsync(sessionId, ct) is { } childJobId)
+        {
+            // A new session belongs to the attempt that created it. Later ticks
+            // reuse that persistent session, so they record a non-owning Compute
+            // reference instead of trying to reparent the same job repeatedly.
+            output[isNew ? "child_job_ids" : "related_job_ids"] =
+                new JsonArray(childJobId.ToString());
+        }
+        return output;
     }
 
     private static JsonObject Skip(string reason) => new()
