@@ -584,7 +584,7 @@ public static class DiscussionEndpoints
 
         group.MapPost("/discussions/{id}/resume", async (string id, HttpContext ctx,
             DiscussionStore store, RedComputeClient redCompute, AgentDirectory agents,
-            IEntityStore entities) =>
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();

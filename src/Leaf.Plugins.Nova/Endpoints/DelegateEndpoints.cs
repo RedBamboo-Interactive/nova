@@ -33,7 +33,7 @@ public static class DelegateEndpoints
     {
         group.MapPost("/delegate", async (HttpContext ctx, DelegateRequest request, RedComputeClient redCompute,
             AgentDirectory agentDir, AgentWorkspaces workspaces, DiscussionStore discussions,
-            IEntityStore entities,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities,
             [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
         {
             bool isContinuation = !string.IsNullOrWhiteSpace(request.SessionId);
