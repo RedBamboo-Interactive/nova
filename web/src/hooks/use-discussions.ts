@@ -6,6 +6,7 @@ import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, Questio
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
+import { discussionMessagesForMerge } from "../lib/discussion-transcript"
 
 function isClosed(status: string | undefined): boolean {
   return status === "archived" || status === "archiving"
@@ -299,9 +300,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
           if (data.messages?.length) {
             // The API already merges session-transcript messages with event
             // messages, but we load the raw session above for full fidelity
-            // (tool calls, thinking blocks, etc.). Only take event messages
-            // from the API to avoid duplicates with the raw transcript.
-            apiMsgs = toChatMessages(data.messages.filter((m) => m.source !== "session-transcript"))
+            // (tool calls, thinking blocks, etc.). Remove the API transcript
+            // only when that raw history is actually available; a forbidden
+            // agent-owned session must fall back to the discussion copy.
+            apiMsgs = toChatMessages(discussionMessagesForMerge(data.messages, sessionMsgs.length > 0))
           }
         } catch {}
 
