@@ -22,6 +22,10 @@ function stripContextXml(content: string): string {
 
 type EventResolver = (source: string) => EventType
 
+const INITIAL_HISTORY_TAIL = 500
+const HISTORY_TAIL_STEP = 500
+const MAX_HISTORY_TAIL = 10_000
+
 /**
  * Nova wraps every outgoing user message in context XML; the transcript shows
  * only the part the human typed. Returns null for a message that was pure
@@ -118,7 +122,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const [isSpawning, setIsSpawning] = useState(false)
   const [upstreamConnected, setUpstreamConnected] = useState(true)
   const [loadingDiscussionId, setLoadingDiscussionId] = useState<string | null>(null)
+  const [loadingEarlierDiscussionId, setLoadingEarlierDiscussionId] = useState<string | null>(null)
+  const [hasEarlierMessages, setHasEarlierMessages] = useState<Record<string, boolean>>({})
   const loadedRef = useRef<Set<string>>(new Set())
+  const historyTailRef = useRef<Record<string, number>>({})
 
   const activeDiscussion = discussions.find((d) => d.id === activeDiscussionId) ?? null
   const activeMessages = activeDiscussionId ? messages[activeDiscussionId] ?? [] : []
@@ -276,8 +283,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     syncAndRefresh()
   }, [syncAndRefresh])
 
-  const loadMessages = useCallback(async (id: string) => {
-    if (loadedRef.current.has(id)) return
+  const loadMessages = useCallback(async (id: string, tail = INITIAL_HISTORY_TAIL, force = false) => {
+    if (!force && loadedRef.current.has(id)) return
 
     const disc = discussions.find((d) => d.id === id)
     if (!disc) return
@@ -289,15 +296,21 @@ export function useDiscussions(eventResolver?: EventResolver) {
         // LIVE + heartbeat: merge session messages (chat) with Nova API messages
         // (events — tick digests are events in the heartbeat's stream)
         let sessionMsgs: MessageBlock[] = []
+        let sessionHasEarlier = false
         try {
-          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
-          if (data.messages?.length) sessionMsgs = rebuildBlocks(data.messages)
+          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+          if (data.messages?.length) {
+            sessionMsgs = rebuildBlocks(data.messages)
+            sessionHasEarlier = data.messages.length >= tail
+          }
         } catch {}
 
         let apiMsgs: MessageBlock[] = []
+        let apiHasEarlier = false
         try {
-          const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}`)
+          const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}?tail=${tail}`)
           if (data.messages?.length) {
+            apiHasEarlier = data.messages.length >= tail
             // The API already merges session-transcript messages with event
             // messages, but we load the raw session above for full fidelity
             // (tool calls, thinking blocks, etc.). Remove the API transcript
@@ -328,12 +341,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
           .sort(byTimestamp)
 
         setMessages((prev) => ({ ...prev, [id]: cleanMessages(merged, eventResolver) }))
+        historyTailRef.current[id] = tail
+        setHasEarlierMessages((prev) => ({ ...prev, [id]: sessionHasEarlier || apiHasEarlier }))
         return
       }
 
       if (disc?.sessionId) {
         try {
-          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
+          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
           if (data.session?.title && data.session.title !== disc.title) {
             setDiscussions((prev) =>
               prev.map((d) => d.id === id ? { ...d, title: data.session.title! } : d)
@@ -342,14 +357,18 @@ export function useDiscussions(eventResolver?: EventResolver) {
           }
           if (data.messages?.length) {
             setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages), eventResolver) }))
+            historyTailRef.current[id] = tail
+            setHasEarlierMessages((prev) => ({ ...prev, [id]: data.messages.length >= tail }))
             return
           }
         } catch {
           try {
             await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
-            const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}`)
+            const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
             if (data.messages?.length) {
               setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages), eventResolver) }))
+              historyTailRef.current[id] = tail
+              setHasEarlierMessages((prev) => ({ ...prev, [id]: data.messages.length >= tail }))
               return
             }
           } catch {
@@ -359,15 +378,33 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }
 
       try {
-        const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}`)
+        const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}?tail=${tail}`)
         if (data.messages?.length) {
           setMessages((prev) => ({ ...prev, [id]: cleanMessages(toChatMessages(data.messages), eventResolver) }))
         }
+        historyTailRef.current[id] = tail
+        setHasEarlierMessages((prev) => ({ ...prev, [id]: data.messages.length >= tail }))
       } catch { /* discussion not found */ }
     } finally {
       setLoadingDiscussionId((cur) => cur === id ? null : cur)
     }
   }, [discussions])
+
+  const loadEarlierMessages = useCallback(async (id: string) => {
+    if (loadingEarlierDiscussionId === id || !hasEarlierMessages[id]) return
+    const currentTail = historyTailRef.current[id] ?? INITIAL_HISTORY_TAIL
+    if (currentTail >= MAX_HISTORY_TAIL) {
+      setHasEarlierMessages((prev) => ({ ...prev, [id]: false }))
+      return
+    }
+    const nextTail = Math.min(MAX_HISTORY_TAIL, currentTail + HISTORY_TAIL_STEP)
+    setLoadingEarlierDiscussionId(id)
+    try {
+      await loadMessages(id, nextTail, true)
+    } finally {
+      setLoadingEarlierDiscussionId((current) => current === id ? null : current)
+    }
+  }, [hasEarlierMessages, loadMessages, loadingEarlierDiscussionId])
 
   const reloadActiveMessages = useCallback((force?: boolean) => {
     const id = activeIdRef.current
@@ -972,11 +1009,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
     renameDiscussion,
     setConfidential,
     resumeDiscussion,
+    loadEarlierMessages,
     refreshDiscussions,
     syncAndRefresh,
     reloadActiveMessages,
     handleWsEvent,
     isLoadingMessages: loadingDiscussionId === activeDiscussionId && loadingDiscussionId !== null,
+    hasEarlierMessages: activeDiscussionId ? hasEarlierMessages[activeDiscussionId] ?? false : false,
+    isLoadingEarlier: loadingEarlierDiscussionId === activeDiscussionId && loadingEarlierDiscussionId !== null,
     upstreamConnected,
     handleUpstreamDisconnect,
     handleUpstreamReconnect,

@@ -192,11 +192,15 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     }
 
     /// <summary>Raw GET /ai-session/sessions/{id} as parsed JSON, or null when unreachable/missing.</summary>
-    public async Task<JsonDocument?> GetSessionRawAsync(string sessionId, CancellationToken ct = default)
+    public async Task<JsonDocument?> GetSessionRawAsync(
+        string sessionId, CancellationToken ct = default, int? tail = null)
     {
         try
         {
-            var resp = await _http.GetAsync($"/ai-session/sessions/{sessionId}", ct);
+            var url = tail is { } count
+                ? $"/ai-session/sessions/{sessionId}?tail={count}"
+                : $"/ai-session/sessions/{sessionId}";
+            var resp = await _http.GetAsync(url, ct);
             if (!resp.IsSuccessStatusCode) return null;
             return JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
         }
@@ -289,9 +293,10 @@ public sealed class RedComputeClient(IComputeGateway gateway)
             && session.TryGetProperty("status", out var st) ? st.GetString() : null;
     }
 
-    public async Task<SessionSnapshot?> GetSessionAsync(string sessionId, CancellationToken ct = default)
+    public async Task<SessionSnapshot?> GetSessionAsync(
+        string sessionId, CancellationToken ct = default, int? tail = null)
     {
-        using var doc = await GetSessionRawAsync(sessionId, ct);
+        using var doc = await GetSessionRawAsync(sessionId, ct, tail);
         if (doc == null) return null;
 
         string? status = null, title = null;

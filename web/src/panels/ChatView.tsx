@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useDeferredValue, useMemo } from "react"
+import { useState, useCallback, useEffect, useMemo } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, Switch, Tabs, TabsList, TabsTrigger } from "@redbamboo/ui"
 import { ChatPanel, ContextIndicator, ShareDialog, fetchTranscriptPayload, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
@@ -120,11 +120,13 @@ export function ChatView() {
     renameDiscussion,
     setConfidential,
     resumeDiscussion,
+    loadEarlierMessages,
     isLoadingMessages,
+    hasEarlierMessages,
+    isLoadingEarlier,
     upstreamConnected,
   } = disc
 
-  const deferredMessages = useDeferredValue(activeMessages)
   const payloadSessionId = activeDiscussion?.sessionId ?? null
   const loadTranscriptPayload = useCallback<TranscriptPayloadLoader>((ref, range, signal) => {
     if (!payloadSessionId) return Promise.reject(new Error("This discussion has no active session"))
@@ -255,6 +257,11 @@ export function ChatView() {
     if (!activeDiscussionId) return
     await resumeDiscussion(activeDiscussionId)
   }, [activeDiscussionId, resumeDiscussion])
+
+  const handleLoadEarlier = useCallback(() => {
+    if (!activeDiscussionId) return
+    return loadEarlierMessages(activeDiscussionId)
+  }, [activeDiscussionId, loadEarlierMessages])
 
   const handleSelectDiscussion = useCallback((id: string) => {
     navigate(`/apps/nova/chat/${id}`)
@@ -463,7 +470,7 @@ export function ChatView() {
         </div>
       )}
       <ChatPanel
-        messages={deferredMessages}
+        messages={activeMessages}
         isStreaming={isStreaming}
         interrupting={isInterrupting}
         resumePending={isResumePending}
@@ -480,6 +487,9 @@ export function ChatView() {
         questionOutcome={questionOutcome}
         onAnswerQuestion={handleAnswerQuestion}
         onResume={activeDiscussion.status === "stopped" && activeDiscussion.type !== "live" ? handleResume : undefined}
+        hasEarlierMessages={hasEarlierMessages}
+        onLoadEarlier={handleLoadEarlier}
+        isLoadingEarlier={isLoadingEarlier}
         placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}
         header={<>{chatHeader}{upstreamBanner}</>}
         speechBackend={speechBackend}

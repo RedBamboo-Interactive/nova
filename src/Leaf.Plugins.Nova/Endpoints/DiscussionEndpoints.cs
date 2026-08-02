@@ -361,11 +361,11 @@ public static class DiscussionEndpoints
 
             int? tail = null;
             if (ctx.Request.Query["tail"].FirstOrDefault() is { } tv && int.TryParse(tv, out var tp))
-                tail = tp;
+                tail = Math.Clamp(tp, 1, 10_000);
 
             if (discussion.SessionId is not null)
             {
-                var snapshot = await redCompute.GetSessionAsync(discussion.SessionId);
+                var snapshot = await redCompute.GetSessionAsync(discussion.SessionId, tail: tail);
                 if (snapshot is { Messages.Count: > 0 })
                 {
                     var records = await discussions.GetMessagesAsync(discussion.EntityId);
