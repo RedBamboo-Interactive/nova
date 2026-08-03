@@ -10,16 +10,15 @@ import {
 } from "@redbamboo/ui"
 import { MarkdownRenderer } from "@redbamboo/chat"
 import { useBreadcrumbLabel } from "@redbamboo/utility"
+import { WorkflowGraphViewer, normalizeWorkflowGraph } from "@redbamboo/workflow"
 import { api } from "../lib/api"
 import { useLocalSettings } from "../hooks/use-local-settings"
 import { useAgents } from "../hooks/use-agents"
 import { AgentPicker } from "../components/agent-picker"
 import { setSettings } from "../lib/settings-store"
-import { WorkflowCutoverPanel } from "./WorkflowCutoverPanel"
 import {
   executionSummary,
   expectsPrompt,
-  normalizeWorkflowGraph,
   promptAvailability,
   type AutomationDetailData,
   type AutomationWorkflowDetail,
@@ -276,24 +275,6 @@ function RunHistory({ runs, loading }: { runs: AutomationRun[]; loading: boolean
 
 function WorkflowPreview({ workflow }: { workflow: AutomationWorkflowDetail }) {
   const graph = normalizeWorkflowGraph(workflow.graph)
-  const nodeById = new Map(graph.nodes.map(node => [node.id, node]))
-  const nodeWidth = 168
-  const nodeHeight = 58
-  const padding = 28
-  const minX = graph.nodes.length ? Math.min(...graph.nodes.map(node => node.position.x)) : 0
-  const minY = graph.nodes.length ? Math.min(...graph.nodes.map(node => node.position.y)) : 0
-  const maxX = graph.nodes.length ? Math.max(...graph.nodes.map(node => node.position.x)) : 0
-  const maxY = graph.nodes.length ? Math.max(...graph.nodes.map(node => node.position.y)) : 0
-  const width = Math.max(360, maxX - minX + nodeWidth + padding * 2)
-  const height = Math.max(180, maxY - minY + nodeHeight + padding * 2)
-  const point = (nodeId: string, outgoing: boolean) => {
-    const node = nodeById.get(nodeId)
-    if (!node) return null
-    return {
-      x: node.position.x - minX + padding + (outgoing ? nodeWidth : 0),
-      y: node.position.y - minY + padding + nodeHeight / 2,
-    }
-  }
 
   return (
     <div className="space-y-3">
@@ -311,40 +292,12 @@ function WorkflowPreview({ workflow }: { workflow: AutomationWorkflowDetail }) {
         </a>
       </div>
 
-      {graph.nodes.length === 0 ? (
-        <div className="rounded-md bg-overlay-5 p-3 text-xs text-text-muted">This workflow has no visible graph.</div>
-      ) : (
-        <div className="rounded-lg border border-overlay-10 bg-overlay-5 overflow-auto">
-          <svg viewBox={`0 0 ${width} ${height}`} className="block min-w-[420px] w-full max-h-[420px]" role="img" aria-label={`${workflow.name} workflow graph`}>
-            {graph.edges.map((edge, index) => {
-              const source = point(edge.source, true)
-              const target = point(edge.target, false)
-              if (!source || !target) return null
-              const curve = Math.max(40, Math.abs(target.x - source.x) * 0.45)
-              return <path
-                key={edge.id ?? `${edge.source}-${edge.target}-${index}`}
-                d={`M ${source.x} ${source.y} C ${source.x + curve} ${source.y}, ${target.x - curve} ${target.y}, ${target.x} ${target.y}`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                className="text-overlay-20"
-              />
-            })}
-            {graph.nodes.map(node => {
-              const x = node.position.x - minX + padding
-              const y = node.position.y - minY + padding
-              const label = node.data.label ?? node.type ?? node.id
-              const shortLabel = label.length > 22 ? `${label.slice(0, 21)}…` : label
-              return <g key={node.id} transform={`translate(${x} ${y})`}>
-                <rect width={nodeWidth} height={nodeHeight} rx="9" className="fill-surface stroke-overlay-20" strokeWidth="1.5" />
-                <text x="12" y="25" className="fill-text text-[12px] font-medium">{shortLabel}</text>
-                <text x="12" y="43" className="fill-text-muted text-[10px]">{node.type ?? "node"}</text>
-              </g>
-            })}
-          </svg>
-        </div>
-      )}
-
+      <WorkflowGraphViewer
+        graph={graph}
+        nodeTypes={workflow.nodeTypes}
+        ariaLabel={`${workflow.name} workflow graph`}
+        minHeight={320}
+      />
       {graph.nodes.some(node => node.data.config && Object.keys(node.data.config).length > 0) && (
         <div className="rounded-md border border-overlay-10 divide-y divide-overlay-10">
           {graph.nodes.filter(node => node.data.config && Object.keys(node.data.config).length > 0).map(node => (
@@ -577,11 +530,9 @@ export function AutomationsPanel() {
   const selected = automations.find(a => a.id === urlAutomationId)
     ?? automations.find(a => a.name === urlAutomationId || a.slug === urlAutomationId)
     ?? null
-  const cutoverSelected = urlAutomationId === "workflow-cutover"
-
   useBreadcrumbLabel(
     urlAutomationId ? `/apps/nova/pulse/${urlAutomationId}` : undefined,
-    cutoverSelected ? "Workflow cutover" : selected?.name ?? urlAutomationId,
+    selected?.name ?? urlAutomationId,
   )
 
   const refresh = useCallback(async () => {
@@ -701,13 +652,6 @@ export function AutomationsPanel() {
         {multiAgent && <AgentPicker agents={agents} selectedId={agentFilter} onSelect={id => setSettings({ agentFilter: id })} showAll />}
       </PanelHeader>
       <ScrollArea className="flex-1">
-        <ItemListRow
-          selected={cutoverSelected}
-          icon={<i className="ph-bold ph-git-merge text-xs text-primary" />}
-          title="Workflow cutover"
-          subtitle="Review migration readiness"
-          onClick={() => handleSelect("workflow-cutover")}
-        />
         {visible.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-text-muted">
             <div className="text-center">
@@ -727,9 +671,7 @@ export function AutomationsPanel() {
     </>
   )
 
-  const detail = cutoverSelected ? (
-    <WorkflowCutoverPanel onChanged={refresh} />
-  ) : selected ? (
+  const detail = selected ? (
     <AutomationDetail
       automation={selected}
       detail={detailData}

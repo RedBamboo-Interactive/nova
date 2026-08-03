@@ -21,7 +21,8 @@
   "dependencies": {
     "@redbamboo/chat": "link:../../redbamboo-packages/packages/chat",
     "@redbamboo/ui": "link:../../redbamboo-packages/packages/ui",
-    "@redbamboo/utility": "link:../../redbamboo-packages/packages/utility"
+    "@redbamboo/utility": "link:../../redbamboo-packages/packages/utility",
+    "@redbamboo/workflow": "link:../../redbamboo-packages/packages/workflow"
   },
   "peerDependencies": {
     "react": "^19.0.0",

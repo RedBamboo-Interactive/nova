@@ -60,6 +60,7 @@ public sealed record HeartbeatConfig(
 /// </summary>
 public sealed class HeartbeatService(
     IEntityStore entities,
+    IWorkflowAutomations workflowAutomations,
     IDiscussions discussions,
     DiscussionStore store,
     DiscussionLifecycle lifecycle,
@@ -106,7 +107,6 @@ public sealed class HeartbeatService(
                 ? await entities.GetAsync(automationId, ct)
                 : await entities.GetBySlugAsync(AutomationSlug(agent.Slug), ct);
             if (automation is not null && (automation.TypeSlug != "automation"
-                || StrValue(automation.Data, "action_type") != HeartbeatTickHandler.Type
                 || StrValue(automation.Data, "agent") != agentId))
                 automation = await entities.GetBySlugAsync(AutomationSlug(agent.Slug), ct);
             var discussion = await GetDiscussionAsync(agentId, ct);
@@ -117,8 +117,8 @@ public sealed class HeartbeatService(
                 {
                     var legacyEnabled = config.LegacyEnabled ?? false;
                     var schedule = config.LegacySchedule ?? HeartbeatConfig.DefaultSchedule;
-                    automation = await entities.UpsertBySlugAsync("automation", AutomationSlug(agent.Slug),
-                        $"system:heartbeat:{agent.Slug}", CreateAutomationData(agentId, agent.Name,
+                    automation = await workflowAutomations.EnsureAsync(
+                        CreateAutomationDefinition(agent.Slug, agentId, agent.Name,
                             schedule, legacyEnabled, config, soleOwnerId), ct);
                 }
 
@@ -167,7 +167,8 @@ public sealed class HeartbeatService(
         return result;
     }
 
-    private static JsonObject CreateAutomationData(string agentId, string agentName,
+    private static WorkflowAutomationDefinition CreateAutomationDefinition(
+        string agentSlug, string agentId, string agentName,
         string schedule, bool enabled, HeartbeatConfig config, string? ownerId)
     {
         var actionConfig = new JsonObject();
@@ -186,18 +187,21 @@ public sealed class HeartbeatService(
                 ["authored_by"] = "system:heartbeat-provisioning",
                 ["authored_at"] = DateTimeOffset.UtcNow,
             };
-        var result = new JsonObject
+        var ownership = new JsonObject
         {
-            ["definition_schema"] = 1,
-            ["enabled"] = enabled,
-            ["schedule"] = schedule,
-            ["timezone"] = "Europe/Zurich",
-            ["action_type"] = HeartbeatTickHandler.Type,
-            ["action_config"] = actionConfig.DeepClone(),
-            ["agent"] = agentId,
-            ["owner_id"] = ownerId,
-            ["timeout"] = (config.TickWaitMinutes + 5) * 60,
-            ["trigger"] = new JsonObject
+            ["app"] = "nova",
+            ["actor_agent"] = agentId,
+            ["beneficiary"] = beneficiary,
+        };
+        if (ownerId is not null)
+            ownership["user_id"] = ownerId;
+        return new WorkflowAutomationDefinition
+        {
+            Slug = AutomationSlug(agentSlug),
+            Name = $"system:heartbeat:{agentSlug}",
+            NodeType = HeartbeatTickHandler.Type,
+            Enabled = enabled,
+            Trigger = new JsonObject
             {
                 ["kind"] = "cron",
                 ["expression"] = schedule,
@@ -207,18 +211,9 @@ public sealed class HeartbeatService(
                 ["migration_policy"] = "canonical",
                 ["migration_reason"] = "Heartbeat schedule is authored as local wall-clock time",
             },
-            ["action"] = new JsonObject
-            {
-                ["type"] = HeartbeatTickHandler.Type,
-                ["config"] = actionConfig.DeepClone(),
-                ["target"] = new JsonObject
-                {
-                    ["kind"] = "agent",
-                    ["entity_id"] = agentId,
-                    ["name"] = agentName,
-                },
-            },
-            ["execution_policy"] = new JsonObject
+            ActionConfig = actionConfig,
+            NodeContext = new JsonObject { ["agent"] = agentId },
+            ExecutionPolicy = new JsonObject
             {
                 ["overlap"] = "forbid",
                 ["timeout_seconds"] = (config.TickWaitMinutes + 5) * 60,
@@ -229,16 +224,16 @@ public sealed class HeartbeatService(
                 ["recovery"] = "at-least-once",
                 ["recovery_reason"] = "A crash between session delivery and its durable marker can redeliver one tick",
             },
-            ["ownership"] = new JsonObject
+            Ownership = ownership,
+            Metadata = new JsonObject
             {
-                ["app"] = "nova",
-                ["actor_agent"] = agentId,
-                ["beneficiary"] = beneficiary,
+                ["agent"] = agentId,
+                ["owner_id"] = ownerId,
+                ["timeout"] = (config.TickWaitMinutes + 5) * 60,
             },
+            Description = $"Runs the recurring heartbeat for {agentName}.",
+            ReviewReason = "Nova heartbeat workflow authored by the installed plugin",
         };
-        if (ownerId is not null)
-            result["ownership"]!["user_id"] = ownerId;
-        return result;
     }
 
     private async Task ArchiveAutomationAsync(LeafEntity automation, CancellationToken ct)

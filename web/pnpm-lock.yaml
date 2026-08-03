@@ -17,6 +17,9 @@ importers:
       '@redbamboo/utility':
         specifier: link:../../redbamboo-packages/packages/utility
         version: link:../../redbamboo-packages/packages/utility
+      '@redbamboo/workflow':
+        specifier: link:../../redbamboo-packages/packages/workflow
+        version: link:../../redbamboo-packages/packages/workflow
       react-router-dom:
         specifier: ^7.0.0
         version: 7.18.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)

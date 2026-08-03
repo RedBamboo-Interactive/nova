@@ -15,26 +15,8 @@ export interface AutomationOwnershipDetail {
   beneficiary: AutomationParty
 }
 
-export interface WorkflowNode {
-  id: string
-  type?: string
-  position: { x: number; y: number }
-  data: {
-    label?: string
-    config?: Record<string, unknown>
-  }
-}
-
-export interface WorkflowEdge {
-  id?: string
-  source: string
-  target: string
-}
-
-export interface WorkflowGraph {
-  nodes: WorkflowNode[]
-  edges: WorkflowEdge[]
-}
+import type { WorkflowNodeTypeDefinition } from "@redbamboo/workflow/graph"
+export { normalizeWorkflowGraph } from "@redbamboo/workflow/graph"
 
 export interface AutomationWorkflowDetail {
   id: string
@@ -45,6 +27,7 @@ export interface AutomationWorkflowDetail {
   revisionId?: string
   definitionHash?: string
   versionPolicy?: string
+  nodeTypes?: WorkflowNodeTypeDefinition[]
 }
 
 export interface AutomationDetailData {
@@ -89,51 +72,4 @@ function displayApplication(value?: string): string {
   if (!value || value === "system" || value === "redleaf") return "RedLeaf"
   if (value === "nova") return "Nova"
   return value
-}
-
-export function normalizeWorkflowGraph(value: unknown): WorkflowGraph {
-  let source = value
-  if (typeof source === "string") {
-    try { source = JSON.parse(source) }
-    catch { return { nodes: [], edges: [] } }
-  }
-  if (!source || typeof source !== "object") return { nodes: [], edges: [] }
-
-  const graph = source as { nodes?: unknown; edges?: unknown }
-  const nodes = Array.isArray(graph.nodes) ? graph.nodes.flatMap((candidate): WorkflowNode[] => {
-    if (!candidate || typeof candidate !== "object") return []
-    const node = candidate as Record<string, unknown>
-    if (typeof node.id !== "string") return []
-    const rawPosition = node.position && typeof node.position === "object"
-      ? node.position as Record<string, unknown> : {}
-    const rawData = node.data && typeof node.data === "object"
-      ? node.data as Record<string, unknown> : {}
-    const config = rawData.config && typeof rawData.config === "object" && !Array.isArray(rawData.config)
-      ? rawData.config as Record<string, unknown> : undefined
-    return [{
-      id: node.id,
-      type: typeof node.type === "string" ? node.type : undefined,
-      position: {
-        x: typeof rawPosition.x === "number" ? rawPosition.x : 0,
-        y: typeof rawPosition.y === "number" ? rawPosition.y : 0,
-      },
-      data: {
-        label: typeof rawData.label === "string" ? rawData.label : undefined,
-        config,
-      },
-    }]
-  }) : []
-
-  const edges = Array.isArray(graph.edges) ? graph.edges.flatMap((candidate): WorkflowEdge[] => {
-    if (!candidate || typeof candidate !== "object") return []
-    const edge = candidate as Record<string, unknown>
-    if (typeof edge.source !== "string" || typeof edge.target !== "string") return []
-    return [{
-      id: typeof edge.id === "string" ? edge.id : undefined,
-      source: edge.source,
-      target: edge.target,
-    }]
-  }) : []
-
-  return { nodes, edges }
 }

@@ -94,6 +94,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
         services.AddSingleton(sp =>
             new HeartbeatService(
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+                sp.GetRequiredKeyedService<IWorkflowAutomations>(PluginId),
                 sp.GetRequiredService<IDiscussions>(),
                 sp.GetRequiredService<DiscussionStore>(),
                 sp.GetRequiredService<DiscussionLifecycle>(),
