@@ -51,9 +51,18 @@ public sealed class NovaSessionActionHandler(
         // contract the standalone app's automations relied on.
         DiscussionRead? preCreated = null;
         if (Bool(config, "preCreateDiscussion"))
+        {
+            if (context.Beneficiary.Kind != "user"
+                || string.IsNullOrWhiteSpace(context.Beneficiary.Id))
+                throw new InvalidOperationException(
+                    "nova-session preCreateDiscussion requires an authored, verified user beneficiary");
             preCreated = await discussions.GetOrCreateAutomationDeliveryAsync(
-                context.AttemptJobId, agent.Id,
-                context.Beneficiary.Kind == "user" ? context.Beneficiary.Id : "system", ct);
+                context.AttemptJobId, agent.Id, context.Beneficiary.Id, ct);
+            if (!string.Equals(preCreated.OwnerId, context.Beneficiary.Id,
+                    StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    $"Automation delivery discussion '{preCreated.Id}' belongs to '{preCreated.OwnerId}', not beneficiary '{context.Beneficiary.Id}'");
+        }
 
         var fullPrompt = ComposePrompt(automation.Name, agent, preCreated, prompt, isCodex);
 

@@ -15,6 +15,14 @@ import { useLocalSettings } from "../hooks/use-local-settings"
 import { useAgents } from "../hooks/use-agents"
 import { AgentPicker } from "../components/agent-picker"
 import { setSettings } from "../lib/settings-store"
+import {
+  executionSummary,
+  expectsPrompt,
+  normalizeWorkflowGraph,
+  promptAvailability,
+  type AutomationDetailData,
+  type AutomationWorkflowDetail,
+} from "../lib/automation-detail"
 
 interface Automation {
   id: string
@@ -261,8 +269,100 @@ function RunHistory({ runs, loading }: { runs: AutomationRun[]; loading: boolean
   )
 }
 
-function AutomationDetail({ automation, runs, runsLoading, onRetire, onTrigger, triggering }: {
+function WorkflowPreview({ workflow }: { workflow: AutomationWorkflowDetail }) {
+  const graph = normalizeWorkflowGraph(workflow.graph)
+  const nodeById = new Map(graph.nodes.map(node => [node.id, node]))
+  const nodeWidth = 168
+  const nodeHeight = 58
+  const padding = 28
+  const minX = graph.nodes.length ? Math.min(...graph.nodes.map(node => node.position.x)) : 0
+  const minY = graph.nodes.length ? Math.min(...graph.nodes.map(node => node.position.y)) : 0
+  const maxX = graph.nodes.length ? Math.max(...graph.nodes.map(node => node.position.x)) : 0
+  const maxY = graph.nodes.length ? Math.max(...graph.nodes.map(node => node.position.y)) : 0
+  const width = Math.max(360, maxX - minX + nodeWidth + padding * 2)
+  const height = Math.max(180, maxY - minY + nodeHeight + padding * 2)
+  const point = (nodeId: string, outgoing: boolean) => {
+    const node = nodeById.get(nodeId)
+    if (!node) return null
+    return {
+      x: node.position.x - minX + padding + (outgoing ? nodeWidth : 0),
+      y: node.position.y - minY + padding + nodeHeight / 2,
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium">{workflow.name}</div>
+          {workflow.description && <div className="text-xs text-text-muted mt-0.5">{workflow.description}</div>}
+          <div className="text-[11px] text-text-disabled mt-1">{graph.nodes.length} nodes · {graph.edges.length} connections</div>
+        </div>
+        <a
+          href={`/entities/flow/${encodeURIComponent(workflow.id)}`}
+          className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-overlay-10 px-2.5 py-1.5 text-xs hover:bg-overlay-5"
+        >
+          Open workflow <i className="ph-bold ph-arrow-square-out" />
+        </a>
+      </div>
+
+      {graph.nodes.length === 0 ? (
+        <div className="rounded-md bg-overlay-5 p-3 text-xs text-text-muted">This workflow has no visible graph.</div>
+      ) : (
+        <div className="rounded-lg border border-overlay-10 bg-overlay-5 overflow-auto">
+          <svg viewBox={`0 0 ${width} ${height}`} className="block min-w-[420px] w-full max-h-[420px]" role="img" aria-label={`${workflow.name} workflow graph`}>
+            {graph.edges.map((edge, index) => {
+              const source = point(edge.source, true)
+              const target = point(edge.target, false)
+              if (!source || !target) return null
+              const curve = Math.max(40, Math.abs(target.x - source.x) * 0.45)
+              return <path
+                key={edge.id ?? `${edge.source}-${edge.target}-${index}`}
+                d={`M ${source.x} ${source.y} C ${source.x + curve} ${source.y}, ${target.x - curve} ${target.y}, ${target.x} ${target.y}`}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className="text-overlay-20"
+              />
+            })}
+            {graph.nodes.map(node => {
+              const x = node.position.x - minX + padding
+              const y = node.position.y - minY + padding
+              const label = node.data.label ?? node.type ?? node.id
+              const shortLabel = label.length > 22 ? `${label.slice(0, 21)}…` : label
+              return <g key={node.id} transform={`translate(${x} ${y})`}>
+                <rect width={nodeWidth} height={nodeHeight} rx="9" className="fill-surface stroke-overlay-20" strokeWidth="1.5" />
+                <text x="12" y="25" className="fill-text text-[12px] font-medium">{shortLabel}</text>
+                <text x="12" y="43" className="fill-text-muted text-[10px]">{node.type ?? "node"}</text>
+              </g>
+            })}
+          </svg>
+        </div>
+      )}
+
+      {graph.nodes.some(node => node.data.config && Object.keys(node.data.config).length > 0) && (
+        <div className="rounded-md border border-overlay-10 divide-y divide-overlay-10">
+          {graph.nodes.filter(node => node.data.config && Object.keys(node.data.config).length > 0).map(node => (
+            <details key={node.id} className="group px-3 py-2">
+              <summary className="cursor-pointer list-none flex items-center gap-2 text-xs">
+                <i className="ph-bold ph-caret-right text-text-disabled group-open:rotate-90 transition-transform" />
+                <span className="font-medium">{node.data.label ?? node.type ?? node.id}</span>
+                <span className="text-text-disabled">node configuration</span>
+              </summary>
+              <div className="pt-3 pl-5"><ConfigDisplay config={node.data.config!} /></div>
+            </details>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AutomationDetail({ automation, detail, detailLoading, detailError, runs, runsLoading, onRetire, onTrigger, triggering }: {
   automation: Automation
+  detail: AutomationDetailData | null
+  detailLoading: boolean
+  detailError: boolean
   runs: AutomationRun[]
   runsLoading: boolean
   onRetire: () => void
@@ -272,6 +372,8 @@ function AutomationDetail({ automation, runs, runsLoading, onRetire, onTrigger, 
   const meta = actionMeta[automation.actionType] ?? { icon: "ph-bold ph-gear", label: automation.actionType }
   const system = isSystemAutomation(automation)
   const managedByFlow = automation.actionType === "flow-execution"
+  const beneficiaryUnreviewed = !!detail && detail.ownership.beneficiary.authored !== true
+  const promptState = promptAvailability(automation.actionType, detail, detailLoading, detailError)
 
   return (
     <div className="h-full flex flex-col">
@@ -302,6 +404,30 @@ function AutomationDetail({ automation, runs, runsLoading, onRetire, onTrigger, 
         {automation.description && <p className="text-sm text-text-muted leading-relaxed">{automation.description}</p>}
         {automation.archivedReason && <p className="text-xs text-text-muted">Retired: {automation.archivedReason}</p>}
 
+        {detailError ? (
+          <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2.5 text-xs text-text-muted">
+            <i className="ph-bold ph-warning text-red-500 mr-2" />
+            Automation details are unavailable. Ownership and prompt state could not be verified.
+          </div>
+        ) : detailLoading ? (
+          <div className="rounded-md bg-overlay-5 px-3 py-2 text-xs text-text-muted">Loading execution identity…</div>
+        ) : detail ? (
+          <div className={`rounded-md border px-3 py-2.5 ${beneficiaryUnreviewed ? "border-amber-500/30 bg-amber-500/5" : "border-overlay-10 bg-overlay-5"}`}>
+            <div className="flex items-start gap-2">
+              <i className={`ph-bold ${beneficiaryUnreviewed ? "ph-warning text-amber-500" : detail.ownership.beneficiary.kind === "user" ? "ph-user-circle text-primary" : "ph-gear text-text-muted"} mt-0.5`} />
+              <div>
+                <div className="text-sm font-medium">{executionSummary(detail)}</div>
+                {beneficiaryUnreviewed && (
+                  <div className="text-xs text-text-muted mt-1">
+                    This definition cannot run safely until its beneficiary is explicitly authored.
+                    {detail.ownership.beneficiary.reason ? ` ${detail.ownership.beneficiary.reason}.` : ""}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2.5 text-xs">
           <span className="text-text-muted">Schedule</span>
           <span>
@@ -313,11 +439,17 @@ function AutomationDetail({ automation, runs, runsLoading, onRetire, onTrigger, 
           <span className="text-text-muted">Misfires</span>
           <span className="capitalize">{automation.misfirePolicy}</span>
           {(automation.agentName || automation.agentId) && <>
-            <span className="text-text-muted">Agent</span>
+            <span className="text-text-muted">Runs as</span>
             <span>{automation.agentName ?? automation.agentId}</span>
           </>}
+          {detail && <>
+            <span className="text-text-muted">For</span>
+            <span>{detail.ownership.beneficiary.kind === "user"
+              ? detail.ownership.beneficiary.name ?? detail.ownership.beneficiary.id ?? "User"
+              : detail.ownership.beneficiary.kind === "system" ? "System" : "Unreviewed"}</span>
+          </>}
           {(automation.ownerApp || automation.ownerPlugin) && <>
-            <span className="text-text-muted">Owner</span>
+            <span className="text-text-muted">Managed by</span>
             <span>{automation.ownerPlugin ?? automation.ownerApp}</span>
           </>}
           {automation.reportToDiscussionId && <>
@@ -355,6 +487,46 @@ function AutomationDetail({ automation, runs, runsLoading, onRetire, onTrigger, 
           </div>
         )}
 
+        {expectsPrompt(automation.actionType) && (
+          <div>
+            <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">Prompt</div>
+            {promptState === "unavailable" ? (
+              <div className="rounded-md border border-red-500/30 bg-red-500/5 p-3 text-xs text-text-muted">
+                Prompt unavailable because the automation detail request failed.
+              </div>
+            ) : promptState === "loading" ? (
+              <div className="rounded-md bg-overlay-5 p-3 text-xs text-text-muted">Loading prompt…</div>
+            ) : promptState === "available" ? (
+              <div className="bg-overlay-5 rounded-md px-3 py-2 text-sm leading-relaxed markdown-body max-h-[32rem] overflow-auto">
+                <MarkdownRenderer content={detail!.prompt!} />
+              </div>
+            ) : (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-text-muted">
+                No prompt is stored in this automation definition.
+              </div>
+            )}
+          </div>
+        )}
+
+        {managedByFlow && (
+          <div>
+            <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">Workflow</div>
+            {detailError ? (
+              <div className="rounded-md border border-red-500/30 bg-red-500/5 p-3 text-xs text-text-muted">
+                Workflow unavailable because the automation detail request failed.
+              </div>
+            ) : detailLoading ? (
+              <div className="rounded-md bg-overlay-5 p-3 text-xs text-text-muted">Loading workflow…</div>
+            ) : detail?.workflow ? (
+              <WorkflowPreview workflow={detail.workflow} />
+            ) : (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-text-muted">
+                The linked workflow could not be loaded. Check the flow ID and your flow permissions.
+              </div>
+            )}
+          </div>
+        )}
+
         {automation.lastError && (
           <div>
             <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">Last error</div>
@@ -380,6 +552,9 @@ export function AutomationsPanel() {
   const [automations, setAutomations] = useState<Automation[]>([])
   const [runs, setRuns] = useState<AutomationRun[]>([])
   const [runsLoading, setRunsLoading] = useState(false)
+  const [detailData, setDetailData] = useState<AutomationDetailData | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState(false)
   const [mobileTab, setMobileTab] = useState(0)
   const [triggering, setTriggering] = useState<string | null>(null)
   const { agents, defaultAgentId } = useAgents()
@@ -414,19 +589,36 @@ export function AutomationsPanel() {
     }
   }, [])
 
+  const refreshDetail = useCallback(async (automationId: string) => {
+    setDetailLoading(true)
+    setDetailError(false)
+    try {
+      setDetailData(await api.get<AutomationDetailData>(`/api/automations/${automationId}/detail`))
+    } catch {
+      setDetailData(null)
+      setDetailError(true)
+    } finally {
+      setDetailLoading(false)
+    }
+  }, [])
+
   useEffect(() => { refresh() }, [refresh])
 
   useEffect(() => {
     if (!selected) {
       setRuns([])
+      setDetailData(null)
+      setDetailError(false)
       return
     }
     if (urlAutomationId !== selected.id) {
       navigate(`/apps/nova/pulse/${selected.id}`, { replace: true })
       return
     }
-    refreshRuns(selected.id)
-  }, [selected?.id, urlAutomationId, navigate, refreshRuns])
+    setDetailData(null)
+    setDetailError(false)
+    void Promise.all([refreshRuns(selected.id), refreshDetail(selected.id)])
+  }, [selected?.id, urlAutomationId, navigate, refreshRuns, refreshDetail])
 
   const handleRetire = useCallback(async (automation: Automation) => {
     await api.patch(`/api/entities/${automation.id}`, {
@@ -517,6 +709,9 @@ export function AutomationsPanel() {
   const detail = selected ? (
     <AutomationDetail
       automation={selected}
+      detail={detailData}
+      detailLoading={detailLoading}
+      detailError={detailError}
       runs={runs}
       runsLoading={runsLoading}
       onRetire={() => handleRetire(selected)}

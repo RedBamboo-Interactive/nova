@@ -174,11 +174,19 @@ public sealed class HeartbeatService(
         var beneficiary = ownerId is null
             ? new JsonObject
             {
-                ["kind"] = "system",
-                ["reason"] = $"Heartbeat for {agentName} has no verifiable user owner",
+                ["kind"] = "unreviewed",
+                ["reason"] = $"Heartbeat for {agentName} has no explicitly authored beneficiary",
+                ["authored"] = false,
             }
-            : new JsonObject { ["kind"] = "user", ["id"] = ownerId };
-        return new JsonObject
+            : new JsonObject
+            {
+                ["kind"] = "user",
+                ["id"] = ownerId,
+                ["authored"] = true,
+                ["authored_by"] = "system:heartbeat-provisioning",
+                ["authored_at"] = DateTimeOffset.UtcNow,
+            };
+        var result = new JsonObject
         {
             ["definition_schema"] = 1,
             ["enabled"] = enabled,
@@ -228,6 +236,9 @@ public sealed class HeartbeatService(
                 ["beneficiary"] = beneficiary,
             },
         };
+        if (ownerId is not null)
+            result["ownership"]!["user_id"] = ownerId;
+        return result;
     }
 
     private async Task ArchiveAutomationAsync(LeafEntity automation, CancellationToken ct)
