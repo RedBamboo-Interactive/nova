@@ -29,6 +29,9 @@ export default defineConfig({
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
   },
+  resolve: {
+    dedupe: ["@xyflow/react", "react", "react-dom", "react-router-dom", "zustand"],
+  },
   build: {
     lib: {
       entry: fileURLToPath(new URL("./src/index.ts", import.meta.url)),
