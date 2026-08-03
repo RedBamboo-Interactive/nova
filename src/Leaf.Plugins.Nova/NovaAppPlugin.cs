@@ -60,7 +60,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
             new DiscussionLifecycle(sp.GetRequiredService<DiscussionStore>(), sp.GetRequiredService<RedComputeClient>()));
         // Automation action "nova-session" — collected by the kernel after build and
         // dispatched from its AutomationService for entities with that action_type.
-        services.AddSingleton<IAutomationActionHandler>(sp =>
+        services.AddSingleton(sp =>
             new NovaSessionActionHandler(
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredService<AgentWorkspaces>(),
@@ -68,6 +68,16 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<EventInjector>(),
                 sp.GetRequiredService<RedComputeClient>(),
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
+        services.AddSingleton<IAutomationActionHandler>(sp =>
+            sp.GetRequiredService<NovaSessionActionHandler>());
+        services.AddSingleton<IFlowNodeHandler>(sp => new AutomationFlowNodeAdapter(
+            "nova-session",
+            new FlowNodeExecutionContract(
+                "nova-session/1", FlowNodeEffect.External,
+                FlowNodeDeterminism.Nondeterministic, FlowNodeCachePolicy.Never,
+                FlowNodeRecoveryPolicy.AtLeastOnce,
+                FlowNodeCancellationPolicy.Cooperative, 7_200),
+            sp.GetRequiredService<NovaSessionActionHandler>()));
         services.AddSingleton<LocationService>();
         services.AddSingleton<GeoLocationService>();
         services.AddSingleton(sp =>
@@ -93,12 +103,22 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredService<LocationService>()));
         // Automation action "heartbeat-tick" — one tick of the per-agent heartbeat.
-        services.AddSingleton<IAutomationActionHandler>(sp =>
+        services.AddSingleton(sp =>
             new HeartbeatTickHandler(
                 sp.GetRequiredService<HeartbeatService>(),
                 sp.GetRequiredService<DiscussionStore>(),
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
                 sp.GetRequiredService<EventInjector>()));
+        services.AddSingleton<IAutomationActionHandler>(sp =>
+            sp.GetRequiredService<HeartbeatTickHandler>());
+        services.AddSingleton<IFlowNodeHandler>(sp => new AutomationFlowNodeAdapter(
+            "heartbeat-tick",
+            new FlowNodeExecutionContract(
+                "heartbeat-tick/1", FlowNodeEffect.External,
+                FlowNodeDeterminism.Nondeterministic, FlowNodeCachePolicy.Never,
+                FlowNodeRecoveryPolicy.AtLeastOnce,
+                FlowNodeCancellationPolicy.Cooperative, 3_600),
+            sp.GetRequiredService<HeartbeatTickHandler>()));
         services.AddSingleton(sp =>
             new MessagePipeline(
                 sp.GetRequiredService<DiscussionStore>(),

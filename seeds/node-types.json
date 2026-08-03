@@ -1,0 +1,61 @@
+[
+  {
+    "typeSlug": "node-type",
+    "slug": "nova-session",
+    "name": "Nova Session",
+    "data": {
+      "icon": "ph-bold ph-star",
+      "category": "ai",
+      "description": "Runs an agent session with Nova discussion delivery and an auditable child Compute job.",
+      "input_ports": [
+        { "id": "prompt", "type": "string", "label": "Prompt" }
+      ],
+      "output_ports": [
+        { "id": "summary", "type": "string", "label": "Summary" },
+        { "id": "sessionId", "type": "string", "label": "Session" },
+        { "id": "discussionId", "type": "string", "label": "Discussion" }
+      ],
+      "config_schema": {
+        "type": "object",
+        "required": ["source_automation_id", "automation_name", "prompt"],
+        "properties": {
+          "source_automation_id": { "type": "string", "description": "Stable source automation identity used for provenance and idempotency." },
+          "automation_slug": { "type": "string" },
+          "automation_name": { "type": "string" },
+          "agent": { "type": "string", "description": "Agent entity id or slug." },
+          "prompt": { "type": "string", "widget": "textarea" },
+          "report_to_discussion_id": { "type": "string" },
+          "action_config": { "type": "object", "widget": "json" }
+        }
+      }
+    }
+  },
+  {
+    "typeSlug": "node-type",
+    "slug": "heartbeat-tick",
+    "name": "Heartbeat Tick",
+    "data": {
+      "icon": "ph-bold ph-heartbeat",
+      "category": "agent",
+      "description": "Runs one guarded heartbeat tick for an agent's persistent discussion and session.",
+      "input_ports": [],
+      "output_ports": [
+        { "id": "summary", "type": "string", "label": "Summary" },
+        { "id": "sessionId", "type": "string", "label": "Session" },
+        { "id": "discussionId", "type": "string", "label": "Discussion" },
+        { "id": "silent", "type": "boolean", "label": "Silent" }
+      ],
+      "config_schema": {
+        "type": "object",
+        "required": ["source_automation_id", "automation_name", "agent"],
+        "properties": {
+          "source_automation_id": { "type": "string", "description": "Stable source automation identity used by the agent heartbeat configuration." },
+          "automation_slug": { "type": "string" },
+          "automation_name": { "type": "string" },
+          "agent": { "type": "string", "description": "Agent entity id." },
+          "action_config": { "type": "object", "widget": "json" }
+        }
+      }
+    }
+  }
+]
