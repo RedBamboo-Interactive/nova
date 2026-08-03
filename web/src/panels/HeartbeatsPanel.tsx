@@ -38,6 +38,9 @@ interface Automation {
   schedule?: string
   timezone: string
   misfirePolicy: string
+  executionModel: "legacy" | "workflow"
+  workflowId?: string
+  workflowRevisionId?: string
   actionType: string
   actionConfig?: Record<string, unknown>
   reportToDiscussionId?: string
@@ -161,6 +164,7 @@ function formatDuration(ms?: number): string | null {
 
 function getIcon(automation: Automation): string {
   if (automation.icon) return automation.icon
+  if (automation.executionModel === "workflow") return "ph-bold ph-git-branch"
   return (actionMeta[automation.actionType] ?? { icon: "ph-bold ph-gear" }).icon
 }
 
@@ -369,9 +373,11 @@ function AutomationDetail({ automation, detail, detailLoading, detailError, runs
   onTrigger: () => void
   triggering: boolean
 }) {
-  const meta = actionMeta[automation.actionType] ?? { icon: "ph-bold ph-gear", label: automation.actionType }
+  const workflowBacked = automation.executionModel === "workflow" || automation.actionType === "flow-execution"
+  const meta = workflowBacked
+    ? actionMeta["flow-execution"]!
+    : actionMeta[automation.actionType] ?? { icon: "ph-bold ph-gear", label: automation.actionType }
   const system = isSystemAutomation(automation)
-  const managedByFlow = automation.actionType === "flow-execution"
   const beneficiaryUnreviewed = !!detail && detail.ownership.beneficiary.authored !== true
   const promptState = promptAvailability(automation.actionType, detail, detailLoading, detailError)
 
@@ -398,7 +404,7 @@ function AutomationDetail({ automation, detail, detailLoading, detailError, runs
             : automation.enabled ? <Badge variant="default">Active</Badge>
               : <Badge variant="secondary">Disabled</Badge>}
           {automation.removeOnTrigger && <Badge variant="secondary">One-shot</Badge>}
-          {managedByFlow && <Badge variant="outline">Managed by workflow</Badge>}
+          {workflowBacked && <Badge variant="outline">Reviewed workflow</Badge>}
         </div>
 
         {automation.description && <p className="text-sm text-text-muted leading-relaxed">{automation.description}</p>}
@@ -469,6 +475,10 @@ function AutomationDetail({ automation, detail, detailLoading, detailError, runs
           </>}
           <span className="text-text-muted">Definition</span>
           <span className="font-mono text-[10px] truncate" title={automation.definitionVersion}>{automation.definitionVersion}</span>
+          {automation.workflowRevisionId && <>
+            <span className="text-text-muted">Workflow revision</span>
+            <span className="font-mono text-[10px] truncate" title={automation.workflowRevisionId}>{automation.workflowRevisionId}</span>
+          </>}
         </div>
 
         {automation.lastJobId && (
@@ -480,7 +490,7 @@ function AutomationDetail({ automation, detail, detailLoading, detailError, runs
           </a>
         )}
 
-        {automation.actionConfig && Object.keys(automation.actionConfig).length > 0 && (
+        {!workflowBacked && automation.actionConfig && Object.keys(automation.actionConfig).length > 0 && (
           <div>
             <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">Configuration</div>
             <ConfigDisplay config={automation.actionConfig} />
@@ -508,7 +518,7 @@ function AutomationDetail({ automation, detail, detailLoading, detailError, runs
           </div>
         )}
 
-        {managedByFlow && (
+        {workflowBacked && (
           <div>
             <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">Workflow</div>
             {detailError ? (
@@ -521,7 +531,7 @@ function AutomationDetail({ automation, detail, detailLoading, detailError, runs
               <WorkflowPreview workflow={detail.workflow} />
             ) : (
               <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-text-muted">
-                The linked workflow could not be loaded. Check the flow ID and your flow permissions.
+                {detail?.workflowError ?? "The linked workflow could not be loaded. Check the workflow binding and your permissions."}
               </div>
             )}
           </div>
@@ -658,7 +668,9 @@ export function AutomationsPanel() {
   const retired = visible.filter(a => !!a.archivedAt)
 
   const renderRow = useCallback((automation: Automation, muted = false) => {
-    const meta = actionMeta[automation.actionType] ?? { icon: "ph-bold ph-gear", label: automation.actionType }
+    const meta = automation.executionModel === "workflow"
+      ? actionMeta["flow-execution"]!
+      : actionMeta[automation.actionType] ?? { icon: "ph-bold ph-gear", label: automation.actionType }
     return (
       <ItemListRow
         selected={automation.id === selected?.id}

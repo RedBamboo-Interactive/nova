@@ -42,6 +42,9 @@ export interface AutomationWorkflowDetail {
   slug: string
   description?: string
   graph?: unknown
+  revisionId?: string
+  definitionHash?: string
+  versionPolicy?: string
 }
 
 export interface AutomationDetailData {
@@ -49,6 +52,7 @@ export interface AutomationDetailData {
   prompt?: string
   ownership: AutomationOwnershipDetail
   workflow?: AutomationWorkflowDetail
+  workflowError?: string
 }
 
 export function expectsPrompt(actionType: string): boolean {
