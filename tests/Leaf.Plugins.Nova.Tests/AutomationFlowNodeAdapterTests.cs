@@ -14,7 +14,7 @@ public sealed class AutomationFlowNodeAdapterTests
         var parentId = Guid.NewGuid();
         var beneficiary = new ComputeBeneficiary("user", "user-1", "Laurent");
         var action = new CapturingAction();
-        var adapter = new AutomationFlowNodeAdapter("nova-session",
+        var adapter = new AutomationActionFlowNodeHandler("nova-session",
             FlowNodeExecutionContract.UnverifiedExternal, action);
 
         var output = await adapter.ExecuteAsync(new FlowNodeContext

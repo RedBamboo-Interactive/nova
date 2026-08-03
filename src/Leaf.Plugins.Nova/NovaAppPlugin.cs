@@ -70,7 +70,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
         services.AddSingleton<IAutomationActionHandler>(sp =>
             sp.GetRequiredService<NovaSessionActionHandler>());
-        services.AddSingleton<IFlowNodeHandler>(sp => new AutomationFlowNodeAdapter(
+        services.AddSingleton<IFlowNodeHandler>(sp => new AutomationActionFlowNodeHandler(
             "nova-session",
             new FlowNodeExecutionContract(
                 "nova-session/1", FlowNodeEffect.External,
@@ -111,7 +111,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<EventInjector>()));
         services.AddSingleton<IAutomationActionHandler>(sp =>
             sp.GetRequiredService<HeartbeatTickHandler>());
-        services.AddSingleton<IFlowNodeHandler>(sp => new AutomationFlowNodeAdapter(
+        services.AddSingleton<IFlowNodeHandler>(sp => new AutomationActionFlowNodeHandler(
             "heartbeat-tick",
             new FlowNodeExecutionContract(
                 "heartbeat-tick/1", FlowNodeEffect.External,
