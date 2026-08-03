@@ -15,6 +15,7 @@ import { useLocalSettings } from "../hooks/use-local-settings"
 import { useAgents } from "../hooks/use-agents"
 import { AgentPicker } from "../components/agent-picker"
 import { setSettings } from "../lib/settings-store"
+import { WorkflowCutoverPanel } from "./WorkflowCutoverPanel"
 import {
   executionSummary,
   expectsPrompt,
@@ -576,10 +577,11 @@ export function AutomationsPanel() {
   const selected = automations.find(a => a.id === urlAutomationId)
     ?? automations.find(a => a.name === urlAutomationId || a.slug === urlAutomationId)
     ?? null
+  const cutoverSelected = urlAutomationId === "workflow-cutover"
 
   useBreadcrumbLabel(
     urlAutomationId ? `/apps/nova/pulse/${urlAutomationId}` : undefined,
-    selected?.name ?? urlAutomationId,
+    cutoverSelected ? "Workflow cutover" : selected?.name ?? urlAutomationId,
   )
 
   const refresh = useCallback(async () => {
@@ -699,6 +701,13 @@ export function AutomationsPanel() {
         {multiAgent && <AgentPicker agents={agents} selectedId={agentFilter} onSelect={id => setSettings({ agentFilter: id })} showAll />}
       </PanelHeader>
       <ScrollArea className="flex-1">
+        <ItemListRow
+          selected={cutoverSelected}
+          icon={<i className="ph-bold ph-git-merge text-xs text-primary" />}
+          title="Workflow cutover"
+          subtitle="Review migration readiness"
+          onClick={() => handleSelect("workflow-cutover")}
+        />
         {visible.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-text-muted">
             <div className="text-center">
@@ -718,7 +727,9 @@ export function AutomationsPanel() {
     </>
   )
 
-  const detail = selected ? (
+  const detail = cutoverSelected ? (
+    <WorkflowCutoverPanel onChanged={refresh} />
+  ) : selected ? (
     <AutomationDetail
       automation={selected}
       detail={detailData}
