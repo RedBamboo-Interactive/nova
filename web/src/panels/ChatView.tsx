@@ -166,6 +166,7 @@ export function ChatView() {
   const filteredDiscussions = getSidebarDiscussionOrder(discussions, agentFilter)
 
   const pendingContext = useNovaPendingContext()
+  const activeAgent = activeDiscussion ? getAgent(activeDiscussion.agentId) : undefined
   const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming, activeDiscussion)
   const share = useShare(activeDiscussion?.entityId)
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
@@ -371,6 +372,7 @@ export function ChatView() {
       <ContextIndicator
         stats={sessionStats}
         messages={activeMessages}
+        agent={activeAgent ? { id: activeAgent.id, name: activeAgent.name, avatarUrl: activeAgent.avatarUrl } : null}
         qualityTierOptions={qualityTiers.map(t => ({ value: t.slug, label: t.label, color: t.color, icon: t.icon }))}
         providerOptions={providers.map(p => ({
           value: p.slug,
@@ -456,7 +458,6 @@ export function ChatView() {
     )
   }, [reactions, react, unreact])
 
-  const activeAgent = activeDiscussion ? getAgent(activeDiscussion.agentId) : undefined
   const { opacity: avatarOpacity } = useAvatarStyle()
   const { showAvatar: avatarEnabled } = useLocalSettings()
   const showAvatar = avatarEnabled && !!activeDiscussion
