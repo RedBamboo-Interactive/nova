@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, Switch, Tabs, TabsList, TabsTrigger } from "@redbamboo/ui"
 import { ChatPanel, ContextIndicator, ShareDialog, fetchTranscriptPayload, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
-import { PluginExtensionSlot, useBreadcrumbLabel, formatContextMessage } from "@redbamboo/utility"
+import { PluginExtensionSlot, useBreadcrumbLabel, formatContextMessage, getEntityHref } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
 import { AgentPicker } from "../components/agent-picker"
@@ -372,7 +372,12 @@ export function ChatView() {
       <ContextIndicator
         stats={sessionStats}
         messages={activeMessages}
-        agent={activeAgent ? { id: activeAgent.id, name: activeAgent.name, avatarUrl: activeAgent.avatarUrl } : null}
+        agent={activeAgent ? {
+          id: activeAgent.id,
+          name: activeAgent.name,
+          avatarUrl: activeAgent.avatarUrl,
+          href: getEntityHref("agent", activeAgent.id),
+        } : null}
         qualityTierOptions={qualityTiers.map(t => ({ value: t.slug, label: t.label, color: t.color, icon: t.icon }))}
         providerOptions={providers.map(p => ({
           value: p.slug,
