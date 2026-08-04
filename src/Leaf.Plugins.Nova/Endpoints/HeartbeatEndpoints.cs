@@ -53,8 +53,8 @@ public static class HeartbeatEndpoints
                     ["agent"] = agent.Slug,
                     ["automationId"] = config.AutomationId?.ToString(),
                     ["enabled"] = automation?.Data["enabled"]?.DeepClone(),
-                    ["schedule"] = automation?.Data["schedule"]?.DeepClone(),
-                    ["timezone"] = automation?.Data["timezone"]?.DeepClone(),
+                    ["schedule"] = automation?.Data["trigger"]?["expression"]?.DeepClone(),
+                    ["timezone"] = automation?.Data["trigger"]?["timezone"]?.DeepClone(),
                     ["qualityTier"] = config.QualityTier,
                     ["heartbeat"] = state,
                 });
