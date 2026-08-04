@@ -381,15 +381,22 @@ export function ChatView() {
           iconSvgPath: p.iconSvgPath,
         }))}
       >
-        <div className="flex items-center justify-between py-1.5 border-t border-overlay-6 pt-3">
-          <div className="flex items-center gap-2">
-            <i className="ph-bold ph-lock-simple text-xs text-text-muted" />
-            <span className="text-xs text-text-muted">Confidential</span>
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-overlay-6 bg-overlay-3 px-3 py-2.5">
+          <div className="flex min-w-0 items-start gap-2.5">
+            <i className="ph-bold ph-lock-simple mt-0.5 text-sm text-text-muted" aria-hidden="true" />
+            <div className="min-w-0">
+              <div className="text-xs font-medium text-contrast">Confidential</div>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
+                Excludes this discussion from Live activity, heartbeat and other discussions&apos; context, and bulk exports. The share control is hidden. It remains stored and accessible here.
+              </p>
+            </div>
           </div>
           <Switch
             size="sm"
+            className="mt-0.5 shrink-0"
             checked={activeDiscussion.confidential ?? false}
             onCheckedChange={handleConfidentialToggle}
+            aria-label="Confidential discussion"
           />
         </div>
       </ContextIndicator>
