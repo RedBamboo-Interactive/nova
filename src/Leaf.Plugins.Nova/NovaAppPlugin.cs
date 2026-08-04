@@ -78,8 +78,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 FlowNodeRecoveryPolicy.AtLeastOnce,
                 FlowNodeCancellationPolicy.Cooperative, 7_200),
             sp.GetRequiredService<NovaSessionActionHandler>()));
-        services.AddSingleton<LocationService>();
-        services.AddSingleton<GeoLocationService>();
+        services.AddSingleton(sp =>
+            new PresenceReader(sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
         services.AddSingleton(sp =>
             new DeviceResolver(sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
         services.AddSingleton(sp =>
@@ -91,6 +91,9 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<RedComputeClient>(),
                 sp.GetRequiredService<IDiscussions>()));
         services.AddSingleton<LivePoller>();
+        services.AddSingleton(sp => new PresenceLiveBridge(
+            sp.GetRequiredKeyedService<IPluginEvents>(PluginId),
+            sp.GetRequiredService<LiveEvents>()));
         services.AddSingleton(sp =>
             new HeartbeatService(
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
@@ -102,7 +105,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<RedComputeClient>(),
                 sp.GetRequiredService<EventInjector>(),
                 sp.GetRequiredService<AgentDirectory>(),
-                sp.GetRequiredService<LocationService>()));
+                sp.GetRequiredService<PresenceReader>()));
         // Automation action "heartbeat-tick" — one tick of the per-agent heartbeat.
         services.AddSingleton(sp =>
             new HeartbeatTickHandler(
@@ -130,8 +133,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredService<AgentWorkspaces>(),
                 sp.GetRequiredService<NovaConfigStore>(),
-                sp.GetRequiredService<LocationService>(),
-                sp.GetRequiredService<GeoLocationService>()));
+                sp.GetRequiredService<PresenceReader>()));
     }
 
     public void MapEndpoints(RouteGroupBuilder group)
@@ -180,21 +182,13 @@ public sealed class NovaAppPlugin : ILeafPlugin
             catch { /* reconcile endpoint retries on demand */ }
         }, CancellationToken.None);
 
-        // Steam credentials for the LIVE poller: migrate from the standalone app's
-        // config.json once, if the singleton doesn't carry them yet.
-        var configStore = host.GetRequiredService<NovaConfigStore>();
-        var raw = await configStore.GetRawAsync(ct);
-        if (raw["steam_api_key"] is null)
-        {
-            var (steamKey, steamId) = ReadLegacySteamConfig();
-            if (steamKey != null)
-                await configStore.PatchAsync(new JsonObject { ["steam_api_key"] = steamKey, ["steam_id"] = steamId }, ct);
-        }
+        // Presence is optional. Its public events can enrich LIVE without moving
+        // acquisition, resolution, or provider secrets back into Nova.
+        host.GetRequiredService<PresenceLiveBridge>().Start();
 
-        // Coarse IP geolocation for the context block — fire and forget.
-        _ = host.GetRequiredService<GeoLocationService>().ResolveAsync();
+        // Keep the remaining Smart Home poller independent of Presence availability.
 
-        // Ambient LIVE timeline (Spotify/Sonos/Hue/weather/Steam). Plugins have no
+        // Ambient LIVE timeline (Spotify/Sonos/Hue). Plugins have no
         // shutdown hook, so the loop binds to ApplicationStopping, not the boot ct.
         var lifetime = host.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
         var poller = host.GetRequiredService<LivePoller>();
@@ -204,26 +198,6 @@ public sealed class NovaAppPlugin : ILeafPlugin
         // (RedCompute down, restart between intent and finalization).
         var lifecycle = host.GetRequiredService<DiscussionLifecycle>();
         _ = Task.Run(() => lifecycle.RunReconcilerAsync(lifetime.ApplicationStopping), CancellationToken.None);
-    }
-
-    private static (string? ApiKey, string? SteamId) ReadLegacySteamConfig()
-    {
-        try
-        {
-            var path = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Nova", "config.json");
-            if (!File.Exists(path)) return (null, null);
-
-            using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            if (!doc.RootElement.TryGetProperty("Steam", out var steam)) return (null, null);
-            return (
-                steam.TryGetProperty("ApiKey", out var k) ? k.GetString() : null,
-                steam.TryGetProperty("SteamId", out var s) ? s.GetString() : null);
-        }
-        catch
-        {
-            return (null, null);
-        }
     }
 
     private static (string? QualityMode, string? WorkspacePath) ReadLegacyConfig()

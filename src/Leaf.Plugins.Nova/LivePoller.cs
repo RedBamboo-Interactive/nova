@@ -4,13 +4,12 @@ using System.Text.Json;
 namespace Leaf.Plugins.Nova;
 
 /// <summary>
-/// Ambient LIVE-timeline enrichment, ported from the standalone app: polls Spotify,
-/// Sonos, and Hue (through the smart-home plugin's kernel API), weather (open-meteo),
-/// and Steam presence, and posts state CHANGES as events on the LIVE discussion.
+/// Ambient LIVE-timeline enrichment for Smart Home state: polls Spotify, Sonos,
+/// and Hue. Presence supplies location, weather, and digital-activity events.
 /// Baseline-first: the initial reading of each source is swallowed so a boot never
 /// spams the timeline. Runs until ApplicationStopping (plugins have no shutdown hook).
 /// </summary>
-public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
+public sealed class LivePoller(LiveEvents live)
 {
     // Same-process kernel API. Local requests pass auth (LocalDefault); the plugin
     // has no way to mint suite JWTs — SDK gap, but loopback doesn't need one.
@@ -20,12 +19,6 @@ public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
     private SpotifyState? _lastSpotify;
     private Dictionary<string, SonosRoomState> _lastSonos = [];
     private Dictionary<string, HueGroupState> _lastHueGroups = [];
-    private WeatherState? _lastWeather;
-    private SteamState? _lastSteam;
-    private DateTime? _steamSessionStart;
-    private List<string>? _steamFriendIds;
-    private List<string> _lastSteamFriendsInGame = [];
-
     private readonly HttpClient _kernel = new() { BaseAddress = new Uri(KernelBase), Timeout = TimeSpan.FromSeconds(10) };
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
 
@@ -38,8 +31,6 @@ public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
             PollLoopAsync(TimeSpan.FromSeconds(5), PollSonosAsync, ct),
             PollLoopAsync(TimeSpan.FromSeconds(5), PollSpotifyAsync, ct),
             PollLoopAsync(TimeSpan.FromSeconds(15), PollHueAsync, ct),
-            PollLoopAsync(TimeSpan.FromMinutes(10), PollWeatherAsync, ct),
-            PollLoopAsync(TimeSpan.FromMinutes(2), PollSteamAsync, ct),
         };
         await Task.WhenAll(tasks);
     }
@@ -224,244 +215,8 @@ public sealed class LivePoller(LiveEvents live, NovaConfigStore config)
         _lastSonos = current;
     }
 
-    // ── Weather (open-meteo, Zurich) ───────────────────────────────────
-
-    private async Task PollWeatherAsync()
-    {
-        JsonElement data;
-        try
-        {
-            var resp = await _http.GetAsync(
-                "https://api.open-meteo.com/v1/forecast?latitude=47.3769&longitude=8.5417" +
-                "&current=temperature_2m,weather_code,wind_speed_10m,precipitation" +
-                "&timezone=Europe/Zurich");
-            if (!resp.IsSuccessStatusCode) return;
-            data = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        }
-        catch { return; }
-
-        if (!data.TryGetProperty("current", out var current)) return;
-
-        var temp = current.TryGetProperty("temperature_2m", out var t) ? t.GetDouble() : 0;
-        var code = current.TryGetProperty("weather_code", out var wc) ? wc.GetInt32() : 0;
-        var wind = current.TryGetProperty("wind_speed_10m", out var w) ? w.GetDouble() : 0;
-        var precip = current.TryGetProperty("precipitation", out var p) ? p.GetDouble() : 0;
-
-        var state = new WeatherState(temp, code, ClassifyWeather(code), wind, precip);
-
-        if (_lastWeather == null)
-        {
-            _lastWeather = state;
-            return;
-        }
-
-        var events = new List<string>();
-
-        var tempDelta = Math.Abs(state.Temp - _lastWeather.Temp);
-        if (tempDelta >= 3)
-        {
-            var dir = state.Temp > _lastWeather.Temp ? "up" : "down";
-            events.Add($"Temperature {dir} to {state.Temp:F0}°C (was {_lastWeather.Temp:F0}°C)");
-        }
-
-        if (state.Condition != _lastWeather.Condition)
-            events.Add($"Weather changed: {_lastWeather.Condition} → {state.Condition}");
-
-        if (ClassifyWind(_lastWeather.Wind) != ClassifyWind(state.Wind))
-            events.Add($"Wind now {ClassifyWind(state.Wind)} ({state.Wind:F0} km/h)");
-
-        if (state.Precip > 0 && _lastWeather.Precip == 0)
-            events.Add($"Precipitation started ({state.Precip:F1} mm)");
-        else if (state.Precip == 0 && _lastWeather.Precip > 0)
-            events.Add("Precipitation stopped");
-
-        if (events.Count > 0)
-        {
-            await live.PostAsync("weather", string.Join(". ", events),
-                new { temp = state.Temp, condition = state.Condition, wind = state.Wind, precip = state.Precip, code = state.Code });
-        }
-
-        _lastWeather = state;
-    }
-
-    private static string ClassifyWeather(int code) => code switch
-    {
-        0 => "Clear",
-        1 or 2 => "Partly cloudy",
-        3 => "Overcast",
-        45 or 48 => "Fog",
-        51 or 53 or 55 => "Drizzle",
-        56 or 57 => "Freezing drizzle",
-        61 or 63 or 65 or 80 or 81 or 82 => "Rain",
-        66 or 67 => "Freezing rain",
-        71 or 73 or 75 or 77 or 85 or 86 => "Snow",
-        95 or 96 or 99 => "Thunderstorm",
-        _ => "Unknown",
-    };
-
-    private static string ClassifyWind(double kmh) => kmh switch
-    {
-        < 10 => "calm",
-        < 30 => "breezy",
-        < 50 => "windy",
-        _ => "strong",
-    };
-
-    // ── Steam presence ─────────────────────────────────────────────────
-
-    private async Task PollSteamAsync()
-    {
-        var (apiKey, steamId) = await GetSteamConfigAsync();
-        if (apiKey == null || steamId == null) return;
-
-        JsonElement playerData;
-        try
-        {
-            var resp = await _http.GetAsync(
-                $"https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key={apiKey}&steamids={steamId}");
-            if (!resp.IsSuccessStatusCode) return;
-            var json = await resp.Content.ReadFromJsonAsync<JsonElement>();
-            if (!json.TryGetProperty("response", out var r) || !r.TryGetProperty("players", out var players)
-                || players.GetArrayLength() == 0) return;
-            playerData = players[0];
-        }
-        catch { return; }
-
-        var personaState = playerData.TryGetProperty("personastate", out var ps) ? ps.GetInt32() : 0;
-        var game = playerData.TryGetProperty("gameextrainfo", out var gi) ? gi.GetString() : null;
-        var gameId = playerData.TryGetProperty("gameid", out var gid) ? gid.GetString() : null;
-
-        var current = new SteamState(personaState, game, gameId);
-
-        if (_lastSteam == null)
-        {
-            _lastSteam = current;
-            return;
-        }
-
-        if (current.Game != null && _lastSteam.Game == null)
-        {
-            _steamSessionStart = DateTime.UtcNow;
-            var friends = await GetFriendsInGameAsync(apiKey, steamId, current.GameId);
-            _lastSteamFriendsInGame = friends;
-            var withStr = friends.Count > 0 ? $" with {string.Join(", ", friends)}" : "";
-            await live.PostAsync("steam", $"Started playing {current.Game}{withStr}",
-                new { game = current.Game, gameId = current.GameId, friends, status = "playing" });
-        }
-        else if (current.Game != null && current.GameId != _lastSteam.GameId)
-        {
-            var duration = FormatDuration(_steamSessionStart);
-            await live.PostAsync("steam", $"Stopped playing {_lastSteam.Game}{(duration != null ? $" ({duration})" : "")}",
-                new { game = _lastSteam.Game, status = "stopped", duration });
-
-            _steamSessionStart = DateTime.UtcNow;
-            var friends = await GetFriendsInGameAsync(apiKey, steamId, current.GameId);
-            _lastSteamFriendsInGame = friends;
-            var withStr = friends.Count > 0 ? $" with {string.Join(", ", friends)}" : "";
-            await live.PostAsync("steam", $"Started playing {current.Game}{withStr}",
-                new { game = current.Game, gameId = current.GameId, friends, status = "playing" });
-        }
-        else if (current.Game != null && current.GameId == _lastSteam.GameId)
-        {
-            var friends = await GetFriendsInGameAsync(apiKey, steamId, current.GameId);
-            var joined = friends.Except(_lastSteamFriendsInGame).ToList();
-            var left = _lastSteamFriendsInGame.Except(friends).ToList();
-            if (joined.Count > 0)
-                await live.PostAsync("steam", $"{string.Join(", ", joined)} joined {current.Game}",
-                    new { game = current.Game, friends, joined, status = "group-changed" });
-            if (left.Count > 0)
-                await live.PostAsync("steam", $"{string.Join(", ", left)} left {current.Game}",
-                    new { game = current.Game, friends, left, status = "group-changed" });
-            _lastSteamFriendsInGame = friends;
-        }
-        else if (current.Game == null && _lastSteam.Game != null)
-        {
-            var duration = FormatDuration(_steamSessionStart);
-            _steamSessionStart = null;
-            _lastSteamFriendsInGame = [];
-            await live.PostAsync("steam", $"Stopped playing {_lastSteam.Game}{(duration != null ? $" ({duration})" : "")}",
-                new { game = _lastSteam.Game, status = "stopped", duration });
-        }
-
-        _lastSteam = current;
-    }
-
-    private (string? ApiKey, string? SteamId)? _steamConfigCache;
-    private DateTime _steamConfigFetched = DateTime.MinValue;
-
-    private async Task<(string? ApiKey, string? SteamId)> GetSteamConfigAsync()
-    {
-        if (_steamConfigCache is { } cached && DateTime.UtcNow - _steamConfigFetched < TimeSpan.FromMinutes(5))
-            return cached;
-        try
-        {
-            var c = await config.GetRawAsync();
-            var result = (c["steam_api_key"]?.GetValue<string>(), c["steam_id"]?.GetValue<string>());
-            _steamConfigCache = result;
-            _steamConfigFetched = DateTime.UtcNow;
-            return result;
-        }
-        catch
-        {
-            return (null, null);
-        }
-    }
-
-    private async Task<List<string>> GetFriendsInGameAsync(string apiKey, string steamId, string? gameId)
-    {
-        if (gameId == null) return [];
-
-        try
-        {
-            if (_steamFriendIds == null)
-            {
-                var resp = await _http.GetAsync(
-                    $"https://api.steampowered.com/ISteamUser/GetFriendList/v1/?key={apiKey}&steamid={steamId}&relationship=friend");
-                if (!resp.IsSuccessStatusCode) return [];
-                var json = await resp.Content.ReadFromJsonAsync<JsonElement>();
-                if (!json.TryGetProperty("friendslist", out var fl) || !fl.TryGetProperty("friends", out var friends)) return [];
-
-                _steamFriendIds = [];
-                foreach (var f in friends.EnumerateArray())
-                    if (f.TryGetProperty("steamid", out var sid))
-                        _steamFriendIds.Add(sid.GetString()!);
-            }
-
-            // GetPlayerSummaries accepts up to 100 steamids
-            var ids = string.Join(",", _steamFriendIds);
-            var summResp = await _http.GetAsync(
-                $"https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key={apiKey}&steamids={ids}");
-            if (!summResp.IsSuccessStatusCode) return [];
-            var summJson = await summResp.Content.ReadFromJsonAsync<JsonElement>();
-            if (!summJson.TryGetProperty("response", out var r) || !r.TryGetProperty("players", out var players)) return [];
-
-            var names = new List<string>();
-            foreach (var p in players.EnumerateArray())
-            {
-                var fGameId = p.TryGetProperty("gameid", out var fgid) ? fgid.GetString() : null;
-                if (fGameId == gameId)
-                {
-                    var name = p.TryGetProperty("personaname", out var pn) ? pn.GetString() : null;
-                    if (name != null) names.Add(name);
-                }
-            }
-            return names;
-        }
-        catch { return []; }
-    }
-
-    private static string? FormatDuration(DateTime? start)
-    {
-        if (start == null) return null;
-        var span = DateTime.UtcNow - start.Value;
-        if (span.TotalHours >= 1)
-            return $"{(int)span.TotalHours}h {span.Minutes}m";
-        return span.Minutes < 1 ? "< 1m" : $"{span.Minutes}m";
-    }
 
     private record SpotifyState(bool Playing, string? TrackUri, string? Track, string? Artist);
     private record SonosRoomState(string Room, bool Playing, string? Track, string? Artist, string TrackKey, string? AlbumArt);
     private record HueGroupState(string Name, bool On, int Brightness);
-    private record WeatherState(double Temp, int Code, string Condition, double Wind, double Precip);
-    private record SteamState(int PersonaState, string? Game, string? GameId);
 }

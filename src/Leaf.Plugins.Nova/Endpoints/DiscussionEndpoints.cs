@@ -493,7 +493,7 @@ public static class DiscussionEndpoints
             return Results.Ok(result);
         });
 
-        group.MapGet("/discussions/{id}/context", async (string id, HttpContext ctx, DiscussionStore store, MessagePipeline pipeline, GeoLocationService geo) =>
+        group.MapGet("/discussions/{id}/context", async (string id, HttpContext ctx, DiscussionStore store, MessagePipeline pipeline, PresenceReader presence) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
@@ -515,7 +515,15 @@ public static class DiscussionEndpoints
                 : null;
 
             var (outfit, outfitAsset) = await pipeline.ResolveOutfitContextAsync(discussion.AgentId);
-            var snapshot = NovaContextBuilder.BuildSnapshot(own, others, outfit, outfitAsset, geo.Location);
+            var currentPresence = await presence.CurrentAsync(userId);
+            var snapshot = NovaContextBuilder.BuildSnapshot(
+                own, others, outfit, outfitAsset,
+                currentPresence?.Location,
+                latitude: currentPresence?.Latitude,
+                longitude: currentPresence?.Longitude,
+                zone: currentPresence?.PlaceName,
+                placeName: currentPresence?.PlaceName,
+                timezone: currentPresence?.Timezone);
             return Results.Ok(snapshot);
         });
 
@@ -897,7 +905,9 @@ public static class DiscussionEndpoints
                 return Results.BadRequest(new { error = "Content or at least one attachment is required" });
 
             var ua = ctx.Request.Headers.UserAgent.ToString();
-            var browserId = ctx.Request.Headers.TryGetValue("X-Device-Id", out var did) ? did.ToString() : null;
+            var browserId = ctx.Request.Headers.TryGetValue("X-Leaf-Installation-Id", out var leafId)
+                ? leafId.ToString()
+                : ctx.Request.Headers.TryGetValue("X-Device-Id", out var legacyId) ? legacyId.ToString() : null;
             var resolved = await devices.ResolveAsync(ua, browserId);
 
             live.NoteDevice(resolved);
@@ -905,10 +915,10 @@ public static class DiscussionEndpoints
             var outcome = request.Input is { Length: > 0 }
                 ? await pipeline.SendInputAsync(
                     discussion, userId, request.Input, resolved,
-                    request.InputMethod ?? "typed", request.Latitude, request.Longitude)
+                    request.InputMethod ?? "typed")
                 : await pipeline.SendAsync(
                     discussion, userId, request.Content, request.Images, resolved,
-                    request.InputMethod ?? "typed", request.Latitude, request.Longitude);
+                    request.InputMethod ?? "typed");
 
             if (!outcome.Success)
             {

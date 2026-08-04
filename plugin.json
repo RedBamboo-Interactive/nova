@@ -27,11 +27,7 @@
   },
   "permissions": [
     { "kind": "net", "target": "127.0.0.1:18800", "reason": "RedCompute AI sessions, TTS/STT, delegation" },
-    { "kind": "net", "target": "nominatim.openstreetmap.org", "reason": "Reverse geocoding for the location context" },
-    { "kind": "net", "target": "ip-api.com", "reason": "Coarse IP geolocation for the context block" },
     { "kind": "net", "target": "localhost:5005", "reason": "Sonos bridge polling for LIVE timeline events" },
-    { "kind": "net", "target": "api.open-meteo.com", "reason": "Weather-change events on the LIVE timeline" },
-    { "kind": "net", "target": "api.steampowered.com", "reason": "Steam presence events on the LIVE timeline" },
     { "kind": "net", "target": "127.0.0.1:18804", "reason": "Smart-home plugin API polling (Spotify/Hue) for LIVE events" },
     { "kind": "fs", "target": "agent-workspaces", "reason": "Agent workspace markdown files (memory, CLAUDE.md generation, journal)" },
     { "kind": "fs", "target": "local-media", "reason": "Serve local image/video files referenced in chat (/file endpoint)" }

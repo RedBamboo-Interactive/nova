@@ -1,12 +1,12 @@
 const BASE = ""
 
 function getDeviceId(): string {
-  const key = "nova-device-id"
-  let id = localStorage.getItem(key)
+  const key = "leaf:installation-id"
+  let id = localStorage.getItem(key) ?? localStorage.getItem("nova-device-id")
   if (!id) {
     id = crypto.randomUUID()
-    localStorage.setItem(key, id)
   }
+  localStorage.setItem(key, id)
   return id
 }
 
@@ -28,7 +28,7 @@ export class ApiError extends Error {
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {}
   if (body) headers["Content-Type"] = "application/json"
-  if (_deviceId) headers["X-Device-Id"] = _deviceId
+  if (_deviceId) headers["X-Leaf-Installation-Id"] = _deviceId
   const res = await fetch(`${BASE}${path}`, {
     method,
     credentials: "include",

@@ -5,14 +5,6 @@ using Microsoft.AspNetCore.Routing;
 
 namespace Leaf.Plugins.Nova.Endpoints;
 
-public class LocationUpdateRequest
-{
-    public double? Latitude { get; set; }
-    public double? Longitude { get; set; }
-    public double? Accuracy { get; set; }
-    public string? Timezone { get; set; }
-}
-
 public class MemoryFileRequest
 {
     public string Path { get; set; } = "";
@@ -26,22 +18,15 @@ public static class MiscEndpoints
     {
         // ── Location ───────────────────────────────────────────────────
 
-        group.MapPost("/location/update", async (HttpContext ctx, LocationService location) =>
+        group.MapPost("/location/update", () => Results.Json(new
         {
-            LocationUpdateRequest? body;
-            try { body = await ctx.Request.ReadFromJsonAsync<LocationUpdateRequest>(); }
-            catch { return Results.BadRequest(new { error = "Invalid JSON" }); }
+            error = "presence_owns_location",
+            message = "Use /api/extensions/presence/installations/register and /observations.",
+        }, statusCode: 410));
 
-            if (body?.Latitude == null || body.Longitude == null)
-                return Results.BadRequest(new { error = "latitude and longitude are required" });
-
-            location.UpdateLocation(body.Latitude.Value, body.Longitude.Value, body.Accuracy, body.Timezone);
-            return Results.Ok(new { success = true });
-        });
-
-        group.MapGet("/location/current", (LocationService location) =>
+        group.MapGet("/location/current", async (HttpContext ctx, PresenceReader presence) =>
         {
-            var loc = location.Latest;
+            var loc = await presence.CurrentAsync(ctx.User.FindFirst("sub")?.Value);
             if (loc == null)
                 return Results.Ok(new { available = false });
 
@@ -50,10 +35,11 @@ public static class MiscEndpoints
                 available = true,
                 latitude = loc.Latitude,
                 longitude = loc.Longitude,
-                accuracy = loc.Accuracy,
-                timestamp = loc.Timestamp.ToString("o"),
-                zone = loc.Zone,
+                accuracy = (double?)null,
+                timestamp = loc.ObservedAt?.ToString("o"),
+                zone = loc.PlaceName,
                 place = loc.PlaceName,
+                source = "presence",
             });
         });
 

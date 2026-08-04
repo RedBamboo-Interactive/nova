@@ -68,7 +68,7 @@ public sealed class HeartbeatService(
     RedComputeClient redCompute,
     EventInjector injector,
     AgentDirectory agents,
-    LocationService location)
+    PresenceReader presenceReader)
 {
     public const string DiscussionType = "heartbeat";
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _rotationGates = new();
@@ -441,12 +441,12 @@ public sealed class HeartbeatService(
         sb.Append('\n');
         sb.Append(presence);
 
-        // Inject current location so the heartbeat knows where Laurent is right now.
-        var loc = location.Latest;
+        // Presence owns acquisition and resolution; heartbeat consumes its current state.
+        var loc = await presenceReader.CurrentAsync(heartbeat.OwnerId, ct);
         if (loc != null)
         {
-            var zone = loc.Zone ?? loc.PlaceName ?? $"{loc.Latitude:F4}, {loc.Longitude:F4}";
-            sb.Append($"\nCurrent location: {zone}");
+            sb.Append($"\nCurrent presence: {loc.PlaceName ?? loc.State}"
+                + $" ({loc.Confidence ?? "unknown"} confidence, source {loc.Source ?? "unknown"})");
         }
 
         // Inject recent LIVE events so the heartbeat has the same awareness as the

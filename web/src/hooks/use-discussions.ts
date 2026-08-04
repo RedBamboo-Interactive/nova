@@ -223,41 +223,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
   // Archive intents in flight (and confirmed): a stale list refresh racing the
   // DELETE must not resurrect these rows.
   const pendingArchivesRef = useRef<Set<string>>(new Set())
-  const gpsRef = useRef<{ latitude: number; longitude: number; accuracy?: number } | null>(null)
-  const lastPostedGpsRef = useRef<{ latitude: number; longitude: number } | null>(null)
-
-  useEffect(() => {
-    if (!navigator.geolocation) return
-    const id = navigator.geolocation.watchPosition(
-      (pos) => {
-        gpsRef.current = {
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          accuracy: pos.coords.accuracy ?? undefined,
-        }
-      },
-      () => { gpsRef.current = null },
-      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
-    )
-    return () => navigator.geolocation.clearWatch(id)
-  }, [])
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const gps = gpsRef.current
-      if (!gps) return
-      const last = lastPostedGpsRef.current
-      if (last && last.latitude === gps.latitude && last.longitude === gps.longitude) return
-      lastPostedGpsRef.current = { latitude: gps.latitude, longitude: gps.longitude }
-      api.post("/api/apps/nova/location/update", {
-        latitude: gps.latitude,
-        longitude: gps.longitude,
-        accuracy: gps.accuracy ?? null,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      }).catch(() => {})
-    }, 120_000)
-    return () => clearInterval(interval)
-  }, [])
 
   const sessionToDiscussion = useMemo(() => {
     const map = new Map<string, string>()
@@ -552,11 +517,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }))
     }
 
-    const gps = gpsRef.current
-    const gpsPayload = gps ? { latitude: gps.latitude, longitude: gps.longitude } : {}
-
     try {
-      const body = input ? { input, inputMethod, ...gpsPayload } : { content, images, inputMethod, ...gpsPayload }
+      const body = input ? { input, inputMethod } : { content, images, inputMethod }
       const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/apps/nova/discussions/${discussionId}/message`, body)
       updateSessionId(res)
       backfillMessage(res.metadata, res.messageUid)

@@ -37,8 +37,7 @@ public sealed class MessagePipeline(
     AgentDirectory agents,
     AgentWorkspaces workspaces,
     NovaConfigStore config,
-    LocationService location,
-    GeoLocationService geo)
+    PresenceReader presence)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -222,9 +221,7 @@ public sealed class MessagePipeline(
             catch { }
         }
 
-        if (latitude.HasValue && longitude.HasValue)
-            location.UpdateLocation(latitude.Value, longitude.Value, null);
-        var locReading = location.Latest;
+        var locReading = await presence.CurrentAsync(userId, ct);
 
         List<ContextSnapshot.LiveEventEntry>? liveEvents = null;
         var liveDiscussion = ownDiscussions.FirstOrDefault(d => d.Type == "live");
@@ -245,8 +242,8 @@ public sealed class MessagePipeline(
 
         var currentSnapshot = NovaContextBuilder.BuildSnapshot(
             ownDiscussions, otherAgentDiscussions, currentOutfit, currentOutfitAsset,
-            geo.Location, moodSummary, latitude, longitude,
-            locReading?.Zone, locReading?.PlaceName, locReading?.Timezone, liveEvents);
+            locReading?.Location, moodSummary, locReading?.Latitude, locReading?.Longitude,
+            locReading?.PlaceName, locReading?.PlaceName, locReading?.Timezone, liveEvents);
         var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
 
         var reactionLines = await GetRecentReactionLinesAsync(
