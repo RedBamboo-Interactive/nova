@@ -11,38 +11,11 @@ public class MemoryFileRequest
     public string Content { get; set; } = "";
 }
 
-/// <summary>Location, journal/memory files, settings, and local media serving.</summary>
+/// <summary>Journal/memory files, settings, and local media serving.</summary>
 public static class MiscEndpoints
 {
     public static void Map(RouteGroupBuilder group)
     {
-        // ── Location ───────────────────────────────────────────────────
-
-        group.MapPost("/location/update", () => Results.Json(new
-        {
-            error = "presence_owns_location",
-            message = "Use /api/extensions/presence/installations/register and /observations.",
-        }, statusCode: 410));
-
-        group.MapGet("/location/current", async (HttpContext ctx, PresenceReader presence) =>
-        {
-            var loc = await presence.CurrentAsync(ctx.User.FindFirst("sub")?.Value);
-            if (loc == null)
-                return Results.Ok(new { available = false });
-
-            return Results.Ok(new
-            {
-                available = true,
-                latitude = loc.Latitude,
-                longitude = loc.Longitude,
-                accuracy = (double?)null,
-                timestamp = loc.ObservedAt?.ToString("o"),
-                zone = loc.PlaceName,
-                place = loc.PlaceName,
-                source = "presence",
-            });
-        });
-
         // ── Journal / memory files ─────────────────────────────────────
 
         group.MapGet("/workspace/manifest", async (HttpContext ctx, AgentWorkspaces workspaces) =>

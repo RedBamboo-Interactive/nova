@@ -55,8 +55,6 @@ public class DiscussionMessageRequest
     public ImageAttachmentDto[]? Images { get; set; }
     public InputPartDto[]? Input { get; set; }
     public string? InputMethod { get; set; }
-    public double? Latitude { get; set; }
-    public double? Longitude { get; set; }
 }
 
 public class ReactionRequest
@@ -493,7 +491,7 @@ public static class DiscussionEndpoints
             return Results.Ok(result);
         });
 
-        group.MapGet("/discussions/{id}/context", async (string id, HttpContext ctx, DiscussionStore store, MessagePipeline pipeline, PresenceReader presence) =>
+        group.MapGet("/discussions/{id}/context", async (string id, HttpContext ctx, DiscussionStore store, MessagePipeline pipeline, ExtensionContributions extensions) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
@@ -515,15 +513,11 @@ public static class DiscussionEndpoints
                 : null;
 
             var (outfit, outfitAsset) = await pipeline.ResolveOutfitContextAsync(discussion.AgentId);
-            var currentPresence = await presence.CurrentAsync(userId);
+            var extensionContexts = await extensions.CollectContextAsync(
+                userId, discussion.AgentId, discussion.Id, "inspection");
             var snapshot = NovaContextBuilder.BuildSnapshot(
                 own, others, outfit, outfitAsset,
-                currentPresence?.Location,
-                latitude: currentPresence?.Latitude,
-                longitude: currentPresence?.Longitude,
-                zone: currentPresence?.PlaceName,
-                placeName: currentPresence?.PlaceName,
-                timezone: currentPresence?.Timezone);
+                extensionContexts: extensionContexts);
             return Results.Ok(snapshot);
         });
 

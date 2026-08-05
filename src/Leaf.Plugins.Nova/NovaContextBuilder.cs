@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Leaf.Sdk.Services;
 
 namespace Leaf.Plugins.Nova;
 
@@ -18,29 +20,32 @@ public sealed class ContextSnapshot
     [JsonPropertyName("outfitAsset")]
     public string? OutfitAsset { get; set; }
 
-    [JsonPropertyName("location")]
-    public string? Location { get; set; }
-
-    [JsonPropertyName("latitude")]
-    public double? Latitude { get; set; }
-
-    [JsonPropertyName("longitude")]
-    public double? Longitude { get; set; }
-
-    [JsonPropertyName("zone")]
-    public string? Zone { get; set; }
-
-    [JsonPropertyName("placeName")]
-    public string? PlaceName { get; set; }
-
-    [JsonPropertyName("timezone")]
-    public string? Timezone { get; set; }
-
     [JsonPropertyName("mood")]
     public string? Mood { get; set; }
 
     [JsonPropertyName("liveEvents")]
     public List<LiveEventEntry> LiveEvents { get; set; } = [];
+
+    [JsonPropertyName("extensionContexts")]
+    public List<ExtensionContextEntry> ExtensionContexts { get; set; } = [];
+
+    public sealed class ExtensionContextEntry
+    {
+        [JsonPropertyName("id")]
+        public string Id { get; set; } = "";
+
+        [JsonPropertyName("source")]
+        public string Source { get; set; } = "";
+
+        [JsonPropertyName("content")]
+        public string Content { get; set; } = "";
+
+        [JsonPropertyName("revision")]
+        public string? Revision { get; set; }
+
+        [JsonPropertyName("data")]
+        public JsonObject? Data { get; set; }
+    }
 
     public sealed class LiveEventEntry
     {
@@ -95,14 +100,9 @@ public static class NovaContextBuilder
         List<DiscussionRead>? otherAgentDiscussions,
         string? outfit,
         string? outfitAsset,
-        string? location = null,
         string? mood = null,
-        double? latitude = null,
-        double? longitude = null,
-        string? zone = null,
-        string? placeName = null,
-        string? timezone = null,
-        List<ContextSnapshot.LiveEventEntry>? liveEvents = null)
+        List<ContextSnapshot.LiveEventEntry>? liveEvents = null,
+        IReadOnlyList<PluginContextFragment>? extensionContexts = null)
     {
         return new ContextSnapshot
         {
@@ -110,14 +110,16 @@ public static class NovaContextBuilder
             OtherAgentDiscussions = otherAgentDiscussions?.Select(ToEntry).ToList() ?? [],
             Outfit = outfit,
             OutfitAsset = outfitAsset,
-            Location = location,
             Mood = mood,
-            Latitude = latitude,
-            Longitude = longitude,
-            Zone = zone,
-            PlaceName = placeName,
-            Timezone = timezone,
             LiveEvents = liveEvents ?? [],
+            ExtensionContexts = extensionContexts?.Select(fragment => new ContextSnapshot.ExtensionContextEntry
+            {
+                Id = fragment.Id,
+                Source = fragment.Source,
+                Content = fragment.Content,
+                Revision = fragment.Revision,
+                Data = fragment.Data?.DeepClone() as JsonObject,
+            }).ToList() ?? [],
         };
 
         static ContextSnapshot.DiscussionEntry ToEntry(DiscussionRead d) => new()
@@ -137,7 +139,7 @@ public static class NovaContextBuilder
         List<string>? reactionLines = null)
     {
         var sb = new StringBuilder();
-        AppendOpenTag(sb, now, device, input, currentId, agentName, snapshot.Location, snapshot.Latitude, snapshot.Longitude, snapshot.Zone, snapshot.PlaceName, snapshot.Timezone);
+        AppendOpenTag(sb, now, device, input, currentId, agentName);
 
         if (snapshot.Mood != null)
             sb.Append($"\nMood: {snapshot.Mood}");
@@ -189,6 +191,13 @@ public static class NovaContextBuilder
                 var source = ev.Source.StartsWith("event:") ? ev.Source[6..] : ev.Source;
                 sb.Append($"\n- [{source}] {ev.Content} ({FormatRelativeTime(now - ev.Timestamp)})");
             }
+        }
+
+        if (snapshot.ExtensionContexts.Count > 0)
+        {
+            sb.Append("\n\nInstalled extension context:");
+            foreach (var context in snapshot.ExtensionContexts)
+                sb.Append($"\n- [{context.Source}] {context.Content}");
         }
 
         if (snapshot.Outfit != null)
@@ -263,9 +272,6 @@ public static class NovaContextBuilder
                 changes.Add("Outfit removed");
         }
 
-        if (current.Location != previous.Location && current.Location != null)
-            changes.Add($"Location changed: {current.Location}");
-
         if (current.Mood != previous.Mood && current.Mood != null)
             changes.Add($"Mood changed: {current.Mood}");
 
@@ -279,8 +285,22 @@ public static class NovaContextBuilder
             changes.Add($"[{source}] {ev.Content}");
         }
 
+        var previousExtensions = previous.ExtensionContexts
+            .ToDictionary(item => $"{item.Source}:{item.Id}", StringComparer.Ordinal);
+        var currentExtensions = current.ExtensionContexts
+            .ToDictionary(item => $"{item.Source}:{item.Id}", StringComparer.Ordinal);
+        foreach (var key in currentExtensions.Keys.Union(previousExtensions.Keys))
+        {
+            previousExtensions.TryGetValue(key, out var before);
+            currentExtensions.TryGetValue(key, out var after);
+            if (after == null)
+                changes.Add($"Extension context [{before!.Source}] removed");
+            else if (before == null || before.Revision != after.Revision || before.Content != after.Content)
+                changes.Add($"[{after.Source}] {after.Content}");
+        }
+
         var sb = new StringBuilder();
-        AppendOpenTag(sb, now, device, input, currentId, agentName, current.Location, current.Latitude, current.Longitude, current.Zone, current.PlaceName, current.Timezone);
+        AppendOpenTag(sb, now, device, input, currentId, agentName);
 
         if (reactionLines is { Count: > 0 })
             foreach (var r in reactionLines)
@@ -332,31 +352,17 @@ public static class NovaContextBuilder
             ["activeDiscussionCount"] = active.Count,
             ["archivedDiscussionCount"] = archived.Count,
             ["otherAgentDiscussionCount"] = snapshot.OtherAgentDiscussions.Count,
+            ["extensionContextCount"] = snapshot.ExtensionContexts.Count,
             ["outfit"] = snapshot.Outfit,
         };
     }
 
-    private static void AppendOpenTag(StringBuilder sb, DateTime now, ResolvedDevice device, string input, string currentId, string? agentName, string? userLocation = null, double? latitude = null, double? longitude = null, string? zone = null, string? placeName = null, string? timezone = null)
+    private static void AppendOpenTag(StringBuilder sb, DateTime now, ResolvedDevice device,
+        string input, string currentId, string? agentName)
     {
-        var localTimeAttr = "";
-        if (timezone != null)
-        {
-            try
-            {
-                var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
-                var localTime = TimeZoneInfo.ConvertTimeFromUtc(now, tz);
-                localTimeAttr = $" local_time=\"{localTime:HH:mm}\"";
-            }
-            catch (TimeZoneNotFoundException) { }
-        }
         var agentAttr = agentName != null ? $" agent=\"{agentName}\"" : "";
-        var locationAttr = userLocation != null ? $" location=\"{userLocation}\"" : "";
-        var latAttr = latitude.HasValue ? $" latitude=\"{latitude.Value:F4}\"" : "";
-        var lngAttr = longitude.HasValue ? $" longitude=\"{longitude.Value:F4}\"" : "";
-        var zoneAttr = zone != null ? $" zone=\"{zone}\"" : "";
-        var placeAttr = placeName != null ? $" place=\"{placeName}\"" : "";
         var roomAttr = device.Room != null ? $" room=\"{device.Room}\"" : "";
-        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\"{localTimeAttr} day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device.ShortLabel}\" device_type=\"{device.Type}\" platform=\"{device.Platform}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}{locationAttr}{latAttr}{lngAttr}{zoneAttr}{placeAttr}{roomAttr}>");
+        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device.ShortLabel}\" device_type=\"{device.Type}\" platform=\"{device.Platform}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}{roomAttr}>");
     }
 
     private static string FormatRelativeTime(TimeSpan elapsed)

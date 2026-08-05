@@ -5,7 +5,8 @@ namespace Leaf.Plugins.Nova;
 
 /// <summary>
 /// Ambient LIVE-timeline enrichment for Smart Home state: polls Spotify, Sonos,
-/// and Hue. Presence supplies location, weather, and digital-activity events.
+/// and Hue. Other installed extensions may contribute their own events through
+/// Nova's generic live-event slot.
 /// Baseline-first: the initial reading of each source is swallowed so a boot never
 /// spams the timeline. Runs until ApplicationStopping (plugins have no shutdown hook).
 /// </summary>

@@ -137,7 +137,7 @@ public sealed class EventInjector(
 
 /// <summary>
 /// Posts system events onto the agent's LIVE discussion timeline (device switches,
-/// location changes, delegation callbacks, discussion activity).
+/// extension events, delegation callbacks, and discussion activity).
 /// </summary>
 public sealed class LiveEvents(DiscussionStore store, EventInjector injector, AgentDirectory agents)
 {
@@ -157,7 +157,12 @@ public sealed class LiveEvents(DiscussionStore store, EventInjector injector, Ag
         _lastDeviceName = device.Name;
     }
 
-    public async Task PostAsync(string source, string content, object? metadata = null)
+    public async Task PostAsync(
+        string source,
+        string content,
+        object? metadata = null,
+        string? idempotencyKey = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -167,7 +172,8 @@ public sealed class LiveEvents(DiscussionStore store, EventInjector injector, Ag
             JsonElement? meta = metadata != null
                 ? JsonSerializer.SerializeToElement(metadata)
                 : null;
-            await injector.InjectAsync(live, content, "system", source, metadata: meta);
+            await injector.InjectAsync(live, content, "system", source,
+                metadata: meta, idempotencyKey: idempotencyKey, ct: ct);
         }
         catch { /* the LIVE timeline is best-effort by design */ }
     }

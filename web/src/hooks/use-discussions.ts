@@ -578,7 +578,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const body = input ? { input, inputMethod, ...gpsPayload } : { content, images, inputMethod, ...gpsPayload }
+        const body = input ? { input, inputMethod } : { content, images, inputMethod }
         const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/apps/nova/discussions/${discussionId}/message`, body)
         updateSessionId(res)
         backfillMessage(res.metadata, res.messageUid)

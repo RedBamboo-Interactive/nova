@@ -11,7 +11,7 @@ namespace Leaf.Plugins.Nova;
 
 /// <summary>
 /// Nova-the-APP as a Leaf plugin: the chat/discussion UI and its glue endpoints
-/// (send, delegate, ask, callbacks, journal, location). Nova-the-AGENT —
+/// (send, delegate, ask, callbacks, and journal). Nova-the-AGENT —
 /// the agent entity, workspace VFS mount, memory, dreaming automations — is a kernel
 /// capability and deliberately NOT here.
 /// </summary>
@@ -78,10 +78,10 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 FlowNodeRecoveryPolicy.AtLeastOnce,
                 FlowNodeCancellationPolicy.Cooperative, 7_200),
             sp.GetRequiredService<NovaSessionActionHandler>()));
-        services.AddSingleton(sp =>
-            new PresenceReader(sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
-        services.AddSingleton(sp =>
-            new DeviceResolver(sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
+        services.AddSingleton(sp => new ExtensionContributions(
+            sp.GetRequiredKeyedService<IPluginExtensions>(PluginId),
+            sp.GetRequiredService<LiveEvents>()));
+        services.AddSingleton<DeviceResolver>();
         services.AddSingleton(sp =>
             new ConversationExporter(sp.GetRequiredService<RedComputeClient>(), sp.GetRequiredService<IDiscussions>()));
         services.AddSingleton<IShareEnricher>(sp =>
@@ -91,9 +91,6 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<RedComputeClient>(),
                 sp.GetRequiredService<IDiscussions>()));
         services.AddSingleton<LivePoller>();
-        services.AddSingleton(sp => new PresenceLiveBridge(
-            sp.GetRequiredKeyedService<IPluginEvents>(PluginId),
-            sp.GetRequiredService<LiveEvents>()));
         services.AddSingleton(sp =>
             new HeartbeatService(
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
@@ -105,7 +102,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<RedComputeClient>(),
                 sp.GetRequiredService<EventInjector>(),
                 sp.GetRequiredService<AgentDirectory>(),
-                sp.GetRequiredService<PresenceReader>()));
+                sp.GetRequiredService<ExtensionContributions>()));
         // Automation action "heartbeat-tick" — one tick of the per-agent heartbeat.
         services.AddSingleton(sp =>
             new HeartbeatTickHandler(
@@ -133,7 +130,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredService<AgentWorkspaces>(),
                 sp.GetRequiredService<NovaConfigStore>(),
-                sp.GetRequiredService<PresenceReader>()));
+                sp.GetRequiredService<ExtensionContributions>()));
     }
 
     public void MapEndpoints(RouteGroupBuilder group)
@@ -182,9 +179,9 @@ public sealed class NovaAppPlugin : ILeafPlugin
             catch { /* reconcile endpoint retries on demand */ }
         }, CancellationToken.None);
 
-        // Presence is optional. Its public events can enrich LIVE without moving
-        // acquisition, resolution, or provider secrets back into Nova.
-        host.GetRequiredService<PresenceLiveBridge>().Start();
+        // Optional extensions attach through generic backend slots. Nova does not
+        // know which contributors are installed.
+        host.GetRequiredService<ExtensionContributions>().Start();
 
         // Keep the remaining Smart Home poller independent of Presence availability.
 

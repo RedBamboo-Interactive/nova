@@ -68,7 +68,7 @@ public sealed class HeartbeatService(
     RedComputeClient redCompute,
     EventInjector injector,
     AgentDirectory agents,
-    PresenceReader presenceReader)
+    ExtensionContributions extensions)
 {
     public const string DiscussionType = "heartbeat";
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _rotationGates = new();
@@ -441,16 +441,13 @@ public sealed class HeartbeatService(
         sb.Append('\n');
         sb.Append(presence);
 
-        // Presence owns acquisition and resolution; heartbeat consumes its current state.
-        var loc = await presenceReader.CurrentAsync(heartbeat.OwnerId, ct);
-        if (loc != null)
-        {
-            sb.Append($"\nCurrent presence: {loc.PlaceName ?? loc.State}"
-                + $" ({loc.Confidence ?? "unknown"} confidence, source {loc.Source ?? "unknown"})");
-        }
+        var extensionContexts = await extensions.CollectContextAsync(
+            heartbeat.OwnerId, heartbeat.AgentId, heartbeat.Id, "heartbeat", ct);
+        foreach (var context in extensionContexts)
+            sb.Append($"\n[{context.Source}] {context.Content}");
 
         // Inject recent LIVE events so the heartbeat has the same awareness as the
-        // LIVE discussion: location changes, device switches, automation results, etc.
+        // LIVE discussion: device switches, automation results, extension events, etc.
         var liveDisc = all.FirstOrDefault(d => d.Type == "live");
         if (liveDisc != null)
         {

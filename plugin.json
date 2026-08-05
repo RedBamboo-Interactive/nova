@@ -7,7 +7,21 @@
   "icon": "ph-star",
   "color": "nova",
   "requires": ["entities", "records", "discussions", "conversation-search", "ai-inference", "assets"],
-  "backend": { "assembly": "Leaf.Plugins.Nova" },
+  "backend": {
+    "assembly": "Leaf.Plugins.Nova",
+    "slots": [
+      {
+        "id": "context-contributor",
+        "contract": "leaf.context-fragment/1",
+        "description": "Optional installed extensions may contribute bounded agent context"
+      },
+      {
+        "id": "live-event",
+        "contract": "leaf.live-event/1",
+        "description": "Optional installed extensions may project events onto Nova LIVE"
+      }
+    ]
+  },
   "frontend": {
     "package": "@redbamboo/plugin-nova",
     "route": "/apps/nova",

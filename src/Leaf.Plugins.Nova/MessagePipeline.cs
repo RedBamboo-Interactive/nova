@@ -37,7 +37,7 @@ public sealed class MessagePipeline(
     AgentDirectory agents,
     AgentWorkspaces workspaces,
     NovaConfigStore config,
-    PresenceReader presence)
+    ExtensionContributions extensions)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -110,24 +110,23 @@ public sealed class MessagePipeline(
     public Task<SendMessageOutcome> SendAsync(
         DiscussionRead discussion, string? userId,
         string content, ImageAttachmentDto[]? images, ResolvedDevice device, string input,
-        double? latitude = null, double? longitude = null, CancellationToken ct = default)
-        => SendCoreAsync(discussion, userId, content, images, null, device, input, latitude, longitude, ct);
+        CancellationToken ct = default)
+        => SendCoreAsync(discussion, userId, content, images, null, device, input, ct);
 
     public Task<SendMessageOutcome> SendInputAsync(
         DiscussionRead discussion, string? userId,
-        InputPartDto[] parts, ResolvedDevice device, string input,
-        double? latitude = null, double? longitude = null, CancellationToken ct = default)
+        InputPartDto[] parts, ResolvedDevice device, string input, CancellationToken ct = default)
     {
         var content = string.Join("\n", parts
             .Where(part => string.Equals(part.Type, "text", StringComparison.OrdinalIgnoreCase))
             .Select(part => part.Text ?? ""));
-        return SendCoreAsync(discussion, userId, content, null, parts, device, input, latitude, longitude, ct);
+        return SendCoreAsync(discussion, userId, content, null, parts, device, input, ct);
     }
 
     private async Task<SendMessageOutcome> SendCoreAsync(
         DiscussionRead discussion, string? userId,
-        string content, ImageAttachmentDto[]? images, InputPartDto[]? inputParts, ResolvedDevice device, string input,
-        double? latitude = null, double? longitude = null, CancellationToken ct = default)
+        string content, ImageAttachmentDto[]? images, InputPartDto[]? inputParts,
+        ResolvedDevice device, string input, CancellationToken ct = default)
     {
         var sessionId = discussion.SessionId;
         var sessionIsNew = false;
@@ -221,7 +220,8 @@ public sealed class MessagePipeline(
             catch { }
         }
 
-        var locReading = await presence.CurrentAsync(userId, ct);
+        var extensionContexts = await extensions.CollectContextAsync(
+            userId, discussion.AgentId, discussion.Id, "conversation", ct);
 
         List<ContextSnapshot.LiveEventEntry>? liveEvents = null;
         var liveDiscussion = ownDiscussions.FirstOrDefault(d => d.Type == "live");
@@ -242,8 +242,9 @@ public sealed class MessagePipeline(
 
         var currentSnapshot = NovaContextBuilder.BuildSnapshot(
             ownDiscussions, otherAgentDiscussions, currentOutfit, currentOutfitAsset,
-            locReading?.Location, moodSummary, locReading?.Latitude, locReading?.Longitude,
-            locReading?.PlaceName, locReading?.PlaceName, locReading?.Timezone, liveEvents);
+            mood: moodSummary,
+            liveEvents: liveEvents,
+            extensionContexts: extensionContexts);
         var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
 
         var reactionLines = await GetRecentReactionLinesAsync(
