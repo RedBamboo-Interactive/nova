@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo, startTransition } from "react"
+import { useState, useCallback, useEffect, useRef, useMemo, useSyncExternalStore, startTransition } from "react"
 import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
@@ -7,6 +7,15 @@ import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
 import { discussionMessagesForMerge, mergeRevalidatedMessages } from "../lib/discussion-transcript"
+import {
+  clearDiscussionArchivePending,
+  getDiscussionList,
+  isDiscussionArchivePending,
+  markDiscussionArchivePending,
+  setDiscussionList,
+  subscribeDiscussionList,
+  upsertDiscussion,
+} from "../lib/discussion-list-store"
 
 function isClosed(status: string | undefined): boolean {
   return status === "archived" || status === "archiving"
@@ -100,7 +109,11 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
 export function useDiscussions(eventResolver?: EventResolver) {
   const { toast } = useToast()
   const environment = useUiEnvironment()
-  const [discussions, setDiscussions] = useState<DiscussionInfo[]>([])
+  // Float Nova and the ordinary Nova route are separate React trees. The list
+  // is server state, so both trees observe one module-level snapshot while all
+  // view state below (selection, loaded transcript, dialogs) remains local.
+  const discussions = useSyncExternalStore(subscribeDiscussionList, getDiscussionList, getDiscussionList)
+  const setDiscussions = setDiscussionList
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Record<string, MessageBlock[]>>({})
   const [streaming, setStreaming] = useState<Record<string, boolean>>({})
@@ -224,10 +237,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
   }, [environment.document, environment.window, reconcileStreaming])
 
-  // Archive intents in flight (and confirmed): a stale list refresh racing the
-  // DELETE must not resurrect these rows.
-  const pendingArchivesRef = useRef<Set<string>>(new Set())
-
   const sessionToDiscussion = useMemo(() => {
     const map = new Map<string, string>()
     for (const d of discussions) {
@@ -238,10 +247,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   const refreshDiscussions = useCallback(async () => {
     const list = await api.get<DiscussionInfo[]>("/api/apps/nova/discussions")
-    setDiscussions(list
-      .filter((d) => !dismissedIds.has(d.id))
-      .map((d) => pendingArchivesRef.current.has(d.id) ? { ...d, status: "archiving" as const } : d))
-  }, [dismissedIds])
+    setDiscussions(list)
+  }, [])
 
   const syncAndRefresh = useCallback(async () => {
     await api.post("/api/apps/nova/discussions/sync").catch(() => {})
@@ -421,8 +428,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [])
 
   const visibleDiscussions = useMemo(
-    () => discussions.filter((d) => !isClosed(d.status)),
-    [discussions],
+    () => discussions.filter((d) => !dismissedIds.has(d.id) && !isClosed(d.status)),
+    [discussions, dismissedIds],
   )
 
   useEffect(() => {
@@ -450,7 +457,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (qualityTier) body.qualityTier = qualityTier
       if (provider) body.provider = provider
       const d = await api.post<DiscussionInfo>("/api/apps/nova/discussions", Object.keys(body).length ? body : undefined)
-      setDiscussions((prev) => prev.some((x) => x.id === d.id) ? prev : [d, ...prev])
+      // The creation websocket can beat the HTTP response and insert a sparse
+      // placeholder. Always replace it with the authoritative returned record
+      // so every surface gets the entity and session ids needed for chat.
+      upsertDiscussion(d)
       setActiveDiscussionId(d.id)
       setMessages((prev) => ({ ...prev, [d.id]: [] }))
       loadedRef.current.add(d.id)
@@ -705,7 +715,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         // session events back to the server for them. Checked via the ref —
         // a setState updater's side effect is not guaranteed to have run here.
         const known = discussionsRef.current.find((d) => d.id === discId)
-        if (!known || isClosed(known.status) || pendingArchivesRef.current.has(discId)) return
+        if (!known || isClosed(known.status) || isDiscussionArchivePending(discId)) return
         const isStopped = session.status === "Stopped" || session.status === "Error"
         const isLiveDisc = known.type === "live"
         const discStatus = (isStopped && !isLiveDisc) ? "stopped" as const : "idle" as const
@@ -768,7 +778,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setInterrupting((prev) => ({ ...prev, [discId]: false }))
       setResumePending((prev) => ({ ...prev, [discId]: false }))
       const known = discussionsRef.current.find((d) => d.id === discId)
-      const closed = !known || isClosed(known.status) || pendingArchivesRef.current.has(discId)
+      const closed = !known || isClosed(known.status) || isDiscussionArchivePending(discId)
       const isLive = known?.type === "live"
       setDiscussions((prev) =>
         prev.map((d) => d.id === discId && !isClosed(d.status) ? { ...d, status: isLive ? "idle" as const : "stopped" as const } : d)
@@ -796,6 +806,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
         }
         return [newDisc, ...prev]
       })
+      // Clients that did not originate the create have only the sparse event
+      // payload. Hydrate the canonical record so title/session routing works.
+      void refreshDiscussions()
     } else if (event.type === "discussion.event") {
       const { discussionId, content, source, senderAgentId, metadata, timestamp: serverTs } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; metadata?: Record<string, unknown> | null; timestamp?: string }
       if (!discussionId) return
@@ -891,7 +904,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discId]: result.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion])
+  }, [sessionToDiscussion, clearQuestion, refreshDiscussions])
 
   const handleUpstreamDisconnect = useCallback(() => {
     setUpstreamConnected(false)
@@ -925,15 +938,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
     // Optimistic close: record the intent first so list refreshes and session
     // events during the DELETE cannot resurrect the row, then hide it.
-    pendingArchivesRef.current.add(id)
-    setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: "archiving" as const } : d))
+    markDiscussionArchivePending(id)
     if (activeIdRef.current === id) setActiveDiscussionId(null)
     try {
       await api.delete(`/api/apps/nova/discussions/${id}`)
       // Intent stays in the set after success: the server now owns the state
       // and default list fetches exclude closed discussions anyway.
     } catch (err) {
-      pendingArchivesRef.current.delete(id)
+      clearDiscussionArchivePending(id)
       if (disc) setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: disc.status } : d))
       toast({ variant: "error", title: "Failed to archive", description: err instanceof Error ? err.message : "Unknown error" })
     }
