@@ -130,15 +130,18 @@ public sealed class MessagePipeline(
     {
         var sessionId = discussion.SessionId;
         var sessionIsNew = false;
+        var computeOwnerId = discussion.OwnerId;
 
         if (sessionId is null && _pendingSessions.TryRemove(discussion.Id, out var pending))
             sessionId = await pending;
 
         if (sessionId is null)
         {
+            computeOwnerId = DiscussionOwnership.ResolveForSessionStart(
+                discussion.OwnerId, userId, needsSession: true);
             try
             {
-                sessionId = await TryCreateSessionAsync(discussion.AgentId, discussion.OwnerId,
+                sessionId = await TryCreateSessionAsync(discussion.AgentId, computeOwnerId,
                     discussion.QualityTier, discussion.Provider, ct, discussion.Id);
             }
             catch
@@ -151,7 +154,10 @@ public sealed class MessagePipeline(
                 return new(false, null, "redcompute_unavailable", "RedCompute refused to create a session.");
 
             sessionIsNew = true;
-            await store.PatchAsync(discussion.EntityId, new JsonObject { ["session_id"] = sessionId }, ct: ct);
+            var sessionPatch = new JsonObject { ["session_id"] = sessionId };
+            if (!string.Equals(computeOwnerId, discussion.OwnerId, StringComparison.Ordinal))
+                sessionPatch["owner_id"] = computeOwnerId;
+            await store.PatchAsync(discussion.EntityId, sessionPatch, ct: ct);
 
             // Replay pending assistant messages (from nova-message on pre-created
             // discussions) into the new session so they appear as visible chat bubbles.
@@ -296,7 +302,7 @@ public sealed class MessagePipeline(
         var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
         if (agent == null)
             return new(false, sessionId, "missing_agent", "The discussion has no linked Agent entity.");
-        var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, discussion.OwnerId, ct);
+        var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, computeOwnerId, ct);
         var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
             $"/api/apps/nova/discussions/{discussion.Id}/message",
             [new ComputeContextReference("discussion", discussion.Id),
