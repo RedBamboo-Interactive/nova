@@ -28,6 +28,7 @@ import {
   type GlobalInputLeaseState,
 } from "../lib/global-input"
 import { api } from "../lib/api"
+import { readFloatingWindowBounds, writeFloatingWindowBounds } from "../lib/floating-window-bounds"
 
 export const FLOATING_NOVA_SURFACE_ID = "nova:floating-chat"
 export const FLOATING_NOVA_COMMAND_ID = "nova:float-chat"
@@ -276,14 +277,15 @@ export function FloatingNovaService() {
     }
 
     const controller = (window as Window & FloatingNovaWindow).documentPictureInPicture!
+    const requestedBounds = readFloatingWindowBounds(localStorage)
     stateRef.current = "opening"
     setSurfaceState("opening")
     notifyUiSurfaceChanged(FLOATING_NOVA_SURFACE_ID)
 
     // This call must remain in the trusted activation task. Do not await setup first.
     const opening = controller.requestWindow({
-      width: 420,
-      height: 700,
+      width: requestedBounds.width,
+      height: requestedBounds.height,
       preferInitialWindowPlacement: false,
     }).then((openedWindow) => {
       presentationCleanupRef.current?.()
@@ -293,7 +295,10 @@ export function FloatingNovaService() {
       root.style.height = "100%"
       openedWindow.document.body.replaceChildren(root)
 
+      const persistBounds = () => writeFloatingWindowBounds(localStorage, openedWindow)
       const handleClosed = () => {
+        persistBounds()
+        openedWindow.removeEventListener("resize", persistBounds)
         presentationCleanupRef.current?.()
         presentationCleanupRef.current = null
         windowRef.current = null
@@ -303,6 +308,7 @@ export function FloatingNovaService() {
         setSurfaceState("closed")
         notifyUiSurfaceChanged(FLOATING_NOVA_SURFACE_ID)
       }
+      openedWindow.addEventListener("resize", persistBounds)
       openedWindow.addEventListener("pagehide", handleClosed, { once: true })
 
       windowRef.current = openedWindow
@@ -311,6 +317,9 @@ export function FloatingNovaService() {
       setPortalRoot(root)
       setSurfaceState("open")
       notifyUiSurfaceChanged(FLOATING_NOVA_SURFACE_ID)
+      void api.post(`/api/ui/window-placements/${encodeURIComponent(FLOATING_NOVA_SURFACE_ID)}/attachments`, {
+        windowTitle: document.title,
+      }).catch(() => {})
       return { ok: true, state: "open" as const }
     }).catch((error: unknown) => {
       stateRef.current = "error"
