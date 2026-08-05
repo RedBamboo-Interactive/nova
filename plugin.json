@@ -51,6 +51,7 @@
             "The opener RedLeaf document must remain alive.",
             "The browser controls final size and position.",
             "Opening requires trusted user activation.",
+            "Global push-to-talk leases the configured shared voice key through RedLeaf and is active only while Float Nova is open.",
             "Mobile clients are unsupported."
           ]
         }

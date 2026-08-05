@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, type ButtonHTMLAttributes } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, Switch, Tabs, TabsList, TabsTrigger, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, ContextIndicator, ShareDialog, fetchTranscriptPayload, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
+import { ChatPanel, ContextIndicator, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { PluginExtensionSlot, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
@@ -205,6 +205,7 @@ export function ChatView({
   const { agents, getAgent } = useAgents()
   const multiAgent = agents.length > 1
   const settings = useLocalSettings()
+  const pushToTalk = usePushToTalkSettings()
   const agentFilter = settings.agentFilter
 
   const filteredDiscussions = getSidebarDiscussionOrder(discussions, agentFilter)
@@ -619,6 +620,8 @@ export function ChatView({
         placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}
         header={<>{chatHeader}{upstreamBanner}</>}
         speechBackend={speechBackend}
+        pushToTalkKey={pushToTalk.key}
+        globalPushToTalk={floating}
         resolveImageSrc={resolveImageSrc}
         resolveFileLink={resolveFileLink}
         resolveEventLink={resolveEventLink}

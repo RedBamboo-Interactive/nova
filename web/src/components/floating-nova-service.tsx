@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
+import { dispatchGlobalPushToTalk, usePushToTalkSettings } from "@redbamboo/chat"
 import { ToastProvider, UiEnvironmentProvider } from "@redbamboo/ui"
 import {
   notifyUiSurfaceChanged,
   registerUiSurface,
   ShellLayerOutlet,
+  useWsSubscribeByType,
   type UiSurfaceActionResult,
   type UiSurfaceSnapshot,
   type UiSurfaceState,
@@ -18,6 +20,14 @@ import {
   type FloatingNovaWindow,
 } from "./floating-nova-support"
 import { FLOATING_NOVA_NAVIGATION_EVENT, type FloatingNovaNavigationAction } from "../lib/floating-navigation"
+import {
+  GLOBAL_INPUT_EVENT_TYPE,
+  GLOBAL_INPUT_LEASE_ENDPOINT,
+  parseGlobalInputEvent,
+  type GlobalInputLease,
+  type GlobalInputLeaseState,
+} from "../lib/global-input"
+import { api } from "../lib/api"
 
 export const FLOATING_NOVA_SURFACE_ID = "nova:floating-chat"
 export const FLOATING_NOVA_COMMAND_ID = "nova:float-chat"
@@ -65,10 +75,14 @@ function copyDocumentPresentation(target: Document): () => void {
 
 function FloatingNovaContent({
   selectedDiscussionId,
+  globalInputState,
+  pushToTalkKey,
   onSelectedDiscussionChange,
   onDock,
 }: {
   selectedDiscussionId: string | null
+  globalInputState: GlobalInputLeaseState
+  pushToTalkKey: string
   onSelectedDiscussionChange: (id: string) => void
   onDock: () => void
 }) {
@@ -83,7 +97,11 @@ function FloatingNovaContent({
   }, [createDiscussion, onSelectedDiscussionChange])
 
   return (
-    <div className="relative isolate h-full min-h-0 overflow-hidden bg-background text-foreground">
+    <div
+      className="relative isolate h-full min-h-0 overflow-hidden bg-background text-foreground"
+      data-global-push-to-talk={globalInputState}
+      data-push-to-talk-key={pushToTalkKey}
+    >
       <ShellLayerOutlet position="background" targetAppId="nova" />
       <ChatView
         presentation="floating"
@@ -104,9 +122,11 @@ function FloatingNovaContent({
 export function FloatingNovaService() {
   const navigate = useNavigate()
   const support = useMemo(getFloatingNovaSupport, [])
+  const { key: pushToTalkKey } = usePushToTalkSettings()
   const [surfaceState, setSurfaceState] = useState<UiSurfaceState>(support.supported ? "closed" : "unsupported")
   const [pipWindow, setPipWindow] = useState<Window | null>(null)
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null)
+  const [globalInputState, setGlobalInputState] = useState<GlobalInputLeaseState>("inactive")
   const [selectedDiscussionId, setSelectedDiscussionId] = useState<string | null>(() =>
     localStorage.getItem(SELECTED_DISCUSSION_KEY),
   )
@@ -115,10 +135,93 @@ export function FloatingNovaService() {
   const selectedRef = useRef(selectedDiscussionId)
   const openingPromiseRef = useRef<Promise<UiSurfaceActionResult> | null>(null)
   const presentationCleanupRef = useRef<(() => void) | null>(null)
+  const globalInputStateRef = useRef(globalInputState)
+  const globalInputLeaseRef = useRef<GlobalInputLease | null>(null)
 
   stateRef.current = surfaceState
   windowRef.current = pipWindow
   selectedRef.current = selectedDiscussionId
+  globalInputStateRef.current = globalInputState
+
+  useWsSubscribeByType(GLOBAL_INPUT_EVENT_TYPE, (data) => {
+    const event = parseGlobalInputEvent(data)
+    const lease = globalInputLeaseRef.current
+    const target = windowRef.current?.document
+    if (!event || !lease || !target) return
+    if (event.key !== pushToTalkKey || !event.leaseIds.includes(lease.leaseId)) return
+    dispatchGlobalPushToTalk(target, { key: event.key, pressed: event.pressed })
+  })
+
+  useEffect(() => {
+    if (!pipWindow) {
+      globalInputStateRef.current = "inactive"
+      setGlobalInputState("inactive")
+      return
+    }
+
+    let cancelled = false
+    let renewTimer: ReturnType<typeof setTimeout> | undefined
+    const targetDocument = pipWindow.document
+
+    const setLeaseState = (state: GlobalInputLeaseState) => {
+      if (cancelled) return
+      globalInputStateRef.current = state
+      setGlobalInputState(state)
+      notifyUiSurfaceChanged(FLOATING_NOVA_SURFACE_ID)
+    }
+
+    const releaseLease = (lease: GlobalInputLease | null) => {
+      dispatchGlobalPushToTalk(targetDocument, { key: pushToTalkKey, pressed: false })
+      if (lease) void api.delete<{ released: boolean }>(`${GLOBAL_INPUT_LEASE_ENDPOINT}/${lease.leaseId}`).catch(() => {})
+    }
+
+    const acquireLease = async () => {
+      setLeaseState("connecting")
+      try {
+        const lease = await api.post<GlobalInputLease>(GLOBAL_INPUT_LEASE_ENDPOINT, {
+          feature: "push-to-talk",
+          key: pushToTalkKey,
+          surfaceId: FLOATING_NOVA_SURFACE_ID,
+        })
+        if (cancelled || pipWindow.closed) {
+          releaseLease(lease)
+          return
+        }
+        globalInputLeaseRef.current = lease
+        setLeaseState("active")
+        renewTimer = setTimeout(renewLease, lease.renewAfterMs)
+      } catch {
+        setLeaseState("unavailable")
+      }
+    }
+
+    const renewLease = async () => {
+      const lease = globalInputLeaseRef.current
+      if (cancelled || !lease) return
+      try {
+        const renewed = await api.put<GlobalInputLease>(`${GLOBAL_INPUT_LEASE_ENDPOINT}/${lease.leaseId}`)
+        if (cancelled || pipWindow.closed) {
+          releaseLease(renewed)
+          return
+        }
+        globalInputLeaseRef.current = renewed
+        renewTimer = setTimeout(renewLease, renewed.renewAfterMs)
+      } catch {
+        globalInputLeaseRef.current = null
+        releaseLease(lease)
+        setLeaseState("unavailable")
+      }
+    }
+
+    void acquireLease()
+    return () => {
+      cancelled = true
+      if (renewTimer) clearTimeout(renewTimer)
+      const lease = globalInputLeaseRef.current
+      globalInputLeaseRef.current = null
+      releaseLease(lease)
+    }
+  }, [pipWindow, pushToTalkKey])
 
   const updateSelectedDiscussion = useCallback((id: string) => {
     selectedRef.current = id
@@ -245,6 +348,15 @@ export function FloatingNovaService() {
         selector: TRIGGER_SELECTOR,
         actions: ["open", "focus", "close", "dock", "select-discussion", "show-discussions", "show-chat", "next-discussion", "previous-discussion", "new-discussion"],
         selectedResource: selectedRef.current ? { type: "discussion", id: selectedRef.current } : null,
+        inputCapabilities: [{
+          id: "push-to-talk",
+          kind: "keyboard-hold",
+          scope: "global",
+          key: pushToTalkKey,
+          state: globalInputStateRef.current,
+          leaseEndpoint: GLOBAL_INPUT_LEASE_ENDPOINT,
+          eventType: GLOBAL_INPUT_EVENT_TYPE,
+        }],
       }),
       runAction: (action: string, args?: Readonly<Record<string, unknown>>): Promise<UiSurfaceActionResult> | UiSurfaceActionResult => {
         const discussionId = typeof args?.discussionId === "string" ? args.discussionId : undefined
@@ -285,7 +397,7 @@ export function FloatingNovaService() {
       },
     }
     return registerUiSurface(FLOATING_NOVA_SURFACE_ID, registration)
-  }, [closeSurface, dockSurface, openSurface, support, updateSelectedDiscussion])
+  }, [closeSurface, dockSurface, openSurface, pushToTalkKey, support, updateSelectedDiscussion])
 
   useEffect(() => () => {
     presentationCleanupRef.current?.()
@@ -301,6 +413,8 @@ export function FloatingNovaService() {
         <NovaRuntimeProvider>
           <FloatingNovaContent
             selectedDiscussionId={selectedDiscussionId}
+            globalInputState={globalInputState}
+            pushToTalkKey={pushToTalkKey}
             onSelectedDiscussionChange={updateSelectedDiscussion}
             onDock={dockSurface}
           />
