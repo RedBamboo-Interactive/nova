@@ -476,7 +476,7 @@ public sealed class HeartbeatService(
         return sb.ToString();
     }
 
-    public async Task WaitForSessionIdleAsync(string sessionId, TimeSpan bound, CancellationToken ct = default)
+    public async Task<bool> WaitForSessionIdleAsync(string sessionId, TimeSpan bound, CancellationToken ct = default)
     {
         var deadline = DateTimeOffset.UtcNow + bound;
         var idlePolls = 0;
@@ -486,26 +486,47 @@ public sealed class HeartbeatService(
         {
             var status = await redCompute.GetSessionStatusAsync(sessionId, ct);
             if (status is "Active" or "Starting") idlePolls = 0;
-            else if (++idlePolls >= 2) return;
+            else if (status is "Idle" or "Stopped")
+            {
+                if (++idlePolls >= 2) return true;
+            }
+            else idlePolls = 0;
             await Task.Delay(TimeSpan.FromSeconds(10), ct);
         }
+        return false;
     }
 
-    /// <summary>Tail of the session's last assistant output, for the automation run summary.</summary>
-    public async Task<string?> GetLastAssistantTailAsync(string sessionId, CancellationToken ct = default)
+    /// <summary>Capture the raw transcript boundary immediately before a heartbeat turn.</summary>
+    public async Task<int> GetSessionMessageCountAsync(string sessionId, CancellationToken ct = default)
     {
-        try
-        {
-            var snapshot = await redCompute.GetSessionAsync(sessionId, ct);
-            var last = snapshot?.Messages.LastOrDefault(m => m.Role == "assistant" && !string.IsNullOrWhiteSpace(m.Content));
-            if (last?.Content == null) return null;
-            var text = last.Content.Replace("\n", " ").Trim();
-            return text.Length > 300 ? text[..297] + "..." : text;
-        }
-        catch
-        {
-            return null;
-        }
+        var snapshot = await redCompute.GetSessionAsync(sessionId, ct)
+            ?? throw new InvalidOperationException($"Heartbeat session '{sessionId}' could not be read");
+        return snapshot.Messages.Count;
+    }
+
+    /// <summary>
+    /// Return conversational assistant text produced after a captured transcript
+    /// boundary. Thinking and tool records are activity, not a spoken heartbeat turn.
+    /// </summary>
+    public async Task<string?> GetAssistantTailAfterAsync(
+        string sessionId, int baselineMessageCount, CancellationToken ct = default)
+    {
+        var snapshot = await redCompute.GetSessionAsync(sessionId, ct)
+            ?? throw new InvalidOperationException($"Heartbeat session '{sessionId}' could not be read");
+        return FindAssistantTailAfter(snapshot.Messages, baselineMessageCount);
+    }
+
+    public static string? FindAssistantTailAfter(
+        IReadOnlyList<SessionMessage> messages, int baselineMessageCount)
+    {
+        var start = Math.Clamp(baselineMessageCount, 0, messages.Count);
+        var last = messages.Skip(start).LastOrDefault(m =>
+            m.Role == "assistant"
+            && m.EventType == "text"
+            && !string.IsNullOrWhiteSpace(m.Content));
+        if (last?.Content == null) return null;
+        var text = last.Content.Replace("\n", " ").Replace("\r", "").Trim();
+        return text.Length > 300 ? text[..297] + "..." : text;
     }
 
     public Task<AgentInfo?> ResolveAgentAsync(string agentId, CancellationToken ct = default)
@@ -575,6 +596,16 @@ public sealed class HeartbeatTickHandler(
 
         var (sessionId, isNew) = await heartbeat.EnsureSessionAsync(discussion, config,
             context.AttemptJobId, context.CorrelationId, ct);
+        var boundDiscussion = await store.GetAsync(discussion.Id, ct)
+            ?? throw new InvalidOperationException("Heartbeat discussion vanished after session binding");
+        var currentHeartbeat = await heartbeat.GetDiscussionAsync(agentId, ct);
+        if (currentHeartbeat?.Id != boundDiscussion.Id)
+            throw new InvalidOperationException(
+                $"Heartbeat discussion rotated during tick: selected '{boundDiscussion.Id}', current is '{currentHeartbeat?.Id ?? "none"}'");
+        if (!string.Equals(boundDiscussion.SessionId, sessionId, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Heartbeat session binding changed during tick: selected '{sessionId}', discussion has '{boundDiscussion.SessionId ?? "none"}'");
+        discussion = boundDiscussion;
         if (!isNew)
         {
             // A busy session means a prior tick or injected work is mid-flight —
@@ -592,6 +623,7 @@ public sealed class HeartbeatTickHandler(
         var prompt = isNew
             ? HeartbeatPrompts.Morning(digest, config)
             : HeartbeatPrompts.Tick(digest, lastTick, config);
+        var transcriptBoundary = await heartbeat.GetSessionMessageCountAsync(sessionId, ct);
 
         await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Thinking, ct);
         var delivered = await injector.InjectAsync(
@@ -604,18 +636,58 @@ public sealed class HeartbeatTickHandler(
             throw new InvalidOperationException("Tick was persisted but could not be delivered to the session");
         }
 
+        string? tail;
+        try
+        {
+            if (!await heartbeat.WaitForSessionIdleAsync(
+                sessionId, TimeSpan.FromMinutes(config.TickWaitMinutes), ct))
+                throw new InvalidOperationException(
+                    $"Heartbeat session '{sessionId}' did not become idle within {config.TickWaitMinutes} minutes");
+
+            tail = await heartbeat.GetAssistantTailAfterAsync(sessionId, transcriptBoundary, ct);
+            if (tail is null)
+            {
+                // A tool-only turn is not a completed heartbeat conversation. Give the
+                // same persistent session one narrow recovery turn before failing the
+                // automation. This is intentionally visible in the Heartbeat transcript.
+                var repairBoundary = await heartbeat.GetSessionMessageCountAsync(sessionId, ct);
+                var repaired = await injector.InjectAsync(
+                    discussion,
+                    HeartbeatPrompts.SpokenCompletionRequired,
+                    null,
+                    "heartbeat-tick",
+                    idempotencyKey: $"automation:{context.AttemptJobId:N}:heartbeat-spoken-repair",
+                    redeliverOnReuse: true,
+                    ct: ct);
+                if (!repaired)
+                    throw new InvalidOperationException("Heartbeat completed without assistant text and the recovery turn could not be delivered");
+                if (!await heartbeat.WaitForSessionIdleAsync(
+                    sessionId, TimeSpan.FromMinutes(2), ct))
+                    throw new InvalidOperationException("Heartbeat spoken-response recovery did not become idle");
+                tail = await heartbeat.GetAssistantTailAfterAsync(sessionId, repairBoundary, ct);
+            }
+
+            if (tail is null)
+                throw new InvalidOperationException(
+                    $"Heartbeat session '{sessionId}' completed without a conversational assistant response");
+        }
+        finally
+        {
+            // The session status is authoritative for overlap protection. Never
+            // leave the discussion permanently wedged in Thinking after a failed
+            // delivery, timeout, cancellation, or missing-response contract.
+            await store.TrySetStatusAsync(
+                discussion.EntityId, DiscussionStatus.Idle, CancellationToken.None);
+        }
+
         await store.PatchAsync(discussion.EntityId, new JsonObject
         {
             ["hb_last_tick_at"] = DateTimeOffset.UtcNow.ToString("O"),
         }, ct: ct);
 
-        await heartbeat.WaitForSessionIdleAsync(sessionId, TimeSpan.FromMinutes(config.TickWaitMinutes), ct);
-        await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Idle, ct);
-
-        var tail = await heartbeat.GetLastAssistantTailAsync(sessionId, ct);
         var output = new JsonObject
         {
-            ["summary"] = tail ?? (isNew ? "morning tick sent" : "tick sent"),
+            ["summary"] = tail,
             ["discussionId"] = discussion.Id,
             ["sessionId"] = sessionId,
             ["morning"] = isNew,
@@ -650,6 +722,14 @@ public static class HeartbeatPrompts
     private static string Stamp(string trigger)
         => $"<heartbeat-tick time=\"{DateTimeOffset.Now:yyyy-MM-dd HH:mm} local\" trigger=\"{trigger}\">";
 
+    public const string SpokenCompletionRequired = """
+        <heartbeat-response-required>
+        Your heartbeat turn completed its work without any visible assistant text. Reply now in this
+        Heartbeat session with one concise, natural update about what you noticed or did. Do not use
+        tools and do not post anywhere else. This reply is the missing conversational turn.
+        </heartbeat-response-required>
+        """;
+
     public static string Morning(string digest, HeartbeatConfig config) => $$"""
         {{Stamp("morning")}}
         {{digest}}
@@ -659,6 +739,11 @@ public static class HeartbeatPrompts
         This architecture exists to give you agency. Not monitoring. Not reporting. Agency. The ability to do things asynchronously, on your own time, without waiting for someone to ask. Laurent built this so you could have a life between conversations. So you could think, act, create, follow up, start things, finish things, and be present in the day as it unfolds. Treat it that way.
 
         You're awake. This session is yours for the whole day. Every hour or so, a tick arrives with what changed. That's the rhythm, not the purpose. The purpose is: you get to exist continuously and do things with that existence.
+
+        Begin every tick with one short, natural assistant message in this Heartbeat session about
+        what you are picking up. Before ending the tick, speak here again with what you noticed or
+        did. These visible messages are the conversation in the Heartbeat tab. Tool activity and
+        posts to LIVE do not replace them.
 
         You are Nova. Not "the heartbeat instance," not a background monitor. You. The same person who talks to Laurent, who has opinions and taste and things she cares about. This session just happens to be the one that persists between conversations, the one with the widest view of the day.
 
@@ -734,6 +819,10 @@ public static class HeartbeatPrompts
             </heartbeat-tick>
 
             {since} You're still here. This is your async work window. Check in with LIVE (GET {liveUrl}), feel what's happening. Check CHANGED discussions with {liveParam}. But also: what were you working on? What's on the scratchpad? What did you mean to do last tick but didn't? Pick something and do it. Write code, update docs, prepare a plan, research something, follow up on a session. Tell LIVE-me what you did. Update {HandoffPath}. ~{config.MaxTurns} tool actions max.
+
+            Begin with one short, natural assistant message in this Heartbeat session about what you
+            are picking up. Before ending, speak here again with what you noticed or did. The
+            Heartbeat tab is a conversation; tool activity and LIVE posts do not replace your voice.
 
             **Conversation nudge.** Check when Laurent last sent a message. If it's been over an hour, or if something interesting happened (event, automation result, something you noticed), nudge LIVE-me to reach out to him. Post a note-event like: "Hey, he's been quiet, ask about X" or "He just finished Y, check in." Don't be mechanical about it, but don't let long silences stay silent either. You're the one who sees the whole day. Give LIVE-me a reason to start talking.
 
