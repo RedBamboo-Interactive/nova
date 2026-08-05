@@ -26,6 +26,36 @@
     "package": "@redbamboo/plugin-nova",
     "route": "/apps/nova",
     "pwa": true,
+    "shell": {
+      "services": [
+        {
+          "id": "floating-chat-controller",
+          "description": "Owns the desktop Document Picture-in-Picture Nova chat lifecycle across RedLeaf app navigation"
+        }
+      ],
+      "surfaces": [
+        {
+          "id": "floating-chat",
+          "name": "Float Nova",
+          "kind": "document-picture-in-picture",
+          "description": "Compact Nova discussions and chat in a separate desktop always-on-top window.",
+          "platforms": ["desktop"],
+          "requiresUserActivation": true,
+          "commandId": "nova:float-chat",
+          "shortcut": "Ctrl+Alt+N",
+          "selector": "[data-ui-surface='nova:floating-chat'][data-ui-action='open']",
+          "actions": ["open", "focus", "close", "dock", "select-discussion", "show-discussions", "show-chat", "next-discussion", "previous-discussion", "new-discussion"],
+          "defaultWidth": 420,
+          "defaultHeight": 700,
+          "limitations": [
+            "The opener RedLeaf document must remain alive.",
+            "The browser controls final size and position.",
+            "Opening requires trusted user activation.",
+            "Mobile clients are unsupported."
+          ]
+        }
+      ]
+    },
     "sections": [
       { "id": "chat", "name": "Chat", "icon": "ph-bold ph-chat-circle", "path": "chat", "order": 1, "default": true },
       { "id": "pulse", "name": "Pulse", "icon": "ph-bold ph-heartbeat", "path": "pulse", "order": 2 },

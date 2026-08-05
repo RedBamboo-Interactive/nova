@@ -75,7 +75,7 @@ export function AgentAvatar({ agent, size = 20, className = "" }: AgentAvatarPro
       onError={(e) => {
         const el = e.currentTarget
         el.style.display = "none"
-        const fallback = document.createElement("span")
+        const fallback = el.ownerDocument.createElement("span")
         fallback.className = `inline-flex items-center justify-center rounded-full bg-overlay-10 text-text-muted shrink-0 ${className}`
         fallback.style.width = `${size}px`
         fallback.style.height = `${size}px`

@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect, useMemo } from "react"
+import { useState, useCallback, useEffect, useMemo, type ButtonHTMLAttributes } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { MasterDetailLayout, PanelHeader, Switch, Tabs, TabsList, TabsTrigger } from "@redbamboo/ui"
+import { MasterDetailLayout, PanelHeader, Switch, Tabs, TabsList, TabsTrigger, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, ContextIndicator, ShareDialog, fetchTranscriptPayload, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
-import { PluginExtensionSlot, useBreadcrumbLabel, formatContextMessage, getEntityHref } from "@redbamboo/utility"
+import { PluginExtensionSlot, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
 import { AgentPicker } from "../components/agent-picker"
@@ -18,7 +18,13 @@ import { useShare } from "../hooks/use-share"
 import { setSettings } from "../lib/settings-store"
 import { api } from "../lib/api"
 import { findLiveHeartbeatPair } from "../lib/live-heartbeat"
-import { getSidebarDiscussionOrder } from "../lib/discussion-navigation"
+import { getAdjacentSidebarDiscussion, getSidebarDiscussionOrder } from "../lib/discussion-navigation"
+import {
+  FLOATING_NOVA_NAVIGATION_EVENT,
+  FLOATING_NOVA_SHORTCUT_LIST,
+  getFloatingNovaNavigationAction,
+  type FloatingNovaNavigationAction,
+} from "../lib/floating-navigation"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -30,6 +36,26 @@ interface ProviderInfo {
   icon?: string
   iconSvgPath?: string
   color?: string
+}
+
+function ChatHeaderAction({
+  icon,
+  label,
+  ...props
+}: {
+  icon: string
+  label: string
+} & ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      type="button"
+      {...props}
+      className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
+    >
+      <i aria-hidden="true" className={`${icon} text-sm`} />
+      <span>{label}</span>
+    </button>
+  )
 }
 
 function useAvatarStyle() {
@@ -73,10 +99,28 @@ function navigateCodeRed(path: string) {
   }).catch(() => {})
 }
 
-export function ChatView() {
+export interface ChatViewProps {
+  presentation?: "standard" | "floating"
+  selectedDiscussionId?: string | null
+  onSelectDiscussion?: (id: string) => void
+  onNewDiscussion?: () => void
+  onDock?: () => void
+}
+
+export function ChatView({
+  presentation = "standard",
+  selectedDiscussionId = null,
+  onSelectDiscussion,
+  onNewDiscussion,
+  onDock,
+}: ChatViewProps = {}) {
   const { discussionId: urlDiscussionId } = useParams()
   const navigate = useNavigate()
   const disc = useDisc()
+  const environment = useUiEnvironment()
+  const floating = presentation === "floating"
+  const requestedDiscussionId = floating ? selectedDiscussionId : (urlDiscussionId ?? null)
+  const floatingSurface = useUiSurface("nova:floating-chat")
 
   // Intercept clicks on CodeRed links and navigate via API instead
   useEffect(() => {
@@ -86,16 +130,16 @@ export function ChatView() {
       const href = anchor.getAttribute("href")
       if (!href) return
       try {
-        const url = new URL(href, window.location.origin)
+        const url = new URL(href, environment.window.location.origin)
         if (url.hostname === "localhost" && url.port === "18801") {
           e.preventDefault()
           navigateCodeRed(url.pathname + url.search)
         }
       } catch {}
     }
-    document.addEventListener("click", handler)
-    return () => document.removeEventListener("click", handler)
-  }, [])
+    environment.document.addEventListener("click", handler)
+    return () => environment.document.removeEventListener("click", handler)
+  }, [environment.document, environment.window.location.origin])
 
   const {
     discussions,
@@ -140,17 +184,17 @@ export function ChatView() {
   [payloadSessionId])
 
   useEffect(() => {
-    if (urlDiscussionId && urlDiscussionId !== activeDiscussionId) {
-      selectDiscussion(urlDiscussionId)
+    if (requestedDiscussionId && requestedDiscussionId !== activeDiscussionId) {
+      selectDiscussion(requestedDiscussionId)
       setMobileTab(1)
-    } else if (!urlDiscussionId && activeDiscussionId) {
+    } else if (!requestedDiscussionId && activeDiscussionId) {
       clearDiscussionSelection()
       setMobileTab(0)
     }
-  }, [urlDiscussionId, activeDiscussionId, selectDiscussion, clearDiscussionSelection])
+  }, [requestedDiscussionId, activeDiscussionId, selectDiscussion, clearDiscussionSelection])
 
   useBreadcrumbLabel(
-    urlDiscussionId ? `/apps/nova/chat/${urlDiscussionId}` : undefined,
+    !floating && urlDiscussionId ? `/apps/nova/chat/${urlDiscussionId}` : undefined,
     activeDiscussion?.type === "live"
       ? "Live"
       : activeDiscussion?.type === "heartbeat"
@@ -173,6 +217,11 @@ export function ChatView() {
   const [mobileTab, setMobileTab] = useState(0)
   const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
+
+  useEffect(() => {
+    if (floating || !floatingSurface?.supported || !activeDiscussionId) return
+    void runUiSurfaceAction("nova:floating-chat", "select-discussion", { discussionId: activeDiscussionId })
+  }, [activeDiscussionId, floating, floatingSurface?.supported])
 
   useEffect(() => {
     api.get<{ tiers: QualityTierInfo[] }>("/ai-session/quality-modes")
@@ -265,9 +314,10 @@ export function ChatView() {
   }, [activeDiscussionId, loadEarlierMessages])
 
   const handleSelectDiscussion = useCallback((id: string) => {
-    navigate(`/apps/nova/chat/${id}`)
+    if (floating) onSelectDiscussion?.(id)
+    else navigate(`/apps/nova/chat/${id}`)
     setMobileTab(1)
-  }, [navigate])
+  }, [floating, navigate, onSelectDiscussion])
 
   // Discussion-activity events link back to the discussion they describe.
   const resolveEventLink = useCallback((event: ParsedEvent) => {
@@ -278,8 +328,51 @@ export function ChatView() {
   }, [handleSelectDiscussion])
 
   const openNewDiscussion = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("nova:open-new-discussion"))
-  }, [])
+    if (onNewDiscussion) onNewDiscussion()
+    else environment.window.dispatchEvent(new CustomEvent("nova:open-new-discussion"))
+  }, [environment.window, onNewDiscussion])
+
+  useEffect(() => {
+    if (!floating) return
+
+    const runNavigation = (action: FloatingNovaNavigationAction) => {
+      if (action === "show-discussions") {
+        setMobileTab(0)
+        return
+      }
+      if (action === "show-chat") {
+        if (activeDiscussionId) setMobileTab(1)
+        return
+      }
+      if (action === "new-discussion") {
+        openNewDiscussion()
+        return
+      }
+      const direction = action === "next-discussion" ? 1 : -1
+      const adjacent = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, direction, agentFilter)
+      if (adjacent) handleSelectDiscussion(adjacent.id)
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || environment.document.querySelector('[data-slot="dialog-content"]')) return
+      const action = getFloatingNovaNavigationAction(event)
+      if (!action) return
+      event.preventDefault()
+      event.stopPropagation()
+      runNavigation(action)
+    }
+    const handleNavigationEvent = (event: Event) => {
+      const action = (event as CustomEvent<{ action?: FloatingNovaNavigationAction }>).detail?.action
+      if (action) runNavigation(action)
+    }
+
+    environment.document.addEventListener("keydown", handleKeyDown)
+    environment.document.addEventListener(FLOATING_NOVA_NAVIGATION_EVENT, handleNavigationEvent)
+    return () => {
+      environment.document.removeEventListener("keydown", handleKeyDown)
+      environment.document.removeEventListener(FLOATING_NOVA_NAVIGATION_EVENT, handleNavigationEvent)
+    }
+  }, [activeDiscussionId, agentFilter, discussions, environment.document, floating, handleSelectDiscussion, openNewDiscussion])
 
   const upstreamBanner = !upstreamConnected && (
     <div className="flex items-center gap-2 px-4 py-2 bg-accent-teal-a15 border-b border-overlay-6 text-text-muted text-sm">
@@ -359,15 +452,34 @@ export function ChatView() {
         )
       }
     >
-      {!activeDiscussion.confidential && (
-        <button
+      {!floating && !activeDiscussion.confidential && (
+        <ChatHeaderAction
           onClick={handleShare}
-          className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
+          icon="ph-bold ph-share-network"
+          label="Share"
           title="Share conversation"
-        >
-          <i className="ph-bold ph-share-network text-xs" />
-          <span>Share</span>
-        </button>
+        />
+      )}
+      {!floating && floatingSurface?.supported && (
+        <ChatHeaderAction
+          onClick={() => void runUiSurfaceAction("nova:floating-chat", "open", { discussionId: activeDiscussion.id })}
+          icon="ph-bold ph-picture-in-picture"
+          label="Float"
+          data-slot="floating-surface-trigger"
+          data-ui-surface="nova:floating-chat"
+          data-ui-action="open"
+          title="Float Nova (Ctrl+Alt+N)"
+        />
+      )}
+      {floating && onDock && (
+        <ChatHeaderAction
+          onClick={onDock}
+          icon="ph-bold ph-arrow-square-in"
+          label="Dock"
+          data-ui-surface="nova:floating-chat"
+          data-ui-action="dock"
+          title="Dock in RedLeaf"
+        />
       )}
       <ContextIndicator
         stats={sessionStats}
@@ -423,7 +535,7 @@ export function ChatView() {
       <button
         onClick={openNewDiscussion}
         className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
-        title="New discussion (Ctrl+N)"
+        title={`New discussion (${floating ? "Alt+N" : "Ctrl+N"})`}
       >
         <i className="ph-bold ph-plus text-xs" />
         <span>New</span>
@@ -465,7 +577,8 @@ export function ChatView() {
 
   const { opacity: avatarOpacity } = useAvatarStyle()
   const { showAvatar: avatarEnabled } = useLocalSettings()
-  const showAvatar = avatarEnabled && !!activeDiscussion
+  const showAvatar = !floating && avatarEnabled && !!activeDiscussion
+  const showFloatingTabAvatar = floating && avatarEnabled && !!activeDiscussion
   const [avatarVersion, setAvatarVersion] = useState(0)
   useEffect(() => {
     const handler = () => setAvatarVersion(v => v + 1)
@@ -541,7 +654,16 @@ export function ChatView() {
   )
 
   return (
-    <div className="relative h-full w-full">
+    <div
+      className="relative h-full w-full"
+      data-slot={floating ? "floating-surface-root" : undefined}
+      data-ui-surface={floating ? "nova:floating-chat" : undefined}
+      data-surface-state={floating ? "open" : undefined}
+      data-view={floating ? (mobileTab === 0 ? "discussions" : "chat") : undefined}
+      data-discussion-id={floating ? (activeDiscussionId ?? undefined) : undefined}
+      data-streaming={floating ? (isStreaming || undefined) : undefined}
+      data-ui-shortcuts={floating ? FLOATING_NOVA_SHORTCUT_LIST : undefined}
+    >
       {showAvatar && (
         <div
           className="absolute top-4 left-1/2 -translate-x-1/2 w-[80px] h-[80px] z-20 rounded-full overflow-hidden md:hidden p-1.5"
@@ -564,8 +686,36 @@ export function ChatView() {
           />
         </div>
       )}
+      {showFloatingTabAvatar && (
+        <div
+          role="presentation"
+          aria-hidden="true"
+          data-slot="floating-surface-avatar"
+          className="pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 w-[80px] h-[80px] z-30 rounded-full overflow-hidden p-1.5"
+          style={{ backgroundColor: "var(--background)" }}
+        >
+          <div className="relative size-full overflow-hidden rounded-full">
+            <img
+              src={avatarSrc}
+              alt=""
+              className="size-full object-cover object-top"
+              style={{ opacity: avatarOpacity }}
+            />
+            <PluginExtensionSlot
+              targetPluginId="nova"
+              slotId="chat-avatar-overlay"
+              context={{
+                agentId: activeDiscussion?.agentId ?? null,
+                discussionId: activeDiscussionId,
+                variant: "mobile",
+              }}
+            />
+          </div>
+        </div>
+      )}
       <MasterDetailLayout
-        layoutKey="nova-discussions"
+        layoutKey={floating ? undefined : "nova-discussions"}
+        presentation={floating ? "compact" : "responsive"}
         mobileLabels={["Discussions", "Chat"]}
         mobileTab={mobileTab}
         onMobileTabChange={setMobileTab}
@@ -575,7 +725,7 @@ export function ChatView() {
           <div className="flex-1 overflow-hidden">
             <DiscussionSidebar
               discussions={filteredDiscussions}
-              activeDiscussionId={urlDiscussionId ?? activeDiscussionId}
+              activeDiscussionId={requestedDiscussionId ?? activeDiscussionId}
               onSelect={handleSelectDiscussion}
               onArchive={archiveDiscussion}
               onRotate={rotateDiscussion}

@@ -64,6 +64,26 @@ function AskNovaHandler({ discRef, setPendingContext }: { discRef: React.RefObje
  * routes (chat / pulse / journal) and the discussion state shared across them.
  */
 function NovaAppInner() {
+  const element = useRoutes(routes)
+  const { pathname } = useLocation()
+  usePluginBreadcrumbs(routes, "/apps/nova", pathname)
+
+  return (
+    <NovaRuntimeProvider enableAskNova>
+      <AppShell>
+        <div className="h-full overflow-hidden">{element}</div>
+      </AppShell>
+    </NovaRuntimeProvider>
+  )
+}
+
+export function NovaRuntimeProvider({
+  children,
+  enableAskNova = false,
+}: {
+  children: React.ReactNode
+  enableAskNova?: boolean
+}) {
   const { resolve: resolveEventType } = useEventTypes()
   const disc = useDiscussions(resolveEventType)
   const discRef = useRef(disc)
@@ -71,18 +91,12 @@ function NovaAppInner() {
   const pendingContext = usePendingNovaContext()
 
   const appCtx = useMemo<AppContext>(() => ({ disc, pendingContext }), [disc, pendingContext])
-  const element = useRoutes(routes)
-  const { pathname } = useLocation()
-  usePluginBreadcrumbs(routes, "/apps/nova", pathname)
-
   return (
     <>
       <WsDiscussionBridge discRef={discRef} />
-      <AskNovaHandler discRef={discRef} setPendingContext={pendingContext.set} />
+      {enableAskNova && <AskNovaHandler discRef={discRef} setPendingContext={pendingContext.set} />}
       <AppContextValue.Provider value={appCtx}>
-        <AppShell>
-          <div className="h-full overflow-hidden">{element}</div>
-        </AppShell>
+        {children}
       </AppContextValue.Provider>
     </>
   )

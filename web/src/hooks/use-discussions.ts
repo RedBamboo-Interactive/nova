@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, startTransition } from "react"
-import { useToast } from "@redbamboo/ui"
+import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
 import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, UploadedAttachment } from "@redbamboo/chat"
@@ -99,6 +99,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
 
 export function useDiscussions(eventResolver?: EventResolver) {
   const { toast } = useToast()
+  const environment = useUiEnvironment()
   const [discussions, setDiscussions] = useState<DiscussionInfo[]>([])
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Record<string, MessageBlock[]>>({})
@@ -214,14 +215,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
   // coming back to a tab that may have been suspended, and a socket that just
   // reconnected (handled in handleUpstreamReconnect).
   useEffect(() => {
-    const onVisible = () => { if (document.visibilityState === "visible") reconcileStreaming() }
-    document.addEventListener("visibilitychange", onVisible)
-    window.addEventListener("focus", onVisible)
+    const onVisible = () => { if (environment.document.visibilityState === "visible") reconcileStreaming() }
+    environment.document.addEventListener("visibilitychange", onVisible)
+    environment.window.addEventListener("focus", onVisible)
     return () => {
-      document.removeEventListener("visibilitychange", onVisible)
-      window.removeEventListener("focus", onVisible)
+      environment.document.removeEventListener("visibilitychange", onVisible)
+      environment.window.removeEventListener("focus", onVisible)
     }
-  }, [reconcileStreaming])
+  }, [environment.document, environment.window, reconcileStreaming])
 
   // Archive intents in flight (and confirmed): a stale list refresh racing the
   // DELETE must not resurrect these rows.

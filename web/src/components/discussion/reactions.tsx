@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react"
-import { Icon } from "@redbamboo/ui"
+import { Icon, useUiEnvironment } from "@redbamboo/ui"
 import type { ReactionGroup } from "../../hooks/use-reactions"
 import { api } from "../../lib/api"
 
@@ -136,18 +136,19 @@ interface EmojiPickerProps {
 
 function EmojiPicker({ items, align, onSelect, onClose }: EmojiPickerProps) {
   const ref = useRef<HTMLDivElement>(null)
+  const environment = useUiEnvironment()
 
   useEffect(() => {
     const handler = (e: Event) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose()
     }
-    document.addEventListener("mousedown", handler)
-    document.addEventListener("touchstart", handler)
+    environment.document.addEventListener("mousedown", handler)
+    environment.document.addEventListener("touchstart", handler)
     return () => {
-      document.removeEventListener("mousedown", handler)
-      document.removeEventListener("touchstart", handler)
+      environment.document.removeEventListener("mousedown", handler)
+      environment.document.removeEventListener("touchstart", handler)
     }
-  }, [onClose])
+  }, [environment.document, onClose])
 
   return (
     <div

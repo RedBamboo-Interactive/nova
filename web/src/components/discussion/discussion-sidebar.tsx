@@ -42,6 +42,12 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
   const renderLiveItem = useCallback((discussion: DiscussionInfo) => {
     const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
     return (
+      <div
+        data-discussion-id={discussion.id}
+        data-discussion-type={discussion.type}
+        data-discussion-status={discussion.status}
+        data-discussion-selected={discussion.id === sidebarSelectionId || undefined}
+      >
       <ItemListRow
         selected={discussion.id === sidebarSelectionId}
         onClick={() => onSelect(discussion.id)}
@@ -82,6 +88,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           </button>
         }
       />
+      </div>
     )
   }, [sidebarSelectionId, onSelect, onRotate, getAgent, multiAgent])
 
@@ -90,6 +97,13 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
     const unread = alive && isUnread(discussion)
     const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
     return (
+      <div
+        data-discussion-id={discussion.id}
+        data-discussion-type={discussion.type}
+        data-discussion-status={discussion.status}
+        data-discussion-unread={unread || undefined}
+        data-discussion-selected={discussion.id === activeDiscussionId || undefined}
+      >
       <ItemListRow
         selected={discussion.id === activeDiscussionId}
         onClick={() => onSelect(discussion.id)}
@@ -148,6 +162,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           )
         }
       />
+      </div>
     )
   }, [activeDiscussionId, onSelect, onArchive, onDismiss, getAgent, multiAgent])
 
