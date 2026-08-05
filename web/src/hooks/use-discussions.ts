@@ -6,7 +6,7 @@ import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, Questio
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
-import { discussionMessagesForMerge } from "../lib/discussion-transcript"
+import { discussionMessagesForMerge, mergeRevalidatedMessages } from "../lib/discussion-transcript"
 
 function isClosed(status: string | undefined): boolean {
   return status === "archived" || status === "archiving"
@@ -126,6 +126,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const [hasEarlierMessages, setHasEarlierMessages] = useState<Record<string, boolean>>({})
   const loadedRef = useRef<Set<string>>(new Set())
   const historyTailRef = useRef<Record<string, number>>({})
+  const loadGenerationRef = useRef<Record<string, number>>({})
 
   const activeDiscussion = discussions.find((d) => d.id === activeDiscussionId) ?? null
   const activeMessages = activeDiscussionId ? messages[activeDiscussionId] ?? [] : []
@@ -137,6 +138,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   const activeIdRef = useRef(activeDiscussionId)
   activeIdRef.current = activeDiscussionId
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
   const streamingRef = useRef(streaming)
   streamingRef.current = streaming
   // Synchronous view of the list for event handlers: reading status via a
@@ -256,6 +259,24 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
     setLoadingDiscussionId(id)
     loadedRef.current.add(id)
+    const generation = (loadGenerationRef.current[id] ?? 0) + 1
+    loadGenerationRef.current[id] = generation
+    const baseline = messagesRef.current[id] ?? []
+    const isCurrentLoad = () => loadGenerationRef.current[id] === generation
+    const commitMessages = (authoritative: MessageBlock[]) => {
+      if (!isCurrentLoad()) return
+      setMessages((prev) => {
+        if (!isCurrentLoad()) return prev
+        const current = prev[id] ?? []
+        const merged = mergeRevalidatedMessages(authoritative, baseline, current).sort(byTimestamp)
+        return { ...prev, [id]: merged }
+      })
+    }
+    const commitHistory = (hasEarlier: boolean) => {
+      if (!isCurrentLoad()) return
+      historyTailRef.current[id] = tail
+      setHasEarlierMessages((prev) => ({ ...prev, [id]: hasEarlier }))
+    }
     try {
       if ((disc?.type === "live" || disc?.type === "heartbeat") && disc?.sessionId) {
         // LIVE + heartbeat: merge session messages (chat) with Nova API messages
@@ -305,9 +326,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
           })
           .sort(byTimestamp)
 
-        setMessages((prev) => ({ ...prev, [id]: cleanMessages(merged, eventResolver) }))
-        historyTailRef.current[id] = tail
-        setHasEarlierMessages((prev) => ({ ...prev, [id]: sessionHasEarlier || apiHasEarlier }))
+        commitMessages(cleanMessages(merged, eventResolver))
+        commitHistory(sessionHasEarlier || apiHasEarlier)
         return
       }
 
@@ -321,9 +341,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
             api.put(`/api/apps/nova/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
           }
           if (data.messages?.length) {
-            setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages), eventResolver) }))
-            historyTailRef.current[id] = tail
-            setHasEarlierMessages((prev) => ({ ...prev, [id]: data.messages.length >= tail }))
+            commitMessages(cleanMessages(rebuildBlocks(data.messages), eventResolver))
+            commitHistory(data.messages.length >= tail)
             return
           }
         } catch {
@@ -331,9 +350,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
             await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
             const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
             if (data.messages?.length) {
-              setMessages((prev) => ({ ...prev, [id]: cleanMessages(rebuildBlocks(data.messages), eventResolver) }))
-              historyTailRef.current[id] = tail
-              setHasEarlierMessages((prev) => ({ ...prev, [id]: data.messages.length >= tail }))
+              commitMessages(cleanMessages(rebuildBlocks(data.messages), eventResolver))
+              commitHistory(data.messages.length >= tail)
               return
             }
           } catch {
@@ -344,16 +362,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
       try {
         const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}?tail=${tail}`)
-        if (data.messages?.length) {
-          setMessages((prev) => ({ ...prev, [id]: cleanMessages(toChatMessages(data.messages), eventResolver) }))
-        }
-        historyTailRef.current[id] = tail
-        setHasEarlierMessages((prev) => ({ ...prev, [id]: data.messages.length >= tail }))
+        commitMessages(cleanMessages(toChatMessages(data.messages ?? []), eventResolver))
+        commitHistory(data.messages.length >= tail)
       } catch { /* discussion not found */ }
     } finally {
-      setLoadingDiscussionId((cur) => cur === id ? null : cur)
+      if (isCurrentLoad()) setLoadingDiscussionId((cur) => cur === id ? null : cur)
     }
-  }, [discussions])
+  }, [discussions, eventResolver])
 
   const loadEarlierMessages = useCallback(async (id: string) => {
     if (loadingEarlierDiscussionId === id || !hasEarlierMessages[id]) return
@@ -386,7 +401,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const selectDiscussion = useCallback((id: string) => {
     setActiveDiscussionId(id)
     startTransition(() => {
-      loadMessages(id)
+      // Render an already loaded discussion immediately, then revalidate its
+      // current tail. WebSocket delivery is best-effort across mobile suspend
+      // and network handoffs; revisiting a cached discussion is the durable
+      // recovery boundary for any messages or tool calls missed in between.
+      const wasLoaded = loadedRef.current.has(id)
+      const tail = historyTailRef.current[id] ?? INITIAL_HISTORY_TAIL
+      loadMessages(id, tail, wasLoaded)
       api.put(`/api/apps/nova/discussions/${id}/read`).catch(() => {})
       setDiscussions((prev) =>
         prev.map((d) => d.id === id ? { ...d, lastReadAt: new Date().toISOString() } : d)
@@ -883,6 +904,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   const handleUpstreamReconnect = useCallback(() => {
     setUpstreamConnected(true)
+    // The socket cannot replay frames emitted while the client was suspended.
+    // Refresh the active tail now and make every other cached discussion load
+    // authoritatively the next time it is selected.
+    loadedRef.current.clear()
     refreshDiscussions()
     reloadActiveMessages(true)
     // Anything that stayed latched while the socket was down has to be settled
