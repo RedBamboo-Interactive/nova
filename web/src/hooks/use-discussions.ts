@@ -857,7 +857,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (activeDiscussionId === oldDiscussionId) setActiveDiscussionId(null)
       refreshDiscussions()
     } else if (event.type === "session.stream") {
-      const { sessionId, event: evt } = event.data as { sessionId: string; event: ClaudeStreamEvent }
+      const { sessionId, event: evt, timestamp: serverTimestamp } = event.data as {
+        sessionId: string
+        event: ClaudeStreamEvent
+        timestamp?: string
+      }
       const discId = sessionToDiscussion.get(sessionId)
       if (!discId) return
 
@@ -876,6 +880,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         payloadRef: evt.payloadRef ?? null,
         messageId: evt.messageId ?? null,
         messageUid: evt.messageUid ?? null,
+        timestamp: serverTimestamp ?? new Date().toISOString(),
         requestId: evt.requestId ?? null,
       }
 

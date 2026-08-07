@@ -1,7 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { appendEvent, orderMessages } from "./message-order.ts"
-import type { MessageBlock } from "@redbamboo/chat"
+import type { ChatEvent, MessageBlock } from "@redbamboo/chat"
+import { processStreamEvent } from "../../../../redbamboo-packages/packages/chat/src/lib/process-stream-event.ts"
 
 // Frieze ordering has regressed four times, each fix trading one wrong
 // placement for another. These fixtures pin the rule down: events render in
@@ -155,4 +156,26 @@ test("a burst during a streaming reply stays one row and does not move", () => {
     live = appendEvent(live, { source: "event:weather", content: `w${i}`, data: null, timestamp: at(minute) })
   }
   assert.equal(shape(live), "USER(q1) NOVA(a1) [w0+w1+w2+w3]")
+})
+
+test("live events use timestamps when relayed sockets arrive out of order", () => {
+  let live: MessageBlock[] = [user(4, "q1"), nova(8, "a1")]
+  live = appendEvent(live, { source: "event:weather", content: "late", data: null, timestamp: at(9) })
+  live = appendEvent(live, { source: "event:weather", content: "early", data: null, timestamp: at(6) })
+  assert.equal(shape(live), "USER(q1) [early] NOVA(a1) [late]")
+})
+
+test("tool activity streamed after an event stays after it", () => {
+  const tool = (minute: number, name: string): ChatEvent => ({
+    type: "tool_use",
+    toolName: name,
+    timestamp: at(minute),
+    messageUid: "turn",
+  })
+  let live: MessageBlock[] = [user(4, "q1")]
+  live = processStreamEvent(live, true, tool(5, "before")).messages
+  live = appendEvent(live, { source: "event:weather", content: "rain", data: null, timestamp: at(6) })
+  live = processStreamEvent(live, true, tool(7, "after")).messages
+
+  assert.deepEqual(live.map((block) => block.parts[0]?.toolName ?? block.role), ["user", "before", "event:weather", "after"])
 })

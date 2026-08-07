@@ -22,15 +22,10 @@ import type { EventType } from "./types"
  * any further turn existed. Live and reloaded views disagreed for the same
  * reason.
  *
- * The hoisting also isn't needed. `rebuildBlocks()` folds all of a turn's
- * records into exactly one assistant block, so a single turn can never be split
- * by an event. Consecutive assistant blocks only arise from separate ambient
- * posts (heartbeat digests), and an event that arrived between two of those
- * belongs between them.
- *
- * One consequence worth knowing: an assistant block carries the timestamp of its
- * first record, so an event that arrives mid-reply sorts after the whole reply
- * rather than inside it.
+ * Ambient events are chronological boundaries even inside one assistant turn.
+ * The stream opens a continuation block for later model activity, while the
+ * shared activity projection joins adjacent segments into one frieze row. That
+ * keeps the conversation turn intact without falsifying left-to-right order.
  */
 
 export type EventTypeResolver = (source: string) => EventType | undefined
@@ -114,6 +109,23 @@ function newEventBlock(event: FriezeEvent, part: MessagePart, index: number): Me
   }
 }
 
+function eventPartTime(part: MessagePart): number {
+  try {
+    const payload = JSON.parse(part.toolInput ?? "{}") as { timestamp?: string }
+    const time = payload.timestamp ? new Date(payload.timestamp).getTime() : Number.NaN
+    return Number.isNaN(time) ? 0 : time
+  } catch {
+    return 0
+  }
+}
+
+function chronologicalEventParts(parts: MessagePart[]): MessagePart[] {
+  return parts
+    .map((part, index) => ({ part, index }))
+    .sort((a, b) => eventPartTime(a.part) - eventPartTime(b.part) || a.index - b.index)
+    .map(({ part }) => part)
+}
+
 /**
  * Apply the ordering rule to a mixed list of conversation blocks and raw event
  * messages. Non-event blocks pass through untouched.
@@ -139,10 +151,8 @@ export function orderMessages(blocks: MessageBlock[], resolve?: EventTypeResolve
 
 /**
  * The same rule applied incrementally, for an event arriving over the socket.
- * A live event is always the newest thing in the discussion, so appending keeps
- * timestamp order without re-sorting — and re-sorting would be actively wrong,
- * since an in-flight assistant block is stamped when it opened and would jump
- * past events that arrived while it was still writing.
+ * Relayed sockets can overtake one another, so insertion uses the authoritative
+ * event timestamp rather than assuming browser receipt order.
  */
 export function appendEvent(
   blocks: MessageBlock[],
@@ -150,9 +160,30 @@ export function appendEvent(
   resolve?: EventTypeResolver,
 ): MessageBlock[] {
   const part = buildEventPart(event, resolve)
-  const last = blocks[blocks.length - 1]
-  if (last && isEventBlock(last)) {
-    return [...blocks.slice(0, -1), { ...last, parts: [...last.parts, part] }]
+  let index = blocks.length
+  const eventTime = new Date(event.timestamp).getTime()
+  while (index > 0 && new Date(blocks[index - 1].timestamp ?? 0).getTime() > eventTime) index--
+
+  const previous = blocks[index - 1]
+  if (previous && isEventBlock(previous)) {
+    return [
+      ...blocks.slice(0, index - 1),
+      { ...previous, parts: chronologicalEventParts([...previous.parts, part]) },
+      ...blocks.slice(index),
+    ]
   }
-  return [...blocks, newEventBlock(event, part, blocks.length)]
+  const next = blocks[index]
+  if (next && isEventBlock(next)) {
+    return [
+      ...blocks.slice(0, index),
+      { ...next, timestamp: event.timestamp, parts: chronologicalEventParts([part, ...next.parts]) },
+      ...blocks.slice(index + 1),
+    ]
+  }
+
+  return [
+    ...blocks.slice(0, index),
+    newEventBlock(event, part, index),
+    ...blocks.slice(index),
+  ]
 }
