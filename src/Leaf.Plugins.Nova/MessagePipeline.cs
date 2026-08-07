@@ -36,6 +36,7 @@ public sealed class MessagePipeline(
     RedComputeClient redCompute,
     AgentDirectory agents,
     AgentWorkspaces workspaces,
+    IAgentScratchSpace scratchSpace,
     NovaConfigStore config,
     ExtensionContributions extensions)
 {
@@ -86,18 +87,23 @@ public sealed class MessagePipeline(
 
         var appConfig = await config.GetAsync(ct);
         var agentProvider = agentId != null ? await agents.GetAgentProviderAsync(agentId, ct) : null;
+        var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
+        if (agent == null) return null;
+        var scratch = scratchSpace.PrepareExecution(
+            agent.Name,
+            discussionId ?? parentJobId ?? Guid.NewGuid().ToString("N"));
 
         var body = new Dictionary<string, object?>
         {
             ["projectPath"] = workspace.WorkspacePath,
             ["qualityTier"] = qualityTierOverride ?? appConfig.DefaultQualityMode,
+            ["scratchDir"] = scratch.Path,
+            ["addDirs"] = new[] { scratch.Path },
         };
         var effectiveProvider = providerOverride ?? agentProvider;
         if (effectiveProvider != null)
             body["provider"] = effectiveProvider;
 
-        var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
-        if (agent == null) return null;
         var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ct);
         var context = new List<ComputeContextReference>();
         if (discussionId != null) context.Add(new ComputeContextReference("discussion", discussionId));
@@ -267,7 +273,15 @@ public sealed class MessagePipeline(
         var priorBlock = priorMessage != null
             ? $"\n<nova-prior-message role=\"assistant\">\n{priorMessage}\n</nova-prior-message>\n"
             : "";
-        var enrichedContent = contextBlock + priorBlock + "\n" + content;
+        var scratch = scratchSpace.PrepareExecution(agentName ?? "Agent", discussion.Id);
+        var scratchBlock = $"""
+            <scratch-space path="{scratch.Path}">
+            Put disposable artifacts, downloads, probes, generated intermediates, and temporary scripts here.
+            Never create temp, tmp, or scratch folders inside the persistent workspace. Promote only deliberate final work into the workspace.
+            </scratch-space>
+
+            """;
+        var enrichedContent = contextBlock + priorBlock + scratchBlock + content;
 
         string? messageUid = null;
         object requestBody;
@@ -281,7 +295,7 @@ public sealed class MessagePipeline(
                 {
                     typedInput.Add(new { type = "text", text = enriched
                         ? part.Text ?? ""
-                        : contextBlock + priorBlock + "\n" + (part.Text ?? "") });
+                        : contextBlock + priorBlock + scratchBlock + (part.Text ?? "") });
                     enriched = true;
                 }
                 else if (string.Equals(part.Type, "attachment", StringComparison.OrdinalIgnoreCase)
@@ -291,7 +305,7 @@ public sealed class MessagePipeline(
                 }
             }
             if (!enriched)
-                typedInput.Insert(0, new { type = "text", text = contextBlock + priorBlock });
+                typedInput.Insert(0, new { type = "text", text = contextBlock + priorBlock + scratchBlock });
             requestBody = new { input = typedInput };
         }
         else

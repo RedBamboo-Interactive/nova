@@ -22,7 +22,8 @@ public sealed class NovaSessionActionHandler(
     DiscussionStore discussions,
     EventInjector injector,
     RedComputeClient redCompute,
-    IEntityStore entities) : IAutomationActionHandler
+    IEntityStore entities,
+    IAgentScratchSpace scratchSpace) : IAutomationActionHandler
 {
     private static readonly string[] DefaultTools =
         ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebFetch", "WebSearch", "TodoWrite"];
@@ -64,7 +65,8 @@ public sealed class NovaSessionActionHandler(
                     $"Automation delivery discussion '{preCreated.Id}' belongs to '{preCreated.OwnerId}', not beneficiary '{context.Beneficiary.Id}'");
         }
 
-        var fullPrompt = ComposePrompt(automation.Name, agent, preCreated, prompt, isCodex);
+        var scratch = scratchSpace.PrepareExecution(agent.Name, context.AttemptJobId.ToString("N"));
+        var fullPrompt = ComposePrompt(automation.Name, agent, preCreated, prompt, isCodex, scratch.Path);
 
         var timeout = IntOr(config, "timeout") ?? 3600;
         var body = new Dictionary<string, object?>
@@ -78,6 +80,8 @@ public sealed class NovaSessionActionHandler(
             ["timeout"] = timeout,
             ["sandbox"] = isCodex ? "danger-full-access" : null,
             ["networkAccess"] = isCodex,
+            ["env"] = scratch.Environment,
+            ["addDirs"] = new[] { scratch.Path },
         };
 
         var provenanceContext = new List<ComputeContextReference>
@@ -138,7 +142,7 @@ public sealed class NovaSessionActionHandler(
         return agents.NovaAgentId != null ? await agents.GetAgentAsync(agents.NovaAgentId, ct) : null;
     }
 
-    private static string ComposePrompt(string automationName, AgentInfo agent, DiscussionRead? preCreated, string prompt, bool isCodex)
+    private static string ComposePrompt(string automationName, AgentInfo agent, DiscussionRead? preCreated, string prompt, bool isCodex, string scratchPath)
     {
         // /ai-session/execute takes a single prompt — fold the agent identity in ahead
         // of the task, then the run context, then the task itself. CLAUDE.md in the
@@ -168,6 +172,11 @@ public sealed class NovaSessionActionHandler(
         }
 
         parts.Add(prompt);
+        parts.Add($"""
+            SCRATCH SPACE: Put every disposable artifact, download, probe, generated intermediate,
+            and temporary script in {scratchPath}. Never create temp, tmp, or scratch folders inside
+            the persistent workspace. Move only deliberate final work into the workspace.
+            """);
         if (isCodex)
         {
             parts.Add("""

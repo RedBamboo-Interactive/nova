@@ -69,7 +69,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<DiscussionStore>(),
                 sp.GetRequiredService<EventInjector>(),
                 sp.GetRequiredService<RedComputeClient>(),
-                sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
+                sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+                sp.GetRequiredService<IAgentScratchSpace>()));
         services.AddSingleton<IAutomationActionHandler>(sp =>
             sp.GetRequiredService<NovaSessionActionHandler>());
         services.AddSingleton<IFlowNodeHandler>(sp => new AutomationActionFlowNodeHandler(
@@ -131,6 +132,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<RedComputeClient>(),
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredService<AgentWorkspaces>(),
+                sp.GetRequiredService<IAgentScratchSpace>(),
                 sp.GetRequiredService<NovaConfigStore>(),
                 sp.GetRequiredService<ExtensionContributions>()));
     }

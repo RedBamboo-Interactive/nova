@@ -496,11 +496,25 @@ public sealed class HeartbeatService(
         return false;
     }
 
+    private async Task<SessionSnapshot> GetReadableSessionAsync(
+        string sessionId, CancellationToken ct)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        while (true)
+        {
+            var snapshot = await redCompute.GetSessionAsync(sessionId, ct);
+            if (snapshot is not null) return snapshot;
+            if (DateTimeOffset.UtcNow >= deadline)
+                throw new InvalidOperationException(
+                    $"Heartbeat session '{sessionId}' could not be read");
+            await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+        }
+    }
+
     /// <summary>Capture the raw transcript boundary immediately before a heartbeat turn.</summary>
     public async Task<int> GetSessionMessageCountAsync(string sessionId, CancellationToken ct = default)
     {
-        var snapshot = await redCompute.GetSessionAsync(sessionId, ct)
-            ?? throw new InvalidOperationException($"Heartbeat session '{sessionId}' could not be read");
+        var snapshot = await GetReadableSessionAsync(sessionId, ct);
         return snapshot.Messages.Count;
     }
 
@@ -511,8 +525,7 @@ public sealed class HeartbeatService(
     public async Task<string?> GetAssistantTailAfterAsync(
         string sessionId, int baselineMessageCount, CancellationToken ct = default)
     {
-        var snapshot = await redCompute.GetSessionAsync(sessionId, ct)
-            ?? throw new InvalidOperationException($"Heartbeat session '{sessionId}' could not be read");
+        var snapshot = await GetReadableSessionAsync(sessionId, ct);
         return FindAssistantTailAfter(snapshot.Messages, baselineMessageCount);
     }
 
