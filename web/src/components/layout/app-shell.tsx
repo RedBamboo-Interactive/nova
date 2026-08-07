@@ -57,8 +57,8 @@ function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: st
   })
 
   useCommand("nova-close-discussion", {
-    label: "Archive Discussion",
-    description: "Archive the active discussion and stop its session",
+    label: "Close Discussion",
+    description: "Close the active discussion and stop its session",
     group: "Discussions",
     shortcut: "Alt+W",
     keywords: ["close", "archive", "remove"],
