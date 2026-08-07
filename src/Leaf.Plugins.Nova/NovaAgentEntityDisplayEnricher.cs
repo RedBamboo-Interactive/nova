@@ -23,7 +23,7 @@ public sealed class NovaAgentEntityDisplayEnricher(AgentDirectory agents)
     {
         if (agent is null) return null;
         return new EntityDisplayEnrichment(
-            Subtitle: "Agent",
+            Subtitle: agent.Description,
             ImageUrl: AgentDirectory.BuildAvatarUrl(agent.AvatarFilename),
             ImageShape: "circle");
     }

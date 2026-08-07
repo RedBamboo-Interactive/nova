@@ -11,7 +11,7 @@ public class NovaAgentEntityDisplayEnricherTests
             Id: Guid.NewGuid().ToString(),
             Slug: "nova",
             Name: "Nova",
-            Description: null,
+            Description: "AI assistant with persistent identity and memory",
             AvatarFilename: "active-outfit.png",
             WorkspacePath: "C:\\Nova",
             WorkspaceId: null,
@@ -24,7 +24,7 @@ public class NovaAgentEntityDisplayEnricherTests
         var projection = NovaAgentEntityDisplayEnricher.Project(agent);
 
         Assert.NotNull(projection);
-        Assert.Equal("Agent", projection.Subtitle);
+        Assert.Equal("AI assistant with persistent identity and memory", projection.Subtitle);
         Assert.Equal("/api/assets/active-outfit.png", projection.ImageUrl);
         Assert.Equal("circle", projection.ImageShape);
     }
