@@ -7,6 +7,7 @@ import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
 import { discussionMessagesForMerge, mergeRevalidatedMessages } from "../lib/discussion-transcript"
+import { applySessionStatus } from "../lib/discussion-runtime"
 import {
   clearDiscussionArchivePending,
   getDiscussionList,
@@ -786,14 +787,19 @@ export function useDiscussions(eventResolver?: EventResolver) {
             }
           }
         }
-      } else if (!pendingQuestionsRef.current[discId]) {
+      } else {
+        // The discussion list and the transcript must describe the same runtime.
+        // A turn can start in another window or through an automation, so the
+        // local optimistic send is not an authoritative source of this state.
+        setDiscussions((prev) => applySessionStatus(prev, discId, session.status))
         // Active means a turn is running even when this client didn't start
         // it — an automation, the heartbeat, or the same discussion open on
         // his phone. Without this there is no path back to streaming=true, so
         // the composer looks idle and the message queue drains straight into a
         // live turn. A pending question is the exception: the turn is Active
         // but blocked on the user, and answers go through onAnswerQuestion.
-        setStreaming((prev) => ({ ...prev, [discId]: true }))
+        if (!pendingQuestionsRef.current[discId])
+          setStreaming((prev) => ({ ...prev, [discId]: true }))
       }
     } else if (event.type === "session.ended") {
       const { id } = event.data as { id: string }
@@ -947,6 +953,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
           setDiscussions((p) =>
             p.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
           )
+        } else if (result.isStreaming || result.resumePending) {
+          // Recover when session.updated raced ahead of a newly-associated
+          // session id. Any live stream activity is sufficient evidence that
+          // the discussion is running.
+          setDiscussions((p) => applySessionStatus(p, discId, "Active"))
         }
         return { ...prev, [discId]: result.messages }
       })

@@ -168,13 +168,12 @@ public static class DiscussionEndpoints
                 if (rcStatus == null && d.Status is "idle" or "thinking")
                     rcStatus = await redCompute.GetSessionStatusAsync(d.SessionId);
 
-                var isAlive = rcStatus is "Active" or "Idle" or "Starting";
+                // Reconcile activity as well as liveness. Previously an Active
+                // RedCompute session remained `idle` in the discussion entity,
+                // so a refresh could turn a visibly running thread green.
+                var newStatus = DiscussionStatus.FromSessionStatus(rcStatus, d.Type);
 
-                string? newStatus = null;
-                if (isAlive && d.Status == "stopped") newStatus = "idle";
-                else if (!isAlive && rcStatus != null && d.Status is "idle" or "thinking") newStatus = "stopped";
-
-                if (newStatus != null)
+                if (newStatus != null && newStatus != d.Status)
                 {
                     // State-machine write: refused (null) if the discussion closed
                     // (archiving/archived) while this sweep was probing sessions.

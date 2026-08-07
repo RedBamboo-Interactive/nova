@@ -20,6 +20,15 @@ public static class DiscussionStatus
     public const string Archived = "archived";
 
     public static bool IsClosed(string status) => status is Archived or Archiving;
+
+    public static string? FromSessionStatus(string? sessionStatus, string discussionType)
+        => sessionStatus switch
+        {
+            "Active" => Thinking,
+            "Idle" or "Starting" => Idle,
+            "Stopped" or "Error" => discussionType == "live" ? Idle : Stopped,
+            _ => null,
+        };
 }
 
 /// <summary>
