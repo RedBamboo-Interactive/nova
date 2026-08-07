@@ -1,35 +1,81 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { discussionMessagesForMerge, mergeRevalidatedMessages } from "./discussion-transcript.ts"
-import type { DiscussionMessage } from "./types.ts"
+import {
+  mergeDiscussionAndSessionBlocks,
+  mergeRevalidatedMessages,
+} from "./discussion-transcript.ts"
 import type { MessageBlock } from "@redbamboo/chat"
 
-function message(id: string, source: string): DiscussionMessage {
+function projectedBlock(id: string, source: string, timestamp: string): MessageBlock {
   return {
     id,
     role: source === "session-transcript" ? "assistant" : "user",
     parts: [{ type: "text", content: id }],
-    timestamp: "2026-08-02T12:00:00.000Z",
-    source,
+    timestamp,
+    metadata: { source },
   }
 }
 
-const event = message("tick", "event:heartbeat-tick")
-const reply = message("reply", "session-transcript")
-const acceptedBridge = message("accepted-user", "user-message")
+const event = projectedBlock("tick", "event:heartbeat-tick", "2026-08-02T12:00:00.000Z")
+const projectedReply = projectedBlock("reply", "session-transcript", "2026-08-02T12:01:00.000Z")
+const acceptedBridge = projectedBlock("accepted-user", "user-message", "2026-08-02T12:02:00.000Z")
+const rawReply: MessageBlock = {
+  ...projectedReply,
+  parts: [{ type: "tool_use", content: "", toolName: "Read", toolInput: "{}" }],
+  metadata: undefined,
+}
 
 test("uses raw session fidelity without duplicating the discussion transcript", () => {
-  assert.deepEqual(discussionMessagesForMerge([event, reply], true), [event])
+  assert.deepEqual(
+    mergeDiscussionAndSessionBlocks([event, projectedReply], [rawReply]),
+    [event, rawReply],
+  )
 })
 
 test("retains the authorized discussion transcript when the raw session is unavailable", () => {
-  assert.deepEqual(discussionMessagesForMerge([event, reply], false), [event, reply])
+  assert.deepEqual(
+    mergeDiscussionAndSessionBlocks([event, projectedReply], []),
+    [event, projectedReply],
+  )
 })
 
 test("retains an accepted user bridge while raw session history is available", () => {
   assert.deepEqual(
-    discussionMessagesForMerge([event, reply, acceptedBridge], true),
-    [event, acceptedBridge],
+    mergeDiscussionAndSessionBlocks([event, projectedReply, acceptedBridge], [rawReply]),
+    [event, rawReply, acceptedBridge],
+  )
+})
+
+test("accepted-message convergence keeps raw tool activity instead of replacing it with text only", () => {
+  const timestamp = "2026-08-07T13:53:43.000Z"
+  const projectedText: MessageBlock = {
+    id: "assistant-turn",
+    role: "assistant",
+    parts: [{ type: "text", content: "Working on it" }],
+    timestamp,
+    metadata: { source: "session-transcript" },
+  }
+  const rawTurn: MessageBlock = {
+    id: "assistant-turn",
+    role: "assistant",
+    parts: [
+      { type: "tool_use", content: "", toolName: "Bash", toolInput: "{}" },
+      { type: "tool_result", content: "done" },
+      { type: "text", content: "Working on it" },
+    ],
+    timestamp,
+  }
+  const acceptedUser: MessageBlock = {
+    id: "accepted-user",
+    role: "user",
+    parts: [{ type: "text", content: "One more thing" }],
+    timestamp: "2026-08-07T13:54:00.000Z",
+    metadata: { source: "user-message" },
+  }
+
+  assert.deepEqual(
+    mergeDiscussionAndSessionBlocks([projectedText, acceptedUser], [rawTurn]),
+    [rawTurn, acceptedUser],
   )
 })
 

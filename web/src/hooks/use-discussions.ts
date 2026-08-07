@@ -6,7 +6,7 @@ import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, Questio
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
-import { discussionMessagesForMerge, mergeRevalidatedMessages } from "../lib/discussion-transcript"
+import { mergeDiscussionAndSessionBlocks, mergeRevalidatedMessages } from "../lib/discussion-transcript"
 import { applySessionStatus } from "../lib/discussion-runtime"
 import {
   clearDiscussionArchivePending,
@@ -318,34 +318,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
           const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}?tail=${tail}`)
           if (data.messages?.length) {
             apiHasEarlier = data.messages.length >= tail
-            // The API already merges session-transcript messages with event
-            // messages, but we load the raw session above for full fidelity
-            // (tool calls, thinking blocks, etc.). Remove the API transcript
-            // only when that raw history is actually available; a forbidden
-            // agent-owned session must fall back to the discussion copy.
-            apiMsgs = toChatMessages(discussionMessagesForMerge(data.messages, sessionMsgs.length > 0))
+            apiMsgs = toChatMessages(data.messages)
           }
         } catch {}
 
-        const seen = new Set<string>()
         // Nova API messages first: when both stores hold the same logical
         // message (shared uid), the Nova copy wins dedup — it carries the
         // source metadata that drives event rendering. Order on screen is
         // unaffected (the merge re-sorts by timestamp below).
-        const merged = [...apiMsgs, ...sessionMsgs]
-          .filter((m) => {
-            // Blocks sharing an id are the same logical message cross-posted
-            // to both stores (message uid); the timestamp+prefix key covers
-            // records that predate the uid rollout.
-            const dedupContent = m.role === "user" ? stripContextXml(m.parts[0]?.content ?? "") : (m.parts[0]?.content ?? "")
-            const normTs = m.timestamp.replace(/\+00:00$/, "Z")
-            const key = `${normTs}:${dedupContent.slice(0, 50)}`
-            if ((m.id != null && seen.has(m.id)) || seen.has(key)) return false
-            if (m.id != null) seen.add(m.id)
-            seen.add(key)
-            return true
-          })
-          .sort(byTimestamp)
+        const merged = mergeDiscussionAndSessionBlocks(apiMsgs, sessionMsgs, stripContextXml)
 
         commitMessages(cleanMessages(merged, eventResolver))
         commitHistory(sessionHasEarlier || apiHasEarlier)
@@ -358,8 +339,26 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (preferDiscussionApi) {
         try {
           const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}?tail=${tail}`)
-          commitMessages(cleanMessages(toChatMessages(data.messages ?? []), eventResolver))
-          commitHistory(data.messages.length >= tail)
+          let sessionMsgs: MessageBlock[] = []
+          let sessionHasEarlier = false
+          if (disc.sessionId) {
+            try {
+              const session = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+              if (session.messages?.length) {
+                sessionMsgs = rebuildBlocks(session.messages)
+                sessionHasEarlier = session.messages.length >= tail
+              }
+            } catch {
+              // The authorized discussion projection remains a safe fallback.
+            }
+          }
+          const merged = mergeDiscussionAndSessionBlocks(
+            toChatMessages(data.messages ?? []),
+            sessionMsgs,
+            stripContextXml,
+          )
+          commitMessages(cleanMessages(merged, eventResolver))
+          commitHistory(data.messages.length >= tail || sessionHasEarlier)
           return
         } catch {
           // Preserve the ordinary raw-session fallback if the canonical read

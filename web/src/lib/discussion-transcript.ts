@@ -1,19 +1,34 @@
-import type { DiscussionMessage } from "./types.ts"
 import type { MessageBlock } from "@redbamboo/chat"
 
 /**
- * The Nova discussion is the authorization boundary for its rendered history.
- * When the raw Compute transcript is available it wins because it carries tool
- * calls and thinking blocks; otherwise retain the discussion's transcript copy
- * instead of reducing the history to event markers.
+ * Combine Nova's authorized discussion projection with RedCompute's richer raw
+ * transcript. The discussion endpoint contributes ambient events and a newly
+ * accepted user-message bridge while the session mirror catches up; once raw
+ * session history is available, its tool/thinking parts must remain canonical.
  */
-export function discussionMessagesForMerge(
-  messages: DiscussionMessage[],
-  hasRawSessionMessages: boolean,
-): DiscussionMessage[] {
-  return hasRawSessionMessages
-    ? messages.filter((message) => message.source !== "session-transcript")
-    : messages
+export function mergeDiscussionAndSessionBlocks(
+  discussionBlocks: MessageBlock[],
+  sessionBlocks: MessageBlock[],
+  normalizeUserContent: (content: string) => string = (content) => content,
+): MessageBlock[] {
+  const discussionOnly = sessionBlocks.length > 0
+    ? discussionBlocks.filter((message) => message.metadata?.source !== "session-transcript")
+    : discussionBlocks
+  const seen = new Set<string>()
+
+  return [...discussionOnly, ...sessionBlocks]
+    .filter((message) => {
+      const idKey = message.id == null ? null : `id:${message.id}`
+      const content = message.parts[0]?.content ?? ""
+      const dedupContent = message.role === "user" ? normalizeUserContent(content) : content
+      const timestamp = message.timestamp.replace(/\+00:00$/, "Z")
+      const fallbackKey = `content:${timestamp}:${dedupContent.slice(0, 50)}`
+      if ((idKey !== null && seen.has(idKey)) || seen.has(fallbackKey)) return false
+      if (idKey !== null) seen.add(idKey)
+      seen.add(fallbackKey)
+      return true
+    })
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
 }
 
 function messageFingerprint(message: MessageBlock): string {
