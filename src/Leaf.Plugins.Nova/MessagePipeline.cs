@@ -274,13 +274,18 @@ public sealed class MessagePipeline(
             ? $"\n<nova-prior-message role=\"assistant\">\n{priorMessage}\n</nova-prior-message>\n"
             : "";
         var scratch = scratchSpace.PrepareExecution(agentName ?? "Agent", discussion.Id);
-        var scratchBlock = $"""
-            <scratch-space path="{scratch.Path}">
-            Put disposable artifacts, downloads, probes, generated intermediates, and temporary scripts here.
-            Never create temp, tmp, or scratch folders inside the persistent workspace. Promote only deliberate final work into the workspace.
-            </scratch-space>
+        // The scratch convention is session setup, not conversational content. Tell the
+        // agent once on the first turn; the session already carries the directory through
+        // scratchDir/addDirs and the REDLEAF_SCRATCH_DIR environment variable thereafter.
+        var scratchBlock = previousSnapshot == null
+            ? $"""
+                <scratch-space path="{scratch.Path}">
+                Put disposable artifacts, downloads, probes, generated intermediates, and temporary scripts here.
+                Never create temp, tmp, or scratch folders inside the persistent workspace. Promote only deliberate final work into the workspace.
+                </scratch-space>
 
-            """;
+                """
+            : "";
         var enrichedContent = contextBlock + priorBlock + scratchBlock + content;
 
         string? messageUid = null;

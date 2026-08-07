@@ -17,6 +17,9 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
     internal static readonly Regex NovaPriorTag = new(
         @"<nova-prior-message[s]?[^>]*>[\s\S]*?</nova-prior-message[s]?>\s*", RegexOptions.Compiled);
 
+    internal static readonly Regex ScratchSpaceTag = new(
+        @"<scratch-space[^>]*>[\s\S]*?</scratch-space>\s*", RegexOptions.Compiled);
+
     public async Task<string> ExportAsync(IReadOnlyList<DiscussionRead> discussionsToExport, DateTime since, CancellationToken ct = default)
     {
         if (discussionsToExport.Count == 0)
@@ -178,6 +181,7 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
     {
         content = NovaContextTag.Replace(content, "");
         content = NovaPriorTag.Replace(content, "");
+        content = ScratchSpaceTag.Replace(content, "");
         return content.TrimStart();
     }
 
