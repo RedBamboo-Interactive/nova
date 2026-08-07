@@ -328,14 +328,12 @@ public sealed class MessagePipeline(
 
         var hasImages = images is { Length: > 0 };
         var hasAttachments = claimedAttachments.Length > 0;
+        var acceptedMessageUid = messageUid ?? Guid.NewGuid().ToString("N");
         var patch = new JsonObject
         {
             ["last_activity"] = new DateTimeOffset(now).ToString("O"),
             ["last_context_json"] = NovaContextBuilder.SerializeSnapshot(currentSnapshot),
         };
-        // One count bump per user message: the image path gets it from PostAsync below.
-        if (!hasImages && !hasAttachments)
-            patch["message_count"] = discussion.MessageCount + 1;
         if (discussion.InjectedContext != null)
             patch["injected_context"] = null;
         if (sessionIsNew)
@@ -360,7 +358,7 @@ public sealed class MessagePipeline(
             {
                 ["parts_json"] = JsonSerializer.Serialize(parts, JsonOptions),
                 ["source"] = "user-message",
-                ["uid"] = messageUid ?? Guid.NewGuid().ToString("N"),
+                ["uid"] = acceptedMessageUid,
             }, userId, ct);
         }
         else if (hasImages)
@@ -378,11 +376,23 @@ public sealed class MessagePipeline(
             {
                 ["parts_json"] = JsonSerializer.Serialize(parts, JsonOptions),
                 ["source"] = "user-message",
-                ["uid"] = messageUid ?? Guid.NewGuid().ToString("N"),
+                ["uid"] = acceptedMessageUid,
+            }, userId, ct);
+        }
+        else
+        {
+            // Persist every accepted user message before the endpoint publishes its
+            // convergence event. RedCompute mirrors the message asynchronously, so
+            // this record is Nova's authoritative bridge during that short window.
+            // PostMessageAsync owns the single message_count increment for all paths.
+            await store.PostMessageAsync(discussion.EntityId, "user", content, new JsonObject
+            {
+                ["source"] = "user-message",
+                ["uid"] = acceptedMessageUid,
             }, userId, ct);
         }
 
-        return new(true, sessionId, null, null, metadata, messageUid);
+        return new(true, sessionId, null, null, metadata, acceptedMessageUid);
     }
 
     public async Task<(string? Outfit, string? Asset)> ResolveOutfitContextAsync(string? agentId, CancellationToken ct = default)

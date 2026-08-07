@@ -311,18 +311,23 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         {
             foreach (var el in arr.EnumerateArray())
             {
-                messages.Add(new SessionMessage
-                {
-                    Role = el.GetProperty("role").GetString() ?? "unknown",
-                    EventType = el.TryGetProperty("eventType", out var et) ? et.GetString() ?? "text" : "text",
-                    Content = el.TryGetProperty("content", out var c) ? c.GetString() : null,
-                    Timestamp = el.TryGetProperty("timestamp", out var ts) ? ts.GetDateTimeOffset().UtcDateTime : DateTime.MinValue,
-                });
+                messages.Add(ParseSessionMessage(el));
             }
         }
 
         return new SessionSnapshot(status, title, messages);
     }
+
+    internal static SessionMessage ParseSessionMessage(JsonElement el) => new()
+    {
+        Role = el.GetProperty("role").GetString() ?? "unknown",
+        EventType = el.TryGetProperty("eventType", out var et) ? et.GetString() ?? "text" : "text",
+        Content = el.TryGetProperty("content", out var c) ? c.GetString() : null,
+        Timestamp = el.TryGetProperty("timestamp", out var ts) ? ts.GetDateTimeOffset().UtcDateTime : DateTime.MinValue,
+        MessageUid = el.TryGetProperty("messageUid", out var uid) && uid.ValueKind == JsonValueKind.String
+            ? uid.GetString()
+            : null,
+    };
 
     public sealed record SessionListEntry(string Id, string Status, int MessageCount);
 

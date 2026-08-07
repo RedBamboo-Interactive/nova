@@ -220,11 +220,6 @@ export function ChatView({
   const [providers, setProviders] = useState<ProviderInfo[]>([])
 
   useEffect(() => {
-    if (floating || !floatingSurface?.supported || !activeDiscussionId) return
-    void runUiSurfaceAction("nova:floating-chat", "select-discussion", { discussionId: activeDiscussionId })
-  }, [activeDiscussionId, floating, floatingSurface?.supported])
-
-  useEffect(() => {
     api.get<{ tiers: QualityTierInfo[] }>("/ai-session/quality-modes")
       .then(data => setQualityTiers(data.tiers ?? []))
       .catch(() => {})

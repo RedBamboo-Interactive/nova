@@ -259,11 +259,23 @@ export function useDiscussions(eventResolver?: EventResolver) {
     syncAndRefresh()
   }, [syncAndRefresh])
 
-  const loadMessages = useCallback(async (id: string, tail = INITIAL_HISTORY_TAIL, force = false) => {
+  const loadMessages = useCallback(async (
+    id: string,
+    tail = INITIAL_HISTORY_TAIL,
+    force = false,
+    sessionIdOverride?: string | null,
+    preferDiscussionApi = false,
+  ) => {
     if (!force && loadedRef.current.has(id)) return
 
-    const disc = discussions.find((d) => d.id === id)
-    if (!disc) return
+    const currentDiscussion = discussionsRef.current.find((d) => d.id === id)
+    if (!currentDiscussion) return
+    // An accepted-message event can beat the POST response that updates the
+    // shared discussion record with a newly-created session id. Carrying the
+    // event's id into this revalidation avoids a timing-dependent empty load.
+    const disc = sessionIdOverride && sessionIdOverride !== currentDiscussion.sessionId
+      ? { ...currentDiscussion, sessionId: sessionIdOverride }
+      : currentDiscussion
 
     setLoadingDiscussionId(id)
     loadedRef.current.add(id)
@@ -339,6 +351,21 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return
       }
 
+      // An accepted user-message event is published only after Nova has stored
+      // its canonical bridge record. Read that endpoint first for convergence:
+      // the raw Compute transcript can legitimately lag the accepted send.
+      if (preferDiscussionApi) {
+        try {
+          const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}?tail=${tail}`)
+          commitMessages(cleanMessages(toChatMessages(data.messages ?? []), eventResolver))
+          commitHistory(data.messages.length >= tail)
+          return
+        } catch {
+          // Preserve the ordinary raw-session fallback if the canonical read
+          // itself is temporarily unavailable.
+        }
+      }
+
       if (disc?.sessionId) {
         try {
           const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
@@ -376,7 +403,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     } finally {
       if (isCurrentLoad()) setLoadingDiscussionId((cur) => cur === id ? null : cur)
     }
-  }, [discussions, eventResolver])
+  }, [eventResolver])
 
   const loadEarlierMessages = useCallback(async (id: string) => {
     if (loadingEarlierDiscussionId === id || !hasEarlierMessages[id]) return
@@ -839,6 +866,21 @@ export function useDiscussions(eventResolver?: EventResolver) {
         }
         return { ...prev, [discussionId]: [...current, newBlock].sort(byTimestamp) }
       })
+    } else if (event.type === "discussion.user-message") {
+      const { discussionId, sessionId } = event.data as { discussionId?: string; sessionId?: string | null }
+      if (!discussionId) return
+      if (sessionId) {
+        setDiscussions((prev) => prev.map((discussion) => discussion.id === discussionId
+          ? { ...discussion, sessionId }
+          : discussion))
+      }
+      // The send is now durable in RedCompute. Revalidate every mounted runtime
+      // viewing it instead of copying the queue winner's optimistic block across
+      // views; this also converges other open clients and attachment-rich messages.
+      loadedRef.current.delete(discussionId)
+      if (activeIdRef.current !== discussionId) return
+      const tail = historyTailRef.current[discussionId] ?? INITIAL_HISTORY_TAIL
+      void loadMessages(discussionId, tail, true, sessionId, true)
     } else if (event.type === "discussion.cleared") {
       const { discussionId } = event.data as { discussionId: string }
       if (!discussionId) return
@@ -909,7 +951,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discId]: result.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, refreshDiscussions])
+  }, [sessionToDiscussion, clearQuestion, refreshDiscussions, loadMessages])
 
   const handleUpstreamDisconnect = useCallback(() => {
     setUpstreamConnected(false)

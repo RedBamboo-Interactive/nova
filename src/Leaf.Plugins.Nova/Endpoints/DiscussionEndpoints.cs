@@ -374,6 +374,11 @@ public static class DiscussionEndpoints
                         .ToDictionary(g => g.Key, g => g.OrderByDescending(m => m.CreatedAt).First());
 
                     var collapsed = ConversationExporter.CollapseMessages(snapshot.Messages);
+                    var pendingUserUids = FindPendingUserMessageUids(
+                        collapsed.Where(m => m.Role == "user").Select(m => m.MessageUid),
+                        records
+                            .Where(m => m.Metadata["source"]?.GetValue<string>() == "user-message")
+                            .Select(m => m.Metadata["uid"]?.GetValue<string>()));
                     var sessionMsgs = collapsed
                         .Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content))
                         .Select(m =>
@@ -400,6 +405,27 @@ public static class DiscussionEndpoints
                             };
                         });
 
+                    // RedCompute's session mirror can lag a successful send. Keep
+                    // Nova's synchronously persisted copy visible until its stable
+                    // uid appears in the session transcript, then let the transcript
+                    // replace it without ever rendering a duplicate.
+                    var pendingUserMsgs = records
+                        .Where(m => m.Metadata["source"]?.GetValue<string>() == "user-message")
+                        .Where(m => !string.IsNullOrWhiteSpace(m.Metadata["uid"]?.GetValue<string>()))
+                        .GroupBy(m => m.Metadata["uid"]!.GetValue<string>())
+                        .Select(g => g.OrderByDescending(m => m.CreatedAt).First())
+                        .Where(m => pendingUserUids.Contains(m.Metadata["uid"]!.GetValue<string>()))
+                        .Select(m => new
+                        {
+                            id = (string?)m.Id.ToString(),
+                            messageUid = m.Metadata["uid"]?.GetValue<string>(),
+                            role = m.Role,
+                            parts = MapUserMessageParts(m.Metadata["parts_json"]?.GetValue<string>(), m.Content),
+                            timestamp = m.CreatedAt.UtcDateTime.ToString("o"),
+                            senderAgentId = (string?)null,
+                            source = (string?)"user-message",
+                        });
+
                     var eventMsgs = records
                         .Where(m => (m.Metadata["source"]?.GetValue<string>() ?? "").StartsWith("event:"))
                         .Select(m =>
@@ -419,7 +445,7 @@ public static class DiscussionEndpoints
                             };
                         });
 
-                    var merged = sessionMsgs.Concat(eventMsgs)
+                    var merged = sessionMsgs.Concat(pendingUserMsgs).Concat(eventMsgs)
                         .OrderBy(m => m.timestamp)
                         .AsEnumerable();
 
@@ -886,7 +912,7 @@ public static class DiscussionEndpoints
             return Results.Ok(new { success = true });
         });
 
-        group.MapPost("/discussions/{id}/message", async (string id, DiscussionMessageRequest request, HttpContext ctx, DiscussionStore store, MessagePipeline pipeline, DeviceResolver devices, LiveEvents live, DiscussionActivity activity) =>
+        group.MapPost("/discussions/{id}/message", async (string id, DiscussionMessageRequest request, HttpContext ctx, DiscussionStore store, MessagePipeline pipeline, DeviceResolver devices, LiveEvents live, DiscussionActivity activity, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
@@ -934,6 +960,25 @@ public static class DiscussionEndpoints
                 string.IsNullOrWhiteSpace(request.Content)
                     ? request.Input is { Length: > 0 } ? "[attachment]" : "[image]"
                     : request.Content, discussion.Confidential);
+
+            // The ordinary and floating Nova surfaces deliberately own independent
+            // selections and local React runtimes. Once a send is accepted, every
+            // runtime viewing this discussion must revalidate the same canonical
+            // transcript; otherwise whichever shared queue consumer wins the drain
+            // is the only surface that renders the optimistic user message.
+            // Notification failure must never turn an already-delivered message into
+            // an HTTP failure that the client retries and duplicates.
+            try
+            {
+                await events.PublishAsync("discussion.user-message", new JsonObject
+                {
+                    ["discussionId"] = id,
+                    ["sessionId"] = outcome.SessionId,
+                    ["messageUid"] = outcome.MessageUid,
+                });
+            }
+            catch { /* best-effort convergence; reconnect/reselection revalidates */ }
+
             return Results.Ok(new { success = true, sessionId = outcome.SessionId, metadata = outcome.Metadata, messageUid = outcome.MessageUid });
         });
 
@@ -1109,6 +1154,22 @@ public static class DiscussionEndpoints
             new { type = (string?)"text", content = (string?)content, toolName = (string?)null, toolInput = (string?)null },
             .. attachments,
         ];
+    }
+
+    internal static HashSet<string> FindPendingUserMessageUids(
+        IEnumerable<string?> sessionUserUids,
+        IEnumerable<string?> persistedUserUids)
+    {
+        var mirrored = sessionUserUids
+            .Where(uid => !string.IsNullOrWhiteSpace(uid))
+            .Select(uid => uid!)
+            .ToHashSet(StringComparer.Ordinal);
+
+        return persistedUserUids
+            .Where(uid => !string.IsNullOrWhiteSpace(uid))
+            .Select(uid => uid!)
+            .Where(uid => !mirrored.Contains(uid))
+            .ToHashSet(StringComparer.Ordinal);
     }
 
     private static object[] MapParts(string? partsJson, string content)

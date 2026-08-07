@@ -16,6 +16,7 @@ function message(id: string, source: string): DiscussionMessage {
 
 const event = message("tick", "event:heartbeat-tick")
 const reply = message("reply", "session-transcript")
+const acceptedBridge = message("accepted-user", "user-message")
 
 test("uses raw session fidelity without duplicating the discussion transcript", () => {
   assert.deepEqual(discussionMessagesForMerge([event, reply], true), [event])
@@ -23,6 +24,13 @@ test("uses raw session fidelity without duplicating the discussion transcript", 
 
 test("retains the authorized discussion transcript when the raw session is unavailable", () => {
   assert.deepEqual(discussionMessagesForMerge([event, reply], false), [event, reply])
+})
+
+test("retains an accepted user bridge while raw session history is available", () => {
+  assert.deepEqual(
+    discussionMessagesForMerge([event, reply, acceptedBridge], true),
+    [event, acceptedBridge],
+  )
 })
 
 function block(id: string, content: string, timestamp = "2026-08-05T10:00:00.000Z"): MessageBlock {
@@ -44,6 +52,22 @@ test("revalidation preserves a message added while the request was in flight", (
   assert.deepEqual(
     mergeRevalidatedMessages([old, fresh], [old], [old, optimistic]),
     [old, fresh, optimistic],
+  )
+})
+
+test("accepted send replaces the queue winner's optimistic user block", () => {
+  const optimistic: MessageBlock = {
+    ...block("optimistic", "hello"),
+    role: "user",
+  }
+  const accepted: MessageBlock = {
+    ...block("message-uid", "hello", "2026-08-05T10:00:00.050Z"),
+    role: "user",
+  }
+
+  assert.deepEqual(
+    mergeRevalidatedMessages([accepted], [optimistic], [optimistic]),
+    [accepted],
   )
 })
 
