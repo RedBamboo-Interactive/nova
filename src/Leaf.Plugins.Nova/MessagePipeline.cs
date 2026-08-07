@@ -37,7 +37,6 @@ public sealed class MessagePipeline(
     AgentDirectory agents,
     AgentWorkspaces workspaces,
     IAgentScratchSpace scratchSpace,
-    NovaConfigStore config,
     ExtensionContributions extensions)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -82,13 +81,10 @@ public sealed class MessagePipeline(
         IReadOnlyList<ComputeContextReference>? additionalContext = null,
         string? correlationId = null, string? parentJobId = null)
     {
-        var workspace = await workspaces.GetAsync(agentId, ct);
-        workspace.GenerateClaudeMd();
-
-        var appConfig = await config.GetAsync(ct);
-        var agentProvider = agentId != null ? await agents.GetAgentProviderAsync(agentId, ct) : null;
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
         if (agent == null) return null;
+        var workspace = await workspaces.GetAsync(agent.Id, ct);
+        workspace.GenerateClaudeMd();
         var scratch = scratchSpace.PrepareExecution(
             agent.Name,
             discussionId ?? parentJobId ?? Guid.NewGuid().ToString("N"));
@@ -96,11 +92,11 @@ public sealed class MessagePipeline(
         var body = new Dictionary<string, object?>
         {
             ["projectPath"] = workspace.WorkspacePath,
-            ["qualityTier"] = qualityTierOverride ?? appConfig.DefaultQualityMode,
+            ["qualityTier"] = qualityTierOverride ?? agent.QualityTier,
             ["scratchDir"] = scratch.Path,
             ["addDirs"] = new[] { scratch.Path },
         };
-        var effectiveProvider = providerOverride ?? agentProvider;
+        var effectiveProvider = providerOverride ?? agent.Provider;
         if (effectiveProvider != null)
             body["provider"] = effectiveProvider;
 

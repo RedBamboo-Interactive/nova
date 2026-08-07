@@ -13,7 +13,6 @@ public class NovaAgentEntityDisplayEnricherTests
             Name: "Nova",
             Description: "AI assistant with persistent identity and memory",
             AvatarFilename: "active-outfit.png",
-            WorkspacePath: "C:\\Nova",
             WorkspaceId: null,
             Identity: null,
             OutputProtocol: null,
@@ -41,6 +40,6 @@ public class NovaAgentEntityDisplayEnricherTests
     }
 
     private static AgentInfo MakeAgent(string avatar) => new(
-        Guid.NewGuid().ToString(), "nova", "Nova", null, avatar, "C:\\Nova",
+        Guid.NewGuid().ToString(), "nova", "Nova", null, avatar,
         null, null, null, null, null);
 }

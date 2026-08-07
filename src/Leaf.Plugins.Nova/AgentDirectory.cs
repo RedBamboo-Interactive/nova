@@ -10,7 +10,6 @@ public sealed record AgentInfo(
     string Name,
     string? Description,
     string? AvatarFilename,
-    string WorkspacePath,
     string? WorkspaceId,
     string? Identity,
     string? OutputProtocol,
@@ -27,17 +26,15 @@ public sealed record AgentInfo(
 public sealed class AgentDirectory : IDisposable
 {
     private readonly IEntityStore store;
-    private readonly NovaConfigStore config;
     private readonly IDisposable _avatarChangedSubscription;
     private List<AgentInfo> _agents = [];
     private DateTime _lastRefresh = DateTime.MinValue;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
 
-    public AgentDirectory(IEntityStore store, NovaConfigStore config, IPluginEvents events)
+    public AgentDirectory(IEntityStore store, IPluginEvents events)
     {
         this.store = store;
-        this.config = config;
         _avatarChangedSubscription = events.Subscribe(
             "agent.avatar-changed",
             _ =>
@@ -96,7 +93,6 @@ public sealed class AgentDirectory : IDisposable
 
     private async Task<List<AgentInfo>> FetchAgentsAsync(CancellationToken ct)
     {
-        var novaWorkspaceOverride = (await SafeConfigAsync(ct))?.WorkspacePath;
         var items = await store.QueryAsync(new EntityQuery
         {
             TypeSlug = "agent",
@@ -118,12 +114,6 @@ public sealed class AgentDirectory : IDisposable
                     : await store.GetBySlugAsync(workspaceRef, ct);
             }
             var workspaceId = workspace?.TypeSlug == "page" ? workspace.Id.ToString() : null;
-
-            var workspacePath = item.Slug == "nova" && novaWorkspaceOverride != null
-                ? novaWorkspaceOverride
-                : Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "RedLeaf", "agents", item.Slug);
 
             var providerRaw = Str(data, "provider");
             if (providerRaw != null && Guid.TryParse(providerRaw, out var provGuid))
@@ -179,7 +169,6 @@ public sealed class AgentDirectory : IDisposable
                 item.Name,
                 Str(data, "description"),
                 avatarFilename,
-                workspacePath,
                 workspaceId,
                 Str(data, "identity"),
                 Str(data, "output_protocol"),
@@ -218,12 +207,6 @@ public sealed class AgentDirectory : IDisposable
         if (data["avatar"] is JsonObject obj)
             return Str(obj, "filename") ?? Str(obj, "url");
         return null;
-    }
-
-    private async Task<NovaAppConfig?> SafeConfigAsync(CancellationToken ct)
-    {
-        try { return await config.GetAsync(ct); }
-        catch { return null; }
     }
 
     private static string? Str(JsonObject data, string key)

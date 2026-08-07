@@ -21,7 +21,10 @@ export function MemoryPanel() {
   const settings = useLocalSettings()
   const agentFilter = settings.agentFilter
   const multiAgent = agents.length > 1
-  const selectedAgent = agents.find((agent) => agent.id === (agentFilter ?? defaultAgentId))
+  const selectedAgent = agents.find((agent) => agent.id === agentFilter)
+    ?? agents.find((agent) => agent.id === defaultAgentId)
+    ?? agents[0]
+  const selectedAgentId = selectedAgent?.id ?? null
 
   // On the index route the host's /apps/nova/* splat ("journal") leaks through
   // the merged params — only a deeper path is an actual file selection.
@@ -32,26 +35,28 @@ export function MemoryPanel() {
     selectedFile?.split("/").pop(),
   )
 
-  const agentParam = agentFilter ? `&agent=${encodeURIComponent(agentFilter)}` : ""
+  const agentParam = selectedAgentId ? `&agent=${encodeURIComponent(selectedAgentId)}` : ""
 
   const refreshManifest = useCallback(async () => {
-    const url = agentFilter
-      ? `/api/apps/nova/workspace/manifest?agent=${encodeURIComponent(agentFilter)}`
-      : "/api/apps/nova/workspace/manifest"
+    if (!selectedAgentId) {
+      setFiles([])
+      return
+    }
+    const url = `/api/apps/nova/workspace/manifest?agent=${encodeURIComponent(selectedAgentId)}`
     const data = await api.get<{ files: string[] }>(url)
     setFiles(data.files)
-  }, [agentFilter])
+  }, [selectedAgentId])
 
   useEffect(() => {
     refreshManifest()
   }, [refreshManifest])
 
   useEffect(() => {
-    if (!selectedFile) return
+    if (!selectedFile || !selectedAgentId) return
     api.get<{ content: string }>(
       `/api/apps/nova/memory/file?path=${encodeURIComponent(selectedFile)}${agentParam}`,
     ).then((data) => setContent(data.content))
-  }, [selectedFile, agentParam])
+  }, [selectedFile, selectedAgentId, agentParam])
 
   const handleSelectFile = useCallback((path: string) => {
     navigate(`/apps/nova/journal/${path}`)
@@ -59,7 +64,8 @@ export function MemoryPanel() {
   }, [navigate])
 
   const handleRevealWorkspace = useCallback(async () => {
-    const query = agentFilter ? `?agent=${encodeURIComponent(agentFilter)}` : ""
+    if (!selectedAgentId) return
+    const query = `?agent=${encodeURIComponent(selectedAgentId)}`
     try {
       await api.post(`/api/apps/nova/workspace/reveal${query}`)
     } catch (error) {
@@ -69,7 +75,15 @@ export function MemoryPanel() {
         description: error instanceof Error ? error.message : "Unknown error",
       })
     }
-  }, [agentFilter, toast])
+  }, [selectedAgentId, toast])
+
+  const handleSelectAgent = useCallback((id: string | null) => {
+    if (!id) return
+    setSettings({ agentFilter: id })
+    navigate("/apps/nova/journal")
+    setContent("")
+    setMobileTab(0)
+  }, [navigate])
 
   const handleOpenEntityWorkspace = useCallback(() => {
     if (selectedAgent?.workspaceId) navigate(`/workspace/${selectedAgent.workspaceId}`)
@@ -87,15 +101,15 @@ export function MemoryPanel() {
         {multiAgent && (
           <AgentPicker
             agents={agents}
-            selectedId={agentFilter}
-            onSelect={(id) => setSettings({ agentFilter: id })}
-            showAll
+            selectedId={selectedAgentId}
+            onSelect={handleSelectAgent}
           />
         )}
         <Button
           variant="ghost"
           size="icon-xs"
           onClick={() => void handleRevealWorkspace()}
+          disabled={!selectedAgentId}
           title="Open workspace folder in Windows Explorer"
           aria-label="Open workspace folder in Windows Explorer"
         >

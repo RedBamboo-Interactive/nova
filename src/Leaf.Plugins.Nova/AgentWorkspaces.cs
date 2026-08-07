@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Leaf.Sdk.Services;
 
 namespace Leaf.Plugins.Nova;
 
@@ -114,25 +115,30 @@ public sealed class AgentWorkspace(string workspacePath)
 }
 
 /// <summary>Per-agent workspace cache; materializes agent-entity config files on first use.</summary>
-public sealed class AgentWorkspaces(AgentDirectory agents)
+public sealed class AgentWorkspaces(
+    AgentDirectory agents,
+    IAgentWorkspacePathResolver workspacePaths)
 {
     private readonly ConcurrentDictionary<string, AgentWorkspace> _cache = new();
 
     public async Task<AgentWorkspace> GetAsync(string? agentId, CancellationToken ct = default)
     {
-        agentId ??= agents.NovaAgentId ?? "nova";
+        if (string.IsNullOrWhiteSpace(agentId))
+            throw new InvalidOperationException("An Agent must be selected");
         if (_cache.TryGetValue(agentId, out var cached))
             return cached;
 
-        var agent = await agents.GetAgentAsync(agentId, ct);
-        var path = agent?.WorkspacePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "RedLeaf", "agents", "nova");
+        var agent = await agents.GetAgentAsync(agentId, ct)
+            ?? throw new InvalidOperationException($"Agent not found: {agentId}");
+        if (!Guid.TryParse(agent.Id, out var entityId))
+            throw new InvalidOperationException($"Agent has an invalid entity id: {agent.Id}");
+        var path = await workspacePaths.ResolveAsync(entityId, ct)
+            ?? throw new InvalidOperationException(
+                $"The entity-backed workspace for Agent '{agent.Name}' is unavailable");
 
         var workspace = new AgentWorkspace(path);
         workspace.EnsureDirectories();
-        if (agent != null)
-            workspace.MaterializeAgentFiles(agent);
+        workspace.MaterializeAgentFiles(agent);
 
         _cache[agentId] = workspace;
         return workspace;

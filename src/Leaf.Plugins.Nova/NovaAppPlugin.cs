@@ -1,6 +1,4 @@
 using System.Reflection;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using Leaf.Plugins.Nova.Endpoints;
 using Leaf.Sdk;
 using Leaf.Sdk.Services;
@@ -31,18 +29,17 @@ public sealed class NovaAppPlugin : ILeafPlugin
 
     public void ConfigureServices(IServiceCollection services, PluginContext ctx)
     {
-        services.AddSingleton(sp =>
-            new NovaConfigStore(sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
         services.AddSingleton<RedComputeClient>();
         services.AddSingleton(sp =>
             new AgentDirectory(
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
-                sp.GetRequiredService<NovaConfigStore>(),
                 sp.GetRequiredKeyedService<IPluginEvents>(PluginId)));
         services.AddSingleton<IEntityDisplayEnricher>(sp =>
             new NovaAgentEntityDisplayEnricher(sp.GetRequiredService<AgentDirectory>()));
         services.AddSingleton(sp =>
-            new AgentWorkspaces(sp.GetRequiredService<AgentDirectory>()));
+            new AgentWorkspaces(
+                sp.GetRequiredService<AgentDirectory>(),
+                sp.GetRequiredService<IAgentWorkspacePathResolver>()));
         services.AddSingleton(sp =>
             new DiscussionStore(sp.GetRequiredKeyedService<IEntityStore>(PluginId), sp.GetRequiredService<IDiscussions>()));
         services.AddSingleton(sp =>
@@ -133,7 +130,6 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredService<AgentWorkspaces>(),
                 sp.GetRequiredService<IAgentScratchSpace>(),
-                sp.GetRequiredService<NovaConfigStore>(),
                 sp.GetRequiredService<ExtensionContributions>()));
     }
 
@@ -153,19 +149,18 @@ public sealed class NovaAppPlugin : ILeafPlugin
         var store = host.GetRequiredService<IEntityStore>();
         var agents = host.GetRequiredService<AgentDirectory>();
 
-        // The config singleton is created here, NOT seeded: plugin seeds re-upsert on
-        // every boot, which would clobber user-entered values. First boot migrates the
-        // standalone app's %LOCALAPPDATA%\Nova\config.json values.
-        var existing = await store.QueryAsync(new EntityQuery { TypeSlug = NovaConfigStore.TypeSlug, Limit = 1 }, ct);
-        if (existing.Count == 0)
+        // The old standalone Nova config duplicated Agent quality/workspace settings.
+        // Agent entities and RedLeaf's VFS are now authoritative. Preserve unrelated
+        // legacy integration data until its owning extensions migrate it.
+        var legacyConfigs = await store.QueryAsync(
+            new EntityQuery { TypeSlug = "nova-config", Limit = 10 }, ct);
+        foreach (var legacyConfig in legacyConfigs)
         {
-            var (qualityMode, workspacePath) = ReadLegacyConfig();
-            await store.UpsertBySlugAsync(NovaConfigStore.TypeSlug, NovaConfigStore.Slug, "Nova App Config",
-                new JsonObject
-                {
-                    ["default_quality_mode"] = qualityMode ?? "standard",
-                    ["workspace_path"] = workspacePath,
-                }, ct);
+            var data = legacyConfig.Data.DeepClone().AsObject();
+            var changed = data.Remove("default_quality_mode");
+            changed |= data.Remove("workspace_path");
+            if (changed)
+                await store.ReplaceDataAsync(legacyConfig.Id, data, ct: ct);
         }
 
         // Resolve Nova's agent entity (kernel-seeded). The agent system is kernel-level;
@@ -201,23 +196,4 @@ public sealed class NovaAppPlugin : ILeafPlugin
         _ = Task.Run(() => lifecycle.RunReconcilerAsync(lifetime.ApplicationStopping), CancellationToken.None);
     }
 
-    private static (string? QualityMode, string? WorkspacePath) ReadLegacyConfig()
-    {
-        try
-        {
-            var path = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Nova", "config.json");
-            if (!File.Exists(path)) return (null, null);
-
-            using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            var root = doc.RootElement;
-            return (
-                root.TryGetProperty("DefaultQualityMode", out var q) ? q.GetString() : null,
-                root.TryGetProperty("WorkspacePath", out var w) ? w.GetString() : null);
-        }
-        catch
-        {
-            return (null, null);
-        }
-    }
 }

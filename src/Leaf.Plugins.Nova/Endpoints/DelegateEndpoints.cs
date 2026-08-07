@@ -88,7 +88,7 @@ public static class DelegateEndpoints
                 var ws = await workspaces.GetAsync(resolvedAgent.Id, ctx.RequestAborted);
                 ws.GenerateClaudeMd();
 
-                request.ProjectPath ??= resolvedAgent.WorkspacePath;
+                request.ProjectPath ??= ws.WorkspacePath;
                 request.Provider ??= resolvedAgent.Provider;
                 if (string.IsNullOrWhiteSpace(request.Model)
                     && string.IsNullOrWhiteSpace(request.QualityTier)
