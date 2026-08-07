@@ -60,8 +60,8 @@ function AskNovaHandler({ discRef, setPendingContext }: { discRef: React.RefObje
 
 /**
  * Nova as a Leaf plugin page. The host shell owns auth, theme, the WebSocket
- * provider, and the command palette — this component only mounts Nova's internal
- * routes (chat / pulse / journal) and the discussion state shared across them.
+ * provider, and the command palette. This component mounts Nova's chat routes and
+ * the discussion state shared across them.
  */
 function NovaAppInner() {
   const element = useRoutes(routes)

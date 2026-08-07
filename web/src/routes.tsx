@@ -1,7 +1,5 @@
 import { Navigate, type RouteObject } from "react-router-dom"
 import { ChatView } from "./panels/ChatView"
-import { AutomationsPanel } from "./panels/HeartbeatsPanel"
-import { MemoryPanel } from "./panels/MemoryPanel"
 
 export const routes: RouteObject[] = [
   { index: true, element: <Navigate to="chat" replace /> },
@@ -17,27 +15,5 @@ export const routes: RouteObject[] = [
       },
     ],
   },
-  {
-    path: "pulse",
-    handle: { crumb: "Pulse", icon: "ph-bold ph-heartbeat" },
-    children: [
-      { index: true, element: <AutomationsPanel /> },
-      {
-        path: ":automationId",
-        handle: { crumb: (p: Record<string, string>) => p.automationId },
-        element: <AutomationsPanel />,
-      },
-    ],
-  },
-  {
-    path: "journal",
-    handle: { crumb: "Journal", icon: "ph-bold ph-book" },
-    children: [
-      { index: true, element: <MemoryPanel /> },
-      {
-        path: "*",
-        element: <MemoryPanel />,
-      },
-    ],
-  },
+  { path: "*", element: <Navigate to="/apps/nova/chat" replace /> },
 ]

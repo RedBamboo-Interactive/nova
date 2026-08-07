@@ -8,8 +8,8 @@ import { getAdjacentSidebarDiscussion } from "../../lib/discussion-navigation"
 import { useDisc } from "../../App"
 
 /**
- * Discussion commands live at the Nova shell level so Ctrl+N etc. work from any
- * panel (Pulse, Journal) — each action navigates to the chat panel as needed.
+ * Discussion commands live at the Nova shell level so Ctrl+N etc. remain available
+ * throughout Nova's chat routes.
  */
 function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: string) => void; onNewDiscussion: () => void }) {
   const {
@@ -131,9 +131,9 @@ interface Props {
 }
 
 /**
- * Nova's internal chrome inside the Leaf shell. Tab navigation (Chat/Pulse/Journal)
- * is now handled by the shell via app-section entities declared in plugin.json.
- * This component provides conversation search, settings panel, and discussion commands.
+ * Nova's internal chrome inside the Leaf shell. The shell exposes Chat as Nova's sole
+ * app section; Workspace and Entities remain canonical RedLeaf surfaces.
+ * This component provides conversation search and discussion commands.
  */
 export function AppShell({ children }: Props) {
   const [searchOpen, setSearchOpen] = useState(false)

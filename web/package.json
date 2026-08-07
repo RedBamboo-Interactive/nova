@@ -1,7 +1,7 @@
 {
   "name": "@redbamboo/plugin-nova",
   "version": "0.1.0",
-  "description": "Nova plugin frontend — AI companion chat, multi-agent discussions, pulse, journal",
+  "description": "Nova plugin frontend for persistent multi-agent discussions",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "exports": {
