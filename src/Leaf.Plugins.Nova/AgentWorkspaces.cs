@@ -89,6 +89,13 @@ public sealed class AgentWorkspace(string workspacePath)
             > To change these instructions, edit the source files in `config/`.
             > Sections: identity.md, output_protocol.md, capabilities.md, memory.md
 
+            # Session Scratch Space
+
+            `REDLEAF_SCRATCH_DIR` points to the current session's disposable workspace. Put downloads,
+            probes, generated intermediates, and temporary scripts there. Do not create `temp`, `tmp`,
+            or `scratch` folders inside the persistent Agent workspace. Promote only deliberate final
+            work into the persistent workspace.
+
             {identity}
 
             ---

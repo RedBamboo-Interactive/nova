@@ -270,19 +270,7 @@ public sealed class MessagePipeline(
             ? $"\n<nova-prior-message role=\"assistant\">\n{priorMessage}\n</nova-prior-message>\n"
             : "";
         var scratch = scratchSpace.PrepareExecution(agentName ?? "Agent", discussion.Id);
-        // The scratch convention is session setup, not conversational content. Tell the
-        // agent once on the first turn; the session already carries the directory through
-        // scratchDir/addDirs and the REDLEAF_SCRATCH_DIR environment variable thereafter.
-        var scratchBlock = previousSnapshot == null
-            ? $"""
-                <scratch-space path="{scratch.Path}">
-                Put disposable artifacts, downloads, probes, generated intermediates, and temporary scripts here.
-                Never create temp, tmp, or scratch folders inside the persistent workspace. Promote only deliberate final work into the workspace.
-                </scratch-space>
-
-                """
-            : "";
-        var enrichedContent = contextBlock + priorBlock + scratchBlock + content;
+        var enrichedContent = contextBlock + priorBlock + content;
 
         string? messageUid = null;
         object requestBody;
@@ -296,7 +284,7 @@ public sealed class MessagePipeline(
                 {
                     typedInput.Add(new { type = "text", text = enriched
                         ? part.Text ?? ""
-                        : contextBlock + priorBlock + scratchBlock + (part.Text ?? "") });
+                        : contextBlock + priorBlock + (part.Text ?? "") });
                     enriched = true;
                 }
                 else if (string.Equals(part.Type, "attachment", StringComparison.OrdinalIgnoreCase)
@@ -306,7 +294,7 @@ public sealed class MessagePipeline(
                 }
             }
             if (!enriched)
-                typedInput.Insert(0, new { type = "text", text = contextBlock + priorBlock + scratchBlock });
+                typedInput.Insert(0, new { type = "text", text = contextBlock + priorBlock });
             requestBody = new { input = typedInput };
         }
         else
