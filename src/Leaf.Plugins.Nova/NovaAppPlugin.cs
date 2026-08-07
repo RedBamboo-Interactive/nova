@@ -39,6 +39,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
                 sp.GetRequiredService<NovaConfigStore>(),
                 sp.GetRequiredKeyedService<IPluginEvents>(PluginId)));
+        services.AddSingleton<IEntityDisplayEnricher>(sp =>
+            new NovaAgentEntityDisplayEnricher(sp.GetRequiredService<AgentDirectory>()));
         services.AddSingleton(sp =>
             new AgentWorkspaces(sp.GetRequiredService<AgentDirectory>()));
         services.AddSingleton(sp =>
