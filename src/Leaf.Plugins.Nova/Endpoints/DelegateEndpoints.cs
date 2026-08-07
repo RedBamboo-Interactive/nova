@@ -19,6 +19,8 @@ public class DelegateRequest
     public string? DiscussionId { get; set; }
     public bool? Navigate { get; set; }
     public string? Model { get; set; }
+    public string? QualityTier { get; set; }
+    // Compatibility for callers using the old provider-specific terminology.
     public string? QualityMode { get; set; }
     public string? Provider { get; set; }
 }
@@ -88,8 +90,10 @@ public static class DelegateEndpoints
 
                 request.ProjectPath ??= resolvedAgent.WorkspacePath;
                 request.Provider ??= resolvedAgent.Provider;
-                if (string.IsNullOrWhiteSpace(request.Model) && string.IsNullOrWhiteSpace(request.QualityMode))
-                    request.QualityMode = resolvedAgent.QualityMode;
+                if (string.IsNullOrWhiteSpace(request.Model)
+                    && string.IsNullOrWhiteSpace(request.QualityTier)
+                    && string.IsNullOrWhiteSpace(request.QualityMode))
+                    request.QualityTier = resolvedAgent.QualityTier;
             }
 
             if (!isContinuation && string.IsNullOrWhiteSpace(request.ProjectPath))
@@ -145,7 +149,9 @@ public static class DelegateEndpoints
                     if (!string.IsNullOrWhiteSpace(request.Model))
                         createBody["model"] = request.Model;
                     else
-                        createBody["qualityTier"] = string.IsNullOrWhiteSpace(request.QualityMode) ? "standard" : request.QualityMode;
+                        createBody["qualityTier"] = request.QualityTier
+                            ?? request.QualityMode
+                            ?? "standard";
 
                     var createProvenance = await NovaComputeProvenance.CreateAsync(
                         entities, resolvedAgent, beneficiary,

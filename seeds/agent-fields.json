@@ -1,0 +1,22 @@
+[
+  {
+    "parentType": "agent",
+    "slug": "live",
+    "name": "Live",
+    "fieldType": "boolean",
+    "sortOrder": 9,
+    "description": "Enables this Agent's paired LIVE and Heartbeat presence.",
+    "icon": "ph-bold ph-broadcast"
+  },
+  {
+    "parentType": "agent",
+    "slug": "heartbeat_automation",
+    "name": "Heartbeat Automation",
+    "fieldType": "entity_ref",
+    "sortOrder": 10,
+    "description": "System-maintained canonical automation for this Agent's paired LIVE and Heartbeat presence.",
+    "constraints": "{\"target_type\": \"automation\"}",
+    "displayHints": "{\"read_only\": true}",
+    "icon": "ph-bold ph-heartbeat"
+  }
+]

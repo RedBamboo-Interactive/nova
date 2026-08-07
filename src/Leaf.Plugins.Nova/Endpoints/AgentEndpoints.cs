@@ -22,11 +22,10 @@ public static class AgentEndpoints
                 slug = a.Slug,
                 name = a.Name,
                 description = a.Description,
-                status = a.Status,
                 avatarUrl = AgentDirectory.BuildAvatarUrl(a.AvatarFilename) ?? "/nova-avatar.png",
                 workspaceId = a.WorkspaceId,
                 provider = a.Provider,
-                qualityMode = a.QualityMode,
+                qualityTier = a.QualityTier,
             }));
         });
 

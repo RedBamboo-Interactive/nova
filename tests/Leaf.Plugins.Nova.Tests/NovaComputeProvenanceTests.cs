@@ -25,7 +25,7 @@ public sealed class NovaComputeProvenanceTests
             }));
         var agent = new AgentInfo(
             "agent-id", "nova", "Nova", null, "avatar.png", "C:\\Nova", null,
-            null, null, null, null, "active");
+            null, null, null, null);
 
         var provenance = await NovaComputeProvenance.CreateAsync(
             store,
@@ -47,7 +47,7 @@ public sealed class NovaComputeProvenanceTests
         var store = new FakeEntityStore();
         var agent = new AgentInfo(
             "agent-id", "nova", "Nova", null, null, "C:\\Nova", null,
-            null, null, null, null, "active");
+            null, null, null, null);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             NovaComputeProvenance.CreateAsync(
@@ -91,6 +91,23 @@ public sealed class NovaComputeProvenanceTests
         public Task<LeafEntity> PatchAsync(
             Guid id, JsonObject dataPatch, string? name = null, CancellationToken ct = default)
             => throw new NotSupportedException();
+
+        public Task<LeafEntity> ReplaceDataAsync(
+            Guid id, JsonObject data, string? name = null, CancellationToken ct = default)
+        {
+            var index = Array.FindIndex(entities, entity => entity.Id == id);
+            if (index < 0) throw new KeyNotFoundException($"Entity '{id}' was not found.");
+
+            var existing = entities[index];
+            var replacement = existing with
+            {
+                Data = data.DeepClone() as JsonObject ?? new JsonObject(),
+                Name = name ?? existing.Name,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            entities[index] = replacement;
+            return Task.FromResult(replacement);
+        }
 
         public Task DeleteAsync(Guid id, CancellationToken ct = default)
             => throw new NotSupportedException();

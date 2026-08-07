@@ -8,10 +8,10 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Leaf.Plugins.Nova.Endpoints;
 
 /// <summary>
-/// Heartbeat management surface. Provisioning is driven by the agent entity's
-/// <c>heartbeat</c> config block; these endpoints trigger reconciliation (after a
-/// config edit), expose per-agent status, and let the goodnight automation signal
-/// the day boundary directly.
+/// Heartbeat management surface. Agent <c>live</c> owns the paired LIVE and
+/// Heartbeat lifecycle. Schedule is stored on the canonical automation trigger and
+/// execution settings are stored on its workflow action configuration. These endpoints trigger reconciliation, expose status, and let
+/// the goodnight automation signal the day boundary directly.
 /// </summary>
 public static class HeartbeatEndpoints
 {
@@ -28,9 +28,9 @@ public static class HeartbeatEndpoints
             var result = new JsonArray();
             foreach (var agent in agents)
             {
-                var config = HeartbeatConfig.Parse(agent.Data);
+                var config = await heartbeat.GetConfigurationAsync(agent);
                 if (config == null) continue;
-                var automation = config.AutomationId is { } automationId
+                var automation = HeartbeatService.AutomationId(agent.Data) is { } automationId
                     ? await entities.GetAsync(automationId)
                     : null;
 

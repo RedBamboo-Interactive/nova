@@ -8,12 +8,13 @@ namespace Leaf.Plugins.Nova;
 
 /// <summary>
 /// Per-agent heartbeat behavior plus a reference to its canonical automation.
-/// Schedule and enabled state belong to that automation; legacy copies are read
-/// only long enough for reconciliation to migrate them.
+/// Schedule belongs to that automation; legacy copies are read only long enough
+/// for reconciliation to migrate them. Agent data.live owns the paired LIVE and
+/// Heartbeat lifecycle, so an automation enabled flag is never an independent
+/// presence switch.
 /// </summary>
 public sealed record HeartbeatConfig(
     Guid? AutomationId,
-    bool? LegacyEnabled,
     string? LegacySchedule,
     string QualityTier,
     int TickWaitMinutes,
@@ -24,14 +25,26 @@ public sealed record HeartbeatConfig(
     // when no goodnight/rotation signal closed the day.
     public const string DefaultSchedule = "55 2,6-23 * * *";
 
+    public static HeartbeatConfig Default => new(null, null, "deep", 15, 15);
+
+    /// <summary>Configuration carried by the heartbeat-tick workflow action.</summary>
+    public static HeartbeatConfig FromActionConfig(JsonObject? actionConfig)
+    {
+        var config = actionConfig ?? new JsonObject();
+        return new HeartbeatConfig(
+            AutomationId: null,
+            LegacySchedule: null,
+            QualityTier: Str(config, "quality_tier") ?? "deep",
+            TickWaitMinutes: Int(config, "tick_wait_minutes") ?? 15,
+            MaxTurns: Int(config, "max_turns") ?? 15);
+    }
+
     public static HeartbeatConfig? Parse(JsonObject agentData)
     {
         if (agentData["heartbeat"] is not JsonObject hb) return null;
         return new HeartbeatConfig(
             AutomationId: Guid.TryParse(Str(hb, "automation_id"), out var automationId)
                 ? automationId : null,
-            LegacyEnabled: hb["enabled"] is JsonValue e && e.TryGetValue<bool>(out var b)
-                ? b : null,
             LegacySchedule: Str(hb, "schedule"),
             QualityTier: Str(hb, "quality_tier") ?? "deep",
             TickWaitMinutes: Int(hb, "tick_wait_minutes") ?? 15,
@@ -71,107 +84,270 @@ public sealed class HeartbeatService(
     ExtensionContributions extensions)
 {
     public const string DiscussionType = "heartbeat";
+    public const string AutomationField = "heartbeat_automation";
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _rotationGates = new();
+    private readonly SemaphoreSlim _reconcileGate = new(1, 1);
 
     private static string AutomationSlug(string agentSlug) => $"system-heartbeat-{agentSlug}";
 
     // ── Provisioning ────────────────────────────────────────────────
 
     /// <summary>
-    /// Link every agent heartbeat to one canonical automation. Legacy schedule and
-    /// enabled copies are consumed once, then removed from the agent config. Later
-    /// reconciliations never overwrite the automation definition.
+    /// Reconcile the Agent's paired LIVE and Heartbeat presence. data.live is the
+    /// master lifecycle switch: when true it ensures both discussions and the one
+    /// canonical heartbeat automation; when false or absent it closes both and
+    /// disables the automation while preserving its schedule and quality config.
+    /// Legacy heartbeat.enabled is discarded during migration and never remains a second switch.
     /// </summary>
     public async Task<JsonObject> ReconcileAsync(CancellationToken ct = default)
     {
-        var result = new JsonObject { ["provisioned"] = new JsonArray(), ["tornDown"] = new JsonArray() };
-        var agentEntities = await entities.QueryAsync(new EntityQuery { TypeSlug = "agent", Limit = 50 }, ct);
-        var users = await entities.QueryAsync(new EntityQuery { TypeSlug = "user", Limit = 2 }, ct);
-        var soleOwnerId = users.Count == 1 ? users[0].Id.ToString() : null;
-
-        foreach (var agent in agentEntities)
+        await _reconcileGate.WaitAsync(ct);
+        try
         {
-            var agentId = agent.Id.ToString();
+            var result = new JsonObject { ["provisioned"] = new JsonArray(), ["tornDown"] = new JsonArray() };
+            var agentEntities = await entities.QueryAsync(new EntityQuery { TypeSlug = "agent", Limit = 50 }, ct);
+            var users = await entities.QueryAsync(new EntityQuery { TypeSlug = "user", Limit = 2 }, ct);
+            var soleOwnerId = users.Count == 1 ? users[0].Id.ToString() : null;
 
-            // ── LIVE discussion: enabled by agent data.live == true ──
-            var liveEnabled = agent.Data["live"] is JsonValue lv && lv.TryGetValue<bool>(out var lb) && lb;
-            var existingLive = (await store.ListAsync(agentId, ct))
-                .FirstOrDefault(d => d.Type == "live" && !DiscussionStatus.IsClosed(d.Status));
-
-            if (liveEnabled && existingLive == null)
-                await store.CreateAsync($"{agent.Name} Live", agentId, soleOwnerId ?? "system", "live", ct: ct);
-
-            // ── Heartbeat: enabled by agent data.heartbeat.enabled ──
-            var config = HeartbeatConfig.Parse(agent.Data);
-            var automation = config?.AutomationId is { } automationId
-                ? await entities.GetAsync(automationId, ct)
-                : await entities.GetBySlugAsync(AutomationSlug(agent.Slug), ct);
-            if (automation is not null && (automation.TypeSlug != "automation"
-                || StrValue(automation.Data, "agent") != agentId))
-                automation = await entities.GetBySlugAsync(AutomationSlug(agent.Slug), ct);
-            var discussion = await GetDiscussionAsync(agentId, ct);
-
-            if (config != null)
+            foreach (var agent in agentEntities)
             {
+                var agentId = agent.Id.ToString();
+                var open = await store.ListAsync(agentId, ct);
+                var openLive = OpenDiscussions(open, "live");
+                var openHeartbeat = OpenDiscussions(open, DiscussionType);
+                var legacy = HeartbeatConfig.Parse(agent.Data);
+                var binding = await NormalizeHeartbeatAsync(agent, legacy, soleOwnerId, ct);
+                var config = binding?.Config;
+                var automation = binding?.Automation;
+
+                if (!IsLiveEnabled(agent.Data))
+                {
+                    foreach (var discussion in openLive.Concat(openHeartbeat))
+                        await lifecycle.BeginArchiveAsync(discussion, ct);
+                    if (automation != null)
+                        await DeactivateAutomationAsync(automation, "agent-live-disabled", ct);
+                    if (openLive.Count > 0 || openHeartbeat.Count > 0 || automation != null)
+                        ((JsonArray)result["tornDown"]!).Add(agent.Slug);
+                    continue;
+                }
+
+                // LIVE is the prerequisite and master switch, so absence of an old
+                // heartbeat reference gets defaults rather than leaving LIVE unpaired.
+                config ??= await DefaultConfigAsync(agent, ct);
                 if (automation == null)
                 {
-                    var legacyEnabled = config.LegacyEnabled ?? false;
-                    var schedule = config.LegacySchedule ?? HeartbeatConfig.DefaultSchedule;
-                    automation = await workflowAutomations.EnsureAsync(
+                    automation = await workflowAutomations.UpsertAsync(
                         CreateAutomationDefinition(agent.Slug, agentId, agent.Name,
-                            schedule, legacyEnabled, config, soleOwnerId), ct);
+                            config.LegacySchedule ?? HeartbeatConfig.DefaultSchedule, true, config, soleOwnerId), ct);
+                    await SetAutomationReferenceAsync(agent, automation.Id, ct);
+                }
+                else if (automation.Data["paused_reason"] is JsonValue paused
+                    && paused.TryGetValue<string>(out var reason)
+                    && reason == "agent-live-disabled")
+                {
+                    await ReactivateAutomationAsync(automation, ct);
                 }
 
-                if (config.AutomationId != automation.Id
-                    || config.LegacyEnabled is not null || config.LegacySchedule is not null)
+                // Reconciliation is serialized. Historic duplicates are collapsed
+                // to the newest canonical thread instead of creating more.
+                var live = await EnsureSingleDiscussionAsync(openLive, $"{agent.Name} Live",
+                    agentId, soleOwnerId, "live", null, ct);
+                var heartbeat = await EnsureSingleDiscussionAsync(openHeartbeat, $"{agent.Name} Heartbeat",
+                    agentId, soleOwnerId, DiscussionType, config.QualityTier, ct);
+                ((JsonArray)result["provisioned"]!).Add(new JsonObject
                 {
-                    var heartbeatData = agent.Data["heartbeat"]?.DeepClone() as JsonObject
-                        ?? new JsonObject();
-                    heartbeatData.Remove("enabled");
-                    heartbeatData.Remove("schedule");
-                    heartbeatData["automation_id"] = automation.Id.ToString();
-                    await entities.PatchAsync(agent.Id, new JsonObject
-                    {
-                        ["heartbeat"] = heartbeatData,
-                    }, ct: ct);
-                }
-
-                var enabled = IsEnabled(automation.Data);
-                if (enabled)
-                {
-                    discussion ??= await store.CreateAsync($"{agent.Name} Heartbeat", agentId,
-                        soleOwnerId ?? "system", DiscussionType, config.QualityTier, ct: ct);
-                    ((JsonArray)result["provisioned"]!).Add(new JsonObject
-                    {
-                        ["agent"] = agent.Slug,
-                        ["automationId"] = automation.Id.ToString(),
-                        ["discussionId"] = discussion.Id,
-                    });
-                }
-                else if (discussion != null)
-                {
-                    await lifecycle.BeginArchiveAsync(discussion, ct);
-                    ((JsonArray)result["tornDown"]!).Add(agent.Slug);
-                }
+                    ["agent"] = agent.Slug,
+                    ["automationId"] = automation.Id.ToString(),
+                    ["liveDiscussionId"] = live.Id,
+                    ["discussionId"] = heartbeat.Id,
+                });
             }
-            else
-            {
-                if (automation != null)
-                    await ArchiveAutomationAsync(automation, ct);
-                if (discussion != null)
-                    await lifecycle.BeginArchiveAsync(discussion, ct);
-                if (automation != null || discussion != null)
-                    ((JsonArray)result["tornDown"]!).Add(agent.Slug);
-            }
+            return result;
         }
-        return result;
+        finally { _reconcileGate.Release(); }
+    }
+
+    public static bool IsLiveEnabled(JsonObject agentData)
+        => agentData["live"] is JsonValue live && live.TryGetValue<bool>(out var enabled) && enabled;
+
+    private sealed record HeartbeatBinding(LeafEntity Automation, HeartbeatConfig Config);
+
+    public static Guid? AutomationId(JsonObject agentData)
+        => agentData[AutomationField] is JsonValue value
+            && value.TryGetValue<string>(out var text)
+            && Guid.TryParse(text, out var id) ? id : null;
+
+    public async Task<HeartbeatConfig?> GetConfigurationAsync(LeafEntity agent, CancellationToken ct = default)
+    {
+        if (AutomationId(agent.Data) is not { } automationId) return null;
+        var automation = await entities.GetAsync(automationId, ct);
+        if (automation?.TypeSlug != "automation") return null;
+        var actionConfig = await ReadWorkflowActionConfigAsync(automation, ct);
+        var config = HeartbeatConfig.FromActionConfig(actionConfig);
+        return config with
+        {
+            AutomationId = automationId,
+            QualityTier = await ResolveQualityTierSlugAsync(
+                actionConfig?["quality_tier"], ct),
+        };
+    }
+
+    private async Task<HeartbeatBinding?> NormalizeHeartbeatAsync(LeafEntity agent,
+        HeartbeatConfig? legacy, string? ownerId, CancellationToken ct)
+    {
+        var automation = await ResolveAutomationAsync(agent, legacy, ct);
+        var legacyData = agent.Data["heartbeat"] as JsonObject;
+        var needsProvisioning = IsLiveEnabled(agent.Data) || legacyData != null || automation != null;
+        if (!needsProvisioning) return null;
+
+        var actionConfig = automation == null
+            ? new JsonObject()
+            : await ReadWorkflowActionConfigAsync(automation, ct) ?? new JsonObject();
+        var legacySuppliesConfig = legacyData != null;
+        var needsActionConfigUpdate = MissingActionConfig(actionConfig);
+        var effective = legacy ?? HeartbeatConfig.FromActionConfig(actionConfig);
+        var quality = await ResolveQualityTierReferenceAsync(effective.QualityTier, agent, ct);
+        actionConfig["quality_tier"] = quality;
+        actionConfig["tick_wait_minutes"] = legacyData?["tick_wait_minutes"]?.DeepClone()
+            ?? actionConfig["tick_wait_minutes"] ?? effective.TickWaitMinutes;
+        actionConfig["max_turns"] = legacyData?["max_turns"]?.DeepClone()
+            ?? actionConfig["max_turns"] ?? effective.MaxTurns;
+
+        if (automation == null || legacySuppliesConfig || needsActionConfigUpdate)
+        {
+            var definition = CreateAutomationDefinition(agent.Slug, agent.Id.ToString(), agent.Name,
+                legacy?.LegacySchedule ?? StrValue(automation?.Data ?? new JsonObject(), "trigger")
+                    ?? HeartbeatConfig.DefaultSchedule,
+                automation == null || IsEnabled(automation.Data),
+                HeartbeatConfig.FromActionConfig(actionConfig), ownerId);
+            if (automation != null)
+                definition = definition with
+                {
+                    Trigger = MergeTrigger(automation.Data["trigger"] as JsonObject, legacy?.LegacySchedule),
+                    ExecutionPolicy = CloneObject(automation.Data["execution_policy"] as JsonObject, definition.ExecutionPolicy),
+                    Ownership = CloneObject(automation.Data["ownership"] as JsonObject, definition.Ownership),
+                    Metadata = new JsonObject { ["agent"] = agent.Id.ToString(), ["owner_id"] = ownerId },
+                };
+            definition = definition with { ActionConfig = actionConfig };
+            automation = await workflowAutomations.UpsertAsync(definition, ct);
+        }
+
+        if (automation == null) return null;
+        if (legacyData != null || AutomationId(agent.Data) != automation.Id)
+            await SetAutomationReferenceAsync(agent, automation.Id, ct);
+
+        var qualitySlug = await ResolveQualityTierSlugAsync(actionConfig["quality_tier"], ct);
+        return new HeartbeatBinding(automation, HeartbeatConfig.FromActionConfig(actionConfig) with
+        {
+            AutomationId = automation.Id,
+            QualityTier = qualitySlug,
+        });
+    }
+
+    private async Task SetAutomationReferenceAsync(LeafEntity agent, Guid automationId, CancellationToken ct)
+    {
+        var replacement = agent.Data.DeepClone() as JsonObject ?? new JsonObject();
+        replacement[AutomationField] = automationId.ToString();
+        replacement.Remove("heartbeat");
+        await entities.ReplaceDataAsync(agent.Id, replacement, ct: ct);
+    }
+
+    private async Task<string> ResolveQualityTierReferenceAsync(string requested, LeafEntity agent, CancellationToken ct)
+    {
+        if (Guid.TryParse(requested, out var id)
+            && await entities.GetAsync(id, ct) is { TypeSlug: "quality-tier" }) return id.ToString();
+        var tiers = await entities.QueryAsync(new EntityQuery { TypeSlug = "quality-tier", Limit = 100 }, ct);
+        var match = tiers.FirstOrDefault(t => t.Slug == requested)
+            ?? (agent.Data["quality_tier"] is JsonValue agentTier
+                && agentTier.TryGetValue<string>(out var agentTierId)
+                ? tiers.FirstOrDefault(t => t.Id.ToString() == agentTierId) : null)
+            ?? tiers.FirstOrDefault(t => t.Slug == "deep");
+        return match?.Id.ToString() ?? throw new InvalidOperationException(
+            "Heartbeat requires a quality-tier entity for its workflow action configuration");
+    }
+
+    private async Task<HeartbeatConfig> DefaultConfigAsync(LeafEntity agent, CancellationToken ct)
+    {
+        var qualityReference = await ResolveQualityTierReferenceAsync("deep", agent, ct);
+        return HeartbeatConfig.Default with
+        {
+            QualityTier = await ResolveQualityTierSlugAsync(JsonValue.Create(qualityReference), ct),
+        };
+    }
+
+    public async Task<string> ResolveQualityTierSlugAsync(JsonNode? reference, CancellationToken ct = default)
+    {
+        if (reference is JsonValue value && value.TryGetValue<string>(out var raw))
+        {
+            if (Guid.TryParse(raw, out var id)
+                && await entities.GetAsync(id, ct) is { TypeSlug: "quality-tier" } tier) return tier.Slug;
+            return raw; // narrow compatibility while a legacy workflow is migrated.
+        }
+        return "deep";
+    }
+
+    private async Task<JsonObject?> ReadWorkflowActionConfigAsync(LeafEntity automation, CancellationToken ct)
+    {
+        if (!Guid.TryParse(StrValue(automation.Data["workflow"] as JsonObject ?? new JsonObject(), "entity_id"), out var workflowId)) return null;
+        var workflow = await entities.GetAsync(workflowId, ct);
+        var nodes = workflow?.Data["graph"]?["nodes"] as JsonArray;
+        var action = nodes?.OfType<JsonObject>().FirstOrDefault(node => StrValue(node, "id") == "action");
+        return action?["data"]?["config"]?["action_config"]?.DeepClone() as JsonObject;
+    }
+
+    private static bool MissingActionConfig(JsonObject config)
+        => config["quality_tier"] == null || config["tick_wait_minutes"] == null || config["max_turns"] == null;
+
+    private static JsonObject CloneObject(JsonObject? value, JsonObject fallback)
+        => value?.DeepClone() as JsonObject ?? fallback.DeepClone() as JsonObject ?? new JsonObject();
+
+    private static JsonObject MergeTrigger(JsonObject? existing, string? legacySchedule)
+    {
+        var trigger = existing?.DeepClone() as JsonObject ?? new JsonObject
+        {
+            ["kind"] = "cron", ["expression"] = HeartbeatConfig.DefaultSchedule, ["timezone"] = "Europe/Zurich",
+        };
+        if (legacySchedule != null) trigger["expression"] = legacySchedule;
+        return trigger;
+    }
+
+    private static List<DiscussionRead> OpenDiscussions(IEnumerable<DiscussionRead> discussions, string type)
+        => discussions.Where(d => d.Type == type && !DiscussionStatus.IsClosed(d.Status)).ToList();
+
+    private async Task<DiscussionRead> EnsureSingleDiscussionAsync(List<DiscussionRead> open,
+        string title, string agentId, string? ownerId, string type, string? qualityTier, CancellationToken ct)
+    {
+        var canonical = open.FirstOrDefault()
+            ?? await store.CreateAsync(title, agentId, ownerId ?? "system", type, qualityTier, ct: ct);
+        foreach (var duplicate in open.Skip(1))
+            await lifecycle.BeginArchiveAsync(duplicate, ct);
+        return canonical;
+    }
+
+    private async Task<LeafEntity?> ResolveAutomationAsync(LeafEntity agent, HeartbeatConfig? config,
+        CancellationToken ct)
+    {
+        var automation = AutomationId(agent.Data) is { } referenceId
+            ? await entities.GetAsync(referenceId, ct)
+            : config?.AutomationId is { } automationId
+            ? await entities.GetAsync(automationId, ct)
+            : await entities.GetBySlugAsync("automation", AutomationSlug(agent.Slug), ct);
+        if (automation is not null && (automation.TypeSlug != "automation"
+            || StrValue(automation.Data, "agent") != agent.Id.ToString()))
+            automation = await entities.GetBySlugAsync("automation", AutomationSlug(agent.Slug), ct);
+        return automation;
     }
 
     private static WorkflowAutomationDefinition CreateAutomationDefinition(
         string agentSlug, string agentId, string agentName,
         string schedule, bool enabled, HeartbeatConfig config, string? ownerId)
     {
-        var actionConfig = new JsonObject();
+        var actionConfig = new JsonObject
+        {
+            ["quality_tier"] = config.QualityTier,
+            ["tick_wait_minutes"] = config.TickWaitMinutes,
+            ["max_turns"] = config.MaxTurns,
+        };
         var beneficiary = ownerId is null
             ? new JsonObject
             {
@@ -236,17 +412,25 @@ public sealed class HeartbeatService(
         };
     }
 
-    private async Task ArchiveAutomationAsync(LeafEntity automation, CancellationToken ct)
+    private async Task DeactivateAutomationAsync(LeafEntity automation, string reason, CancellationToken ct)
     {
         if (!IsEnabled(automation.Data)
-            && automation.Data["archived_reason"]?.GetValue<string>() == "heartbeat-reference-removed")
+            && automation.Data["paused_reason"]?.GetValue<string>() == reason)
             return;
+        // LIVE is a reversible presence pause, never an automation archival.
         await entities.PatchAsync(automation.Id, new JsonObject
         {
             ["enabled"] = false,
-            ["archived_at"] = DateTimeOffset.UtcNow,
-            ["archived_reason"] = "heartbeat-reference-removed",
+            ["paused_reason"] = reason,
         }, ct: ct);
+    }
+
+    private async Task ReactivateAutomationAsync(LeafEntity automation, CancellationToken ct)
+    {
+        var restored = automation.Data.DeepClone() as JsonObject ?? new JsonObject();
+        restored["enabled"] = true;
+        restored.Remove("paused_reason");
+        await entities.ReplaceDataAsync(automation.Id, restored, ct: ct);
     }
 
     private static bool IsEnabled(JsonObject data)
@@ -295,6 +479,9 @@ public sealed class HeartbeatService(
     private async Task<DiscussionRead?> RotateCoreAsync(string agentId, string reason,
         CancellationToken ct, string? idempotencyKey)
     {
+        var agentEntity = await entities.GetAsync(Guid.Parse(agentId), ct);
+        if (agentEntity == null || !IsLiveEnabled(agentEntity.Data)) return null;
+
         var rotationKey = string.IsNullOrWhiteSpace(idempotencyKey)
             ? null : $"heartbeat-rotation:{idempotencyKey}";
         if (rotationKey is not null
@@ -325,9 +512,9 @@ public sealed class HeartbeatService(
         // Archive the old discussion, create a fresh one.
         await lifecycle.BeginArchiveAsync(discussion, ct);
 
-        var agentEntity = await entities.GetAsync(Guid.Parse(agentId), ct);
-        var config = agentEntity != null ? HeartbeatConfig.Parse(agentEntity.Data) : null;
-        var agentName = agentEntity?.Name ?? "Agent";
+        var binding = await NormalizeHeartbeatAsync(agentEntity, HeartbeatConfig.Parse(agentEntity.Data), null, ct);
+        var config = binding?.Config ?? await DefaultConfigAsync(agentEntity, ct);
+        var agentName = agentEntity.Name;
 
         if (rotationKey is not null)
         {
@@ -577,9 +764,17 @@ public sealed class HeartbeatTickHandler(
 
         var agentEntity = await entities.GetAsync(agentGuid, ct)
             ?? throw new InvalidOperationException($"Agent entity not found: {agentId}");
-        var config = HeartbeatConfig.Parse(agentEntity.Data);
-        if (config is null || config.AutomationId != context.Automation.Id)
+        if (!HeartbeatService.IsLiveEnabled(agentEntity.Data))
+            return Skip("agent LIVE is disabled");
+
+        if (HeartbeatService.AutomationId(agentEntity.Data) != context.Automation.Id)
             return Skip("agent heartbeat no longer references this automation");
+        var config = HeartbeatConfig.FromActionConfig(context.ActionConfig) with
+        {
+            AutomationId = context.Automation.Id,
+            QualityTier = await heartbeat.ResolveQualityTierSlugAsync(
+                context.ActionConfig?["quality_tier"], ct),
+        };
 
         var agent = await heartbeat.ResolveAgentAsync(agentId, ct)
             ?? throw new InvalidOperationException($"Agent not active: {agentId}");

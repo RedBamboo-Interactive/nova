@@ -16,9 +16,8 @@ public sealed record AgentInfo(
     string? OutputProtocol,
     string? Capabilities,
     string? MemoryInstructions,
-    string Status,
     string? Provider = null,
-    string? QualityMode = null);
+    string? QualityTier = null);
 
 /// <summary>
 /// Cached view of the kernel's <c>agent</c> entities (the agent SYSTEM stays kernel —
@@ -101,7 +100,6 @@ public sealed class AgentDirectory : IDisposable
         var items = await store.QueryAsync(new EntityQuery
         {
             TypeSlug = "agent",
-            DataEquals = new Dictionary<string, object?> { ["status"] = "active" },
             Limit = 50,
         }, ct);
 
@@ -135,13 +133,45 @@ public sealed class AgentDirectory : IDisposable
             }
 
             string? qualityTier = null;
-            var qmRaw = Str(data, "quality_mode");
-            if (qmRaw != null && Guid.TryParse(qmRaw, out var qmGuid))
+            var tierRaw = Str(data, "quality_tier");
+            if (tierRaw != null && Guid.TryParse(tierRaw, out var tierGuid))
             {
-                try { var qe = await store.GetAsync(qmGuid, ct); if (qe != null) qualityTier = Str(qe.Data, "quality_tier"); }
+                try
+                {
+                    var tier = await store.GetAsync(tierGuid, ct);
+                    if (tier?.TypeSlug == "quality-tier") qualityTier = tier.Slug;
+                }
                 catch { }
             }
-            else qualityTier = qmRaw;
+            else qualityTier = tierRaw;
+
+            // Transitional fallback for databases that have not run the migration yet.
+            if (qualityTier == null)
+            {
+                var legacyModeRaw = Str(data, "quality_mode");
+                if (legacyModeRaw != null && Guid.TryParse(legacyModeRaw, out var modeGuid))
+                {
+                    try
+                    {
+                        var mode = await store.GetAsync(modeGuid, ct);
+                        var legacyTierRaw = mode is null ? null : Str(mode.Data, "quality_tier");
+                        if (legacyTierRaw != null && Guid.TryParse(legacyTierRaw, out var legacyTierGuid))
+                        {
+                            var tier = await store.GetAsync(legacyTierGuid, ct);
+                            qualityTier = tier?.TypeSlug == "quality-tier" ? tier.Slug : null;
+                        }
+                        else
+                        {
+                            qualityTier = legacyTierRaw;
+                        }
+                    }
+                    catch { }
+                }
+                else
+                {
+                    qualityTier = legacyModeRaw;
+                }
+            }
 
             agents.Add(new AgentInfo(
                 item.Id.ToString(),
@@ -155,7 +185,6 @@ public sealed class AgentDirectory : IDisposable
                 Str(data, "output_protocol"),
                 Str(data, "capabilities"),
                 Str(data, "memory_instructions"),
-                Str(data, "status") ?? "active",
                 providerRaw,
                 qualityTier));
         }

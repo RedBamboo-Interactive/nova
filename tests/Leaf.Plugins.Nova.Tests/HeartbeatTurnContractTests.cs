@@ -42,7 +42,7 @@ public sealed class HeartbeatTurnContractTests
     [Fact]
     public void Heartbeat_prompts_make_the_visible_session_reply_mandatory()
     {
-        var config = new HeartbeatConfig(null, true, null, "deep", 15, 15);
+        var config = new HeartbeatConfig(null, null, "deep", 15, 15);
 
         Assert.Contains("conversation in the Heartbeat tab", HeartbeatPrompts.Morning("digest", config));
         Assert.Contains("Heartbeat tab is a conversation", HeartbeatPrompts.Tick("digest", null, config));

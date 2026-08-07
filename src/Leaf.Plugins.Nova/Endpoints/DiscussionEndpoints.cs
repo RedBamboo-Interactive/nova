@@ -673,7 +673,7 @@ public static class DiscussionEndpoints
                 return Results.Json(new { error = "Live discussions cannot be archived" }, statusCode: 400);
 
             if (discussion.Type == HeartbeatService.DiscussionType)
-                return Results.Json(new { error = "Heartbeat discussions are managed by the agent config — disable the heartbeat to remove it" }, statusCode: 400);
+                return Results.Json(new { error = "Heartbeat discussions are managed by Agent LIVE — disable LIVE to remove the paired presence" }, statusCode: 400);
 
             if (DiscussionStatus.IsClosed(discussion.Status))
                 return Results.Ok(DiscussionStore.ToInfo(discussion)); // idempotent

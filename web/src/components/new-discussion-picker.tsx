@@ -68,8 +68,8 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
     Promise.all([agentsP, providersP, tiersP]).then(([agentList, provList, tierList]) => {
       setAgents(agentList)
       const first = agentList[0]
-      if (first?.qualityMode && tierList.some(t => t.slug === first.qualityMode))
-        setQualityTier(first.qualityMode)
+      if (first?.qualityTier && tierList.some(t => t.slug === first.qualityTier))
+        setQualityTier(first.qualityTier)
       else
         setQualityTier(tierList.find(t => t.isDefault)?.slug ?? tierList[0]?.slug ?? "")
       if (first?.provider && provList.some(p => p.slug === first.provider))
@@ -92,8 +92,8 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   }, [highlightedAgent?.id])
 
   function applyAgentDefaults(agent: AgentInfo) {
-    if (agent.qualityMode && tiers.some(t => t.slug === agent.qualityMode))
-      setQualityTier(agent.qualityMode)
+    if (agent.qualityTier && tiers.some(t => t.slug === agent.qualityTier))
+      setQualityTier(agent.qualityTier)
     if (agent.provider && providers.some(p => p.slug === agent.provider))
       setSelectedProvider(agent.provider)
   }

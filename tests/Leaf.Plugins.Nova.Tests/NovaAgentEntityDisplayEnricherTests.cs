@@ -18,8 +18,7 @@ public class NovaAgentEntityDisplayEnricherTests
             Identity: null,
             OutputProtocol: null,
             Capabilities: null,
-            MemoryInstructions: null,
-            Status: "active");
+            MemoryInstructions: null);
 
         var projection = NovaAgentEntityDisplayEnricher.Project(agent);
 
@@ -43,5 +42,5 @@ public class NovaAgentEntityDisplayEnricherTests
 
     private static AgentInfo MakeAgent(string avatar) => new(
         Guid.NewGuid().ToString(), "nova", "Nova", null, avatar, "C:\\Nova",
-        null, null, null, null, null, "active");
+        null, null, null, null, null);
 }

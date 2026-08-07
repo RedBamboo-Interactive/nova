@@ -174,8 +174,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
         var nova = agentEntities.FirstOrDefault(a => a.Slug == "nova");
         agents.NovaAgentId = nova?.Id.ToString();
 
-        // LIVE + heartbeat provisioning follows agent config (data.live,
-        // data.heartbeat.enabled); picked up here on boot or via POST /heartbeat/reconcile.
+        // data.live owns the paired LIVE + Heartbeat lifecycle. The canonical
+        // automation owns its schedule and workflow action configuration.
         var heartbeat = host.GetRequiredService<HeartbeatService>();
         _ = Task.Run(async () =>
         {

@@ -24,11 +24,10 @@ export interface AgentInfo {
   slug: string
   name: string
   description: string | null
-  status: string
   avatarUrl: string
   workspaceId?: string | null
   provider?: string | null
-  qualityMode?: string | null
+  qualityTier?: string | null
 }
 
 export interface DiscussionMessage {

@@ -38,7 +38,39 @@
       "icon": "ph-bold ph-heartbeat",
       "category": "agent",
       "description": "Runs one guarded heartbeat tick for an agent's persistent discussion and session.",
-      "input_ports": [],
+      "input_ports": [
+        {
+          "id": "quality_tier",
+          "label": "Quality Tier",
+          "widget": "entity",
+          "field_type": "entity_ref",
+          "constraints": { "target_type": "quality-tier" },
+          "config_path": "action_config",
+          "description": "Provider-agnostic quality tier used when creating the heartbeat session."
+        },
+        {
+          "id": "tick_wait_minutes",
+          "label": "Tick Wait Minutes",
+          "widget": "slider",
+          "field_type": "integer",
+          "default": 15,
+          "minimum": 1,
+          "maximum": 60,
+          "config_path": "action_config",
+          "description": "Maximum minutes to wait for a heartbeat session to become idle."
+        },
+        {
+          "id": "max_turns",
+          "label": "Max Turns",
+          "widget": "slider",
+          "field_type": "integer",
+          "default": 15,
+          "minimum": 1,
+          "maximum": 100,
+          "config_path": "action_config",
+          "description": "Maximum tool actions requested in one heartbeat turn."
+        }
+      ],
       "output_ports": [
         { "id": "summary", "type": "string", "label": "Summary" },
         { "id": "sessionId", "type": "string", "label": "Session" },
