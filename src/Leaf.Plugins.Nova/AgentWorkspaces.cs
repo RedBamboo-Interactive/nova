@@ -15,6 +15,17 @@ public sealed class AgentWorkspace(string workspacePath)
     public string ConfigPath => Path.Combine(workspacePath, "config");
     public string MemoryPath => Path.Combine(workspacePath, "memory");
 
+    /// <summary>
+    /// True when RedLeaf owns the harness files as a generated, read-only VFS projection. Physical
+    /// fallback workspaces remain writable and keep the legacy materialize/compile path.
+    /// </summary>
+    public bool UsesGeneratedHarnessProjection()
+        => new[] { "AGENTS.md", "CLAUDE.md" }.All(name =>
+        {
+            var path = Path.Combine(workspacePath, name);
+            return File.Exists(path) && File.GetAttributes(path).HasFlag(FileAttributes.ReadOnly);
+        });
+
     public void EnsureDirectories()
     {
         Directory.CreateDirectory(ConfigPath);
@@ -78,6 +89,11 @@ public sealed class AgentWorkspace(string workspacePath)
 
     public void GenerateClaudeMd()
     {
+        // The canonical VFS compiler already produced these files from the Agent and selected
+        // Skills. Writing them would correctly fail with ACCESS_DENIED and would reintroduce a
+        // second source of truth. Keep compilation here only for physical fallback workspaces.
+        if (UsesGeneratedHarnessProjection()) return;
+
         var identity = ReadConfigFile("identity.md");
         var protocol = ReadConfigFile("output_protocol.md");
         var capabilities = ReadConfigFile("capabilities.md");
@@ -145,7 +161,8 @@ public sealed class AgentWorkspaces(
 
         var workspace = new AgentWorkspace(path);
         workspace.EnsureDirectories();
-        workspace.MaterializeAgentFiles(agent);
+        if (!workspace.UsesGeneratedHarnessProjection())
+            workspace.MaterializeAgentFiles(agent);
 
         _cache[agentId] = workspace;
         return workspace;
