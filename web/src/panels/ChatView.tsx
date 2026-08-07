@@ -406,6 +406,7 @@ export function ChatView({
       >
         <TabsTrigger
           value="live"
+          className="after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px]"
           style={{ height: "100%" }}
         >
           <i
@@ -414,13 +415,11 @@ export function ChatView({
             style={{ color: "var(--color-status-live)" }}
           />
           Live
-          {activeDiscussion?.type === "live" && (
-            <span aria-hidden="true" className="absolute inset-x-1 bottom-[-2px] h-0.5 rounded-full bg-primary" />
-          )}
         </TabsTrigger>
         <TabsTrigger
           value="heartbeat"
           aria-label={liveHeartbeatPair.heartbeat.status === "thinking" ? "Heartbeat, tick running" : "Heartbeat"}
+          className="after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px]"
           style={{ height: "100%" }}
         >
           <i
@@ -429,9 +428,6 @@ export function ChatView({
             style={{ color: "var(--color-accent-gold)" }}
           />
           Heartbeat
-          {activeDiscussion?.type === "heartbeat" && (
-            <span aria-hidden="true" className="absolute inset-x-1 bottom-[-2px] h-0.5 rounded-full bg-primary" />
-          )}
         </TabsTrigger>
       </TabsList>
     </Tabs>
