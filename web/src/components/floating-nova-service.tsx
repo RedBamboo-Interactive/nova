@@ -29,6 +29,7 @@ import {
 } from "../lib/global-input"
 import { api } from "../lib/api"
 import { readFloatingWindowBounds, writeFloatingWindowBounds } from "../lib/floating-window-bounds"
+import { resolveFloatingOpenSelection } from "../lib/floating-open-selection"
 
 export const FLOATING_NOVA_SURFACE_ID = "nova:floating-chat"
 export const FLOATING_NOVA_COMMAND_ID = "nova:float-chat"
@@ -246,7 +247,16 @@ export function FloatingNovaService() {
   }, [closeSurface, navigate])
 
   const openSurface = useCallback((discussionId?: string): Promise<UiSurfaceActionResult> => {
-    if (discussionId) updateSelectedDiscussion(discussionId)
+    const existing = windowRef.current
+    const alreadyOpen = Boolean(existing && !existing.closed)
+    const alreadyOpening = Boolean(openingPromiseRef.current)
+    const openingSelection = resolveFloatingOpenSelection({
+      explicitDiscussionId: discussionId,
+      openerPathname: window.location.pathname,
+      persistedDiscussionId: selectedRef.current,
+      surfaceAlreadyOpen: alreadyOpen,
+      surfaceOpening: alreadyOpening,
+    })
     if (!support.supported) {
       return Promise.resolve({
         ok: false,
@@ -255,7 +265,6 @@ export function FloatingNovaService() {
       })
     }
 
-    const existing = windowRef.current
     if (existing && !existing.closed) {
       existing.focus()
       return Promise.resolve({ ok: true, state: "open" })
@@ -310,6 +319,12 @@ export function FloatingNovaService() {
       }
       openedWindow.addEventListener("resize", persistBounds)
       openedWindow.addEventListener("pagehide", handleClosed, { once: true })
+
+      // Commit the one-time seed only after the browser has granted the window
+      // and its document is ready. A denied/failed open must not silently alter
+      // which discussion Float restores on a later successful attempt.
+      if (openingSelection && openingSelection !== selectedRef.current)
+        updateSelectedDiscussion(openingSelection)
 
       windowRef.current = openedWindow
       stateRef.current = "open"
