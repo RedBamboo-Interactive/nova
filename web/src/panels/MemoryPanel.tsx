@@ -25,6 +25,7 @@ export function MemoryPanel() {
     ?? agents.find((agent) => agent.id === defaultAgentId)
     ?? agents[0]
   const selectedAgentId = selectedAgent?.id ?? null
+  const hasWorkspace = Boolean(selectedAgent?.workspaceId)
 
   // On the index route the host's /apps/nova/* splat ("journal") leaks through
   // the merged params — only a deeper path is an actual file selection.
@@ -38,25 +39,25 @@ export function MemoryPanel() {
   const agentParam = selectedAgentId ? `&agent=${encodeURIComponent(selectedAgentId)}` : ""
 
   const refreshManifest = useCallback(async () => {
-    if (!selectedAgentId) {
+    if (!selectedAgentId || !hasWorkspace) {
       setFiles([])
       return
     }
     const url = `/api/apps/nova/workspace/manifest?agent=${encodeURIComponent(selectedAgentId)}`
     const data = await api.get<{ files: string[] }>(url)
     setFiles(data.files)
-  }, [selectedAgentId])
+  }, [selectedAgentId, hasWorkspace])
 
   useEffect(() => {
     refreshManifest()
   }, [refreshManifest])
 
   useEffect(() => {
-    if (!selectedFile || !selectedAgentId) return
+    if (!selectedFile || !selectedAgentId || !hasWorkspace) return
     api.get<{ content: string }>(
       `/api/apps/nova/memory/file?path=${encodeURIComponent(selectedFile)}${agentParam}`,
     ).then((data) => setContent(data.content))
-  }, [selectedFile, selectedAgentId, agentParam])
+  }, [selectedFile, selectedAgentId, hasWorkspace, agentParam])
 
   const handleSelectFile = useCallback((path: string) => {
     navigate(`/apps/nova/journal/${path}`)
@@ -64,7 +65,7 @@ export function MemoryPanel() {
   }, [navigate])
 
   const handleRevealWorkspace = useCallback(async () => {
-    if (!selectedAgentId) return
+    if (!selectedAgentId || !hasWorkspace) return
     const query = `?agent=${encodeURIComponent(selectedAgentId)}`
     try {
       await api.post(`/api/apps/nova/workspace/reveal${query}`)
@@ -75,7 +76,7 @@ export function MemoryPanel() {
         description: error instanceof Error ? error.message : "Unknown error",
       })
     }
-  }, [selectedAgentId, toast])
+  }, [selectedAgentId, hasWorkspace, toast])
 
   const handleSelectAgent = useCallback((id: string | null) => {
     if (!id) return
@@ -109,7 +110,7 @@ export function MemoryPanel() {
           variant="ghost"
           size="icon-xs"
           onClick={() => void handleRevealWorkspace()}
-          disabled={!selectedAgentId}
+          disabled={!selectedAgentId || !hasWorkspace}
           title="Open workspace folder in Windows Explorer"
           aria-label="Open workspace folder in Windows Explorer"
         >
@@ -127,7 +128,17 @@ export function MemoryPanel() {
         </Button>
       </PanelHeader>
       <ScrollArea className="flex-1">
-        {files.length === 0 ? (
+        {!hasWorkspace ? (
+          <div className="flex items-center justify-center px-6 py-12 text-text-muted">
+            <div className="text-center">
+              <i className="ph-bold ph-folder-dashed text-2xl mb-3 opacity-30" />
+              <p className="text-sm">No workspace set up</p>
+              <p className="mt-1 text-xs text-text-disabled">
+                Add a Workspace to this Agent to use Journal.
+              </p>
+            </div>
+          </div>
+        ) : files.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-text-muted">
             <div className="text-center">
               <i className="ph-bold ph-book text-2xl mb-3 opacity-30" />
@@ -176,7 +187,14 @@ export function MemoryPanel() {
     </>
   )
 
-  const detail = selectedFile ? (
+  const detail = !hasWorkspace ? (
+    <div className="h-full flex items-center justify-center text-text-muted">
+      <div className="text-center">
+        <i className="ph-bold ph-folder-dashed text-2xl mb-3 opacity-30" />
+        <p className="text-sm">No workspace set up</p>
+      </div>
+    </div>
+  ) : selectedFile ? (
     <div className="h-full flex flex-col">
       <PanelHeader title={selectedFile.split("/").pop() ?? selectedFile}>
         <Badge variant="outline">{selectedFile}</Badge>
