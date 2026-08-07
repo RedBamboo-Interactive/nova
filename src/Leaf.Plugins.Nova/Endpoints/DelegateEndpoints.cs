@@ -13,6 +13,7 @@ public class DelegateRequest
 {
     public string? SessionId { get; set; }
     public string? ProjectPath { get; set; }
+    public string? Repository { get; set; }
     public string? Agent { get; set; }
     public string Prompt { get; set; } = "";
     public string? DiscussionId { get; set; }
@@ -40,6 +41,38 @@ public static class DelegateEndpoints
             if (string.IsNullOrWhiteSpace(request.Prompt))
                 return Results.BadRequest(new { error = "prompt is required" });
 
+            Leaf.Sdk.LeafEntity? resolvedRepository = null;
+            if (!isContinuation && !string.IsNullOrWhiteSpace(request.Repository))
+            {
+                resolvedRepository = Guid.TryParse(request.Repository, out var repositoryId)
+                    ? await entities.GetAsync(repositoryId, ctx.RequestAborted)
+                    : await entities.GetBySlugAsync("repository", request.Repository, ctx.RequestAborted);
+                if (resolvedRepository is not { TypeSlug: "repository" })
+                    return Results.Json(new
+                    {
+                        error = "repository_not_found",
+                        message = $"Repository '{request.Repository}' not found",
+                    }, statusCode: 404);
+
+                var status = StringValue(resolvedRepository.Data, "status", "active");
+                if (!string.Equals(status, "active", StringComparison.OrdinalIgnoreCase))
+                    return Results.Json(new
+                    {
+                        error = "repository_inactive",
+                        message = $"Repository '{resolvedRepository.Name}' is not active",
+                    }, statusCode: 409);
+
+                var repositoryPath = StringValue(resolvedRepository.Data, "local_path");
+                if (string.IsNullOrWhiteSpace(repositoryPath) || !Directory.Exists(repositoryPath))
+                    return Results.Json(new
+                    {
+                        error = "repository_checkout_unavailable",
+                        message = $"Repository '{resolvedRepository.Name}' has no available local checkout",
+                    }, statusCode: 409);
+
+                request.ProjectPath = Path.GetFullPath(repositoryPath);
+            }
+
             // Resolve agent if specified: provides workspace, provider, quality defaults.
             AgentInfo? resolvedAgent = null;
             if (!isContinuation && !string.IsNullOrWhiteSpace(request.Agent))
@@ -60,7 +93,7 @@ public static class DelegateEndpoints
             }
 
             if (!isContinuation && string.IsNullOrWhiteSpace(request.ProjectPath))
-                return Results.BadRequest(new { error = "Either sessionId, projectPath, or agent is required" });
+                return Results.BadRequest(new { error = "Either sessionId, repository, projectPath, or agent is required" });
 
             DiscussionRead? discussion = request.DiscussionId != null
                 ? await discussions.GetAsync(request.DiscussionId, ctx.RequestAborted)
@@ -78,6 +111,8 @@ public static class DelegateEndpoints
             var baseContext = new List<ComputeContextReference>();
             if (request.DiscussionId != null)
                 baseContext.Add(new("discussion", request.DiscussionId));
+            if (resolvedRepository != null)
+                baseContext.Add(new("repository", resolvedRepository.Id.ToString()));
 
             // 1. Create session on RedCompute (skip if continuing an existing session)
             string sessionId;
@@ -202,7 +237,11 @@ public static class DelegateEndpoints
                 callbackRegistered,
                 continued = isContinuation,
                 agent = resolvedAgent?.Name,
+                repository = resolvedRepository?.Id,
             });
         });
     }
+
+    private static string StringValue(JsonObject data, string key, string fallback = "") =>
+        data[key] is JsonValue value && value.TryGetValue<string>(out var text) ? text : fallback;
 }

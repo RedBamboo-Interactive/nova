@@ -13,7 +13,7 @@
 
   <PropertyGroup>
     <!-- Resolve Leaf.Sdk: an explicit -p:LeafSdkProject=<path> wins, else the kernel
-         checkout as a T:\Projects-style sibling of this repo. The SDK is the hard
+         checkout as a sibling of this repo. The SDK is the hard
          ceiling — plugins never reference the kernel. A published Leaf.Sdk NuGet
          package replaces this probing at M2a. -->
     <LeafSdkProject Condition="'$(LeafSdkProject)' == '' And Exists('..\..\..\redleaf\src\Leaf.Sdk\Leaf.Sdk.csproj')">..\..\..\redleaf\src\Leaf.Sdk\Leaf.Sdk.csproj</LeafSdkProject>

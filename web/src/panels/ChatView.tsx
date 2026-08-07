@@ -80,7 +80,7 @@ function resolveImageSrc(src: string): string | undefined {
 
 function resolveFileLink(filePath: string, opts?: { line?: number }): (() => void) | undefined {
   const norm = filePath.replace(/\\/g, "/")
-  // Expect absolute paths like T:/Projects/repoName/some/file.ts
+  // Expect absolute paths from the repository entity's machine-specific checkout.
   const match = norm.match(/^([A-Za-z]:\/[^/]+\/[^/]+)\/(.+)$/)
   if (!match) return undefined
   const project = match[1]!
