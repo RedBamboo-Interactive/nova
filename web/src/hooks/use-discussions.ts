@@ -8,6 +8,7 @@ import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
 import { mergeDiscussionAndSessionBlocks, mergeRevalidatedMessages } from "../lib/discussion-transcript"
 import { applySessionStatus } from "../lib/discussion-runtime"
+import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import {
   clearDiscussionArchivePending,
   getDiscussionList,
@@ -897,11 +898,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
       loadedRef.current.delete(discussionId)
       loadMessages(discussionId)
     } else if (event.type === "discussion.rotated") {
-      const { oldDiscussionId } = event.data as { oldDiscussionId: string; newDiscussionId: string; agentId: string }
+      const { oldDiscussionId, newDiscussionId } = event.data as { oldDiscussionId: string; newDiscussionId: string; agentId: string }
       setDiscussions((prev) => prev.filter((d) => d.id !== oldDiscussionId))
       setMessages((prev) => { const next = { ...prev }; delete next[oldDiscussionId]; return next })
       loadedRef.current.delete(oldDiscussionId)
-      if (activeDiscussionId === oldDiscussionId) setActiveDiscussionId(null)
+      setActiveDiscussionId((current) => resolveRotatedDiscussionSelection(current, oldDiscussionId, newDiscussionId))
       refreshDiscussions()
     } else if (event.type === "session.stream") {
       const { sessionId, event: evt, timestamp: serverTimestamp } = event.data as {
@@ -1014,21 +1015,31 @@ export function useDiscussions(eventResolver?: EventResolver) {
     if (activeDiscussionId === id) setActiveDiscussionId(null)
   }, [activeDiscussionId])
 
-  const rotateDiscussion = useCallback(async (id: string) => {
+  const rotateDiscussion = useCallback(async (id: string): Promise<string | null> => {
     try {
       const disc = discussions.find((d) => d.id === id)
+      let newDiscussionId: string | null = null
       if (disc?.type === "heartbeat" && disc.agentId) {
-        await api.post(`/api/apps/nova/heartbeat/${disc.agentId}/rotate`)
+        const response = await api.post<{ discussionId: string | null }>(`/api/apps/nova/heartbeat/${disc.agentId}/rotate`)
+        newDiscussionId = response.discussionId
       } else {
-        await api.post<{ archived: DiscussionInfo; created: DiscussionInfo }>(`/api/apps/nova/discussions/${id}/rotate`)
+        const response = await api.post<{ archived: DiscussionInfo; created: DiscussionInfo }>(`/api/apps/nova/discussions/${id}/rotate`)
+        newDiscussionId = response.created.id
+        upsertDiscussion(response.created)
       }
       setDiscussions((prev) => prev.filter((d) => d.id !== id))
       setMessages((prev) => { const next = { ...prev }; delete next[id]; return next })
       loadedRef.current.delete(id)
+      if (newDiscussionId) {
+        const replacementId = newDiscussionId
+        setActiveDiscussionId((current) => resolveRotatedDiscussionSelection(current, id, replacementId))
+      }
       const label = disc?.type === "heartbeat" ? "Heartbeat" : "LIVE"
       toast({ variant: "success", title: `${label} rotated`, description: `Fresh ${label} discussion created` })
+      return newDiscussionId
     } catch (err) {
       toast({ variant: "error", title: "Failed to rotate", description: err instanceof Error ? err.message : "Unknown error" })
+      return null
     }
   }, [toast, discussions])
 

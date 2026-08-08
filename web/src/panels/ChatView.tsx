@@ -315,6 +315,12 @@ export function ChatView({
     setMobileTab(1)
   }, [floating, navigate, onSelectDiscussion])
 
+  const handleRotateDiscussion = useCallback(async (id: string) => {
+    const followReplacement = activeDiscussionId === id
+    const newDiscussionId = await rotateDiscussion(id)
+    if (followReplacement && newDiscussionId) handleSelectDiscussion(newDiscussionId)
+  }, [activeDiscussionId, handleSelectDiscussion, rotateDiscussion])
+
   // Discussion-activity events link back to the discussion they describe.
   const resolveEventLink = useCallback((event: ParsedEvent) => {
     if (event.key !== "discussion") return undefined
@@ -722,7 +728,7 @@ export function ChatView({
               activeDiscussionId={requestedDiscussionId ?? activeDiscussionId}
               onSelect={handleSelectDiscussion}
               onArchive={archiveDiscussion}
-              onRotate={rotateDiscussion}
+              onRotate={handleRotateDiscussion}
               onDismiss={dismissDiscussion}
               getAgent={getAgent}
               multiAgent={multiAgent}
