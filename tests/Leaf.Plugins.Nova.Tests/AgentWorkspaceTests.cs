@@ -62,4 +62,45 @@ public sealed class AgentWorkspaceTests
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public void DisposableWorkspaceMaterializesAgentInstructionsAndStatesNonPersistence()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"nova-disposable-workspace-{Guid.NewGuid():N}");
+        var agent = new AgentInfo(
+            Id: Guid.NewGuid().ToString(),
+            Slug: "muse",
+            Name: "Muse",
+            Description: null,
+            AvatarFilename: null,
+            WorkspaceId: null,
+            Identity: "# Muse\n\nThink in images.",
+            OutputProtocol: "Keep it concise.",
+            Capabilities: "Create art direction.",
+            MemoryInstructions: null);
+
+        try
+        {
+            var workspace = AgentWorkspace.CreateDisposable(root, agent);
+            workspace.GenerateClaudeMd();
+
+            Assert.True(workspace.IsDisposable);
+            Assert.Equal(agent.Identity, File.ReadAllText(Path.Combine(root, "config", "identity.md")));
+            Assert.True(Directory.Exists(Path.Combine(root, "memory")));
+
+            foreach (var fileName in new[] { "AGENTS.md", "CLAUDE.md" })
+            {
+                var content = File.ReadAllText(Path.Combine(root, fileName));
+                Assert.Contains("Disposable Agent Workspace", content);
+                Assert.Contains("do not persist across", content);
+                Assert.Contains("Do not claim that a file or memory was saved durably", content);
+                Assert.Contains(agent.Identity, content);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
 }

@@ -9,11 +9,20 @@ namespace Leaf.Plugins.Nova;
 /// SYSTEM (entities, VFS mounts) is kernel-level — this only touches the same
 /// directories the sessions themselves work in.
 /// </summary>
-public sealed class AgentWorkspace(string workspacePath)
+public sealed class AgentWorkspace(string workspacePath, bool isDisposable = false)
 {
     public string WorkspacePath => workspacePath;
     public string ConfigPath => Path.Combine(workspacePath, "config");
     public string MemoryPath => Path.Combine(workspacePath, "memory");
+    public bool IsDisposable => isDisposable;
+
+    public static AgentWorkspace CreateDisposable(string workspacePath, AgentInfo agent)
+    {
+        var workspace = new AgentWorkspace(workspacePath, isDisposable: true);
+        workspace.EnsureDirectories();
+        workspace.MaterializeAgentFiles(agent);
+        return workspace;
+    }
 
     /// <summary>
     /// True when RedLeaf owns the harness files as a generated, read-only VFS projection. Physical
@@ -100,17 +109,32 @@ public sealed class AgentWorkspace(string workspacePath)
         var memoryInstructions = ReadConfigFile("memory.md");
         var manifestList = string.Join("\n", GetManifest().Select(p => $"- {p}"));
 
+        var storageInstructions = IsDisposable
+            ? """
+              # Disposable Agent Workspace
+
+              This Agent has no configured entity-backed Workspace. This entire working directory is
+              session-scoped scratch storage and may be removed after execution. Conversation history
+              remains in the discussion, but files and memory written here do not persist across
+              discussions. Do not claim that a file or memory was saved durably.
+
+              `REDLEAF_SCRATCH_DIR` points to this same disposable working directory.
+              """
+            : """
+              # Session Scratch Space
+
+              `REDLEAF_SCRATCH_DIR` points to the current session's disposable workspace. Put downloads,
+              probes, generated intermediates, and temporary scripts there. Do not create `temp`, `tmp`,
+              or `scratch` folders inside the persistent Agent workspace. Promote only deliberate final
+              work into the persistent workspace.
+              """;
+
         var content = $"""
             > **This file is generated. Do not edit it directly.**
             > To change these instructions, edit the source files in `config/`.
             > Sections: identity.md, output_protocol.md, capabilities.md, memory.md
 
-            # Session Scratch Space
-
-            `REDLEAF_SCRATCH_DIR` points to the current session's disposable workspace. Put downloads,
-            probes, generated intermediates, and temporary scripts there. Do not create `temp`, `tmp`,
-            or `scratch` folders inside the persistent Agent workspace. Promote only deliberate final
-            work into the persistent workspace.
+            {storageInstructions}
 
             {identity}
 
@@ -144,7 +168,8 @@ public sealed class AgentWorkspaces(
 {
     private readonly ConcurrentDictionary<string, AgentWorkspace> _cache = new();
 
-    public async Task<AgentWorkspace> GetAsync(string? agentId, CancellationToken ct = default)
+    /// <summary>Resolve only an explicitly configured entity-backed Workspace.</summary>
+    public async Task<AgentWorkspace?> TryGetAsync(string? agentId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(agentId))
             throw new InvalidOperationException("An Agent must be selected");
@@ -155,9 +180,8 @@ public sealed class AgentWorkspaces(
             ?? throw new InvalidOperationException($"Agent not found: {agentId}");
         if (!Guid.TryParse(agent.Id, out var entityId))
             throw new InvalidOperationException($"Agent has an invalid entity id: {agent.Id}");
-        var path = await workspacePaths.ResolveAsync(entityId, ct)
-            ?? throw new InvalidOperationException(
-                $"The entity-backed workspace for Agent '{agent.Name}' is unavailable");
+        var path = await workspacePaths.ResolveAsync(entityId, ct);
+        if (path is null) return null;
 
         var workspace = new AgentWorkspace(path);
         workspace.EnsureDirectories();
@@ -166,6 +190,26 @@ public sealed class AgentWorkspaces(
 
         _cache[agentId] = workspace;
         return workspace;
+    }
+
+    /// <summary>
+    /// Resolve the Agent's durable Workspace for a session, or materialize its entity-authored
+    /// instructions into that session's disposable scratch allocation when none is configured.
+    /// </summary>
+    public async Task<AgentWorkspace> GetForSessionAsync(
+        AgentInfo agent, AgentScratchAllocation scratch, CancellationToken ct = default)
+        => await TryGetAsync(agent.Id, ct)
+            ?? AgentWorkspace.CreateDisposable(scratch.Path, agent);
+
+    /// <summary>Resolve a durable Workspace. Journal and memory operations deliberately stay strict.</summary>
+    public async Task<AgentWorkspace> GetAsync(string? agentId, CancellationToken ct = default)
+    {
+        var workspace = await TryGetAsync(agentId, ct);
+        if (workspace is not null) return workspace;
+
+        var agent = await agents.GetAgentAsync(agentId!, ct);
+        throw new InvalidOperationException(
+            $"The entity-backed workspace for Agent '{agent?.Name ?? agentId}' is unavailable");
     }
 
     public void Invalidate(string? agentId = null)

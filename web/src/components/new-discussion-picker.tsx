@@ -183,6 +183,11 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
                   {agent.description && (
                     <p className="text-xs text-text-muted truncate">{agent.description}</p>
                   )}
+                  {!agent.workspaceId && (
+                    <p className="text-[11px] text-text-muted/70 truncate">
+                      Disposable storage · no cross-discussion memory
+                    </p>
+                  )}
                 </div>
               </div>
             </button>

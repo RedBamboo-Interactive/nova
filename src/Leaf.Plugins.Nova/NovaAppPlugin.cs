@@ -130,7 +130,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredService<AgentWorkspaces>(),
                 sp.GetRequiredService<IAgentScratchSpace>(),
-                sp.GetRequiredService<ExtensionContributions>()));
+                sp.GetRequiredService<ExtensionContributions>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<MessagePipeline>>()));
     }
 
     public void MapEndpoints(RouteGroupBuilder group)

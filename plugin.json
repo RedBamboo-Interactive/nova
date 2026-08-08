@@ -44,13 +44,14 @@
           "commandId": "nova:float-chat",
           "shortcut": "Ctrl+Alt+N",
           "selector": "[data-ui-surface='nova:floating-chat'][data-ui-action='open']",
-          "actions": ["open", "focus", "close", "dock", "select-discussion", "show-discussions", "show-chat", "next-discussion", "previous-discussion", "new-discussion"],
+          "actions": ["open", "focus", "close", "dock", "select-discussion", "capture-context", "show-discussions", "show-chat", "next-discussion", "previous-discussion", "new-discussion"],
           "defaultWidth": 420,
           "defaultHeight": 700,
           "limitations": [
             "The opener RedLeaf document must remain alive.",
             "The RedLeaf Windows host restores and tracks native bounds across PWA lifetimes; browser-only hosts retain size but cannot restore position.",
             "Opening requires trusted user activation.",
+            "Foreground context capture attaches the opener RedLeaf viewport to the selected Float discussion without sending it.",
             "Global push-to-talk leases the configured shared voice key through RedLeaf and is active only while Float Nova is open.",
             "Mobile clients are unsupported."
           ]

@@ -43,9 +43,6 @@ public sealed class NovaSessionActionHandler(
         var agent = await ResolveAgentAsync(Str(data, "agent"), ct)
             ?? throw new InvalidOperationException($"Agent not found: {Str(data, "agent") ?? "(default)"}");
 
-        var workspace = await workspaces.GetAsync(agent.Id, ct);
-        workspace.GenerateClaudeMd();
-
         var isCodex = agent.Provider?.StartsWith("codex", StringComparison.OrdinalIgnoreCase) == true;
 
         // Pre-create the delivery discussion and tell the session about it — same
@@ -66,6 +63,8 @@ public sealed class NovaSessionActionHandler(
         }
 
         var scratch = scratchSpace.PrepareExecution(agent.Name, context.AttemptJobId.ToString("N"));
+        var workspace = await workspaces.GetForSessionAsync(agent, scratch, ct);
+        workspace.GenerateClaudeMd();
         var fullPrompt = ComposePrompt(automation.Name, agent, preCreated, prompt, isCodex, scratch.Path);
 
         var timeout = IntOr(config, "timeout") ?? 3600;

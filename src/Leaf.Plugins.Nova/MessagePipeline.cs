@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Leaf.Sdk.Services;
+using Microsoft.Extensions.Logging;
 
 namespace Leaf.Plugins.Nova;
 
@@ -37,7 +38,8 @@ public sealed class MessagePipeline(
     AgentDirectory agents,
     AgentWorkspaces workspaces,
     IAgentScratchSpace scratchSpace,
-    ExtensionContributions extensions)
+    ExtensionContributions extensions,
+    ILogger<MessagePipeline> logger)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -65,8 +67,11 @@ public sealed class MessagePipeline(
                     await store.PatchAsync(current.EntityId, new JsonObject { ["session_id"] = sessionId });
                 return sessionId;
             }
-            catch
+            catch (Exception ex)
             {
+                logger.LogError(ex,
+                    "Failed to create session for discussion {DiscussionId} and Agent {AgentId}",
+                    discussion.Id, discussion.AgentId);
                 try { await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped); }
                 catch { /* best effort */ }
                 return null;
@@ -83,11 +88,11 @@ public sealed class MessagePipeline(
     {
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
         if (agent == null) return null;
-        var workspace = await workspaces.GetAsync(agent.Id, ct);
-        workspace.GenerateClaudeMd();
         var scratch = scratchSpace.PrepareExecution(
             agent.Name,
             discussionId ?? parentJobId ?? Guid.NewGuid().ToString("N"));
+        var workspace = await workspaces.GetForSessionAsync(agent, scratch, ct);
+        workspace.GenerateClaudeMd();
 
         var body = new Dictionary<string, object?>
         {
@@ -146,8 +151,11 @@ public sealed class MessagePipeline(
                 sessionId = await TryCreateSessionAsync(discussion.AgentId, computeOwnerId,
                     discussion.QualityTier, discussion.Provider, ct, discussion.Id);
             }
-            catch
+            catch (Exception ex)
             {
+                logger.LogError(ex,
+                    "Failed to start a session for discussion {DiscussionId} and Agent {AgentId}",
+                    discussion.Id, discussion.AgentId);
                 return new(false, null, "redcompute_unavailable",
                     "RedCompute could not be reached to start a session. Check that it is running on its configured port.");
             }

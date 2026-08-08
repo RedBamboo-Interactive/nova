@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect, useMemo, type ButtonHTMLAttributes } from "react"
+import { useState, useCallback, useEffect, useMemo, useRef, type ButtonHTMLAttributes } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { MasterDetailLayout, PanelHeader, Switch, Tabs, TabsList, TabsTrigger, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, SessionInfoButton, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
-import { PluginExtensionSlot, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface } from "@redbamboo/utility"
+import { MasterDetailLayout, PanelHeader, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
+import { ChatPanel, PendingContextBanner, SessionInfoButton, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
+import { PluginExtensionSlot, captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
 import { AgentPicker } from "../components/agent-picker"
@@ -25,6 +25,10 @@ import {
   getFloatingNovaNavigationAction,
   type FloatingNovaNavigationAction,
 } from "../lib/floating-navigation"
+import {
+  FLOATING_NOVA_CAPTURE_CONTEXT_EVENT,
+  type FloatingNovaCaptureContextRequest,
+} from "../lib/floating-context"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -211,6 +215,7 @@ export function ChatView({
   const filteredDiscussions = getSidebarDiscussionOrder(discussions, agentFilter)
 
   const pendingContext = useNovaPendingContext()
+  const { toast } = useToast()
   const activeAgent = activeDiscussion ? getAgent(activeDiscussion.agentId) : undefined
   const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming, activeDiscussion)
   const share = useShare(activeDiscussion?.entityId)
@@ -218,6 +223,8 @@ export function ChatView({
   const [mobileTab, setMobileTab] = useState(0)
   const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
+  const [capturingContext, setCapturingContext] = useState(false)
+  const capturingContextRef = useRef(false)
 
   useEffect(() => {
     api.get<{ tiers: QualityTierInfo[] }>("/ai-session/quality-modes")
@@ -228,7 +235,6 @@ export function ChatView({
       .catch(() => {})
   }, [])
 
-  const { wrapMessage, clear: clearContext } = pendingContext
   const attachmentTransport = useMemo<AttachmentTransport>(() => ({
     async upload(file) {
       const form = new FormData()
@@ -246,46 +252,107 @@ export function ChatView({
     },
     getDownloadUrl(attachment) { return attachment.downloadUrl },
   }), [])
-  const handleSend = useCallback((content: string, images?: ImageAttachment[], options?: SendOptions) => {
-    if (!activeDiscussionId) return
-    const wrapped = wrapMessage(content, images)
-    const sending = sendMessage(activeDiscussionId, wrapped.text, wrapped.images, options?.inputMethod)
-    clearContext()
-    return sending
-  }, [activeDiscussionId, sendMessage, wrapMessage, clearContext])
 
-  const handleSendInput = useCallback(async (input: ChatInputPart[], attachments: UploadedAttachment[], options?: SendOptions) => {
-    if (!activeDiscussionId) return
-    const text = input
-      .filter((part): part is Extract<ChatInputPart, { type: "text" }> => part.type === "text")
-      .map(part => part.text)
-      .join("\n")
-    const wrapped = wrapMessage(text)
-    const contextAttachments: UploadedAttachment[] = []
-    for (const image of wrapped.images ?? []) {
-      const blob = await fetch(`data:${image.mediaType};base64,${image.base64}`).then(response => response.blob())
-      contextAttachments.push(await attachmentTransport.upload(new File([blob], "context-image", { type: image.mediaType })))
+  const captureWhatISee = useCallback(async (): Promise<UiSurfaceActionResult> => {
+    if (!floating) {
+      return { ok: false, state: "unsupported", error: { code: "floating_surface_required", message: "What I see is available only in Float Nova." } }
     }
-    const allAttachments = [...contextAttachments, ...attachments]
-    const wrappedInput: ChatInputPart[] = [{ type: "text", text: wrapped.text }]
-    wrappedInput.push(...allAttachments.map(attachment => ({ type: "attachment" as const, attachmentId: attachment.id })))
+    const discussionId = activeDiscussionId
+    if (!discussionId || !activeDiscussion) {
+      return { ok: false, state: "open", error: { code: "discussion_required", message: "Select a discussion before attaching foreground context." } }
+    }
+    if (activeDiscussion.type === "heartbeat" || activeDiscussion.status === "archived" || (activeDiscussion.status === "stopped" && activeDiscussion.type !== "live")) {
+      return { ok: false, state: "open", error: { code: "discussion_read_only", message: "This discussion cannot accept a context attachment." } }
+    }
+    if (capturingContextRef.current) {
+      return { ok: false, state: "open", error: { code: "capture_in_progress", message: "Foreground context is already being captured." } }
+    }
+
+    capturingContextRef.current = true
+    setCapturingContext(true)
     try {
-      await sendInput(activeDiscussionId, wrappedInput, allAttachments, options?.inputMethod)
-      clearContext()
+      const captured = await captureVisibleAppContext({ sourceWindow: window, sourceDocument: document })
+      let context = captured.context
+      let screenshotAttachment: UploadedAttachment | undefined
+      let degraded = captured.screenshotStatus === "unavailable"
+
+      if (context.screenshot) {
+        try {
+          const blob = await fetch(`data:${context.screenshot.mediaType};base64,${context.screenshot.base64}`).then(response => response.blob())
+          screenshotAttachment = await attachmentTransport.upload(new File([blob], "what-i-see.png", { type: context.screenshot.mediaType }))
+        } catch {
+          context = { ...context, screenshot: undefined }
+          degraded = true
+        }
+      }
+
+      pendingContext.set(discussionId, {
+        context,
+        screenshotAttachment,
+        discard: screenshotAttachment
+          ? () => { void attachmentTransport.delete(screenshotAttachment.id).catch(() => {}) }
+          : undefined,
+      })
+
+      if (degraded) {
+        toast({
+          title: "Context attached without screenshot",
+          description: "The page details and selection are ready to send.",
+          variant: "default",
+        })
+      }
+      return { ok: true, state: "open" }
     } catch (error) {
-      for (const attachment of contextAttachments) void attachmentTransport.delete(attachment.id).catch(() => {})
-      throw error
+      const sourceChanged = error instanceof VisibleAppContextCaptureError && error.code === "source_changed"
+      const message = sourceChanged
+        ? "The foreground app changed during capture. Try once more on the page you want to share."
+        : error instanceof Error ? error.message : "Foreground context could not be captured."
+      toast({ title: sourceChanged ? "Screen changed" : "Context capture failed", description: message, variant: "error" })
+      return {
+        ok: false,
+        state: "open",
+        error: { code: sourceChanged ? "source_changed" : "capture_failed", message },
+      }
+    } finally {
+      capturingContextRef.current = false
+      setCapturingContext(false)
     }
-  }, [activeDiscussionId, attachmentTransport, clearContext, sendInput, wrapMessage])
+  }, [activeDiscussion, activeDiscussionId, attachmentTransport, floating, pendingContext, toast])
 
   useEffect(() => {
-    const ctx = pendingContext.context
-    if (!ctx?.question || !activeDiscussionId) return
-    const text = formatContextMessage(ctx, ctx.question)
-    const images = ctx.screenshot ? [ctx.screenshot] : undefined
-    void sendMessage(activeDiscussionId, text, images).catch(() => {})
-    clearContext()
-  }, [pendingContext.context, activeDiscussionId, sendMessage, clearContext])
+    if (!floating) return
+    const handleCaptureRequest = (event: Event) => {
+      const request = (event as CustomEvent<FloatingNovaCaptureContextRequest>).detail
+      void captureWhatISee().then(result => request?.respond?.(result))
+    }
+    environment.document.addEventListener(FLOATING_NOVA_CAPTURE_CONTEXT_EVENT, handleCaptureRequest)
+    return () => environment.document.removeEventListener(FLOATING_NOVA_CAPTURE_CONTEXT_EVENT, handleCaptureRequest)
+  }, [captureWhatISee, environment.document, floating])
+
+  const prepareOutgoingMessage = useCallback((message: OutgoingMessageDraft): OutgoingMessageDraft => {
+    if (!activeDiscussionId) return message
+    const pending = pendingContext.consume(activeDiscussionId)
+    if (!pending) return message
+    return {
+      ...message,
+      content: formatContextMessage(pending.context, message.content),
+      attachments: pending.screenshotAttachment
+        ? [pending.screenshotAttachment, ...(message.attachments ?? [])]
+        : message.attachments,
+    }
+  }, [activeDiscussionId, pendingContext])
+
+  const activePendingContext = floating ? pendingContext.get(activeDiscussionId) : null
+
+  const handleSend = useCallback((content: string, images?: ImageAttachment[], options?: SendOptions) => {
+    if (!activeDiscussionId) return
+    return sendMessage(activeDiscussionId, content, images, options?.inputMethod)
+  }, [activeDiscussionId, sendMessage])
+
+  const handleSendInput = useCallback((input: ChatInputPart[], attachments: UploadedAttachment[], options?: SendOptions) => {
+    if (!activeDiscussionId) return
+    return sendInput(activeDiscussionId, input, attachments, options?.inputMethod)
+  }, [activeDiscussionId, sendInput])
 
   const handleInterrupt = useCallback(() => {
     if (!activeDiscussionId) return
@@ -573,6 +640,25 @@ export function ChatView({
     )
   }, [reactions, react, unreact])
 
+  const renderWhatISeeAction = useCallback(({ disabled }: { disabled: boolean }) => {
+    if (!floating) return null
+    return (
+      <button
+        type="button"
+        onClick={() => { void captureWhatISee() }}
+        disabled={disabled || capturingContext}
+        className="w-7 h-7 flex items-center justify-center rounded text-muted-a50 hover:text-text-muted hover:bg-overlay-6 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        title="Attach what I see"
+        aria-label="Attach what I see"
+        data-slot="what-i-see-trigger"
+        data-ui-surface="nova:floating-chat"
+        data-ui-action="capture-context"
+      >
+        <i className={`ph-bold ${capturingContext ? "ph-spinner animate-spin" : "ph-eye"} text-xs`} aria-hidden="true" />
+      </button>
+    )
+  }, [captureWhatISee, capturingContext, floating])
+
   const { opacity: avatarOpacity } = useAvatarStyle()
   const { showAvatar: avatarEnabled } = useLocalSettings()
   const showAvatar = !floating && avatarEnabled && !!activeDiscussion
@@ -600,6 +686,7 @@ export function ChatView({
         resumePending={isResumePending}
         onSend={handleSend}
         onSendInput={handleSendInput}
+        prepareOutgoingMessage={prepareOutgoingMessage}
         attachmentTransport={attachmentTransport}
         enableFileAttachments
         onInterrupt={handleInterrupt}
@@ -616,6 +703,12 @@ export function ChatView({
         isLoadingEarlier={isLoadingEarlier}
         placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}
         header={<>{chatHeader}{upstreamBanner}</>}
+        footer={activePendingContext ? (
+          <PendingContextBanner
+            context={activePendingContext.context}
+            onDismiss={() => pendingContext.clear(activeDiscussionId)}
+          />
+        ) : undefined}
         speechBackend={speechBackend}
         pushToTalkKey={pushToTalk.key}
         globalPushToTalk={floating}
@@ -627,6 +720,7 @@ export function ChatView({
         assistantAvatar={avatarSrc}
         resolveAgentInfo={resolveAgentInfo}
         renderStatusLine={renderStatusLine}
+        renderAttachmentActions={renderWhatISeeAction}
         renderSideActions={renderSideActions}
       />
     </div>

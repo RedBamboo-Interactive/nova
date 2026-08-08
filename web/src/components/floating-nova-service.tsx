@@ -30,6 +30,10 @@ import {
 import { api } from "../lib/api"
 import { readFloatingWindowBounds, writeFloatingWindowBounds } from "../lib/floating-window-bounds"
 import { resolveFloatingOpenSelection } from "../lib/floating-open-selection"
+import {
+  FLOATING_NOVA_CAPTURE_CONTEXT_EVENT,
+  type FloatingNovaCaptureContextRequest,
+} from "../lib/floating-context"
 
 export const FLOATING_NOVA_SURFACE_ID = "nova:floating-chat"
 export const FLOATING_NOVA_COMMAND_ID = "nova:float-chat"
@@ -370,7 +374,7 @@ export function FloatingNovaService() {
         commandId: FLOATING_NOVA_COMMAND_ID,
         shortcut: FLOATING_NOVA_SHORTCUT,
         selector: TRIGGER_SELECTOR,
-        actions: ["open", "focus", "close", "dock", "select-discussion", "show-discussions", "show-chat", "next-discussion", "previous-discussion", "new-discussion"],
+        actions: ["open", "focus", "close", "dock", "select-discussion", "capture-context", "show-discussions", "show-chat", "next-discussion", "previous-discussion", "new-discussion"],
         selectedResource: selectedRef.current ? { type: "discussion", id: selectedRef.current } : null,
         inputCapabilities: [{
           id: "push-to-talk",
@@ -403,6 +407,37 @@ export function FloatingNovaService() {
         if (action === "select-discussion" && discussionId) {
           updateSelectedDiscussion(discussionId)
           return { ok: true, state: stateRef.current }
+        }
+        if (action === "capture-context") {
+          const current = windowRef.current
+          if (!current || current.closed) {
+            return { ok: false, state: stateRef.current, error: { code: "surface_closed", message: "Float Nova is not open." } }
+          }
+          if (!selectedRef.current) {
+            return { ok: false, state: stateRef.current, error: { code: "discussion_required", message: "Select a writable discussion before attaching foreground context." } }
+          }
+          return new Promise<UiSurfaceActionResult>((resolve) => {
+            let settled = false
+            const finish = (result: UiSurfaceActionResult) => {
+              if (settled) return
+              settled = true
+              clearTimeout(timeout)
+              resolve(result)
+            }
+            const timeout = setTimeout(() => finish({
+              ok: false,
+              state: stateRef.current,
+              error: { code: "capture_unavailable", message: "Float Nova did not accept the context capture request." },
+            }), 30_000)
+            const captureEvent = current.document.createEvent("CustomEvent")
+            captureEvent.initCustomEvent(
+              FLOATING_NOVA_CAPTURE_CONTEXT_EVENT,
+              false,
+              false,
+              { respond: finish } satisfies FloatingNovaCaptureContextRequest,
+            )
+            current.document.dispatchEvent(captureEvent)
+          })
         }
         if (["show-discussions", "show-chat", "next-discussion", "previous-discussion", "new-discussion"].includes(action)) {
           const current = windowRef.current

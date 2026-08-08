@@ -657,7 +657,7 @@ export function AutomationsPanel() {
             <div className="text-center">
               <i className="ph-bold ph-heartbeat text-2xl mb-3 opacity-30" />
               <p className="text-sm">No routines{!isNovaSelected ? " for this agent" : " yet"}</p>
-              {isNovaSelected && <p className="text-xs text-text-disabled mt-1">Ask Nova to set one up in chat</p>}
+              {isNovaSelected && <p className="text-xs text-text-disabled mt-1">Set one up in Nova chat</p>}
             </div>
           </div>
         ) : (

@@ -1,10 +1,8 @@
-import { useCallback, useRef, useMemo, createContext, useContext } from "react"
-import { useNavigate, useRoutes, useLocation } from "react-router-dom"
+import { useRef, useMemo, createContext, useContext } from "react"
+import { useRoutes, useLocation } from "react-router-dom"
 import {
   useWsSubscribe,
-  useAskNovaReceiver, usePendingNovaContext,
   usePluginBreadcrumbs,
-  type AskNovaContext, type PendingNovaContext,
 } from "@redbamboo/utility"
 import { ToastProvider } from "@redbamboo/ui"
 import { AppShell } from "./components/layout/app-shell"
@@ -12,12 +10,13 @@ import { useDiscussions } from "./hooks/use-discussions"
 import { useEventTypes } from "./hooks/use-event-types"
 import type { WsEvent } from "./lib/types"
 import { routes } from "./routes"
+import { usePendingVisibleContext, type PendingVisibleContextController } from "./hooks/use-pending-visible-context"
 
 type DiscussionsHook = ReturnType<typeof useDiscussions>
 
 interface AppContext {
   disc: DiscussionsHook
-  pendingContext: PendingNovaContext
+  pendingContext: PendingVisibleContextController
 }
 
 const AppContextValue = createContext<AppContext>(null!)
@@ -26,7 +25,7 @@ export function useDisc(): DiscussionsHook {
   return useContext(AppContextValue).disc
 }
 
-export function useNovaPendingContext(): PendingNovaContext {
+export function useNovaPendingContext(): PendingVisibleContextController {
   return useContext(AppContextValue).pendingContext
 }
 
@@ -44,20 +43,6 @@ function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<DiscussionsH
   return null
 }
 
-function AskNovaHandler({ discRef, setPendingContext }: { discRef: React.RefObject<DiscussionsHook>; setPendingContext: (ctx: AskNovaContext) => void }) {
-  const navigate = useNavigate()
-
-  const onContext = useCallback(async (ctx: AskNovaContext) => {
-    const d = await discRef.current.createDiscussion()
-    if (!d) return
-    setPendingContext(ctx)
-    navigate(`/apps/nova/chat/${d.id}`)
-  }, [navigate, setPendingContext])
-
-  useAskNovaReceiver({ onContext })
-  return null
-}
-
 /**
  * Nova as a Leaf plugin page. The host shell owns auth, theme, the WebSocket
  * provider, and the command palette. This component mounts Nova's chat routes and
@@ -69,7 +54,7 @@ function NovaAppInner() {
   usePluginBreadcrumbs(routes, "/apps/nova", pathname)
 
   return (
-    <NovaRuntimeProvider enableAskNova>
+    <NovaRuntimeProvider>
       <AppShell>
         <div className="h-full overflow-hidden">{element}</div>
       </AppShell>
@@ -79,22 +64,19 @@ function NovaAppInner() {
 
 export function NovaRuntimeProvider({
   children,
-  enableAskNova = false,
 }: {
   children: React.ReactNode
-  enableAskNova?: boolean
 }) {
   const { resolve: resolveEventType } = useEventTypes()
   const disc = useDiscussions(resolveEventType)
   const discRef = useRef(disc)
   discRef.current = disc
-  const pendingContext = usePendingNovaContext()
+  const pendingContext = usePendingVisibleContext()
 
   const appCtx = useMemo<AppContext>(() => ({ disc, pendingContext }), [disc, pendingContext])
   return (
     <>
       <WsDiscussionBridge discRef={discRef} />
-      {enableAskNova && <AskNovaHandler discRef={discRef} setPendingContext={pendingContext.set} />}
       <AppContextValue.Provider value={appCtx}>
         {children}
       </AppContextValue.Provider>
