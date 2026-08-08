@@ -1,10 +1,29 @@
-import type { UploadedAttachment } from "@redbamboo/chat"
+import type { OutgoingMessageDraft, UploadedAttachment } from "@redbamboo/chat"
 import type { VisibleAppContext } from "@redbamboo/utility"
 
 export interface PendingVisibleContextEntry {
   context: VisibleAppContext
   screenshotAttachment?: UploadedAttachment
   discard?: () => void
+}
+
+export function applyPendingVisibleContext(
+  message: OutgoingMessageDraft,
+  pending: PendingVisibleContextEntry,
+): OutgoingMessageDraft {
+  const hasFileAttachments = !!message.attachments?.length
+  const inlineScreenshot = !hasFileAttachments ? pending.context.screenshot : undefined
+  if (inlineScreenshot) pending.discard?.()
+
+  return {
+    ...message,
+    images: inlineScreenshot
+      ? [inlineScreenshot, ...(message.images ?? [])]
+      : message.images,
+    attachments: hasFileAttachments && pending.screenshotAttachment
+      ? [pending.screenshotAttachment, ...(message.attachments ?? [])]
+      : message.attachments,
+  }
 }
 
 type Listener = () => void

@@ -29,6 +29,7 @@ import {
   FLOATING_NOVA_CAPTURE_CONTEXT_EVENT,
   type FloatingNovaCaptureContextRequest,
 } from "../lib/floating-context"
+import { applyPendingVisibleContext } from "../lib/pending-visible-context-store"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -333,13 +334,10 @@ export function ChatView({
     if (!activeDiscussionId) return message
     const pending = pendingContext.consume(activeDiscussionId)
     if (!pending) return message
-    return {
+    return applyPendingVisibleContext({
       ...message,
       content: formatContextMessage(pending.context, message.content),
-      attachments: pending.screenshotAttachment
-        ? [pending.screenshotAttachment, ...(message.attachments ?? [])]
-        : message.attachments,
-    }
+    }, pending)
   }, [activeDiscussionId, pendingContext])
 
   const activePendingContext = floating ? pendingContext.get(activeDiscussionId) : null
