@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, type ButtonHTMLAttributes } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, Switch, Tabs, TabsList, TabsTrigger, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, ContextIndicator, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
+import { ChatPanel, SessionInfoButton, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { PluginExtensionSlot, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
@@ -473,7 +473,7 @@ export function ChatView({
           title="Dock in RedLeaf"
         />
       )}
-      <ContextIndicator
+      <SessionInfoButton
         stats={sessionStats}
         messages={activeMessages}
         agent={activeAgent ? {
@@ -510,7 +510,7 @@ export function ChatView({
             aria-label="Confidential discussion"
           />
         </div>
-      </ContextIndicator>
+      </SessionInfoButton>
     </PanelHeader>
   )
 
