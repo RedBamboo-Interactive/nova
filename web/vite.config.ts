@@ -33,6 +33,9 @@ export default defineConfig({
     dedupe: ["@xyflow/react", "react", "react-dom", "react-router-dom", "zustand"],
   },
   build: {
+    target: "es2023",
+    emptyOutDir: true,
+    sourcemap: false,
     lib: {
       entry: fileURLToPath(new URL("./src/index.ts", import.meta.url)),
       formats: ["es"],

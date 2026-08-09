@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Leaf.Plugins.Nova</RootNamespace>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,6 +17,7 @@
          checkout as a sibling of this repo. The SDK is the hard
          ceiling — plugins never reference the kernel. A published Leaf.Sdk NuGet
          package replaces this probing at M2a. -->
+    <LeafSdkProject Condition="'$(LeafSdkProject)' == '' And Exists('..\..\..\leaf-sdk\src\Leaf.Sdk\Leaf.Sdk.csproj')">..\..\..\leaf-sdk\src\Leaf.Sdk\Leaf.Sdk.csproj</LeafSdkProject>
     <LeafSdkProject Condition="'$(LeafSdkProject)' == '' And Exists('..\..\..\redleaf\src\Leaf.Sdk\Leaf.Sdk.csproj')">..\..\..\redleaf\src\Leaf.Sdk\Leaf.Sdk.csproj</LeafSdkProject>
   </PropertyGroup>
 

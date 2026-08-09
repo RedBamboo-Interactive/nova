@@ -7,6 +7,7 @@ obj/
 # Frontend
 node_modules/
 dist/
+web/tsconfig.tsbuildinfo
 
 # Runtime data (agent workspaces, journal, screenshots)
 nova-workspace/

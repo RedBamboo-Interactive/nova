@@ -1,0 +1,362 @@
+name: Build Nova release candidates
+
+on:
+  workflow_call:
+    inputs:
+      central_release_tag:
+        description: Exact future RedBamboo-Interactive/redleaf central GitHub Release tag for the .leafpkg asset.
+        required: true
+        type: string
+    secrets:
+      CROSS_REPO_TOKEN:
+        description: Optional token that can read the pinned RedBamboo and RedLeaf commits.
+        required: false
+  workflow_dispatch:
+    inputs:
+      central_release_tag:
+        description: Exact future RedBamboo-Interactive/redleaf central GitHub Release tag for the .leafpkg asset.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    name: Build one channel-neutral unsigned release input
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.pins.outputs.version }}
+    runs-on: windows-2025
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout exact Nova source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: RedBamboo-Interactive/nova
+          ref: ${{ github.workflow_sha }}
+          path: nova
+          persist-credentials: false
+
+      - name: Read and require immutable producer pins
+        id: pins
+        working-directory: nova
+        shell: pwsh
+        run: |
+          $input = Get-Content -LiteralPath 'release/producer-input.v1.json' -Raw | ConvertFrom-Json
+          $manifest = Get-Content -LiteralPath 'plugin.json' -Raw | ConvertFrom-Json
+          $redleaf = [string]$input.redleafReleaseToolCommit
+          $leafSdk = [string]$input.leafSdk.commit
+          $redbamboo = [string]$input.redbamboo.commit
+          $version = [string]$manifest.version
+          if ('${{ github.repository }}' -cne 'RedBamboo-Interactive/nova') { throw 'This producer is restricted to the canonical RedBamboo-Interactive/nova repository.' }
+          if ($redleaf -notmatch '^[a-f0-9]{40}$') { throw 'RedLeaf release-tool commit pin is unresolved; replace the single placeholder in release/producer-input.v1.json.' }
+          if ($leafSdk -notmatch '^[a-f0-9]{40}$') { throw 'Leaf.Sdk commit must be one full immutable SHA.' }
+          if ($redbamboo -notmatch '^[a-f0-9]{40}$') { throw 'RedBamboo commit must be one full immutable SHA.' }
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') { throw 'plugin.json version must be exact SemVer.' }
+          if ([string]$input.component.id -cne [string]$manifest.id -or [string]$input.component.version -cne $version) { throw 'Producer component identity must match plugin.json.' }
+          "redleaf=$redleaf" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "leaf_sdk=$leafSdk" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "redbamboo=$redbamboo" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Checkout exact RedBamboo inputs
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: RedBamboo-Interactive/redbamboo-packages
+          ref: ${{ steps.pins.outputs.redbamboo }}
+          path: redbamboo-packages
+          token: ${{ secrets.CROSS_REPO_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Checkout exact Leaf.Sdk source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: RedBamboo-Interactive/redleaf
+          ref: ${{ steps.pins.outputs.leaf_sdk }}
+          path: leaf-sdk
+          token: ${{ secrets.CROSS_REPO_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Checkout exact RedLeaf release tool
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: RedBamboo-Interactive/redleaf
+          ref: ${{ steps.pins.outputs.redleaf }}
+          path: redleaf-release
+          token: ${{ secrets.CROSS_REPO_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Set up exact Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.1
+
+      - name: Set up exact .NET SDK used by RedLeaf producer
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 9.0.303
+
+      - name: Enable packageManager-pinned pnpm
+        working-directory: nova/web
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.0.9 --activate
+          if ((corepack pnpm --version).Trim() -cne '11.0.9') { throw 'Corepack did not activate pnpm 11.0.9.' }
+
+      - name: Verify exact checkouts
+        shell: pwsh
+        run: |
+          if ((git -C nova rev-parse HEAD).Trim() -cne '${{ github.workflow_sha }}') { throw 'Nova checkout does not match the called workflow commit.' }
+          if ((git -C redbamboo-packages rev-parse HEAD).Trim() -cne '${{ steps.pins.outputs.redbamboo }}') { throw 'RedBamboo checkout does not match its producer pin.' }
+          if ((git -C leaf-sdk rev-parse HEAD).Trim() -cne '${{ steps.pins.outputs.leaf_sdk }}') { throw 'Leaf.Sdk checkout does not match its producer pin.' }
+          if ((git -C redleaf-release rev-parse HEAD).Trim() -cne '${{ steps.pins.outputs.redleaf }}') { throw 'RedLeaf checkout does not match its producer pin.' }
+
+      - name: Require PowerShell 7 and derive the only future central artifact URL
+        working-directory: nova
+        shell: pwsh
+        env:
+          CENTRAL_RELEASE_TAG: ${{ inputs.central_release_tag }}
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 7) { throw 'This release producer requires PowerShell 7.' }
+          if ([string]::IsNullOrWhiteSpace($env:CENTRAL_RELEASE_TAG) -or $env:CENTRAL_RELEASE_TAG -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$') {
+            throw 'central_release_tag must be one safe, unencoded GitHub Release tag token.'
+          }
+          $version = '${{ steps.pins.outputs.version }}'
+          $artifactName = "nova-$version.leafpkg"
+          if ($artifactName -notmatch '^nova-[0-9A-Za-z.-]+\.leafpkg$') { throw 'The derived Nova artifact filename is not safe.' }
+          $artifactUrl = "https://github.com/RedBamboo-Interactive/redleaf/releases/download/$env:CENTRAL_RELEASE_TAG/$artifactName"
+          "NOVA_CENTRAL_ARTIFACT_URL=$artifactUrl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Locked restore and Release build of the pinned RedLeaf release tool
+        working-directory: redleaf-release
+        shell: pwsh
+        run: |
+          dotnet restore tools/RedLeaf.ReleaseTool/RedLeaf.ReleaseTool.csproj --locked-mode --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'RedLeaf release-tool locked restore failed.' }
+          dotnet build tools/RedLeaf.ReleaseTool/RedLeaf.ReleaseTool.csproj --configuration Release --no-restore --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'RedLeaf release-tool Release build failed.' }
+
+      - name: Restore and build exact shared packages
+        working-directory: redbamboo-packages
+        shell: pwsh
+        run: |
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm --filter @redbamboo/chat --filter @redbamboo/ui --filter @redbamboo/utility --filter @redbamboo/workflow build
+
+      - name: Locked backend and test restore, build, and test
+        working-directory: nova
+        shell: pwsh
+        run: |
+          $backend = 'src/Leaf.Plugins.Nova/Leaf.Plugins.Nova.csproj'
+          $tests = 'tests/Leaf.Plugins.Nova.Tests/Leaf.Plugins.Nova.Tests.csproj'
+          $leafSdk = (Resolve-Path '../leaf-sdk/src/Leaf.Sdk/Leaf.Sdk.csproj').Path
+          dotnet restore $backend --locked-mode -p:LeafSdkProject=$leafSdk --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Nova backend locked restore failed.' }
+          dotnet build $backend --configuration Release --no-restore -p:LeafSdkProject=$leafSdk --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Nova backend build failed.' }
+          dotnet restore $tests --locked-mode -p:LeafSdkProject=$leafSdk --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Nova test locked restore failed.' }
+          dotnet build $tests --configuration Release --no-restore -p:LeafSdkProject=$leafSdk --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Nova test build failed.' }
+          dotnet test $tests --configuration Release --no-build --no-restore -p:LeafSdkProject=$leafSdk --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Nova backend tests failed.' }
+
+      - name: Frozen frontend restore, typecheck, build, and test
+        working-directory: nova/web
+        shell: pwsh
+        run: |
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm run typecheck
+          corepack pnpm run build:pkg
+          corepack pnpm test
+          if (-not (Test-Path -LiteralPath 'dist/plugin.js')) { throw 'build:pkg did not produce web/dist/plugin.js.' }
+
+      - name: Run release contract tests
+        working-directory: nova
+        shell: pwsh
+        run: node --test tests/release-contract.test.mjs
+
+      - name: Generate exact channel-neutral metadata
+        working-directory: nova
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          $sourceDateEpoch = (git show -s --format=%ct HEAD).Trim()
+          node scripts/release/metadata.mjs generate `
+            --input release/producer-input.v1.json `
+            --repository . `
+            --redbamboo ../redbamboo-packages `
+            --leaf-sdk ../leaf-sdk `
+            --redleaf ../redleaf-release `
+            --source-date-epoch $sourceDateEpoch `
+            --output artifacts/nova-release-metadata.v1.json
+
+      - name: Invoke RedLeaf deterministic release packer
+        shell: pwsh
+        run: |
+          & ./redleaf-release/scripts/build-leafpkg-release.ps1 `
+            -PluginDir ./nova `
+            -Metadata ./nova/artifacts/nova-release-metadata.v1.json `
+            -OutputDir ./nova/artifacts `
+            -BackendProject ./nova/src/Leaf.Plugins.Nova/Leaf.Plugins.Nova.csproj `
+            -FrontendDir ./nova/web `
+            -Lock @(
+              'backend-nuget-lock=./nova/src/Leaf.Plugins.Nova/packages.lock.json',
+              'tests-nuget-lock=./nova/tests/Leaf.Plugins.Nova.Tests/packages.lock.json',
+              'web-pnpm-lock=./nova/web/pnpm-lock.yaml',
+              'redbamboo-pnpm-lock=./redbamboo-packages/pnpm-lock.yaml'
+            ) `
+            -BuildInput @(
+              'leaf-sdk=./leaf-sdk',
+              'redbamboo-chat=./redbamboo-packages',
+              'redbamboo-ui=./redbamboo-packages',
+              'redbamboo-utility=./redbamboo-packages',
+              'redbamboo-workflow=./redbamboo-packages'
+            )
+
+      - name: Validate actual artifact and lock facts
+        working-directory: nova
+        shell: pwsh
+        run: |
+          $sourceDateEpoch = (git show -s --format=%ct HEAD).Trim()
+          $version = '${{ steps.pins.outputs.version }}'
+          node scripts/release/metadata.mjs validate `
+            --input release/producer-input.v1.json `
+            --repository . `
+            --redbamboo ../redbamboo-packages `
+            --leaf-sdk ../leaf-sdk `
+            --redleaf ../redleaf-release `
+            --source-date-epoch $sourceDateEpoch `
+            --metadata artifacts/nova-release-metadata.v1.json `
+            --descriptor "artifacts/nova-$version.component-input.v1.json" `
+            --artifact "artifacts/nova-$version.leafpkg"
+
+      - name: Inspect exact package inventory and private-state boundary
+        working-directory: nova
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $version = '${{ steps.pins.outputs.version }}'
+          $artifact = Resolve-Path -LiteralPath "artifacts/nova-$version.leafpkg"
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($artifact)
+          try {
+            $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') } | Sort-Object)
+          } finally {
+            $archive.Dispose()
+          }
+          $allowed = '^(plugin\.json|backend/.+|web/dist/.+|seeds/.+|payload/.+|provision\.json|release/extension-build-evidence\.v1\.json)$'
+          $privateOrGenerated = '(^|/)(memory|identity|config|discussion|discussions|transcript|transcripts|events|outfit|outfits|image|images|audio|assets|upload|uploads|reference|references|automation|credential|credentials|token|tokens|provider|cache|caches|log|logs|database|databases|node_modules|bin|obj|scratch|REDLEAF_SCRATCH_DIR)(/|$)|(^|/)(\.env|environment)(/|$)'
+          $unexpected = @($entries | Where-Object { $_ -notmatch $allowed -or $_ -match $privateOrGenerated })
+          if ($unexpected.Count -ne 0) { throw "Package contains non-application or private/generated paths: $($unexpected -join ', ')" }
+          foreach ($required in @('plugin.json', 'backend/', 'web/dist/')) {
+            if (-not @($entries | Where-Object { $_ -eq $required -or $_.StartsWith($required, [StringComparison]::Ordinal) }).Count) { throw "Package is missing required application content '$required'." }
+          }
+          $entries | Out-File -LiteralPath 'artifacts/nova-package-inventory.txt' -Encoding utf8NoBOM
+
+      - name: Invoke RedLeaf canonical candidate path
+        working-directory: nova
+        shell: pwsh
+        run: |
+          $tool = '../redleaf-release/tools/RedLeaf.ReleaseTool/bin/Release/net9.0/RedLeaf.ReleaseTool.dll'
+          $version = '${{ steps.pins.outputs.version }}'
+          dotnet $tool candidate ingest-extension `
+            --descriptor "artifacts/nova-$version.component-input.v1.json" `
+            --artifact "artifacts/nova-$version.leafpkg" `
+            --artifact-url "$env:NOVA_CENTRAL_ARTIFACT_URL" `
+            --output 'artifacts/nova-candidate.unsigned.json' `
+            --signature-input 'artifacts/nova-signature-input.json'
+          if ($LASTEXITCODE -ne 0) { throw 'RedLeaf candidate ingestion failed.' }
+
+      - name: Upload immutable unsigned handoff only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nova-${{ steps.pins.outputs.version }}-${{ github.workflow_sha }}-unsigned-release-inputs
+          path: |
+            nova/artifacts/nova-${{ steps.pins.outputs.version }}.leafpkg
+            nova/artifacts/nova-${{ steps.pins.outputs.version }}.component-input.v1.json
+            nova/artifacts/nova-release-metadata.v1.json
+            nova/artifacts/nova-candidate.unsigned.json
+            nova/artifacts/nova-signature-input.json
+            nova/artifacts/nova-package-inventory.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  bridge:
+    name: Append unsigned Nova bytes to rolling prerelease
+    needs: candidate
+    concurrency:
+      group: nova-unsigned-candidate-bridge
+      cancel-in-progress: false
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download exact unsigned candidate inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: nova-${{ needs.candidate.outputs.version }}-${{ github.workflow_sha }}-unsigned-release-inputs
+          path: bridge-input
+
+      - name: Prepare exactly two immutable bridge assets
+        shell: pwsh
+        run: |
+          $descriptor = @(Get-ChildItem bridge-input -Recurse -File -Filter nova-candidate.unsigned.json)
+          if ($descriptor.Count -ne 1) { throw 'Expected exactly one unsigned Nova candidate descriptor.' }
+          $candidate = Get-Content -LiteralPath $descriptor[0].FullName -Raw | ConvertFrom-Json
+          if ($candidate.status -ne 'unsigned' -or $null -ne $candidate.artifact.signature) {
+            throw 'The Nova bridge accepts only an unsigned candidate.'
+          }
+          $candidateId = [string]$candidate.candidateId
+          if ($candidateId -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$') { throw 'Candidate ID is not a safe asset-name token.' }
+          $matchingArtifacts = @(Get-ChildItem bridge-input -Recurse -File | Where-Object {
+            $_.Extension -ceq '.leafpkg' -and
+            $_.Length -eq [long]$candidate.artifact.sizeBytes -and
+            (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -eq $candidate.artifact.sha256
+          })
+          if ($matchingArtifacts.Count -ne 1) { throw 'Expected exactly one Nova package matching the unsigned descriptor.' }
+          New-Item -ItemType Directory -Path bridge-assets -Force | Out-Null
+          Copy-Item -LiteralPath $descriptor[0].FullName -Destination "bridge-assets/${candidateId}.candidate.json"
+          Copy-Item -LiteralPath $matchingArtifacts[0].FullName -Destination "bridge-assets/${candidateId}.leafpkg"
+
+      - name: Append and re-verify rolling unsigned prerelease assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: RedBamboo-Interactive/nova
+        run: |
+          $visibility = & gh api "repos/$env:GH_REPO" --jq .visibility
+          if ($LASTEXITCODE -ne 0 -or $visibility -cne 'public') {
+            throw 'Rolling candidate publication requires the producer repository to already be public.'
+          }
+          $tag = 'nova-unsigned-candidates'
+          $releaseJson = & gh release view $tag --json isDraft,isPrerelease,assets 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --prerelease --latest=false --target '${{ github.workflow_sha }}' `
+              --title 'Rolling unsigned Nova candidates' `
+              --notes 'Public unsigned producer inputs for exact central release plans. Trust comes only from central signed metadata.'
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create the rolling Nova candidate prerelease.' }
+            $releaseJson = gh release view $tag --json isDraft,isPrerelease,assets
+          }
+          $release = $releaseJson | ConvertFrom-Json
+          if ($release.isDraft -or -not $release.isPrerelease) { throw 'Candidate bridge tag must remain a public prerelease.' }
+          $existingNames = @($release.assets | ForEach-Object { $_.name })
+          foreach ($file in @(Get-ChildItem bridge-assets -File | Sort-Object Name)) {
+            if ($existingNames -notcontains $file.Name) {
+              gh release upload $tag $file.FullName
+              if ($LASTEXITCODE -ne 0) { throw "Could not append bridge asset '$($file.Name)'." }
+            }
+            New-Item -ItemType Directory -Path "bridge-verify/$($file.BaseName)" -Force | Out-Null
+            gh release download $tag --pattern $file.Name --dir "bridge-verify/$($file.BaseName)"
+            if ($LASTEXITCODE -ne 0) { throw "Could not download bridge asset '$($file.Name)' for verification." }
+            $downloaded = Join-Path "bridge-verify/$($file.BaseName)" $file.Name
+            if ((Get-FileHash -LiteralPath $downloaded -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash) {
+              throw "Rolling prerelease already contains different bytes for '$($file.Name)'."
+            }
+          }
