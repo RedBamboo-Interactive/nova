@@ -1,11 +1,15 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { readFileSync, readdirSync, statSync } from "node:fs"
+import { readFileSync as readFileRaw, readdirSync, statSync } from "node:fs"
 import { join, resolve } from "node:path"
 import test from "node:test"
 import { buildMetadata, canonical, hashFile, validateInput } from "../scripts/release/metadata.mjs"
 
 const root = resolve(import.meta.dirname, "..")
+const readFileSync = (path, encoding) => {
+  const value = readFileRaw(path, encoding)
+  return typeof value === "string" ? value.replaceAll("\r\n", "\n") : value
+}
 const readJson = (path) => JSON.parse(readFileSync(join(root, path), "utf8"))
 const manifest = readJson("plugin.json")
 const packageJson = readJson("web/package.json")
@@ -109,9 +113,8 @@ test("workflow uses immutable action SHAs and one channel-neutral RedLeaf ingest
   assert.doesNotMatch(workflow, /--channel|stable|nightly/i)
   assert.doesNotMatch(workflow, /candidate (build|finalize)|registry build|signer|id-token:\s*write/i)
   assert.doesNotMatch(workflow, /inputs\.artifact_url/i)
-  assert.match(workflow, /central_release_tag/)
-  assert.match(workflow, /\^\[A-Za-z0-9\]\[A-Za-z0-9\._-\]\{0,199\}\$/)
-  assert.match(workflow, /https:\/\/github\.com\/RedBamboo-Interactive\/redleaf\/releases\/download\/\$env:CENTRAL_RELEASE_TAG\/\$artifactName/)
+  assert.doesNotMatch(workflow, /central_release_tag|CENTRAL_RELEASE_TAG/)
+  assert.match(workflow, /https:\/\/github\.com\/RedBamboo-Interactive\/nova\/releases\/download\/nova-unsigned-candidates\/\$artifactName/)
   assert.match(workflow, /repository: RedBamboo-Interactive\/nova/)
   assert.match(workflow, /repository: RedBamboo-Interactive\/redleaf/)
   assert.match(workflow, /repository: RedBamboo-Interactive\/redbamboo-packages/)
@@ -142,10 +145,9 @@ test("the unsigned prerelease bridge is serialized, append-only, and isolated fr
   assert.match(bridge, /contents: write/)
   assert.doesNotMatch(bridge, /id-token:|signing key|private key|REDLEAF_RELEASE_SIGNING_KEY/i)
   assert.match(bridge, /\$tag = 'nova-unsigned-candidates'/)
-  assert.match(bridge, /gh api "repos\/\$env:GH_REPO" --jq \.visibility/)
-  assert.match(bridge, /\$visibility -cne 'public'/)
+  assert.doesNotMatch(bridge, /visibility|already be public|public prerelease/i)
   assert.match(bridge, /\$\{candidateId\}\.candidate\.json/)
-  assert.match(bridge, /\$\{candidateId\}\.leafpkg/)
+  assert.match(bridge, /bridge-assets\/\$artifactName/)
   assert.match(bridge, /status -ne 'unsigned'/)
   assert.match(bridge, /Extension -ceq '\.leafpkg'/)
   assert.match(bridge, /existingNames -notcontains \$file\.Name/)

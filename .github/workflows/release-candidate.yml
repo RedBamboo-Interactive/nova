@@ -3,20 +3,12 @@ name: Build Nova release candidates
 on:
   workflow_call:
     inputs:
-      central_release_tag:
-        description: Exact future RedBamboo-Interactive/redleaf central GitHub Release tag for the .leafpkg asset.
-        required: true
-        type: string
     secrets:
       CROSS_REPO_TOKEN:
         description: Optional token that can read the pinned RedBamboo and RedLeaf commits.
         required: false
   workflow_dispatch:
     inputs:
-      central_release_tag:
-        description: Exact future RedBamboo-Interactive/redleaf central GitHub Release tag for the .leafpkg asset.
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -115,21 +107,17 @@ jobs:
           if ((git -C leaf-sdk rev-parse HEAD).Trim() -cne '${{ steps.pins.outputs.leaf_sdk }}') { throw 'Leaf.Sdk checkout does not match its producer pin.' }
           if ((git -C redleaf-release rev-parse HEAD).Trim() -cne '${{ steps.pins.outputs.redleaf }}') { throw 'RedLeaf checkout does not match its producer pin.' }
 
-      - name: Require PowerShell 7 and derive the only future central artifact URL
+      - name: Require PowerShell 7 and derive the only producer artifact URL
         working-directory: nova
         shell: pwsh
         env:
-          CENTRAL_RELEASE_TAG: ${{ inputs.central_release_tag }}
         run: |
           if ($PSVersionTable.PSVersion.Major -ne 7) { throw 'This release producer requires PowerShell 7.' }
-          if ([string]::IsNullOrWhiteSpace($env:CENTRAL_RELEASE_TAG) -or $env:CENTRAL_RELEASE_TAG -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$') {
-            throw 'central_release_tag must be one safe, unencoded GitHub Release tag token.'
-          }
           $version = '${{ steps.pins.outputs.version }}'
           $artifactName = "nova-$version.leafpkg"
           if ($artifactName -notmatch '^nova-[0-9A-Za-z.-]+\.leafpkg$') { throw 'The derived Nova artifact filename is not safe.' }
-          $artifactUrl = "https://github.com/RedBamboo-Interactive/redleaf/releases/download/$env:CENTRAL_RELEASE_TAG/$artifactName"
-          "NOVA_CENTRAL_ARTIFACT_URL=$artifactUrl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $artifactUrl = "https://github.com/RedBamboo-Interactive/nova/releases/download/nova-unsigned-candidates/$artifactName"
+          "NOVA_PRODUCER_ARTIFACT_URL=$artifactUrl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Locked restore and Release build of the pinned RedLeaf release tool
         working-directory: redleaf-release
@@ -266,7 +254,7 @@ jobs:
           dotnet $tool candidate ingest-extension `
             --descriptor "artifacts/nova-$version.component-input.v1.json" `
             --artifact "artifacts/nova-$version.leafpkg" `
-            --artifact-url "$env:NOVA_CENTRAL_ARTIFACT_URL" `
+            --artifact-url "$env:NOVA_PRODUCER_ARTIFACT_URL" `
             --output 'artifacts/nova-candidate.unsigned.json' `
             --signature-input 'artifacts/nova-signature-input.json'
           if ($LASTEXITCODE -ne 0) { throw 'RedLeaf candidate ingestion failed.' }
@@ -322,7 +310,16 @@ jobs:
           if ($matchingArtifacts.Count -ne 1) { throw 'Expected exactly one Nova package matching the unsigned descriptor.' }
           New-Item -ItemType Directory -Path bridge-assets -Force | Out-Null
           Copy-Item -LiteralPath $descriptor[0].FullName -Destination "bridge-assets/${candidateId}.candidate.json"
-          Copy-Item -LiteralPath $matchingArtifacts[0].FullName -Destination "bridge-assets/${candidateId}.leafpkg"
+          $artifactUrl = [Uri][string]$candidate.artifact.url
+          $expectedBase = "https://github.com/RedBamboo-Interactive/nova/releases/download/nova-unsigned-candidates/"
+          if (-not $artifactUrl.AbsoluteUri.StartsWith($expectedBase, [StringComparison]::Ordinal)) {
+            throw 'Candidate artifact URL is outside the canonical producer prerelease.'
+          }
+          $artifactName = [IO.Path]::GetFileName($artifactUrl.AbsolutePath)
+          if ($artifactName -notcmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}\.leafpkg$') {
+            throw 'Candidate producer artifact name is unsafe.'
+          }
+          Copy-Item -LiteralPath $matchingArtifacts[0].FullName -Destination "bridge-assets/$artifactName"
 
       - name: Append and re-verify rolling unsigned prerelease assets
         shell: pwsh
@@ -330,21 +327,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: RedBamboo-Interactive/nova
         run: |
-          $visibility = & gh api "repos/$env:GH_REPO" --jq .visibility
-          if ($LASTEXITCODE -ne 0 -or $visibility -cne 'public') {
-            throw 'Rolling candidate publication requires the producer repository to already be public.'
-          }
           $tag = 'nova-unsigned-candidates'
           $releaseJson = & gh release view $tag --json isDraft,isPrerelease,assets 2>$null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag --prerelease --latest=false --target '${{ github.workflow_sha }}' `
               --title 'Rolling unsigned Nova candidates' `
-              --notes 'Public unsigned producer inputs for exact central release plans. Trust comes only from central signed metadata.'
+              --notes 'Unsigned producer inputs for exact central component publication. Trust comes only from central signed metadata.'
             if ($LASTEXITCODE -ne 0) { throw 'Could not create the rolling Nova candidate prerelease.' }
             $releaseJson = gh release view $tag --json isDraft,isPrerelease,assets
           }
           $release = $releaseJson | ConvertFrom-Json
-          if ($release.isDraft -or -not $release.isPrerelease) { throw 'Candidate bridge tag must remain a public prerelease.' }
+          if ($release.isDraft -or -not $release.isPrerelease) { throw 'Candidate bridge tag must remain a prerelease.' }
           $existingNames = @($release.assets | ForEach-Object { $_.name })
           foreach ($file in @(Get-ChildItem bridge-assets -File | Sort-Object Name)) {
             if ($existingNames -notcontains $file.Name) {
