@@ -30,6 +30,7 @@ test("repository SDK selection is exact and the packer runs inside the component
   assert.doesNotMatch(workflow, /^    inputs:\s*$/m)
   assert.match(workflow, /name: Invoke [^\n]*RedLeaf[^\n]*\n\s+working-directory: nova/)
   assert.doesNotMatch(workflow, /-notcmatch/)
+  assert.match(readFileSync(join(root, ".gitignore"), "utf8"), /^artifacts\/$/m)
 })
 
 test("Nova is a protected, versioned backend-plus-frontend extension", () => {

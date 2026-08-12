@@ -8,6 +8,7 @@ obj/
 node_modules/
 dist/
 web/tsconfig.tsbuildinfo
+artifacts/
 
 # Runtime data (agent workspaces, journal, screenshots)
 nova-workspace/
