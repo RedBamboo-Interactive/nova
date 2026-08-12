@@ -1,6 +1,6 @@
 {
   "name": "@redbamboo/plugin-nova",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Nova plugin frontend for persistent multi-agent discussions",
   "type": "module",
   "license": "AGPL-3.0-or-later",
