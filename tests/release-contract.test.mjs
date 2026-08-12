@@ -14,7 +14,23 @@ const readJson = (path) => JSON.parse(readFileSync(join(root, path), "utf8"))
 const manifest = readJson("plugin.json")
 const packageJson = readJson("web/package.json")
 const producer = readJson("release/producer-input.v1.json")
+const dotnetSdk = readJson("global.json")
 const validProducer = () => structuredClone(producer)
+
+test("repository SDK selection is exact and the packer runs inside the component checkout", () => {
+  assert.deepEqual(dotnetSdk, {
+    sdk: {
+      version: producer.toolchain.dotnetSdk,
+      rollForward: "disable",
+      allowPrerelease: false,
+    },
+  })
+  const workflow = readFileSync(join(root, ".github/workflows/release-candidate.yml"), "utf8").replaceAll("\r\n", "\n")
+  assert.match(workflow, /workflow_dispatch: \{\}/)
+  assert.doesNotMatch(workflow, /^    inputs:\s*$/m)
+  assert.match(workflow, /name: Invoke [^\n]*RedLeaf[^\n]*\n\s+working-directory: nova/)
+  assert.doesNotMatch(workflow, /-notcmatch/)
+})
 
 test("Nova is a protected, versioned backend-plus-frontend extension", () => {
   const input = validProducer()
@@ -124,7 +140,7 @@ test("workflow uses immutable action SHAs and one channel-neutral RedLeaf ingest
   const releaseToolRestore = workflow.indexOf("dotnet restore tools/RedLeaf.ReleaseTool/RedLeaf.ReleaseTool.csproj --locked-mode --nologo")
   const releaseToolBuild = workflow.indexOf("dotnet build tools/RedLeaf.ReleaseTool/RedLeaf.ReleaseTool.csproj --configuration Release --no-restore --nologo")
   const firstReleaseToolUse = Math.min(
-    workflow.indexOf("./redleaf-release/scripts/build-leafpkg-release.ps1"),
+    workflow.indexOf("../redleaf-release/scripts/build-leafpkg-release.ps1"),
     workflow.indexOf("../redleaf-release/tools/RedLeaf.ReleaseTool/bin/Release/net9.0/RedLeaf.ReleaseTool.dll"),
   )
   assert.ok(releaseToolRestore >= 0, "workflow must locked-restore the pinned RedLeaf release tool")

@@ -2,13 +2,11 @@ name: Build Nova release candidates
 
 on:
   workflow_call:
-    inputs:
     secrets:
       CROSS_REPO_TOKEN:
         description: Optional token that can read the pinned RedBamboo and RedLeaf commits.
         required: false
-  workflow_dispatch:
-    inputs:
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -110,7 +108,6 @@ jobs:
       - name: Require PowerShell 7 and derive the only producer artifact URL
         working-directory: nova
         shell: pwsh
-        env:
         run: |
           if ($PSVersionTable.PSVersion.Major -ne 7) { throw 'This release producer requires PowerShell 7.' }
           $version = '${{ steps.pins.outputs.version }}'
@@ -184,26 +181,27 @@ jobs:
             --output artifacts/nova-release-metadata.v1.json
 
       - name: Invoke RedLeaf deterministic release packer
+        working-directory: nova
         shell: pwsh
         run: |
-          & ./redleaf-release/scripts/build-leafpkg-release.ps1 `
-            -PluginDir ./nova `
-            -Metadata ./nova/artifacts/nova-release-metadata.v1.json `
-            -OutputDir ./nova/artifacts `
-            -BackendProject ./nova/src/Leaf.Plugins.Nova/Leaf.Plugins.Nova.csproj `
-            -FrontendDir ./nova/web `
+          & ../redleaf-release/scripts/build-leafpkg-release.ps1 `
+            -PluginDir . `
+            -Metadata ./artifacts/nova-release-metadata.v1.json `
+            -OutputDir ./artifacts `
+            -BackendProject ./src/Leaf.Plugins.Nova/Leaf.Plugins.Nova.csproj `
+            -FrontendDir ./web `
             -Lock @(
-              'backend-nuget-lock=./nova/src/Leaf.Plugins.Nova/packages.lock.json',
-              'tests-nuget-lock=./nova/tests/Leaf.Plugins.Nova.Tests/packages.lock.json',
-              'web-pnpm-lock=./nova/web/pnpm-lock.yaml',
-              'redbamboo-pnpm-lock=./redbamboo-packages/pnpm-lock.yaml'
+              'backend-nuget-lock=./src/Leaf.Plugins.Nova/packages.lock.json',
+              'tests-nuget-lock=./tests/Leaf.Plugins.Nova.Tests/packages.lock.json',
+              'web-pnpm-lock=./web/pnpm-lock.yaml',
+              'redbamboo-pnpm-lock=../redbamboo-packages/pnpm-lock.yaml'
             ) `
             -BuildInput @(
-              'leaf-sdk=./leaf-sdk',
-              'redbamboo-chat=./redbamboo-packages',
-              'redbamboo-ui=./redbamboo-packages',
-              'redbamboo-utility=./redbamboo-packages',
-              'redbamboo-workflow=./redbamboo-packages'
+              'leaf-sdk=../leaf-sdk',
+              'redbamboo-chat=../redbamboo-packages',
+              'redbamboo-ui=../redbamboo-packages',
+              'redbamboo-utility=../redbamboo-packages',
+              'redbamboo-workflow=../redbamboo-packages'
             )
 
       - name: Validate actual artifact and lock facts
@@ -316,7 +314,7 @@ jobs:
             throw 'Candidate artifact URL is outside the canonical producer prerelease.'
           }
           $artifactName = [IO.Path]::GetFileName($artifactUrl.AbsolutePath)
-          if ($artifactName -notcmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}\.leafpkg$') {
+          if ($artifactName -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}\.leafpkg$') {
             throw 'Candidate producer artifact name is unsafe.'
           }
           Copy-Item -LiteralPath $matchingArtifacts[0].FullName -Destination "bridge-assets/$artifactName"
