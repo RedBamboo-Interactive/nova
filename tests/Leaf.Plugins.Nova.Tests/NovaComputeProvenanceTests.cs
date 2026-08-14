@@ -8,6 +8,20 @@ namespace Leaf.Plugins.Nova.Tests;
 
 public sealed class NovaComputeProvenanceTests
 {
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("local-user")]
+    public async Task LocalDiscussionUsesExplicitSystemBeneficiary(string? ownerId)
+    {
+        var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(
+            new FakeEntityStore(), ownerId);
+
+        Assert.Equal("system", beneficiary.Kind);
+        Assert.Equal("Nova work requested through an unauthenticated local discussion",
+            beneficiary.Reason);
+    }
+
     [Fact]
     public async Task CapturesNovaPresentationFromPluginAndColorEntities()
     {

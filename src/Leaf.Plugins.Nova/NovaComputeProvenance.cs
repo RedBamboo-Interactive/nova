@@ -12,7 +12,8 @@ public static class NovaComputeProvenance
         if (ownerId == "system")
             return new ComputeBeneficiary("system", Reason: "Nova work for a system-owned discussion");
         if (string.IsNullOrWhiteSpace(ownerId) || ownerId == "local-user")
-            return new ComputeBeneficiary("unknown");
+            return new ComputeBeneficiary("system",
+                Reason: "Nova work requested through an unauthenticated local discussion");
         if (Guid.TryParse(ownerId, out var id))
         {
             var user = await entities.GetAsync(id, ct);
