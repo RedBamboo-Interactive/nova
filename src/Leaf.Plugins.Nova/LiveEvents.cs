@@ -126,7 +126,9 @@ public sealed class EventInjector(
                 [new ComputeContextReference("discussion", discussion.Id),
                  new ComputeContextReference("session", discussion.SessionId),
                  new ComputeContextReference("event", uid, NameSnapshot: source)], method: "POST", ct: ct);
-            return await redCompute.SendMessageAsync(discussion.SessionId, messageBody, ct, provenance) != null;
+            return await redCompute.SendMessageAsync(
+                discussion.SessionId, messageBody, ct, provenance,
+                ownerUserId: discussion.OwnerId) != null;
         }
         catch
         {

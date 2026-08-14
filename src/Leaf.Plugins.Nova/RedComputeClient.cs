@@ -53,6 +53,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
             Content = JsonContent.Create(body, options: JsonOptions),
         };
         req.Headers.Add("X-Caller-Info", callerInfo);
+        AddOwnerHeader(req, userId);
         var resp = await gateway.SendAsync(req, provenance, ct);
         if (!resp.IsSuccessStatusCode) return null;
 
@@ -114,7 +115,8 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     /// <summary>Send a user message while preserving RedCompute's status and machine-readable error.</summary>
     public async Task<SendMessageResult> SendMessageDetailedAsync(
         string sessionId, object body, CancellationToken ct = default,
-        ComputeProvenance? provenance = null, string? idempotencyKey = null)
+        ComputeProvenance? provenance = null, string? idempotencyKey = null,
+        string? ownerUserId = null)
     {
         try
         {
@@ -123,6 +125,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
                 Content = JsonContent.Create(body, options: JsonOptions),
             };
             request.Headers.Add("X-Caller-Info", "Nova:agent");
+            AddOwnerHeader(request, ownerUserId);
             if (!string.IsNullOrWhiteSpace(idempotencyKey))
                 request.Headers.Add("X-Idempotency-Key", idempotencyKey);
             var resp = await gateway.SendAsync(request, provenance, ct);
@@ -158,9 +161,11 @@ public sealed class RedComputeClient(IComputeGateway gateway)
 
     /// <summary>Compatibility wrapper for callers that only need success and the response payload.</summary>
     public async Task<JsonElement?> SendMessageAsync(string sessionId, object body,
-        CancellationToken ct = default, ComputeProvenance? provenance = null)
+        CancellationToken ct = default, ComputeProvenance? provenance = null,
+        string? ownerUserId = null)
     {
-        var result = await SendMessageDetailedAsync(sessionId, body, ct, provenance);
+        var result = await SendMessageDetailedAsync(
+            sessionId, body, ct, provenance, ownerUserId: ownerUserId);
         return result.Success ? result.Payload : null;
     }
 
@@ -177,7 +182,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
             using var request = new HttpRequestMessage(method,
                 $"/ai-session/sessions/{sessionId}/input-queue{suffix}");
             request.Headers.Add("X-Caller-Info", "Nova:agent");
-            request.Headers.Add("X-User-Id", ownerUserId);
+            AddOwnerHeader(request, ownerUserId);
             using var response = await gateway.SendAsync(request, provenance: null, ct);
             var content = await response.Content.ReadAsStringAsync(ct);
             var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/json";
@@ -190,6 +195,12 @@ public sealed class RedComputeClient(IComputeGateway gateway)
                 "application/json");
         }
     }
+
+    internal static string CanonicalOwnerUserId(string? ownerUserId) =>
+        string.IsNullOrWhiteSpace(ownerUserId) ? "local-user" : ownerUserId;
+
+    private static void AddOwnerHeader(HttpRequestMessage request, string? ownerUserId) =>
+        request.Headers.TryAddWithoutValidation("X-User-Id", CanonicalOwnerUserId(ownerUserId));
 
     public async Task<bool> InjectAsync(string sessionId, object body, CancellationToken ct = default)
     {

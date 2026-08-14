@@ -180,7 +180,8 @@ public static class DelegateEndpoints
                         [.. baseContext, new ComputeContextReference("session", sessionId)],
                         method: "POST", ct: ctx.RequestAborted);
                     var result = await redCompute.SendMessageAsync(sessionId,
-                        new { content = request.Prompt }, ctx.RequestAborted, messageProvenance);
+                        new { content = request.Prompt }, ctx.RequestAborted, messageProvenance,
+                        ownerUserId: ownerId);
                     if (result is { ValueKind: JsonValueKind.Object }
                         && result.Value.TryGetProperty("sent", out var sent) && sent.GetBoolean())
                     {

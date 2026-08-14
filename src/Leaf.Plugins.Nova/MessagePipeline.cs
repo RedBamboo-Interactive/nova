@@ -340,7 +340,8 @@ public sealed class MessagePipeline(
             [new ComputeContextReference("discussion", discussion.Id),
              new ComputeContextReference("session", sessionId)], method: "POST", ct: ct);
         var sendResult = await redCompute.SendMessageDetailedAsync(
-            sessionId, requestBody, ct, provenance, idempotencyKey);
+            sessionId, requestBody, ct, provenance,
+            idempotencyKey: idempotencyKey, ownerUserId: computeOwnerId);
         if (!sendResult.Success)
         {
             return new(false, sessionId,
