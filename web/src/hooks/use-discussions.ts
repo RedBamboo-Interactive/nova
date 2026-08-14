@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo, useSyncExternalStore
 import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
-import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, UploadedAttachment } from "@redbamboo/chat"
+import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, SendOptions, UploadedAttachment } from "@redbamboo/chat"
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
@@ -502,38 +502,23 @@ export function useDiscussions(eventResolver?: EventResolver) {
     discussionId: string,
     content: string,
     images?: ImageAttachment[],
-    inputMethod?: string,
+    options?: SendOptions,
     input?: ChatInputPart[],
     attachments?: UploadedAttachment[],
-    throwOnFailure = false,
   ) => {
     const disc = discussions.find((d) => d.id === discussionId)
     if (!disc) return
 
-    const userMsg: MessageBlock = {
-      id: crypto.randomUUID(),
-      role: "user",
-      parts: [{ type: "text", content, images, attachments }],
-      timestamp: new Date().toISOString(),
-    }
-    setMessages((prev) => ({
-      ...prev,
-      [discussionId]: [...(prev[discussionId] ?? []), userMsg],
-    }))
-
-    lastSendAtRef.current[discussionId] = Date.now()
-    setStreaming((prev) => ({ ...prev, [discussionId]: true }))
-    setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
-    setResumePending((prev) => ({ ...prev, [discussionId]: false }))
-    setDiscussions((prev) =>
-      prev.map((d) => d.id === discussionId ? { ...d, status: "thinking" as const } : d)
+    const displayContent = options?.displayContent ?? (
+      content
+        .replace(/<nova-context[\s\S]*?<\/nova-context>\s*/g, "")
+        .replace(/<nova-prior-messages?[\s\S]*?<\/nova-prior-messages?>\s*/g, "")
+        .trim()
+      || attachments?.map(attachment => attachment.name).join(", ")
+      || (images?.length ? "Image" : "New discussion")
     )
 
     if (!disc.title && disc.messageCount === 0) {
-      const displayContent = content
-        .replace(/<nova-context[\s\S]*?<\/nova-context>\s*/g, "")
-        .replace(/<nova-prior-messages?[\s\S]*?<\/nova-prior-messages?>\s*/g, "")
-        .trim() || attachments?.map(attachment => attachment.name).join(", ") || (images?.length ? "Image" : "New discussion")
       const title = displayContent.length > 60 ? displayContent.slice(0, 59) + "…" : displayContent
       setDiscussions((prev) =>
         prev.map((d) => d.id === discussionId ? { ...d, title } : d)
@@ -541,113 +526,66 @@ export function useDiscussions(eventResolver?: EventResolver) {
       api.put(`/api/apps/nova/discussions/${discussionId}/title`, { title }).catch(() => {})
     }
 
-    const fail = () => {
-      if (throwOnFailure) {
-        setMessages((previous) => ({
-          ...previous,
-          [discussionId]: (previous[discussionId] ?? []).filter(message => message.id !== userMsg.id),
-        }))
-      }
-      setStreaming((prev) => ({ ...prev, [discussionId]: false }))
-      const failStatus = disc.type === "live" ? "idle" as const : "stopped" as const
+    type Admission = {
+      success: boolean
+      accepted: boolean
+      sessionId?: string
+      disposition: "queued" | "delivered"
+      queueItemId?: string | null
+      metadata?: Record<string, unknown>
+      messageUid?: string | null
+    }
+
+    const body = input
+      ? { input, inputMethod: options?.inputMethod, delivery: options?.delivery, displayContent }
+      : { content, images, inputMethod: options?.inputMethod, delivery: options?.delivery, displayContent }
+    const res = options?.idempotencyKey
+      ? await api.postWithHeaders<Admission>(
+          `/api/apps/nova/discussions/${discussionId}/message`, body,
+          { "X-Idempotency-Key": options.idempotencyKey },
+        )
+      : await api.post<Admission>(`/api/apps/nova/discussions/${discussionId}/message`, body)
+
+    if (res.sessionId && res.sessionId !== disc.sessionId) {
       setDiscussions((prev) =>
-        prev.map((d) => d.id === discussionId ? { ...d, status: failStatus } : d)
+        prev.map((d) => d.id === discussionId ? { ...d, sessionId: res.sessionId! } : d)
       )
     }
 
-    const updateSessionId = (res: { sessionId?: string }) => {
-      if (res.sessionId && res.sessionId !== disc.sessionId) {
-        setDiscussions((prev) =>
-          prev.map((d) => d.id === discussionId ? { ...d, sessionId: res.sessionId! } : d)
-        )
+    if (res.disposition === "delivered") {
+      const userMsg: MessageBlock = {
+        id: res.messageUid ?? crypto.randomUUID(),
+        role: "user",
+        parts: [{ type: "text", content: displayContent, images, attachments }],
+        timestamp: new Date().toISOString(),
+        ...(res.metadata ? { metadata: res.metadata } : {}),
       }
-    }
-
-    // Re-key the optimistic block to the server-minted message uid so a
-    // reaction added before reload survives it, and attach send metadata.
-    const backfillMessage = (meta?: Record<string, unknown>, uid?: string | null) => {
-      if (!meta && !uid) return
-      setMessages((prev) => ({
-        ...prev,
-        [discussionId]: (prev[discussionId] ?? []).map((m) =>
-          m.id === userMsg.id
-            ? { ...m, ...(uid ? { id: uid } : {}), ...(meta ? { metadata: meta } : {}) }
-            : m
-        ),
-      }))
-    }
-
-    try {
-      const body = input ? { input, inputMethod } : { content, images, inputMethod }
-      const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/apps/nova/discussions/${discussionId}/message`, body)
-      updateSessionId(res)
-      backfillMessage(res.metadata, res.messageUid)
-      return
-    } catch (err) {
-      if (err instanceof ApiError && err.status < 500) {
-        fail()
-        toast({ variant: "error", title: "Message not sent", description: err.message })
-        if (throwOnFailure) throw err
-        return
-      }
-      if (!disc.sessionId) {
-        fail()
-        if (throwOnFailure) throw err
-        return
-      }
-    }
-
-    try {
-      const resumed = await api.post<{ sessionId: string | null; status: "idle" }>(
-        `/api/apps/nova/discussions/${discussionId}/resume`
+      setMessages((prev) => {
+        const current = prev[discussionId] ?? []
+        return current.some(message => message.id === userMsg.id)
+          ? prev
+          : { ...prev, [discussionId]: [...current, userMsg] }
+      })
+      lastSendAtRef.current[discussionId] = Date.now()
+      setStreaming((prev) => ({ ...prev, [discussionId]: true }))
+      setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
+      setResumePending((prev) => ({ ...prev, [discussionId]: false }))
+      setDiscussions((prev) =>
+        prev.map((d) => d.id === discussionId ? { ...d, status: "thinking" as const } : d)
       )
-      if (resumed.sessionId !== disc.sessionId) {
-        setDiscussions((prev) =>
-          prev.map((d) => d.id === discussionId
-            ? { ...d, sessionId: resumed.sessionId, status: resumed.status }
-            : d
-          )
-        )
-      }
-    } catch {
-      fail()
-      if (throwOnFailure) throw new Error("The session could not be resumed")
-      return
     }
+    return res
+  }, [discussions])
 
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const body = input ? { input, inputMethod } : { content, images, inputMethod }
-        const res = await api.post<{ success: boolean; sessionId?: string; metadata?: Record<string, unknown>; messageUid?: string | null }>(`/api/apps/nova/discussions/${discussionId}/message`, body)
-        updateSessionId(res)
-        backfillMessage(res.metadata, res.messageUid)
-        return
-      } catch (err) {
-        if (err instanceof ApiError && err.status < 500) {
-          fail()
-          toast({ variant: "error", title: "Message not sent", description: err.message })
-          if (throwOnFailure) throw err
-          return
-        }
-        if (attempt < 2) {
-          await new Promise((r) => setTimeout(r, 1000))
-          continue
-        }
-        fail()
-        if (throwOnFailure) throw err
-      }
-    }
-  }, [discussions, toast])
+  const sendMessage = useCallback((discussionId: string, content: string, images?: ImageAttachment[], options?: SendOptions) =>
+    deliverMessage(discussionId, content, images, options), [deliverMessage])
 
-  const sendMessage = useCallback((discussionId: string, content: string, images?: ImageAttachment[], inputMethod?: string) =>
-    deliverMessage(discussionId, content, images, inputMethod, undefined, undefined, true), [deliverMessage])
-
-  const sendInput = useCallback((discussionId: string, input: ChatInputPart[], attachments: UploadedAttachment[], inputMethod?: string) => {
+  const sendInput = useCallback((discussionId: string, input: ChatInputPart[], attachments: UploadedAttachment[], options?: SendOptions) => {
     const content = input
       .filter((part): part is Extract<ChatInputPart, { type: "text" }> => part.type === "text")
       .map(part => part.text)
       .join("\n")
-    return deliverMessage(discussionId, content, undefined, inputMethod, input, attachments, true)
+    return deliverMessage(discussionId, content, undefined, options, input, attachments)
   }, [deliverMessage])
 
   const interruptDiscussion = useCallback(async (discussionId: string) => {
@@ -731,7 +669,21 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [discussions, toast])
 
   const handleWsEvent = useCallback((event: WsEvent) => {
-    if (event.type === "session.updated") {
+    if (event.type === "session.input-queue.updated") {
+      const update = event.data as { sessionId?: string; transition?: string }
+      if (!update.sessionId) return
+      const discId = sessionToDiscussion.get(update.sessionId)
+      if (!discId) return
+      environment.window.dispatchEvent(new CustomEvent("nova:input-queue-updated", {
+        detail: { discussionId: discId, sessionId: update.sessionId, transition: update.transition },
+      }))
+      if (update.transition === "delivered") {
+        loadedRef.current.delete(discId)
+        const tail = historyTailRef.current[discId] ?? INITIAL_HISTORY_TAIL
+        void loadMessages(discId, tail, true, update.sessionId, true)
+        void refreshDiscussions()
+      }
+    } else if (event.type === "session.updated") {
       const session = event.data as { id: string; status: string; title?: string }
       const discId = sessionToDiscussion.get(session.id)
       if (!discId) return
@@ -962,7 +914,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discId]: result.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, refreshDiscussions, loadMessages])
+  }, [sessionToDiscussion, clearQuestion, refreshDiscussions, loadMessages, environment.window])
 
   const handleUpstreamDisconnect = useCallback(() => {
     setUpstreamConnected(false)

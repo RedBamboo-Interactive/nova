@@ -55,6 +55,8 @@ public class DiscussionMessageRequest
     public ImageAttachmentDto[]? Images { get; set; }
     public InputPartDto[]? Input { get; set; }
     public string? InputMethod { get; set; }
+    public string? Delivery { get; set; }
+    public string? DisplayContent { get; set; }
 }
 
 public class ReactionRequest
@@ -367,7 +369,7 @@ public static class DiscussionEndpoints
                 {
                     var records = await discussions.GetMessagesAsync(discussion.EntityId);
                     var userAttachmentsByUid = records
-                        .Where(m => m.Metadata["source"]?.GetValue<string>() == "user-message")
+                        .Where(m => IsAcceptedUserMessageSource(m.Metadata["source"]?.GetValue<string>()))
                         .Where(m => !string.IsNullOrWhiteSpace(m.Metadata["uid"]?.GetValue<string>()))
                         .GroupBy(m => m.Metadata["uid"]!.GetValue<string>())
                         .ToDictionary(g => g.Key, g => g.OrderByDescending(m => m.CreatedAt).First());
@@ -463,7 +465,9 @@ public static class DiscussionEndpoints
 
             // Fallback: nova-messages only (no active session or empty session transcript)
             var fallbackRecords = await discussions.GetMessagesAsync(discussion.EntityId);
-            var msgs = fallbackRecords.Select(m =>
+            var msgs = fallbackRecords
+                .Where(m => m.Metadata["source"]?.GetValue<string>() != "queued-user-message")
+                .Select(m =>
             {
                 var partsJson = m.Metadata["parts_json"]?.GetValue<string>();
                 var isUserMessage = m.Metadata["source"]?.GetValue<string>() == "user-message";
@@ -931,13 +935,17 @@ public static class DiscussionEndpoints
 
             live.NoteDevice(resolved);
 
+            var idempotencyKey = ctx.Request.Headers["X-Idempotency-Key"].FirstOrDefault();
+
             var outcome = request.Input is { Length: > 0 }
                 ? await pipeline.SendInputAsync(
                     discussion, userId, request.Input, resolved,
-                    request.InputMethod ?? "typed")
+                    request.InputMethod ?? "typed", request.Delivery,
+                    idempotencyKey, request.DisplayContent)
                 : await pipeline.SendAsync(
                     discussion, userId, request.Content, request.Images, resolved,
-                    request.InputMethod ?? "typed");
+                    request.InputMethod ?? "typed", request.Delivery,
+                    idempotencyKey, request.DisplayContent);
 
             if (!outcome.Success)
             {
@@ -955,31 +963,69 @@ public static class DiscussionEndpoints
                 }, statusCode: statusCode);
             }
 
-            _ = activity.OnUserMessage(id, discussion.Title,
-                string.IsNullOrWhiteSpace(request.Content)
-                    ? request.Input is { Length: > 0 } ? "[attachment]" : "[image]"
-                    : request.Content, discussion.Confidential);
-
-            // The ordinary and floating Nova surfaces deliberately own independent
-            // selections and local React runtimes. Once a send is accepted, every
-            // runtime viewing this discussion must revalidate the same canonical
-            // transcript; otherwise whichever shared queue consumer wins the drain
-            // is the only surface that renders the optimistic user message.
-            // Notification failure must never turn an already-delivered message into
-            // an HTTP failure that the client retries and duplicates.
-            try
+            if (outcome.Disposition == "delivered")
             {
-                await events.PublishAsync("discussion.user-message", new JsonObject
-                {
-                    ["discussionId"] = id,
-                    ["sessionId"] = outcome.SessionId,
-                    ["messageUid"] = outcome.MessageUid,
-                });
-            }
-            catch { /* best-effort convergence; reconnect/reselection revalidates */ }
+                _ = activity.OnUserMessage(id, discussion.Title,
+                    string.IsNullOrWhiteSpace(request.Content)
+                        ? request.Input is { Length: > 0 } ? "[attachment]" : "[image]"
+                        : request.Content, discussion.Confidential);
 
-            return Results.Ok(new { success = true, sessionId = outcome.SessionId, metadata = outcome.Metadata, messageUid = outcome.MessageUid });
+                // Only a provider-accepted turn is a transcript message. Durable
+                // admission while another turn runs is represented by the shared
+                // queue ghost and converges through session.input-queue.updated.
+                try
+                {
+                    await events.PublishAsync("discussion.user-message", new JsonObject
+                    {
+                        ["discussionId"] = id,
+                        ["sessionId"] = outcome.SessionId,
+                        ["messageUid"] = outcome.MessageUid,
+                    });
+                }
+                catch { /* best-effort convergence; reconnect/reselection revalidates */ }
+            }
+
+            return Results.Json(new
+            {
+                success = true,
+                accepted = true,
+                sessionId = outcome.SessionId,
+                disposition = outcome.Disposition,
+                queueItemId = outcome.QueueItemId,
+                metadata = outcome.Metadata,
+                messageUid = outcome.MessageUid,
+                queue = outcome.Queue,
+                item = outcome.Item,
+            }, statusCode: outcome.Disposition == "delivered" ? 200 : 202);
         });
+
+        // Discussion-scoped facade over RedCompute's canonical durable queue. The
+        // browser never needs to discover or retain the backing session id, while
+        // agents get the same inspect/cancel/retry/send-now control surface.
+        group.MapGet("/discussions/{id}/input-queue", async (
+            string id, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
+            await ProxyInputQueueAsync(id, "" + ctx.Request.QueryString,
+                HttpMethod.Get, ctx, store, redCompute, emptyWhenSessionless: true));
+
+        group.MapGet("/discussions/{id}/input-queue/{itemId}", async (
+            string id, string itemId, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
+            await ProxyInputQueueAsync(id, $"/{Uri.EscapeDataString(itemId)}",
+                HttpMethod.Get, ctx, store, redCompute));
+
+        group.MapDelete("/discussions/{id}/input-queue/{itemId}", async (
+            string id, string itemId, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
+            await ProxyInputQueueAsync(id, $"/{Uri.EscapeDataString(itemId)}",
+                HttpMethod.Delete, ctx, store, redCompute));
+
+        group.MapPost("/discussions/{id}/input-queue/{itemId}/retry", async (
+            string id, string itemId, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
+            await ProxyInputQueueAsync(id, $"/{Uri.EscapeDataString(itemId)}/retry",
+                HttpMethod.Post, ctx, store, redCompute));
+
+        group.MapPost("/discussions/{id}/input-queue/send-now", async (
+            string id, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
+            await ProxyInputQueueAsync(id, "/send-now",
+                HttpMethod.Post, ctx, store, redCompute));
 
         // ── Reactions ──────────────────────────────────────────────────
 
@@ -1055,6 +1101,41 @@ public static class DiscussionEndpoints
                 });
             return Results.Ok(types);
         });
+    }
+
+    private static async Task<IResult> ProxyInputQueueAsync(
+        string discussionId, string suffix, HttpMethod method, HttpContext ctx,
+        DiscussionStore store, RedComputeClient redCompute, bool emptyWhenSessionless = false)
+    {
+        var discussion = await store.GetAsync(discussionId, ctx.RequestAborted);
+        if (discussion is null) return NotFound();
+        var userId = UserId(ctx);
+        if (!OwnerScope.CanAccess(discussion.OwnerId, userId)) return Forbidden();
+        if (discussion.SessionId is null)
+        {
+            if (emptyWhenSessionless)
+                return Results.Ok(new
+                {
+                    items = Array.Empty<object>(),
+                    queue = new
+                    {
+                        depth = 0,
+                        state = "empty",
+                        blockedReason = (string?)null,
+                        headItemId = (string?)null,
+                        errorCode = (string?)null,
+                    },
+                });
+            return Results.Json(new
+            {
+                error = "session_not_started",
+                message = "This discussion has no RedCompute session yet",
+            }, statusCode: 409);
+        }
+
+        var result = await redCompute.ProxyInputQueueAsync(
+            discussion.SessionId, userId ?? "local-user", method, suffix, ctx.RequestAborted);
+        return Results.Content(result.Content, result.ContentType, statusCode: result.StatusCode);
     }
 
     private static async Task<IResult> SetReactionAsync(string id, ReactionRequest request, HttpContext ctx,
@@ -1154,6 +1235,9 @@ public static class DiscussionEndpoints
             .. attachments,
         ];
     }
+
+    private static bool IsAcceptedUserMessageSource(string? source)
+        => source is "user-message" or "queued-user-message";
 
     internal static HashSet<string> FindPendingUserMessageUids(
         IEnumerable<string?> sessionUserUids,

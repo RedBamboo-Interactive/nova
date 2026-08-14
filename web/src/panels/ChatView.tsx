@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type ButtonHTMLAttributes } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, PendingContextBanner, SessionInfoButton, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
+import { ChatPanel, PendingContextBanner, SessionInfoButton, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { PluginExtensionSlot, captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
@@ -344,13 +344,28 @@ export function ChatView({
 
   const handleSend = useCallback((content: string, images?: ImageAttachment[], options?: SendOptions) => {
     if (!activeDiscussionId) return
-    return sendMessage(activeDiscussionId, content, images, options?.inputMethod)
+    return sendMessage(activeDiscussionId, content, images, options)
   }, [activeDiscussionId, sendMessage])
 
   const handleSendInput = useCallback((input: ChatInputPart[], attachments: UploadedAttachment[], options?: SendOptions) => {
     if (!activeDiscussionId) return
-    return sendInput(activeDiscussionId, input, attachments, options?.inputMethod)
+    return sendInput(activeDiscussionId, input, attachments, options)
   }, [activeDiscussionId, sendInput])
+
+  const queueTransport = useMemo<ChatQueueTransport | undefined>(() => activeDiscussionId ? ({
+    list: () => api.get<ChatQueueSnapshot>(`/api/apps/nova/discussions/${activeDiscussionId}/input-queue?includeTerminal=true`),
+    cancel: (itemId) => api.delete<ChatQueuedItem>(`/api/apps/nova/discussions/${activeDiscussionId}/input-queue/${itemId}`),
+    retry: (itemId) => api.post<ChatQueuedItem>(`/api/apps/nova/discussions/${activeDiscussionId}/input-queue/${itemId}/retry`),
+    sendNow: async () => { await api.post(`/api/apps/nova/discussions/${activeDiscussionId}/input-queue/send-now`) },
+    subscribe(listener) {
+      const onUpdate = (event: Event) => {
+        const detail = (event as CustomEvent<{ discussionId?: string }>).detail
+        if (detail?.discussionId === activeDiscussionId) listener()
+      }
+      environment.window.addEventListener("nova:input-queue-updated", onUpdate)
+      return () => environment.window.removeEventListener("nova:input-queue-updated", onUpdate)
+    },
+  }) : undefined, [activeDiscussionId, environment.window])
 
   const handleInterrupt = useCallback(() => {
     if (!activeDiscussionId) return
@@ -684,6 +699,7 @@ export function ChatView({
         resumePending={isResumePending}
         onSend={handleSend}
         onSendInput={handleSendInput}
+        queueTransport={queueTransport}
         prepareOutgoingMessage={prepareOutgoingMessage}
         attachmentTransport={attachmentTransport}
         enableFileAttachments

@@ -8,7 +8,9 @@ namespace Leaf.Plugins.Nova;
 
 public sealed record SendMessageOutcome(
     bool Success, string? SessionId, string? ErrorCode, string? ErrorMessage,
-    Dictionary<string, object?>? Metadata = null, string? MessageUid = null);
+    Dictionary<string, object?>? Metadata = null, string? MessageUid = null,
+    string Disposition = "delivered", string? QueueItemId = null,
+    JsonElement? Queue = null, JsonElement? Item = null);
 
 public sealed class ImageAttachmentDto
 {
@@ -117,23 +119,29 @@ public sealed class MessagePipeline(
     public Task<SendMessageOutcome> SendAsync(
         DiscussionRead discussion, string? userId,
         string content, ImageAttachmentDto[]? images, ResolvedDevice device, string input,
+        string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
         CancellationToken ct = default)
-        => SendCoreAsync(discussion, userId, content, images, null, device, input, ct);
+        => SendCoreAsync(discussion, userId, content, images, null, device, input,
+            delivery, idempotencyKey, displayContent, ct);
 
     public Task<SendMessageOutcome> SendInputAsync(
         DiscussionRead discussion, string? userId,
-        InputPartDto[] parts, ResolvedDevice device, string input, CancellationToken ct = default)
+        InputPartDto[] parts, ResolvedDevice device, string input,
+        string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
+        CancellationToken ct = default)
     {
         var content = string.Join("\n", parts
             .Where(part => string.Equals(part.Type, "text", StringComparison.OrdinalIgnoreCase))
             .Select(part => part.Text ?? ""));
-        return SendCoreAsync(discussion, userId, content, null, parts, device, input, ct);
+        return SendCoreAsync(discussion, userId, content, null, parts, device, input,
+            delivery, idempotencyKey, displayContent, ct);
     }
 
     private async Task<SendMessageOutcome> SendCoreAsync(
         DiscussionRead discussion, string? userId,
         string content, ImageAttachmentDto[]? images, InputPartDto[]? inputParts,
-        ResolvedDevice device, string input, CancellationToken ct = default)
+        ResolvedDevice device, string input, string? delivery, string? idempotencyKey,
+        string? displayContent, CancellationToken ct = default)
     {
         var sessionId = discussion.SessionId;
         var sessionIsNew = false;
@@ -303,11 +311,24 @@ public sealed class MessagePipeline(
             }
             if (!enriched)
                 typedInput.Insert(0, new { type = "text", text = contextBlock + priorBlock });
-            requestBody = new { input = typedInput };
+            requestBody = new
+            {
+                input = typedInput,
+                delivery,
+                displayContent = displayContent ?? content,
+                metadata = new { app = "nova", discussionId = discussion.Id },
+            };
         }
         else
         {
-            requestBody = new { content = enrichedContent, images };
+            requestBody = new
+            {
+                content = enrichedContent,
+                images,
+                delivery,
+                displayContent = displayContent ?? content,
+                metadata = new { app = "nova", discussionId = discussion.Id },
+            };
         }
 
         var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
@@ -318,7 +339,8 @@ public sealed class MessagePipeline(
             $"/api/apps/nova/discussions/{discussion.Id}/message",
             [new ComputeContextReference("discussion", discussion.Id),
              new ComputeContextReference("session", sessionId)], method: "POST", ct: ct);
-        var sendResult = await redCompute.SendMessageDetailedAsync(sessionId, requestBody, ct, provenance);
+        var sendResult = await redCompute.SendMessageDetailedAsync(
+            sessionId, requestBody, ct, provenance, idempotencyKey);
         if (!sendResult.Success)
         {
             return new(false, sessionId,
@@ -330,6 +352,24 @@ public sealed class MessagePipeline(
         if (sendResult.Payload is { ValueKind: JsonValueKind.Object } payload
             && payload.TryGetProperty("messageUid", out var muEl))
             messageUid = muEl.GetString();
+
+        var disposition = "delivered";
+        string? queueItemId = null;
+        JsonElement? queue = null;
+        JsonElement? item = null;
+        if (sendResult.Payload is { ValueKind: JsonValueKind.Object } admission)
+        {
+            if (admission.TryGetProperty("disposition", out var dispositionElement)
+                && dispositionElement.ValueKind == JsonValueKind.String)
+                disposition = dispositionElement.GetString() ?? disposition;
+            if (admission.TryGetProperty("queueItemId", out var queueItemElement)
+                && queueItemElement.ValueKind == JsonValueKind.String)
+                queueItemId = queueItemElement.GetString();
+            if (admission.TryGetProperty("queue", out var queueElement))
+                queue = queueElement.Clone();
+            if (admission.TryGetProperty("item", out var itemElement))
+                item = itemElement.Clone();
+        }
 
         JsonElement[] claimedAttachments = [];
         if (sendResult.Payload is { ValueKind: JsonValueKind.Object } attachmentPayload
@@ -365,12 +405,12 @@ public sealed class MessagePipeline(
                 downloadUrl = attachment.GetProperty("downloadUrl").GetString(),
             }).ToArray();
 
-            await store.PostMessageAsync(discussion.EntityId, "user", content, new JsonObject
+            await PersistUserMessageAsync(discussion.EntityId, content, new JsonObject
             {
                 ["parts_json"] = JsonSerializer.Serialize(parts, JsonOptions),
-                ["source"] = "user-message",
+                ["source"] = disposition == "delivered" ? "user-message" : "queued-user-message",
                 ["uid"] = acceptedMessageUid,
-            }, userId, ct);
+            }, acceptedMessageUid, userId, idempotencyKey, ct);
         }
         else if (hasImages)
         {
@@ -383,27 +423,38 @@ public sealed class MessagePipeline(
                 parts.Add(new { type = "image", assetId = asset.AssetId, url = asset.Url, mediaType = img.MediaType });
             }
 
-            await store.PostMessageAsync(discussion.EntityId, "user", content, new JsonObject
+            await PersistUserMessageAsync(discussion.EntityId, content, new JsonObject
             {
                 ["parts_json"] = JsonSerializer.Serialize(parts, JsonOptions),
-                ["source"] = "user-message",
+                ["source"] = disposition == "delivered" ? "user-message" : "queued-user-message",
                 ["uid"] = acceptedMessageUid,
-            }, userId, ct);
+            }, acceptedMessageUid, userId, idempotencyKey, ct);
         }
         else
         {
-            // Persist every accepted user message before the endpoint publishes its
-            // convergence event. RedCompute mirrors the message asynchronously, so
-            // this record is Nova's authoritative bridge during that short window.
-            // PostMessageAsync owns the single message_count increment for all paths.
-            await store.PostMessageAsync(discussion.EntityId, "user", content, new JsonObject
+            // Persist every durably accepted user message. Queued records stay hidden
+            // until their stable uid appears in RedCompute's transcript; they retain
+            // Nova's clean display text and attachment metadata for that later merge.
+            await PersistUserMessageAsync(discussion.EntityId, content, new JsonObject
             {
-                ["source"] = "user-message",
+                ["source"] = disposition == "delivered" ? "user-message" : "queued-user-message",
                 ["uid"] = acceptedMessageUid,
-            }, userId, ct);
+            }, acceptedMessageUid, userId, idempotencyKey, ct);
         }
 
-        return new(true, sessionId, null, null, metadata, acceptedMessageUid);
+        return new(true, sessionId, null, null, metadata, acceptedMessageUid,
+            disposition, queueItemId, queue, item);
+    }
+
+    private Task PersistUserMessageAsync(Guid discussionEntityId, string content,
+        JsonObject metadata, string messageUid, string? userId, string? idempotencyKey,
+        CancellationToken ct)
+    {
+        var key = string.IsNullOrWhiteSpace(idempotencyKey)
+            ? $"message:{messageUid}"
+            : $"message:{idempotencyKey}";
+        return store.PostMessageIdempotentAsync(
+            discussionEntityId, "user", content, metadata, key, userId, ct);
     }
 
     public async Task<(string? Outfit, string? Asset)> ResolveOutfitContextAsync(string? agentId, CancellationToken ct = default)

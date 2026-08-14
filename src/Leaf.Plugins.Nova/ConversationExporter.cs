@@ -71,7 +71,7 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         var collapsed = CollapseMessages(raw);
         var textMessages = collapsed.Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content)).ToList();
         var userAttachmentsByUid = records
-            .Where(m => m.Metadata["source"]?.GetValue<string>() == "user-message")
+            .Where(m => m.Metadata["source"]?.GetValue<string>() is "user-message" or "queued-user-message")
             .Where(m => !string.IsNullOrWhiteSpace(m.Metadata["uid"]?.GetValue<string>()))
             .GroupBy(m => m.Metadata["uid"]!.GetValue<string>())
             .ToDictionary(g => g.Key, g => g.OrderByDescending(m => m.CreatedAt).First());
@@ -117,6 +117,9 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
 
     private static void AppendLocalExport(StringBuilder sb, DiscussionRead disc, IReadOnlyList<DiscussionMessage> messages)
     {
+        messages = messages
+            .Where(message => message.Metadata["source"]?.GetValue<string>() != "queued-user-message")
+            .ToArray();
         sb.AppendLine($"## {disc.Title ?? "Untitled"} [{disc.Id}]");
         sb.AppendLine($"Created: {disc.CreatedAt:yyyy-MM-dd HH:mm} — {messages.Count} message(s) [persisted records only, session expired]");
         sb.AppendLine();

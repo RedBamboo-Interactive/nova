@@ -109,10 +109,12 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         bool Success, JsonElement? Payload, int StatusCode,
         string? ErrorCode = null, string? ErrorMessage = null);
 
+    public sealed record ProxyResult(int StatusCode, string Content, string ContentType);
+
     /// <summary>Send a user message while preserving RedCompute's status and machine-readable error.</summary>
     public async Task<SendMessageResult> SendMessageDetailedAsync(
         string sessionId, object body, CancellationToken ct = default,
-        ComputeProvenance? provenance = null)
+        ComputeProvenance? provenance = null, string? idempotencyKey = null)
     {
         try
         {
@@ -121,6 +123,8 @@ public sealed class RedComputeClient(IComputeGateway gateway)
                 Content = JsonContent.Create(body, options: JsonOptions),
             };
             request.Headers.Add("X-Caller-Info", "Nova:agent");
+            if (!string.IsNullOrWhiteSpace(idempotencyKey))
+                request.Headers.Add("X-Idempotency-Key", idempotencyKey);
             var resp = await gateway.SendAsync(request, provenance, ct);
             var raw = await resp.Content.ReadAsStringAsync(ct);
             JsonElement? payload = null;
@@ -158,6 +162,33 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     {
         var result = await SendMessageDetailedAsync(sessionId, body, ct, provenance);
         return result.Success ? result.Payload : null;
+    }
+
+    /// <summary>
+    /// Proxy one discussion-authorized durable queue operation to RedCompute while
+    /// preserving its status and machine-readable response verbatim.
+    /// </summary>
+    public async Task<ProxyResult> ProxyInputQueueAsync(
+        string sessionId, string ownerUserId, HttpMethod method, string suffix = "",
+        CancellationToken ct = default)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(method,
+                $"/ai-session/sessions/{sessionId}/input-queue{suffix}");
+            request.Headers.Add("X-Caller-Info", "Nova:agent");
+            request.Headers.Add("X-User-Id", ownerUserId);
+            using var response = await gateway.SendAsync(request, provenance: null, ct);
+            var content = await response.Content.ReadAsStringAsync(ct);
+            var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/json";
+            return new((int)response.StatusCode, content, contentType);
+        }
+        catch (Exception ex)
+        {
+            return new(502,
+                JsonSerializer.Serialize(new { error = "redcompute_unavailable", message = ex.Message }, JsonOptions),
+                "application/json");
+        }
     }
 
     public async Task<bool> InjectAsync(string sessionId, object body, CancellationToken ct = default)
