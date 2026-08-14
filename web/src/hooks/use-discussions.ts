@@ -7,7 +7,7 @@ import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
 import { mergeDiscussionAndSessionBlocks, mergeRevalidatedMessages } from "../lib/discussion-transcript"
-import { applySessionStatus } from "../lib/discussion-runtime"
+import { applySessionStatus, preservesRecentStreamingLatch } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import {
   clearDiscussionArchivePending,
@@ -158,6 +158,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
   messagesRef.current = messages
   const streamingRef = useRef(streaming)
   streamingRef.current = streaming
+  const latchStreaming = useCallback((discussionId: string) => {
+    streamingRef.current = { ...streamingRef.current, [discussionId]: true }
+    setStreaming((prev) => ({ ...prev, [discussionId]: true }))
+  }, [])
   // Synchronous view of the list for event handlers: reading status via a
   // setState updater's side effect is not reliable (updaters may run later).
   const discussionsRef = useRef(discussions)
@@ -184,6 +188,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
    * question are both drain vetoes in @redbamboo/chat's shouldDrain).
    */
   const clearStreamingLatch = useCallback((discussionId: string) => {
+    streamingRef.current = { ...streamingRef.current, [discussionId]: false }
     setStreaming((prev) => ({ ...prev, [discussionId]: false }))
     setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
     setResumePending((prev) => ({ ...prev, [discussionId]: false }))
@@ -509,6 +514,18 @@ export function useDiscussions(eventResolver?: EventResolver) {
     const disc = discussions.find((d) => d.id === discussionId)
     if (!disc) return
 
+    // The shared queue has already rendered the outgoing bubble. For an idle
+    // send, show the running state in the same render cycle instead of waiting
+    // for HTTP admission and a later provider lifecycle event.
+    const locallyStartedTurn = !!options?.idempotencyKey && !streamingRef.current[discussionId]
+    if (locallyStartedTurn) {
+      lastSendAtRef.current[discussionId] = Date.now()
+      latchStreaming(discussionId)
+      setDiscussions((prev) =>
+        prev.map((d) => d.id === discussionId ? { ...d, status: "thinking" as const } : d)
+      )
+    }
+
     const displayContent = options?.displayContent ?? (
       content
         .replace(/<nova-context[\s\S]*?<\/nova-context>\s*/g, "")
@@ -539,12 +556,18 @@ export function useDiscussions(eventResolver?: EventResolver) {
     const body = input
       ? { input, inputMethod: options?.inputMethod, delivery: options?.delivery, displayContent }
       : { content, images, inputMethod: options?.inputMethod, delivery: options?.delivery, displayContent }
-    const res = options?.idempotencyKey
-      ? await api.postWithHeaders<Admission>(
-          `/api/apps/nova/discussions/${discussionId}/message`, body,
-          { "X-Idempotency-Key": options.idempotencyKey },
-        )
-      : await api.post<Admission>(`/api/apps/nova/discussions/${discussionId}/message`, body)
+    let res: Admission
+    try {
+      res = options?.idempotencyKey
+        ? await api.postWithHeaders<Admission>(
+            `/api/apps/nova/discussions/${discussionId}/message`, body,
+            { "X-Idempotency-Key": options.idempotencyKey },
+          )
+        : await api.post<Admission>(`/api/apps/nova/discussions/${discussionId}/message`, body)
+    } catch (error) {
+      if (locallyStartedTurn) clearStreamingLatch(discussionId)
+      throw error
+    }
 
     if (res.sessionId && res.sessionId !== disc.sessionId) {
       setDiscussions((prev) =>
@@ -553,21 +576,25 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
 
     if (res.disposition === "delivered") {
-      const userMsg: MessageBlock = {
-        id: res.messageUid ?? crypto.randomUUID(),
-        role: "user",
-        parts: [{ type: "text", content: displayContent, images, attachments }],
-        timestamp: new Date().toISOString(),
-        ...(res.metadata ? { metadata: res.metadata } : {}),
+      // The shared remote queue owns the immediately visible outgoing bubble.
+      // Direct callers without its idempotency identity retain the legacy append.
+      if (!options?.idempotencyKey) {
+        const userMsg: MessageBlock = {
+          id: res.messageUid ?? crypto.randomUUID(),
+          role: "user",
+          parts: [{ type: "text", content: displayContent, images, attachments }],
+          timestamp: new Date().toISOString(),
+          ...(res.metadata ? { metadata: res.metadata } : {}),
+        }
+        setMessages((prev) => {
+          const current = prev[discussionId] ?? []
+          return current.some(message => message.id === userMsg.id)
+            ? prev
+            : { ...prev, [discussionId]: [...current, userMsg] }
+        })
       }
-      setMessages((prev) => {
-        const current = prev[discussionId] ?? []
-        return current.some(message => message.id === userMsg.id)
-          ? prev
-          : { ...prev, [discussionId]: [...current, userMsg] }
-      })
       lastSendAtRef.current[discussionId] = Date.now()
-      setStreaming((prev) => ({ ...prev, [discussionId]: true }))
+      latchStreaming(discussionId)
       setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
       setResumePending((prev) => ({ ...prev, [discussionId]: false }))
       setDiscussions((prev) =>
@@ -575,7 +602,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       )
     }
     return res
-  }, [discussions])
+  }, [discussions, clearStreamingLatch, latchStreaming])
 
   const sendMessage = useCallback((discussionId: string, content: string, images?: ImageAttachment[], options?: SendOptions) =>
     deliverMessage(discussionId, content, images, options), [deliverMessage])
@@ -678,6 +705,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
         detail: { discussionId: discId, sessionId: update.sessionId, transition: update.transition },
       }))
       if (update.transition === "delivered") {
+        lastSendAtRef.current[discId] = Date.now()
+        latchStreaming(discId)
+        setDiscussions((prev) => applySessionStatus(prev, discId, "Active"))
         loadedRef.current.delete(discId)
         const tail = historyTailRef.current[discId] ?? INITIAL_HISTORY_TAIL
         void loadMessages(discId, tail, true, update.sessionId, true)
@@ -688,13 +718,25 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const discId = sessionToDiscussion.get(session.id)
       if (!discId) return
       if (session.status !== "Active") {
+        const known = discussionsRef.current.find((d) => d.id === discId)
+        const nowMs = Date.now()
+        if (preservesRecentStreamingLatch(
+          session.status,
+          !!streamingRef.current[discId],
+          lastSendAtRef.current[discId] ?? 0,
+          nowMs,
+          SEND_GRACE_MS,
+        )) {
+          environment.window.setTimeout(() => { void reconcileStreaming() },
+            Math.max(0, SEND_GRACE_MS - (nowMs - (lastSendAtRef.current[discId] ?? 0))) + 50)
+          return
+        }
         setStreaming((prev) => ({ ...prev, [discId]: false }))
         setInterrupting((prev) => ({ ...prev, [discId]: false }))
         setResumePending((prev) => ({ ...prev, [discId]: false }))
         // Closed (archived/archiving) discussions are terminal: never echo
         // session events back to the server for them. Checked via the ref —
         // a setState updater's side effect is not guaranteed to have run here.
-        const known = discussionsRef.current.find((d) => d.id === discId)
         if (!known || isClosed(known.status) || isDiscussionArchivePending(discId)) return
         const isStopped = session.status === "Stopped" || session.status === "Error"
         const isLiveDisc = known.type === "live"
@@ -825,7 +867,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discussionId]: [...current, newBlock].sort(byTimestamp) }
       })
     } else if (event.type === "discussion.user-message") {
-      const { discussionId, sessionId } = event.data as { discussionId?: string; sessionId?: string | null }
+      const { discussionId, sessionId, messageUid } = event.data as { discussionId?: string; sessionId?: string | null; messageUid?: string | null }
       if (!discussionId) return
       if (sessionId) {
         setDiscussions((prev) => prev.map((discussion) => discussion.id === discussionId
@@ -837,6 +879,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       // views; this also converges other open clients and attachment-rich messages.
       loadedRef.current.delete(discussionId)
       if (activeIdRef.current !== discussionId) return
+      if (messageUid && (messagesRef.current[discussionId] ?? []).some(message => message.id === messageUid)) return
       const tail = historyTailRef.current[discussionId] ?? INITIAL_HISTORY_TAIL
       void loadMessages(discussionId, tail, true, sessionId, true)
     } else if (event.type === "discussion.cleared") {
@@ -914,7 +957,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discId]: result.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, refreshDiscussions, loadMessages, environment.window])
+  }, [sessionToDiscussion, clearQuestion, refreshDiscussions, loadMessages, environment.window, latchStreaming, reconcileStreaming])
 
   const handleUpstreamDisconnect = useCallback(() => {
     setUpstreamConnected(false)

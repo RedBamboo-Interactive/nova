@@ -27,3 +27,21 @@ export function applySessionStatus(
     return status && status !== discussion.status ? { ...discussion, status } : discussion
   })
 }
+
+/**
+ * A newly submitted local turn can be durably delivered before RedCompute's
+ * provider lifecycle reaches Active. Ignore that transient non-active status;
+ * terminal statuses and genuinely completed turns still clear immediately.
+ */
+export function preservesRecentStreamingLatch(
+  sessionStatus: string,
+  isStreaming: boolean,
+  lastSendAt: number,
+  now: number,
+  graceMs: number,
+): boolean {
+  return isStreaming
+    && sessionStatus !== "Stopped"
+    && sessionStatus !== "Error"
+    && now - lastSendAt < graceMs
+}

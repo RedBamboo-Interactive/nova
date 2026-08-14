@@ -90,6 +90,15 @@ test("revalidation replaces an unchanged stale snapshot with the authoritative t
   assert.deepEqual(mergeRevalidatedMessages([old, fresh], [old], [old]), [old, fresh])
 })
 
+test("revalidation reuses unchanged block identities instead of repainting history", () => {
+  const existing = block("old", "old")
+  const fetched = block("old", "old")
+
+  const [merged] = mergeRevalidatedMessages([fetched], [existing], [existing])
+
+  assert.equal(merged, existing)
+})
+
 test("revalidation preserves a message added while the request was in flight", () => {
   const old = block("old", "old")
   const fresh = block("fresh", "fresh", "2026-08-05T10:01:00.000Z")

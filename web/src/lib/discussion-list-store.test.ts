@@ -47,6 +47,20 @@ test("shares discussion mutations with every mounted surface", () => {
   unsubscribeFloat()
 })
 
+test("an identical server refresh reuses records and publishes nothing", () => {
+  resetDiscussionListStore()
+  const original = discussion("stable")
+  setDiscussionList([original])
+  let notifications = 0
+  const unsubscribe = subscribeDiscussionList(() => notifications++)
+
+  setDiscussionList([{ ...original }])
+
+  assert.equal(notifications, 0)
+  assert.equal(getDiscussionList()[0], original)
+  unsubscribe()
+})
+
 test("an in-flight archive cannot be resurrected by another surface refresh", () => {
   resetDiscussionListStore()
   markDiscussionArchivePending("archived")

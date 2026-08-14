@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { applySessionStatus, discussionStatusForSession } from "./discussion-runtime.ts"
+import { applySessionStatus, discussionStatusForSession, preservesRecentStreamingLatch } from "./discussion-runtime.ts"
 import type { DiscussionInfo } from "./types.ts"
 
 function discussion(status: DiscussionInfo["status"] = "idle", type: DiscussionInfo["type"] = "chat"): DiscussionInfo {
@@ -37,4 +37,12 @@ test("closed discussions ignore late session events", () => {
 test("a stopped LIVE session stays available while an ordinary chat stops", () => {
   assert.equal(discussionStatusForSession("Stopped", "live"), "idle")
   assert.equal(discussionStatusForSession("Stopped", "chat"), "stopped")
+})
+
+test("a transient idle event cannot clear a freshly submitted turn", () => {
+  assert.equal(preservesRecentStreamingLatch("Idle", true, 1_000, 1_500, 10_000), true)
+  assert.equal(preservesRecentStreamingLatch("Starting", true, 1_000, 1_500, 10_000), true)
+  assert.equal(preservesRecentStreamingLatch("Idle", true, 1_000, 11_001, 10_000), false)
+  assert.equal(preservesRecentStreamingLatch("Stopped", true, 1_000, 1_500, 10_000), false)
+  assert.equal(preservesRecentStreamingLatch("Idle", false, 1_000, 1_500, 10_000), false)
 })

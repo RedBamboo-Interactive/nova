@@ -18,6 +18,19 @@ function applyPendingArchives(list: DiscussionInfo[]): DiscussionInfo[] {
     : discussion)
 }
 
+function stabilize(next: DiscussionInfo[]): DiscussionInfo[] {
+  const previousById = new Map(discussions.map(discussion => [discussion.id, discussion]))
+  const stable = next.map(discussion => {
+    const previous = previousById.get(discussion.id)
+    return previous && JSON.stringify(previous) === JSON.stringify(discussion)
+      ? previous
+      : discussion
+  })
+  return stable.length === discussions.length && stable.every((discussion, index) => discussion === discussions[index])
+    ? discussions
+    : stable
+}
+
 /**
  * The normal Nova route and Float Nova are separate React trees, but discussion
  * records are server state shared by both. Keeping this tiny external store at
@@ -35,7 +48,7 @@ export function subscribeDiscussionList(listener: () => void): () => void {
 
 export function setDiscussionList(update: DiscussionListUpdater): void {
   const next = typeof update === "function" ? update(discussions) : update
-  publish(applyPendingArchives(next))
+  publish(stabilize(applyPendingArchives(next)))
 }
 
 export function upsertDiscussion(discussion: DiscussionInfo): void {

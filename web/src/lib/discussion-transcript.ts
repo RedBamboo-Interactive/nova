@@ -54,6 +54,7 @@ export function mergeRevalidatedMessages(
     baseline.map((message) => [message.id, messageFingerprint(message)]),
   )
   const changed = new Map<string, MessageBlock>()
+  const currentById = new Map(current.map(message => [message.id, message]))
 
   for (const message of current) {
     const previous = baselineFingerprints.get(message.id)
@@ -62,7 +63,14 @@ export function mergeRevalidatedMessages(
     }
   }
 
-  const merged = authoritative.map((message) => changed.get(message.id) ?? message)
+  const merged = authoritative.map((message) => {
+    const concurrent = changed.get(message.id)
+    if (concurrent) return concurrent
+    const existing = currentById.get(message.id)
+    return existing && messageFingerprint(existing) === messageFingerprint(message)
+      ? existing
+      : message
+  })
   const authoritativeIds = new Set(authoritative.map((message) => message.id))
   for (const message of changed.values()) {
     if (!authoritativeIds.has(message.id)) merged.push(message)
