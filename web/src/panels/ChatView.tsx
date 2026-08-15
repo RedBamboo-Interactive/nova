@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { MasterDetailLayout, PanelHeader, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, PendingContextBanner, SessionInfoButton, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
-import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult } from "@redbamboo/utility"
+import { MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
+import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
+import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
 import { AgentPicker } from "../components/agent-picker"
@@ -32,6 +32,7 @@ import {
 } from "../lib/floating-context"
 import { applyPendingVisibleContext } from "../lib/pending-visible-context-store"
 import { isDiscussionSelectionCurrent, resolveRequestedDiscussionId } from "../lib/discussion-view-selection"
+import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToContext, type MonitorVisualSource } from "../lib/visual-capture"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -233,6 +234,11 @@ export function ChatView({
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [capturingContext, setCapturingContext] = useState(false)
   const capturingContextRef = useRef(false)
+  const [contextPickerOpen, setContextPickerOpen] = useState(false)
+  const [redLeafPreview, setRedLeafPreview] = useState<VisibleAppContext | null>(null)
+  const [monitorSources, setMonitorSources] = useState<MonitorVisualSource[]>([])
+  const [monitorSourcesLoading, setMonitorSourcesLoading] = useState(false)
+  const [monitorSourcesError, setMonitorSourcesError] = useState<string | null>(null)
 
   useEffect(() => {
     api.get<{ tiers: QualityTierInfo[] }>("/ai-session/quality-modes")
@@ -261,10 +267,44 @@ export function ChatView({
     getDownloadUrl(attachment) { return attachment.downloadUrl },
   }), [])
 
-  const captureWhatISee = useCallback(async (): Promise<UiSurfaceActionResult> => {
-    if (!floating) {
-      return { ok: false, state: "unsupported", error: { code: "floating_surface_required", message: "What I see is available only in Float Nova." } }
+  const attachVisibleContext = useCallback(async (
+    discussionId: string,
+    initialContext: VisibleAppContext,
+    filename: string,
+    screenshotAlreadyUnavailable = false,
+  ) => {
+    let context = initialContext
+    let screenshotAttachment: UploadedAttachment | undefined
+    let degraded = screenshotAlreadyUnavailable
+
+    if (context.screenshot) {
+      try {
+        const blob = await fetch(`data:${context.screenshot.mediaType};base64,${context.screenshot.base64}`).then(response => response.blob())
+        screenshotAttachment = await attachmentTransport.upload(new File([blob], filename, { type: context.screenshot.mediaType }))
+      } catch {
+        context = { ...context, screenshot: undefined }
+        degraded = true
+      }
     }
+
+    pendingContext.set(discussionId, {
+      context,
+      screenshotAttachment,
+      discard: screenshotAttachment
+        ? () => { void attachmentTransport.delete(screenshotAttachment.id).catch(() => {}) }
+        : undefined,
+    })
+
+    if (degraded) {
+      toast({
+        title: "Context attached without screenshot",
+        description: "The source details and metadata are ready to send.",
+        variant: "default",
+      })
+    }
+  }, [attachmentTransport, pendingContext, toast])
+
+  const captureWhatISee = useCallback(async (): Promise<UiSurfaceActionResult> => {
     const discussionId = activeDiscussionId
     if (!discussionId || !activeDiscussion) {
       return { ok: false, state: "open", error: { code: "discussion_required", message: "Select a discussion before attaching foreground context." } }
@@ -280,35 +320,8 @@ export function ChatView({
     setCapturingContext(true)
     try {
       const captured = await captureVisibleAppContext({ sourceWindow: window, sourceDocument: document })
-      let context = captured.context
-      let screenshotAttachment: UploadedAttachment | undefined
-      let degraded = captured.screenshotStatus === "unavailable"
-
-      if (context.screenshot) {
-        try {
-          const blob = await fetch(`data:${context.screenshot.mediaType};base64,${context.screenshot.base64}`).then(response => response.blob())
-          screenshotAttachment = await attachmentTransport.upload(new File([blob], "what-i-see.png", { type: context.screenshot.mediaType }))
-        } catch {
-          context = { ...context, screenshot: undefined }
-          degraded = true
-        }
-      }
-
-      pendingContext.set(discussionId, {
-        context,
-        screenshotAttachment,
-        discard: screenshotAttachment
-          ? () => { void attachmentTransport.delete(screenshotAttachment.id).catch(() => {}) }
-          : undefined,
-      })
-
-      if (degraded) {
-        toast({
-          title: "Context attached without screenshot",
-          description: "The page details and selection are ready to send.",
-          variant: "default",
-        })
-      }
+      await attachVisibleContext(discussionId, captured.context, "what-i-see-redleaf.png", captured.screenshotStatus === "unavailable")
+      setContextPickerOpen(false)
       return { ok: true, state: "open" }
     } catch (error) {
       const sourceChanged = error instanceof VisibleAppContextCaptureError && error.code === "source_changed"
@@ -325,7 +338,57 @@ export function ChatView({
       capturingContextRef.current = false
       setCapturingContext(false)
     }
-  }, [activeDiscussion, activeDiscussionId, attachmentTransport, floating, pendingContext, toast])
+  }, [activeDiscussion, activeDiscussionId, attachVisibleContext, toast])
+
+  const captureMonitor = useCallback(async (sourceId: string): Promise<void> => {
+    const discussionId = activeDiscussionId
+    if (!discussionId || !activeDiscussion || capturingContextRef.current) return
+    if (activeDiscussion.type === "heartbeat" || activeDiscussion.status === "archived" || activeDiscussion.status === "stopped") return
+
+    capturingContextRef.current = true
+    setCapturingContext(true)
+    try {
+      setContextPickerOpen(false)
+      await new Promise<void>(resolve => {
+        environment.window.requestAnimationFrame(() => environment.window.requestAnimationFrame(() => resolve()))
+      })
+      const capture = await captureMonitorVisualSource(sourceId)
+      await attachVisibleContext(discussionId, monitorCaptureToContext(capture), `what-i-see-${capture.name.toLowerCase().replace(/\s+/g, "-")}.png`)
+    } catch (error) {
+      toast({
+        title: "Monitor capture failed",
+        description: error instanceof Error ? error.message : "The selected monitor could not be captured.",
+        variant: "error",
+      })
+    } finally {
+      capturingContextRef.current = false
+      setCapturingContext(false)
+    }
+  }, [activeDiscussion, activeDiscussionId, attachVisibleContext, environment.window, toast])
+
+  const refreshContextSources = useCallback(() => {
+    const controller = new AbortController()
+    setRedLeafPreview(null)
+    setMonitorSources([])
+    setMonitorSourcesLoading(true)
+    setMonitorSourcesError(null)
+    void Promise.allSettled([
+      captureVisibleAppContext({ sourceWindow: window, sourceDocument: document })
+        .then(captured => setRedLeafPreview(captured.context)),
+      listMonitorVisualSources(controller.signal)
+        .then(setMonitorSources)
+        .catch(error => {
+          setMonitorSources([])
+          setMonitorSourcesError(error instanceof Error ? error.message : "Physical monitors are unavailable.")
+        }),
+    ]).finally(() => setMonitorSourcesLoading(false))
+    return () => controller.abort()
+  }, [])
+
+  useEffect(() => {
+    if (!contextPickerOpen) return
+    return refreshContextSources()
+  }, [contextPickerOpen, refreshContextSources])
 
   useEffect(() => {
     if (!floating) return
@@ -347,7 +410,7 @@ export function ChatView({
     }, pending)
   }, [activeDiscussionId, pendingContext])
 
-  const activePendingContext = floating ? pendingContext.get(activeDiscussionId) : null
+  const activePendingContext = pendingContext.get(activeDiscussionId)
 
   const handleSend = useCallback((content: string, images?: ImageAttachment[], options?: SendOptions) => {
     if (!activeDiscussionId) return
@@ -666,23 +729,108 @@ export function ChatView({
   }, [reactions, react, unreact])
 
   const renderWhatISeeAction = useCallback(({ disabled }: { disabled: boolean }) => {
-    if (!floating) return null
     return (
-      <button
-        type="button"
-        onClick={() => { void captureWhatISee() }}
-        disabled={disabled || capturingContext}
-        className="w-7 h-7 flex items-center justify-center rounded text-muted-a50 hover:text-text-muted hover:bg-overlay-6 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-        title="Attach what I see"
-        aria-label="Attach what I see"
-        data-slot="what-i-see-trigger"
-        data-ui-surface="nova:floating-chat"
-        data-ui-action="capture-context"
-      >
-        <i className={`ph-bold ${capturingContext ? "ph-spinner animate-spin" : "ph-eye"} text-xs`} aria-hidden="true" />
-      </button>
+      <Popover open={contextPickerOpen} onOpenChange={setContextPickerOpen}>
+        <PopoverTrigger
+          disabled={disabled || capturingContext}
+          className="w-7 h-7 flex items-center justify-center rounded text-muted-a50 hover:text-text-muted hover:bg-overlay-6 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          title="Attach what I see"
+          aria-label="Attach what I see"
+          data-slot="what-i-see-trigger"
+          data-ui-surface={floating ? "nova:floating-chat" : undefined}
+          data-ui-action="capture-context"
+        >
+          <i className={`ph-bold ${capturingContext ? "ph-spinner animate-spin" : "ph-eye"} text-xs`} aria-hidden="true" />
+        </PopoverTrigger>
+        <PopoverContent
+          side="top"
+          align="end"
+          className="w-[min(22rem,calc(100vw-1rem))] gap-2 p-3"
+          data-slot="what-i-see-source-picker"
+        >
+          <PopoverHeader>
+            <PopoverTitle>Share what I see</PopoverTitle>
+            <p className="text-[11px] leading-snug text-text-muted">Choose exactly what Nova can see in this message.</p>
+          </PopoverHeader>
+
+          <div className="grid max-h-[22rem] grid-cols-2 gap-2 overflow-y-auto pr-0.5">
+            <button
+              type="button"
+              onClick={() => { void captureWhatISee() }}
+              disabled={capturingContext}
+              className="group overflow-hidden rounded-lg border border-overlay-10 bg-overlay-4 text-left transition-colors hover:border-accent-a40 hover:bg-overlay-6 disabled:opacity-50"
+              data-slot="what-i-see-source-option"
+              data-source-kind="redleaf"
+            >
+              <div className="aspect-video overflow-hidden bg-overlay-8">
+                {redLeafPreview?.screenshot ? (
+                  <img
+                    src={`data:${redLeafPreview.screenshot.mediaType};base64,${redLeafPreview.screenshot.base64}`}
+                    alt="Current RedLeaf view"
+                    className="h-full w-full object-cover object-top"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center"><i className="ph-bold ph-leaf text-lg text-accent" aria-hidden="true" /></div>
+                )}
+              </div>
+              <div className="px-2 py-1.5">
+                <div className="truncate text-xs font-medium text-text-secondary">RedLeaf</div>
+                <div className="truncate text-[10px] text-text-muted">Current page only</div>
+              </div>
+            </button>
+
+            {monitorSources.map(source => (
+              <button
+                key={source.id}
+                type="button"
+                onClick={() => { void captureMonitor(source.id) }}
+                disabled={capturingContext}
+                className="group overflow-hidden rounded-lg border border-overlay-10 bg-overlay-4 text-left transition-colors hover:border-accent-a40 hover:bg-overlay-6 disabled:opacity-50"
+                data-slot="what-i-see-source-option"
+                data-source-kind="monitor"
+                data-source-id={source.id}
+              >
+                <div className="relative aspect-video overflow-hidden bg-overlay-8">
+                  <img
+                    src={`data:${source.previewMediaType};base64,${source.previewBase64}`}
+                    alt={`Preview of ${source.name}`}
+                    className="h-full w-full object-cover"
+                  />
+                  {source.primary && <span className="absolute right-1 top-1 rounded bg-background/80 px-1 py-0.5 text-[8px] font-medium text-text-secondary">Primary</span>}
+                </div>
+                <div className="px-2 py-1.5">
+                  <div className="truncate text-xs font-medium text-text-secondary">{source.name}</div>
+                  <div className="truncate text-[10px] text-text-muted">
+                    {source.bounds.width}×{source.bounds.height}
+                    {source.applications.length > 0 ? ` · ${source.applications.join(", ")}` : ""}
+                  </div>
+                </div>
+              </button>
+            ))}
+
+            {monitorSourcesLoading && monitorSources.length === 0 && (
+              <div className="flex aspect-video items-center justify-center rounded-lg border border-overlay-10 bg-overlay-4 text-[10px] text-text-muted" data-slot="what-i-see-sources-loading">
+                <i className="ph-bold ph-spinner mr-1.5 animate-spin" aria-hidden="true" /> Loading monitors
+              </div>
+            )}
+          </div>
+
+          {monitorSourcesError && (
+            <p className="text-[10px] leading-snug text-text-muted" data-slot="what-i-see-monitors-unavailable">
+              Physical monitors are available only in the local RedLeaf app.
+            </p>
+          )}
+        </PopoverContent>
+      </Popover>
     )
-  }, [captureWhatISee, capturingContext, floating])
+  }, [captureMonitor, captureWhatISee, capturingContext, contextPickerOpen, floating, monitorSources, monitorSourcesError, monitorSourcesLoading, redLeafPreview])
+
+  const renderWhatISeeAttachment = useCallback(() => activePendingContext ? (
+    <PendingContextAttachment
+      context={activePendingContext.context}
+      onDismiss={() => pendingContext.clear(activeDiscussionId)}
+    />
+  ) : null, [activeDiscussionId, activePendingContext, pendingContext])
 
   const { opacity: avatarOpacity } = useAvatarStyle()
   const { showAvatar: avatarEnabled } = useLocalSettings()
@@ -731,12 +879,6 @@ export function ChatView({
         isLoadingEarlier={isLoadingEarlier}
         placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}
         header={<>{chatHeader}{upstreamBanner}</>}
-        footer={activePendingContext ? (
-          <PendingContextBanner
-            context={activePendingContext.context}
-            onDismiss={() => pendingContext.clear(activeDiscussionId)}
-          />
-        ) : undefined}
         speechBackend={speechBackend}
         pushToTalkKey={pushToTalk.key}
         globalPushToTalk={floating}
@@ -748,6 +890,7 @@ export function ChatView({
         assistantAvatar={avatarSrc}
         resolveAgentInfo={resolveAgentInfo}
         renderStatusLine={renderStatusLine}
+        renderComposerAttachments={renderWhatISeeAttachment}
         renderAttachmentActions={renderWhatISeeAction}
         renderSideActions={renderSideActions}
       />

@@ -51,7 +51,7 @@
             "The opener RedLeaf document must remain alive.",
             "The RedLeaf Windows host restores and tracks native bounds across PWA lifetimes; browser-only hosts retain size but cannot restore position.",
             "Opening requires trusted user activation.",
-            "Foreground context capture attaches the opener RedLeaf viewport to the selected Float discussion without sending it.",
+            "What I See opens an explicit source picker for the current RedLeaf page or locally available physical monitors; monitor capture is unavailable through remote/tunnel access and nothing is sent until the user submits the message.",
             "Global push-to-talk leases the configured shared voice key through RedLeaf and is active only while Float Nova is open.",
             "Mobile clients are unsupported."
           ]
