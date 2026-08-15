@@ -34,8 +34,8 @@ test("closed discussions ignore late session events", () => {
   assert.equal(applySessionStatus([archived], "discussion-a", "Active")[0], archived)
 })
 
-test("a stopped LIVE session stays available while an ordinary chat stops", () => {
-  assert.equal(discussionStatusForSession("Stopped", "live"), "idle")
+test("a stopped session requires recovery for LIVE and ordinary chats", () => {
+  assert.equal(discussionStatusForSession("Stopped", "live"), "stopped")
   assert.equal(discussionStatusForSession("Stopped", "chat"), "stopped")
 })
 

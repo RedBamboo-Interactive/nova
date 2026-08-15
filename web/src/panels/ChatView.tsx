@@ -262,7 +262,7 @@ export function ChatView({
     if (!discussionId || !activeDiscussion) {
       return { ok: false, state: "open", error: { code: "discussion_required", message: "Select a discussion before attaching foreground context." } }
     }
-    if (activeDiscussion.type === "heartbeat" || activeDiscussion.status === "archived" || (activeDiscussion.status === "stopped" && activeDiscussion.type !== "live")) {
+    if (activeDiscussion.type === "heartbeat" || activeDiscussion.status === "archived" || activeDiscussion.status === "stopped") {
       return { ok: false, state: "open", error: { code: "discussion_read_only", message: "This discussion cannot accept a context attachment." } }
     }
     if (capturingContextRef.current) {
@@ -706,12 +706,12 @@ export function ChatView({
         onInterrupt={handleInterrupt}
         sessionId={activeDiscussionId}
         draftStorageKey="nova-drafts"
-        disabled={activeDiscussion.status === "archived" || (activeDiscussion.status === "stopped" && activeDiscussion.type !== "live")}
+        disabled={activeDiscussion.status === "archived" || activeDiscussion.status === "stopped"}
         hideComposer={activeDiscussion.type === "heartbeat"}
         pendingQuestion={pendingQuestion}
         questionOutcome={questionOutcome}
         onAnswerQuestion={handleAnswerQuestion}
-        onResume={activeDiscussion.status === "stopped" && activeDiscussion.type !== "live" ? handleResume : undefined}
+        onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
         hasEarlierMessages={hasEarlierMessages}
         onLoadEarlier={handleLoadEarlier}
         isLoadingEarlier={isLoadingEarlier}

@@ -740,7 +740,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         if (!known || isClosed(known.status) || isDiscussionArchivePending(discId)) return
         const isStopped = session.status === "Stopped" || session.status === "Error"
         const isLiveDisc = known.type === "live"
-        const discStatus = (isStopped && !isLiveDisc) ? "stopped" as const : "idle" as const
+        const discStatus = isStopped ? "stopped" as const : "idle" as const
         const now = new Date().toISOString()
         const isViewing = activeIdRef.current === discId
         setDiscussions((prev) =>
@@ -755,7 +755,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             }
           })
         )
-        if (isStopped && !isLiveDisc) {
+        if (isStopped) {
           api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
         } else {
           api.put(`/api/apps/nova/discussions/${discId}/activity`).catch(() => {})
@@ -806,11 +806,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setResumePending((prev) => ({ ...prev, [discId]: false }))
       const known = discussionsRef.current.find((d) => d.id === discId)
       const closed = !known || isClosed(known.status) || isDiscussionArchivePending(discId)
-      const isLive = known?.type === "live"
       setDiscussions((prev) =>
-        prev.map((d) => d.id === discId && !isClosed(d.status) ? { ...d, status: isLive ? "idle" as const : "stopped" as const } : d)
+        prev.map((d) => d.id === discId && !isClosed(d.status) ? { ...d, status: "stopped" as const } : d)
       )
-      if (!closed && !isLive) api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
+      if (!closed) api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
     } else if (event.type === "discussion.created") {
       const { discussionId, agentId, status, type } = event.data as { discussionId: string; agentId?: string; status?: string; type?: string }
       if (!discussionId) return

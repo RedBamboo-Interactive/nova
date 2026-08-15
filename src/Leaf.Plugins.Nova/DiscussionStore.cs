@@ -26,7 +26,7 @@ public static class DiscussionStatus
         {
             "Active" => Thinking,
             "Idle" or "Starting" => Idle,
-            "Stopped" or "Error" => discussionType == "live" ? Idle : Stopped,
+            "Stopped" or "Error" => Stopped,
             _ => null,
         };
 }

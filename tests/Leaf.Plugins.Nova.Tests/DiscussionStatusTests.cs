@@ -11,7 +11,7 @@ public sealed class DiscussionStatusTests
     [InlineData("Starting", "chat", DiscussionStatus.Idle)]
     [InlineData("Stopped", "chat", DiscussionStatus.Stopped)]
     [InlineData("Error", "chat", DiscussionStatus.Stopped)]
-    [InlineData("Stopped", "live", DiscussionStatus.Idle)]
+    [InlineData("Stopped", "live", DiscussionStatus.Stopped)]
     public void Session_status_projects_to_the_discussion_indicator(
         string sessionStatus, string discussionType, string expected)
     {

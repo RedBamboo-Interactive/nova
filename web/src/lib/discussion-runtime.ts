@@ -6,12 +6,12 @@ import type { DiscussionInfo } from "./types"
  */
 export function discussionStatusForSession(
   sessionStatus: string,
-  discussionType: DiscussionInfo["type"],
+  _discussionType: DiscussionInfo["type"],
 ): DiscussionInfo["status"] | null {
   if (sessionStatus === "Active") return "thinking"
   if (sessionStatus === "Idle" || sessionStatus === "Starting") return "idle"
   if (sessionStatus === "Stopped" || sessionStatus === "Error")
-    return discussionType === "live" ? "idle" : "stopped"
+    return "stopped"
   return null
 }
 
