@@ -19,6 +19,13 @@ function projectedBlock(id: string, source: string, timestamp: string): MessageB
 const event = projectedBlock("tick", "event:heartbeat-tick", "2026-08-02T12:00:00.000Z")
 const projectedReply = projectedBlock("reply", "session-transcript", "2026-08-02T12:01:00.000Z")
 const acceptedBridge = projectedBlock("accepted-user", "user-message", "2026-08-02T12:02:00.000Z")
+const automationOpening: MessageBlock = {
+  id: "automation-opening",
+  role: "assistant",
+  parts: [{ type: "text", content: "A persisted opening" }],
+  timestamp: "2026-08-02T11:59:00.000Z",
+  metadata: { source: "nova-message" },
+}
 const rawReply: MessageBlock = {
   ...projectedReply,
   parts: [{ type: "tool_use", content: "", toolName: "Read", toolInput: "{}" }],
@@ -43,6 +50,13 @@ test("retains an accepted user bridge while raw session history is available", (
   assert.deepEqual(
     mergeDiscussionAndSessionBlocks([event, projectedReply, acceptedBridge], [rawReply]),
     [event, rawReply, acceptedBridge],
+  )
+})
+
+test("retains a persisted automation opening when its session replay is absent", () => {
+  assert.deepEqual(
+    mergeDiscussionAndSessionBlocks([automationOpening, projectedReply], [rawReply]),
+    [automationOpening, rawReply],
   )
 })
 

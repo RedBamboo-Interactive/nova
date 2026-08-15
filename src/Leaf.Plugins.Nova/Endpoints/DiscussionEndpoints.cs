@@ -380,6 +380,11 @@ public static class DiscussionEndpoints
                         records
                             .Where(m => m.Metadata["source"]?.GetValue<string>() == "user-message")
                             .Select(m => m.Metadata["uid"]?.GetValue<string>()));
+                    var pendingNovaMessageUids = FindPendingUserMessageUids(
+                        collapsed.Where(m => m.Role == "assistant").Select(m => m.MessageUid),
+                        records
+                            .Where(m => m.Metadata["source"]?.GetValue<string>() == "nova-message")
+                            .Select(m => m.Metadata["uid"]?.GetValue<string>()));
                     var sessionMsgs = collapsed
                         .Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content))
                         .Select(m =>
@@ -427,6 +432,28 @@ public static class DiscussionEndpoints
                             source = (string?)"user-message",
                         });
 
+                    // Automation-created discussions exist before their RedCompute
+                    // session. Their opening assistant message is persisted locally,
+                    // then replayed into the session when the user first replies. The
+                    // replay is deliberately best-effort, so keep the persisted copy
+                    // unless its stable uid is actually present in the transcript.
+                    var pendingNovaMsgs = records
+                        .Where(m => m.Metadata["source"]?.GetValue<string>() == "nova-message")
+                        .Where(m => !string.IsNullOrWhiteSpace(m.Metadata["uid"]?.GetValue<string>()))
+                        .GroupBy(m => m.Metadata["uid"]!.GetValue<string>())
+                        .Select(g => g.OrderByDescending(m => m.CreatedAt).First())
+                        .Where(m => pendingNovaMessageUids.Contains(m.Metadata["uid"]!.GetValue<string>()))
+                        .Select(m => new
+                        {
+                            id = (string?)m.Id.ToString(),
+                            messageUid = m.Metadata["uid"]?.GetValue<string>(),
+                            role = m.Role,
+                            parts = MapParts(m.Metadata["parts_json"]?.GetValue<string>(), m.Content),
+                            timestamp = m.CreatedAt.UtcDateTime.ToString("o"),
+                            senderAgentId = m.Metadata["sender_agent_id"]?.GetValue<string>(),
+                            source = (string?)"nova-message",
+                        });
+
                     var eventMsgs = records
                         .Where(m => (m.Metadata["source"]?.GetValue<string>() ?? "").StartsWith("event:"))
                         .Select(m =>
@@ -446,7 +473,7 @@ public static class DiscussionEndpoints
                             };
                         });
 
-                    var merged = sessionMsgs.Concat(pendingUserMsgs).Concat(eventMsgs)
+                    var merged = sessionMsgs.Concat(pendingUserMsgs).Concat(pendingNovaMsgs).Concat(eventMsgs)
                         .OrderBy(m => m.timestamp)
                         .AsEnumerable();
 

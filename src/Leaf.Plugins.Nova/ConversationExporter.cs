@@ -85,11 +85,35 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
             Source = e.Metadata["source"]?.GetValue<string>(),
         }).ToList();
 
-        var merged = textMessages.Concat(eventEntries).OrderBy(m => m.Timestamp).ToList();
+        var sessionAssistantUids = textMessages
+            .Where(message => message.Role == "assistant" && !string.IsNullOrWhiteSpace(message.MessageUid))
+            .Select(message => message.MessageUid!)
+            .ToHashSet(StringComparer.Ordinal);
+        var pendingNovaMessages = records
+            .Where(message => message.Role == "assistant"
+                && message.Metadata["source"]?.GetValue<string>() == "nova-message")
+            .Where(message => message.Metadata["uid"]?.GetValue<string>() is { Length: > 0 } uid
+                && !sessionAssistantUids.Contains(uid))
+            .GroupBy(message => message.Metadata["uid"]!.GetValue<string>())
+            .Select(group => group.OrderByDescending(message => message.CreatedAt).First())
+            .Select(message => new CollapsedMessage
+            {
+                Role = "assistant",
+                EventType = "text",
+                Content = message.Content,
+                MessageUid = message.Metadata["uid"]?.GetValue<string>(),
+                Timestamp = message.CreatedAt.UtcDateTime,
+                Source = "nova-message",
+            })
+            .ToList();
 
+        var merged = textMessages.Concat(pendingNovaMessages).Concat(eventEntries)
+            .OrderBy(m => m.Timestamp).ToList();
+
+        var visibleMessageCount = textMessages.Count + pendingNovaMessages.Count;
         var countLabel = eventEntries.Count > 0
-            ? $"{textMessages.Count} message(s), {eventEntries.Count} event(s)"
-            : $"{textMessages.Count} message(s)";
+            ? $"{visibleMessageCount} message(s), {eventEntries.Count} event(s)"
+            : $"{visibleMessageCount} message(s)";
 
         sb.AppendLine($"## {disc.Title ?? "Untitled"} [{disc.Id}]");
         sb.AppendLine($"Created: {disc.CreatedAt:yyyy-MM-dd HH:mm} — {countLabel}");

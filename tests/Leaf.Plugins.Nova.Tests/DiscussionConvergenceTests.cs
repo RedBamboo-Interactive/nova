@@ -34,4 +34,24 @@ public sealed class DiscussionConvergenceTests
 
         Assert.Equal(["pending"], pending);
     }
+
+    [Fact]
+    public void PersistedAutomationOpeningRemainsPendingWhenSessionReplayFails()
+    {
+        var pending = DiscussionEndpoints.FindPendingUserMessageUids(
+            ["assistant-reply"],
+            ["automation-opening"]);
+
+        Assert.Equal(["automation-opening"], pending);
+    }
+
+    [Fact]
+    public void ReplayedAutomationOpeningStopsUsingPersistedCopy()
+    {
+        var pending = DiscussionEndpoints.FindPendingUserMessageUids(
+            ["automation-opening", "assistant-reply"],
+            ["automation-opening"]);
+
+        Assert.Empty(pending);
+    }
 }
