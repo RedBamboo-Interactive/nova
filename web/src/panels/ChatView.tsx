@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef, type ButtonHTMLAttributes } from "react"
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, PendingContextBanner, SessionInfoButton, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
@@ -31,6 +31,7 @@ import {
   type FloatingNovaCaptureContextRequest,
 } from "../lib/floating-context"
 import { applyPendingVisibleContext } from "../lib/pending-visible-context-store"
+import { isDiscussionSelectionCurrent } from "../lib/discussion-view-selection"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -189,7 +190,7 @@ export function ChatView({
       : "#",
   [payloadSessionId])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (requestedDiscussionId && requestedDiscussionId !== activeDiscussionId) {
       selectDiscussion(requestedDiscussionId)
       setMobileTab(1)
@@ -391,10 +392,14 @@ export function ChatView({
   }, [activeDiscussionId, loadEarlierMessages])
 
   const handleSelectDiscussion = useCallback((id: string) => {
+    // Keep the selected transcript and the responsive-pane transition atomic.
+    // Otherwise the chat pane can open with the previous discussion while the
+    // route synchronization effect catches up.
+    selectDiscussion(id)
+    setMobileTab(1)
     if (floating) onSelectDiscussion?.(id)
     else navigate(`/apps/nova/chat/${id}`)
-    setMobileTab(1)
-  }, [floating, navigate, onSelectDiscussion])
+  }, [floating, navigate, onSelectDiscussion, selectDiscussion])
 
   const handleRotateDiscussion = useCallback(async (id: string) => {
     const followReplacement = activeDiscussionId === id
@@ -688,7 +693,7 @@ export function ChatView({
     ? `${avatarBase}${avatarBase.includes("?") ? "&" : "?"}v=${avatarVersion}`
     : avatarBase
 
-  const chatArea = activeDiscussion ? (
+  const chatArea = activeDiscussion && isDiscussionSelectionCurrent(requestedDiscussionId, activeDiscussionId) ? (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
       {isLoadingMessages && activeMessages.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center z-10">
