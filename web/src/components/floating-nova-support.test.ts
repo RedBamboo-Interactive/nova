@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {
   getFloatingNovaSupport,
+  isMobileClient,
   type FloatingNovaNavigator,
   type FloatingNovaWindow,
 } from "./floating-nova-support.ts"
@@ -19,6 +20,12 @@ function desktopWindow(withPictureInPicture = true): FloatingNovaWindow {
 }
 
 const desktopNavigator: FloatingNovaNavigator = { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+
+test("mobile detection recognizes client hints and mobile user agents", () => {
+  assert.equal(isMobileClient(desktopNavigator), false)
+  assert.equal(isMobileClient({ userAgent: desktopNavigator.userAgent, userAgentData: { mobile: true } }), true)
+  assert.equal(isMobileClient({ userAgent: "Mozilla/5.0 (Linux; Android 16) Mobile" }), true)
+})
 
 test("Float Nova is absent outside a browser and on mobile clients", () => {
   assert.equal(getFloatingNovaSupport(undefined, undefined).reason, "browser_unavailable")

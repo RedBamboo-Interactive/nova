@@ -4,6 +4,7 @@ import { MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader
 import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
+import { isMobileClient } from "../components/floating-nova-support"
 import { EditableTitle } from "../components/discussion/editable-title"
 import { AgentPicker } from "../components/agent-picker"
 import { TransitioningAgentAvatar } from "../components/transitioning-agent-avatar"
@@ -127,6 +128,7 @@ export function ChatView({
   const disc = useDisc()
   const environment = useUiEnvironment()
   const floating = presentation === "floating"
+  const mobileClient = isMobileClient(environment.window.navigator)
   const requestedDiscussionId = floating ? selectedDiscussionId : (urlDiscussionId ?? null)
   const [pendingDiscussionId, setPendingDiscussionId] = useState<string | null>(null)
   const synchronizedDiscussionId = resolveRequestedDiscussionId(requestedDiscussionId, pendingDiscussionId)
@@ -729,6 +731,23 @@ export function ChatView({
   }, [reactions, react, unreact])
 
   const renderWhatISeeAction = useCallback(({ disabled }: { disabled: boolean }) => {
+    if (mobileClient) {
+      return (
+        <button
+          type="button"
+          onClick={() => { void captureWhatISee() }}
+          disabled={disabled || capturingContext}
+          className="w-7 h-7 flex items-center justify-center rounded text-muted-a50 hover:text-text-muted hover:bg-overlay-6 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          title="Attach what I see"
+          aria-label="Attach what I see"
+          data-slot="what-i-see-trigger"
+          data-mobile-direct-capture="true"
+        >
+          <i className={`ph-bold ${capturingContext ? "ph-spinner animate-spin" : "ph-eye"} text-xs`} aria-hidden="true" />
+        </button>
+      )
+    }
+
     return (
       <Popover open={contextPickerOpen} onOpenChange={setContextPickerOpen}>
         <PopoverTrigger
@@ -823,7 +842,7 @@ export function ChatView({
         </PopoverContent>
       </Popover>
     )
-  }, [captureMonitor, captureWhatISee, capturingContext, contextPickerOpen, floating, monitorSources, monitorSourcesError, monitorSourcesLoading, redLeafPreview])
+  }, [captureMonitor, captureWhatISee, capturingContext, contextPickerOpen, floating, mobileClient, monitorSources, monitorSourcesError, monitorSourcesLoading, redLeafPreview])
 
   const renderWhatISeeAttachment = useCallback(() => activePendingContext ? (
     <PendingContextAttachment
