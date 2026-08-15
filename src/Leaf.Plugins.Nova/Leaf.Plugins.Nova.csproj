@@ -29,6 +29,7 @@
     <!-- The manifest the loader reads from disk is also the Manifest property this
          assembly exposes — embedding the same file keeps them from drifting. -->
     <EmbeddedResource Include="..\..\plugin.json" LogicalName="plugin.json" />
+    <EmbeddedResource Include="Templates\nova-agent-template.v1.json" LogicalName="nova-agent-template.v1.json" />
   </ItemGroup>
 
 </Project>

@@ -29,6 +29,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
 
     public void ConfigureServices(IServiceCollection services, PluginContext ctx)
     {
+        services.AddSingleton<IAgentTemplateProvider, NovaAgentTemplateProvider>();
         services.AddSingleton<RedComputeClient>();
         services.AddSingleton(sp =>
             new AgentDirectory(
