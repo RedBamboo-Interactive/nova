@@ -2,10 +2,11 @@ import { useState, useCallback, useEffect, useMemo, useRef, type ButtonHTMLAttri
 import { useParams, useNavigate } from "react-router-dom"
 import { MasterDetailLayout, PanelHeader, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, PendingContextBanner, SessionInfoButton, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
-import { PluginExtensionSlot, captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult } from "@redbamboo/utility"
+import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
 import { EditableTitle } from "../components/discussion/editable-title"
 import { AgentPicker } from "../components/agent-picker"
+import { TransitioningAgentAvatar } from "../components/transitioning-agent-avatar"
 import { NovaStatusLine } from "../components/nova-status-line"
 import { ReactionPills, AddReactionButton } from "../components/discussion/reactions"
 import { createNovaSpeechBackend } from "../lib/speech"
@@ -683,7 +684,9 @@ export function ChatView({
     return () => window.removeEventListener("nova:avatar-changed", handler)
   }, [])
   const avatarBase = activeAgent ? activeAgent.avatarUrl : "/api/apps/nova/avatar"
-  const avatarSrc = avatarVersion ? `${avatarBase}?v=${avatarVersion}` : avatarBase
+  const avatarSrc = avatarVersion
+    ? `${avatarBase}${avatarBase.includes("?") ? "&" : "?"}v=${avatarVersion}`
+    : avatarBase
 
   const chatArea = activeDiscussion ? (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
@@ -774,23 +777,16 @@ export function ChatView({
     >
       {showAvatar && (
         <div
+          data-avatar-bounce-frame
           className="absolute top-4 left-1/2 -translate-x-1/2 w-[80px] h-[80px] z-20 rounded-full overflow-hidden md:hidden p-1.5"
           style={{ backgroundColor: "var(--background)" }}
         >
-          <img
+          <TransitioningAgentAvatar
             src={avatarSrc}
-            alt=""
-            className="w-full h-full rounded-full object-cover object-top"
-            style={{ opacity: avatarOpacity }}
-          />
-          <PluginExtensionSlot
-            targetPluginId="nova"
-            slotId="chat-avatar-overlay"
-            context={{
-              agentId: activeDiscussion?.agentId ?? null,
-              discussionId: activeDiscussionId,
-              variant: "mobile",
-            }}
+            agentId={activeDiscussion?.agentId ?? null}
+            discussionId={activeDiscussionId}
+            variant="mobile"
+            imageOpacity={avatarOpacity}
           />
         </div>
       )}
@@ -799,26 +795,17 @@ export function ChatView({
           role="presentation"
           aria-hidden="true"
           data-slot="floating-surface-avatar"
+          data-avatar-bounce-frame
           className="pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 w-[80px] h-[80px] z-30 rounded-full overflow-hidden p-1.5"
           style={{ backgroundColor: "var(--background)" }}
         >
-          <div className="relative size-full overflow-hidden rounded-full">
-            <img
-              src={avatarSrc}
-              alt=""
-              className="size-full object-cover object-top"
-              style={{ opacity: avatarOpacity }}
-            />
-            <PluginExtensionSlot
-              targetPluginId="nova"
-              slotId="chat-avatar-overlay"
-              context={{
-                agentId: activeDiscussion?.agentId ?? null,
-                discussionId: activeDiscussionId,
-                variant: "mobile",
-              }}
-            />
-          </div>
+          <TransitioningAgentAvatar
+            src={avatarSrc}
+            agentId={activeDiscussion?.agentId ?? null}
+            discussionId={activeDiscussionId}
+            variant="mobile"
+            imageOpacity={avatarOpacity}
+          />
         </div>
       )}
       <MasterDetailLayout
@@ -847,20 +834,12 @@ export function ChatView({
               className="flex justify-center px-3 pb-5 pt-2 w-full"
               style={{ opacity: avatarOpacity }}
             >
-              <div className="relative w-full max-w-[256px] aspect-square rounded-full overflow-hidden" style={{ backgroundColor: "var(--background)" }}>
-                <img
+              <div data-avatar-bounce-frame className="relative w-full max-w-[256px] aspect-square rounded-full overflow-hidden" style={{ backgroundColor: "var(--background)" }}>
+                <TransitioningAgentAvatar
                   src={avatarSrc}
-                  alt=""
-                  className="w-full h-full rounded-full object-cover object-top transition-opacity duration-500"
-                />
-                <PluginExtensionSlot
-                  targetPluginId="nova"
-                  slotId="chat-avatar-overlay"
-                  context={{
-                    agentId: activeDiscussion?.agentId ?? null,
-                    discussionId: activeDiscussionId,
-                    variant: "sidebar",
-                  }}
+                  agentId={activeDiscussion?.agentId ?? null}
+                  discussionId={activeDiscussionId}
+                  variant="sidebar"
                 />
               </div>
             </div>
