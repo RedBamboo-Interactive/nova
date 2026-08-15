@@ -31,7 +31,7 @@ import {
   type FloatingNovaCaptureContextRequest,
 } from "../lib/floating-context"
 import { applyPendingVisibleContext } from "../lib/pending-visible-context-store"
-import { isDiscussionSelectionCurrent } from "../lib/discussion-view-selection"
+import { isDiscussionSelectionCurrent, resolveRequestedDiscussionId } from "../lib/discussion-view-selection"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -127,6 +127,9 @@ export function ChatView({
   const environment = useUiEnvironment()
   const floating = presentation === "floating"
   const requestedDiscussionId = floating ? selectedDiscussionId : (urlDiscussionId ?? null)
+  const [pendingDiscussionId, setPendingDiscussionId] = useState<string | null>(null)
+  const synchronizedDiscussionId = resolveRequestedDiscussionId(requestedDiscussionId, pendingDiscussionId)
+  const [mobileTab, setMobileTab] = useState(0)
   const floatingSurface = useUiSurface("nova:floating-chat")
 
   // Intercept clicks on CodeRed links and navigate via API instead
@@ -191,14 +194,17 @@ export function ChatView({
   [payloadSessionId])
 
   useLayoutEffect(() => {
-    if (requestedDiscussionId && requestedDiscussionId !== activeDiscussionId) {
-      selectDiscussion(requestedDiscussionId)
+    if (pendingDiscussionId && requestedDiscussionId === pendingDiscussionId) {
+      setPendingDiscussionId(null)
+    }
+    if (synchronizedDiscussionId && synchronizedDiscussionId !== activeDiscussionId) {
+      selectDiscussion(synchronizedDiscussionId)
       setMobileTab(1)
-    } else if (!requestedDiscussionId && activeDiscussionId) {
+    } else if (!synchronizedDiscussionId && activeDiscussionId) {
       clearDiscussionSelection()
       setMobileTab(0)
     }
-  }, [requestedDiscussionId, activeDiscussionId, selectDiscussion, clearDiscussionSelection])
+  }, [requestedDiscussionId, pendingDiscussionId, synchronizedDiscussionId, activeDiscussionId, selectDiscussion, clearDiscussionSelection])
 
   useBreadcrumbLabel(
     !floating && urlDiscussionId ? `/apps/nova/chat/${urlDiscussionId}` : undefined,
@@ -223,7 +229,6 @@ export function ChatView({
   const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming, activeDiscussion)
   const share = useShare(activeDiscussion?.entityId)
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
-  const [mobileTab, setMobileTab] = useState(0)
   const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [capturingContext, setCapturingContext] = useState(false)
@@ -392,14 +397,15 @@ export function ChatView({
   }, [activeDiscussionId, loadEarlierMessages])
 
   const handleSelectDiscussion = useCallback((id: string) => {
-    // Keep the selected transcript and the responsive-pane transition atomic.
-    // Otherwise the chat pane can open with the previous discussion while the
-    // route synchronization effect catches up.
-    selectDiscussion(id)
-    setMobileTab(1)
+    setPendingDiscussionId(id)
     if (floating) onSelectDiscussion?.(id)
     else navigate(`/apps/nova/chat/${id}`)
-  }, [floating, navigate, onSelectDiscussion, selectDiscussion])
+    // The route/host selection is the authority. Selecting the discussion
+    // locally here as well can race the still-old requested id and bounce the
+    // store old -> new -> old -> new. The layout effect applies the requested
+    // selection before paint while the render guard hides any stale transcript.
+    setMobileTab(1)
+  }, [floating, navigate, onSelectDiscussion])
 
   const handleRotateDiscussion = useCallback(async (id: string) => {
     const followReplacement = activeDiscussionId === id
@@ -693,7 +699,7 @@ export function ChatView({
     ? `${avatarBase}${avatarBase.includes("?") ? "&" : "?"}v=${avatarVersion}`
     : avatarBase
 
-  const chatArea = activeDiscussion && isDiscussionSelectionCurrent(requestedDiscussionId, activeDiscussionId) ? (
+  const chatArea = activeDiscussion && isDiscussionSelectionCurrent(synchronizedDiscussionId, activeDiscussionId) ? (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
       {isLoadingMessages && activeMessages.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center z-10">
@@ -825,7 +831,7 @@ export function ChatView({
           <div className="flex-1 overflow-hidden">
             <DiscussionSidebar
               discussions={filteredDiscussions}
-              activeDiscussionId={requestedDiscussionId ?? activeDiscussionId}
+              activeDiscussionId={synchronizedDiscussionId ?? activeDiscussionId}
               onSelect={handleSelectDiscussion}
               onArchive={archiveDiscussion}
               onRotate={handleRotateDiscussion}

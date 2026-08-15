@@ -9,3 +9,15 @@ export function isDiscussionSelectionCurrent(
 ): boolean {
   return requestedDiscussionId === null || requestedDiscussionId === activeDiscussionId
 }
+
+/**
+ * A click can switch the responsive pane one render before the router or Float
+ * host publishes its new selection. Keep that local request authoritative only
+ * for the handoff so the old transcript cannot reappear in the opened pane.
+ */
+export function resolveRequestedDiscussionId(
+  requestedDiscussionId: string | null,
+  pendingDiscussionId: string | null,
+): string | null {
+  return pendingDiscussionId ?? requestedDiscussionId
+}
