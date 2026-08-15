@@ -1,4 +1,7 @@
+import { createExecutionTokenClient } from "@redbamboo/utility"
+
 const BASE = ""
+export const novaExecution = createExecutionTokenClient("nova")
 
 function getDeviceId(): string {
   const key = "leaf:installation-id"
@@ -29,7 +32,7 @@ async function request<T>(method: string, path: string, body?: unknown, extraHea
   const headers: Record<string, string> = { ...extraHeaders }
   if (body) headers["Content-Type"] = "application/json"
   if (_deviceId) headers["X-Leaf-Installation-Id"] = _deviceId
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await novaExecution.fetch(`${BASE}${path}`, {
     method,
     credentials: "include",
     headers: Object.keys(headers).length ? headers : undefined,

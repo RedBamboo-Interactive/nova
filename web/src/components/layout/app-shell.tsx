@@ -6,6 +6,7 @@ import { NewDiscussionPicker } from "../../components/new-discussion-picker"
 import { useLocalSettings } from "../../hooks/use-local-settings"
 import { getAdjacentSidebarDiscussion } from "../../lib/discussion-navigation"
 import { useDisc } from "../../App"
+import { novaExecution } from "../../lib/api"
 
 /**
  * Discussion commands live at the Nova shell level so Ctrl+N etc. remain available
@@ -99,7 +100,7 @@ function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: st
     group: "Discussions",
     keywords: ["export", "download", "markdown", "backup", "save"],
     action: async () => {
-      const res = await fetch("/api/apps/nova/discussions/export", { credentials: "include" })
+      const res = await novaExecution.fetch("/api/apps/nova/discussions/export", { credentials: "include" })
       if (!res.ok) return
       const blob = new Blob([await res.text()], { type: "text/markdown" })
       const url = URL.createObjectURL(blob)

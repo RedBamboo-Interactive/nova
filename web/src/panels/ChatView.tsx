@@ -16,7 +16,7 @@ import { useDisc, useNovaPendingContext } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
 import { useShare } from "../hooks/use-share"
 import { setSettings } from "../lib/settings-store"
-import { api } from "../lib/api"
+import { api, novaExecution } from "../lib/api"
 import { findLiveHeartbeatPair } from "../lib/live-heartbeat"
 import { getAdjacentSidebarDiscussion, getSidebarDiscussionOrder } from "../lib/discussion-navigation"
 import {
@@ -98,7 +98,7 @@ function resolveFileLink(filePath: string, opts?: { line?: number }): (() => voi
 function navigateCodeRed(path: string) {
   // CodeRed is a plugin on this origin now: the kernel bridges codered.navigate
   // onto /ws and the shell routes to /apps/codered client-side.
-  fetch(`/api/apps/codered/navigate?path=${encodeURIComponent(path)}`, {
+  novaExecution.fetch(`/api/apps/codered/navigate?path=${encodeURIComponent(path)}`, {
     method: "POST",
     credentials: "include",
   }).catch(() => {})
@@ -240,7 +240,7 @@ export function ChatView({
     async upload(file) {
       const form = new FormData()
       form.append("file", file, file.name)
-      const response = await fetch("/ai-session/input-attachments", { method: "POST", credentials: "include", body: form })
+      const response = await novaExecution.fetch("/ai-session/input-attachments", { method: "POST", credentials: "include", body: form })
       if (!response.ok) {
         const error = await response.json().catch(() => ({ message: response.statusText }))
         throw new Error(error.message ?? error.error ?? response.statusText)
@@ -248,7 +248,7 @@ export function ChatView({
       return response.json() as Promise<UploadedAttachment>
     },
     async delete(attachmentId) {
-      const response = await fetch(`/ai-session/input-attachments/${encodeURIComponent(attachmentId)}`, { method: "DELETE", credentials: "include" })
+      const response = await novaExecution.fetch(`/ai-session/input-attachments/${encodeURIComponent(attachmentId)}`, { method: "DELETE", credentials: "include" })
       if (!response.ok && response.status !== 404) throw new Error("The attachment could not be removed")
     },
     getDownloadUrl(attachment) { return attachment.downloadUrl },

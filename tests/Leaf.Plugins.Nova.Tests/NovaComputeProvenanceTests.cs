@@ -53,6 +53,11 @@ public sealed class NovaComputeProvenanceTests
         Assert.Equal("Nova", provenance.Origin.App.NameSnapshot);
         Assert.Equal("ph-star", provenance.Origin.App.IconSnapshot);
         Assert.Equal("#C74B7A", provenance.Origin.App.ColorSnapshot);
+        Assert.Equal("agent", provenance.Actor.Kind);
+        Assert.Equal("agent-id", provenance.Actor.EntityId);
+        Assert.Equal("nova", provenance.Actor.Id);
+        Assert.Equal("Nova", provenance.Actor.NameSnapshot);
+        Assert.Equal("/api/assets/avatar.png", provenance.Actor.AvatarSnapshot);
     }
 
     [Fact]
