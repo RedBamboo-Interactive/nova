@@ -18,48 +18,46 @@ public sealed class RedComputeClientTests
         Assert.Equal("hello", message.Content);
     }
 
-    [Theory]
-    [InlineData(null, "local-user")]
-    [InlineData("", "local-user")]
-    [InlineData("user-42", "user-42")]
-    public void OwnerIdentityIsCanonical(string? ownerUserId, string expected)
-    {
-        Assert.Equal(expected, RedComputeClient.CanonicalOwnerUserId(ownerUserId));
-    }
-
     [Fact]
-    public async Task SessionMessageAndQueueUseTheSameForwardedOwner()
+    public async Task SessionMutationsForwardStructuredProvenance()
     {
         var gateway = new RecordingComputeGateway();
         var client = new RedComputeClient(gateway);
 
-        var sessionId = await client.CreateSessionAsync(new(), userId: null);
+        var provenance = Provenance();
+        var sessionId = await client.CreateSessionAsync(new(), provenance);
         var sent = await client.SendMessageDetailedAsync(
-            sessionId!, new { content = "queued" }, ownerUserId: null);
+            sessionId!, new { content = "queued" }, provenance);
         var queue = await client.ProxyInputQueueAsync(
-            sessionId!, ownerUserId: "local-user", HttpMethod.Get);
+            sessionId!, HttpMethod.Get);
 
         Assert.True(sent.Success);
         Assert.Equal(200, queue.StatusCode);
         Assert.Equal(3, gateway.Requests.Count);
-        Assert.All(gateway.Requests, request =>
-            Assert.Equal("local-user", request.OwnerUserId));
+        Assert.Equal(provenance, gateway.Requests[0].Provenance);
+        Assert.Equal(provenance, gateway.Requests[1].Provenance);
+        Assert.Null(gateway.Requests[2].Provenance);
     }
+
+    private static ComputeProvenance Provenance() => new(
+        ComputeProvenance.CurrentSchemaVersion,
+        new ComputeOrigin("redleaf", new ComputeAppReference("app", "nova", null, "Nova"),
+            new ComputeEntrypoint("http", "/api/apps/nova/test", "POST")),
+        new ComputeActor("agent", "Nova", Id: "nova"),
+        new ComputeBeneficiary("user", "user-1", "Laurent"),
+        [], new ComputeTrace(), ComputeProvenanceAssurance.Verified, DateTimeOffset.UtcNow);
 
     private sealed class RecordingComputeGateway : IComputeGateway
     {
-        public List<(string Path, string? OwnerUserId)> Requests { get; } = [];
+        public List<(string Path, ComputeProvenance? Provenance)> Requests { get; } = [];
 
         public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
-            var owner = request.Headers.TryGetValues("X-User-Id", out var values)
-                ? values.SingleOrDefault()
-                : null;
             var path = request.RequestUri?.IsAbsoluteUri == true
                 ? request.RequestUri.AbsolutePath
                 : request.RequestUri?.OriginalString ?? "";
-            Requests.Add((path, owner));
+            Requests.Add((path, provenance));
             var content = path.EndsWith("/sessions", StringComparison.Ordinal)
                 ? "{\"id\":\"session-1\"}"
                 : path.EndsWith("/message", StringComparison.Ordinal)

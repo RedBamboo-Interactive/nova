@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Leaf.Sdk;
 using Leaf.Sdk.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -43,7 +44,17 @@ public static class DelegateEndpoints
             if (string.IsNullOrWhiteSpace(request.Prompt))
                 return Results.BadRequest(new { error = "prompt is required" });
 
-            Leaf.Sdk.LeafEntity? resolvedRepository = null;
+            var callerId = TrustedCallerId(ctx.User);
+            if (callerId == null)
+                return Results.Json(new
+                {
+                    error = "authentication_required",
+                    message = "Delegation requires a signed user or execution identity; local-user is not delegated authority",
+                }, statusCode: StatusCodes.Status401Unauthorized);
+
+            var hasExplicitProjectPath = !isContinuation
+                && !string.IsNullOrWhiteSpace(request.ProjectPath);
+            LeafEntity? resolvedRepository = null;
             if (!isContinuation && !string.IsNullOrWhiteSpace(request.Repository))
             {
                 resolvedRepository = Guid.TryParse(request.Repository, out var repositoryId)
@@ -75,6 +86,41 @@ public static class DelegateEndpoints
                 request.ProjectPath = Path.GetFullPath(repositoryPath);
             }
 
+            // Compatibility for callers that still send a physical path. Code sessions are
+            // repository-backed, so resolve the path to one exact active Repository entity
+            // instead of creating a session whose membership has to be guessed later.
+            if (resolvedRepository is null && hasExplicitProjectPath)
+            {
+                var repositories = await entities.QueryAsync(new EntityQuery
+                {
+                    TypeSlug = "repository",
+                    Limit = 500,
+                }, ctx.RequestAborted);
+                var matches = FindMatchingActiveRepositories(repositories, request.ProjectPath!);
+                if (matches.Count == 0)
+                    return Results.Json(new
+                    {
+                        error = "repository_not_found_for_path",
+                        message = "projectPath must exactly match an active Repository entity checkout",
+                    }, statusCode: StatusCodes.Status422UnprocessableEntity);
+                if (matches.Count > 1)
+                    return Results.Json(new
+                    {
+                        error = "repository_path_ambiguous",
+                        message = "projectPath matches more than one active Repository entity",
+                    }, statusCode: StatusCodes.Status409Conflict);
+
+                resolvedRepository = matches[0];
+                var repositoryPath = StringValue(resolvedRepository.Data, "local_path");
+                if (!Directory.Exists(repositoryPath))
+                    return Results.Json(new
+                    {
+                        error = "repository_checkout_unavailable",
+                        message = $"Repository '{resolvedRepository.Name}' has no available local checkout",
+                    }, statusCode: StatusCodes.Status409Conflict);
+                request.ProjectPath = Path.GetFullPath(repositoryPath);
+            }
+
             // Resolve agent if specified: provides workspace, provider, quality defaults.
             AgentInfo? resolvedAgent = null;
             if (!isContinuation && !string.IsNullOrWhiteSpace(request.Agent))
@@ -99,9 +145,23 @@ public static class DelegateEndpoints
             if (!isContinuation && string.IsNullOrWhiteSpace(request.ProjectPath))
                 return Results.BadRequest(new { error = "Either sessionId, repository, projectPath, or agent is required" });
 
-            DiscussionRead? discussion = request.DiscussionId != null
-                ? await discussions.GetAsync(request.DiscussionId, ctx.RequestAborted)
-                : null;
+            DiscussionRead? discussion = null;
+            if (!string.IsNullOrWhiteSpace(request.DiscussionId))
+            {
+                discussion = await discussions.GetAsync(request.DiscussionId, ctx.RequestAborted);
+                if (discussion == null)
+                    return Results.Json(new
+                    {
+                        error = "discussion_not_found",
+                        message = $"Discussion '{request.DiscussionId}' not found",
+                    }, statusCode: StatusCodes.Status404NotFound);
+                if (!OwnerScope.CanAccess(discussion.OwnerId, callerId))
+                    return Results.Json(new
+                    {
+                        error = "forbidden",
+                        message = "You do not have access to this discussion",
+                    }, statusCode: StatusCodes.Status403Forbidden);
+            }
             resolvedAgent ??= discussion?.AgentId != null
                 ? await agentDir.GetAgentAsync(discussion.AgentId, ctx.RequestAborted)
                 : agentDir.NovaAgentId != null
@@ -110,13 +170,17 @@ public static class DelegateEndpoints
             if (resolvedAgent == null)
                 return Results.Json(new { error = "agent_not_found", message = "No linked Agent entity is available for delegation" }, statusCode: 422);
 
-            var ownerId = discussion?.OwnerId ?? ctx.User.FindFirstValue("sub");
+            var ownerId = discussion?.OwnerId ?? callerId;
             var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ctx.RequestAborted);
             var baseContext = new List<ComputeContextReference>();
             if (request.DiscussionId != null)
                 baseContext.Add(new("discussion", request.DiscussionId));
             if (resolvedRepository != null)
-                baseContext.Add(new("repository", resolvedRepository.Id.ToString()));
+                baseContext.Add(new ComputeContextReference(
+                    "repository",
+                    Id: resolvedRepository.Slug,
+                    EntityId: resolvedRepository.Id.ToString(),
+                    NameSnapshot: resolvedRepository.Name));
 
             // 1. Create session on RedCompute (skip if continuing an existing session)
             string sessionId;
@@ -144,6 +208,8 @@ public static class DelegateEndpoints
                 try
                 {
                     var createBody = new Dictionary<string, object?> { ["projectPath"] = request.ProjectPath };
+                    if (resolvedRepository is not null)
+                        createBody["repositoryId"] = resolvedRepository.Id;
                     if (!string.IsNullOrWhiteSpace(request.Provider))
                         createBody["provider"] = request.Provider;
                     if (!string.IsNullOrWhiteSpace(request.Model))
@@ -156,20 +222,43 @@ public static class DelegateEndpoints
                     var createProvenance = await NovaComputeProvenance.CreateAsync(
                         entities, resolvedAgent, beneficiary,
                         "/api/apps/nova/delegate", baseContext, method: "POST", ct: ctx.RequestAborted);
-                    var created = await redCompute.CreateSessionAsync(createBody, ownerId, "Nova:delegate",
+                    var created = await redCompute.CreateSessionAsync(createBody,
                         createProvenance, ctx.RequestAborted);
                     if (created == null)
                         return Results.Json(new { error = "session_create_failed", message = "RedCompute refused to create the session" }, statusCode: 502);
                     sessionId = created;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (IsExecutionIdentityFailure(ex))
+                {
+                    return Results.Json(new
+                    {
+                        error = "execution_identity_rejected",
+                        message = ex.Message,
+                    }, statusCode: StatusCodes.Status403Forbidden);
+                }
+                catch (TaskCanceledException ex)
+                {
+                    return Results.Json(new
+                    {
+                        error = "redcompute_timeout",
+                        message = ex.Message,
+                    }, statusCode: StatusCodes.Status504GatewayTimeout);
+                }
+                catch (HttpRequestException ex)
                 {
                     return Results.Json(new { error = "redcompute_unavailable", message = ex.Message }, statusCode: 502);
+                }
+                catch (Exception ex)
+                {
+                    return Results.Json(new { error = "delegation_failed", message = ex.Message }, statusCode: 500);
                 }
             }
 
             // 2. Send prompt and verify delivery
             bool promptSent = false;
+            RedComputeClient.SendMessageResult? lastPromptResult = null;
+            var promptMessageUid = Guid.NewGuid().ToString("N");
+            var promptIdempotencyKey = $"nova-delegate:{sessionId}:{promptMessageUid}";
             for (int attempt = 0; attempt < 3 && !promptSent; attempt++)
             {
                 try
@@ -179,15 +268,17 @@ public static class DelegateEndpoints
                         "/api/apps/nova/delegate",
                         [.. baseContext, new ComputeContextReference("session", sessionId)],
                         method: "POST", ct: ctx.RequestAborted);
-                    var result = await redCompute.SendMessageAsync(sessionId,
-                        new { content = request.Prompt }, ctx.RequestAborted, messageProvenance,
-                        ownerUserId: ownerId);
-                    if (result is { ValueKind: JsonValueKind.Object }
-                        && result.Value.TryGetProperty("sent", out var sent) && sent.GetBoolean())
+                    var result = await redCompute.SendMessageDetailedAsync(sessionId,
+                        new { content = request.Prompt, messageUid = promptMessageUid },
+                        messageProvenance, ctx.RequestAborted,
+                        idempotencyKey: promptIdempotencyKey);
+                    lastPromptResult = result;
+                    if (result.Success && IsPromptAccepted(result.Payload))
                     {
                         promptSent = true;
                         break;
                     }
+                    if (result.ErrorCode == "execution_identity_rejected") break;
                 }
                 catch { }
 
@@ -207,12 +298,27 @@ public static class DelegateEndpoints
                     catch { }
                 }
 
+                if (lastPromptResult is { ErrorCode: "execution_identity_rejected" })
+                    return Results.Json(new
+                    {
+                        error = lastPromptResult.ErrorCode,
+                        message = lastPromptResult.ErrorMessage,
+                    }, statusCode: StatusCodes.Status403Forbidden);
+
+                if (lastPromptResult is { ErrorCode: "redcompute_timeout" })
+                    return Results.Json(new
+                    {
+                        error = lastPromptResult.ErrorCode,
+                        message = lastPromptResult.ErrorMessage,
+                    }, statusCode: StatusCodes.Status504GatewayTimeout);
+
                 return Results.Json(new
                 {
                     error = "prompt_send_failed",
                     message = isContinuation
                         ? $"Prompt could not be delivered to session '{sessionId}' after 3 attempts."
                         : "Session created but prompt could not be delivered after 3 attempts. Session cleaned up.",
+                    upstreamError = lastPromptResult?.ErrorCode,
                 }, statusCode: 502);
             }
 
@@ -251,4 +357,56 @@ public static class DelegateEndpoints
 
     private static string StringValue(JsonObject data, string key, string fallback = "") =>
         data[key] is JsonValue value && value.TryGetValue<string>(out var text) ? text : fallback;
+
+    internal static IReadOnlyList<LeafEntity> FindMatchingActiveRepositories(
+        IEnumerable<LeafEntity> repositories,
+        string projectPath) => repositories
+        .Where(repository => repository.TypeSlug == "repository")
+        .Where(repository => string.Equals(
+            StringValue(repository.Data, "status", "active"),
+            "active",
+            StringComparison.OrdinalIgnoreCase))
+        .Where(repository => PathsEqual(
+            StringValue(repository.Data, "local_path"),
+            projectPath))
+        .ToList();
+
+    internal static bool PathsEqual(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right)) return false;
+        try
+        {
+            var leftPath = Path.GetFullPath(left)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var rightPath = Path.GetFullPath(right)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return string.Equals(leftPath, rightPath, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static string? TrustedCallerId(ClaimsPrincipal principal)
+    {
+        if (principal.Identity?.IsAuthenticated != true) return null;
+        var subject = principal.FindFirstValue("sub");
+        return string.IsNullOrWhiteSpace(subject)
+            || subject.Equals("local-user", StringComparison.OrdinalIgnoreCase)
+                ? null : subject;
+    }
+
+    internal static bool IsExecutionIdentityFailure(Exception exception)
+        => exception.GetType().Name.Equals(
+            "ExecutionIdentityValidationException", StringComparison.Ordinal);
+
+    internal static bool IsPromptAccepted(JsonElement? payload)
+    {
+        if (payload is not { ValueKind: JsonValueKind.Object } value) return false;
+        return value.TryGetProperty("accepted", out var accepted)
+                && accepted.ValueKind == JsonValueKind.True
+            || value.TryGetProperty("sent", out var sent)
+                && sent.ValueKind == JsonValueKind.True;
+    }
 }

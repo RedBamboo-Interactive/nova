@@ -113,7 +113,7 @@ public sealed class MessagePipeline(
         if (additionalContext != null) context.AddRange(additionalContext);
         var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
             entrypointRoute, context, correlationId: correlationId, parentJobId: parentJobId, ct: ct);
-        return await redCompute.CreateSessionAsync(body, ownerId, "Nova:agent", provenance, ct);
+        return await redCompute.CreateSessionAsync(body, provenance, ct);
     }
 
     public Task<SendMessageOutcome> SendAsync(
@@ -340,8 +340,8 @@ public sealed class MessagePipeline(
             [new ComputeContextReference("discussion", discussion.Id),
              new ComputeContextReference("session", sessionId)], method: "POST", ct: ct);
         var sendResult = await redCompute.SendMessageDetailedAsync(
-            sessionId, requestBody, ct, provenance,
-            idempotencyKey: idempotencyKey, ownerUserId: computeOwnerId);
+            sessionId, requestBody, provenance, ct,
+            idempotencyKey: idempotencyKey);
         if (!sendResult.Success)
         {
             return new(false, sessionId,

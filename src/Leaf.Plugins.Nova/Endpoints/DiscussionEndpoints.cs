@@ -1160,8 +1160,32 @@ public static class DiscussionEndpoints
             }, statusCode: 409);
         }
 
+        ComputeProvenance? provenance = null;
+        if (method != HttpMethod.Get && method != HttpMethod.Head)
+        {
+            var agents = ctx.RequestServices.GetRequiredService<AgentDirectory>();
+            var agent = discussion.AgentId is null
+                ? null
+                : await agents.GetAgentAsync(discussion.AgentId, ctx.RequestAborted);
+            if (agent is null)
+                return Results.Json(new
+                {
+                    error = "missing_agent",
+                    message = "The discussion has no linked Agent entity",
+                }, statusCode: 422);
+            var entities = ctx.RequestServices.GetRequiredKeyedService<IEntityStore>(NovaAppPlugin.PluginId);
+            var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(
+                entities, discussion.OwnerId, ctx.RequestAborted);
+            provenance = await NovaComputeProvenance.CreateAsync(
+                entities, agent, beneficiary,
+                $"/api/apps/nova/discussions/{discussionId}/input-queue{suffix}",
+                [new ComputeContextReference("discussion", discussionId),
+                 new ComputeContextReference("session", discussion.SessionId)],
+                method: method.Method, ct: ctx.RequestAborted);
+        }
+
         var result = await redCompute.ProxyInputQueueAsync(
-            discussion.SessionId, userId ?? "local-user", method, suffix, ctx.RequestAborted);
+            discussion.SessionId, method, suffix, provenance, ctx.RequestAborted);
         return Results.Content(result.Content, result.ContentType, statusCode: result.StatusCode);
     }
 
