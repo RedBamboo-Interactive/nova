@@ -19,7 +19,8 @@ public sealed class EventInjector(
     IPluginEvents events,
     RedComputeClient redCompute,
     AgentDirectory agents,
-    IEntityStore entities)
+    IEntityStore entities,
+    ConversationUnread conversationUnread)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -91,14 +92,17 @@ public sealed class EventInjector(
             }, ct);
         }
 
-        if (discussion.SessionId is null || role == "system") return false;
+        var sessionId = discussion.SessionId;
+        if (sessionId is null || role == "system") return false;
+
+        discussion = await conversationUnread.EnsureBaselineAsync(discussion, ct);
 
         if (senderAgentId is not null && replyToDiscussionId is not null)
         {
             try
             {
                 var callbackUrl = $"http://127.0.0.1:18804/api/apps/nova/callbacks/agent-response?replyTo={replyToDiscussionId}&agentId={discussion.AgentId}";
-                await redCompute.RegisterCallbackAsync(discussion.SessionId, callbackUrl, force: true, ct);
+                await redCompute.RegisterCallbackAsync(sessionId, callbackUrl, force: true, ct);
             }
             catch { }
         }
@@ -124,10 +128,10 @@ public sealed class EventInjector(
             var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
                 $"/api/apps/nova/discussions/{discussion.Id}/event",
                 [new ComputeContextReference("discussion", discussion.Id),
-                 new ComputeContextReference("session", discussion.SessionId),
+                 new ComputeContextReference("session", sessionId),
                  new ComputeContextReference("event", uid, NameSnapshot: source)], method: "POST", ct: ct);
             return await redCompute.SendMessageAsync(
-                discussion.SessionId, messageBody, provenance, ct) != null;
+                sessionId, messageBody, provenance, ct) != null;
         }
         catch
         {

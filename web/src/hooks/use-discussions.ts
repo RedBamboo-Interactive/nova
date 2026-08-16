@@ -9,7 +9,7 @@ import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../l
 import { mergeDiscussionAndSessionBlocks, mergeRevalidatedMessages } from "../lib/discussion-transcript"
 import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
-import { applyDiscussionMessageArrival } from "../lib/discussion-unread"
+import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
 import {
   clearDiscussionArchivePending,
   getDiscussionList,
@@ -263,6 +263,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
     await refreshDiscussions()
   }, [refreshDiscussions])
 
+  const acknowledgeRead = useCallback(async (id: string, conversationRevision: number) => {
+    try {
+      const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/read`, {
+        conversationRevision,
+      })
+      upsertDiscussion(updated)
+    } catch { /* a later refresh preserves any still-unread revision */ }
+  }, [])
+
   useEffect(() => {
     syncAndRefresh()
   }, [syncAndRefresh])
@@ -449,13 +458,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
       // recovery boundary for any messages or tool calls missed in between.
       const wasLoaded = loadedRef.current.has(id)
       const tail = historyTailRef.current[id] ?? INITIAL_HISTORY_TAIL
-      loadMessages(id, tail, wasLoaded)
-      api.put(`/api/apps/nova/discussions/${id}/read`).catch(() => {})
-      setDiscussions((prev) =>
-        prev.map((d) => d.id === id ? { ...d, lastReadAt: new Date().toISOString() } : d)
-      )
+      const revision = discussionsRef.current.find((discussion) => discussion.id === id)
+        ?.conversationRevision ?? 0
+      void loadMessages(id, tail, wasLoaded)
+        .then(() => acknowledgeRead(id, revision))
     })
-  }, [loadMessages])
+  }, [acknowledgeRead, loadMessages])
 
   const clearDiscussionSelection = useCallback(() => {
     setActiveDiscussionId(null)
@@ -733,15 +741,21 @@ export function useDiscussions(eventResolver?: EventResolver) {
         const now = new Date().toISOString()
         const isViewing = activeIdRef.current === discId
         setDiscussions((prev) =>
-          applySettledSessionStatus(prev, discId, session.status, now, isViewing)
+          applySettledSessionStatus(prev, discId, session.status, now)
         )
         if (isStopped) {
           api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
         } else {
-          api.put(`/api/apps/nova/discussions/${discId}/activity`).catch(() => {})
-          if (isViewing) {
-            api.put(`/api/apps/nova/discussions/${discId}/read`).catch(() => {})
-          }
+          void api.put<DiscussionInfo>(`/api/apps/nova/discussions/${discId}/activity`)
+            .then(async (updated) => {
+              upsertDiscussion(updated)
+              if (!isViewing) return
+              loadedRef.current.delete(discId)
+              const tail = historyTailRef.current[discId] ?? INITIAL_HISTORY_TAIL
+              await loadMessages(discId, tail, true)
+              await acknowledgeRead(discId, updated.conversationRevision)
+            })
+            .catch(() => {})
           // LIVE and heartbeat discussions own their titles — don't let
           // session auto-titles overwrite them (the session title drifts to
           // whatever topic was last discussed, which is confusing).
@@ -808,6 +822,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
           lastActivity: new Date().toISOString(),
           messageCount: 0,
           lastReadAt: null,
+          conversationRevision: 0,
+          readConversationRevision: 0,
           agentId: agentId ?? null,
         }
         return [newDisc, ...prev]
@@ -819,10 +835,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const { discussionId, content, source, senderAgentId, metadata, timestamp: serverTs } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; metadata?: Record<string, unknown> | null; timestamp?: string }
       if (!discussionId) return
       const ts = serverTs ?? new Date().toISOString()
-      const isViewing = activeIdRef.current === discussionId
-      const readAt = isViewing ? new Date().toISOString() : null
-      setDiscussions((prev) => applyDiscussionMessageArrival(prev, discussionId, ts, readAt))
-      if (isViewing) api.put(`/api/apps/nova/discussions/${discussionId}/read`).catch(() => {})
+      setDiscussions((prev) => applyDiscussionMessageArrival(prev, discussionId, ts))
       setMessages((prev) => ({
         ...prev,
         [discussionId]: appendEvent(prev[discussionId] ?? [], {
@@ -834,13 +847,28 @@ export function useDiscussions(eventResolver?: EventResolver) {
         }, eventResolver),
       }))
     } else if (event.type === "discussion.nova-message") {
-      const { discussionId, content, audioUrl, senderAgentId, timestamp: serverTs } = event.data as { discussionId: string; content: string; audioUrl?: string; senderAgentId?: string; timestamp?: string }
+      const { discussionId, content, audioUrl, senderAgentId, timestamp: serverTs,
+        conversationRevision, readConversationRevision } = event.data as {
+          discussionId: string
+          content: string
+          audioUrl?: string
+          senderAgentId?: string
+          timestamp?: string
+          conversationRevision?: number
+          readConversationRevision?: number
+        }
       if (!discussionId) return
       const ts = serverTs ?? new Date().toISOString()
       const isViewing = activeIdRef.current === discussionId
-      const readAt = isViewing ? new Date().toISOString() : null
-      setDiscussions((prev) => applyDiscussionMessageArrival(prev, discussionId, ts, readAt))
-      if (isViewing) api.put(`/api/apps/nova/discussions/${discussionId}/read`).catch(() => {})
+      setDiscussions((prev) => typeof conversationRevision === "number"
+        ? applyConversationMessageArrival(
+            prev,
+            discussionId,
+            ts,
+            conversationRevision,
+            readConversationRevision,
+          )
+        : applyDiscussionMessageArrival(prev, discussionId, ts))
       setMessages((prev) => {
         const current = prev[discussionId] ?? []
         const parts: import("@redbamboo/chat").MessagePart[] = [{ type: "text", content }]
@@ -854,6 +882,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
         }
         return { ...prev, [discussionId]: [...current, newBlock].sort(byTimestamp) }
       })
+      if (isViewing && typeof conversationRevision === "number")
+        void acknowledgeRead(discussionId, conversationRevision)
     } else if (event.type === "discussion.user-message") {
       const { discussionId, sessionId, messageUid } = event.data as { discussionId?: string; sessionId?: string | null; messageUid?: string | null }
       if (!discussionId) return
@@ -873,6 +903,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
     } else if (event.type === "discussion.cleared") {
       const { discussionId } = event.data as { discussionId: string }
       if (!discussionId) return
+      setDiscussions((prev) => prev.map((discussion) => discussion.id === discussionId
+        ? { ...discussion, conversationRevision: 0, readConversationRevision: 0 }
+        : discussion))
       setMessages((prev) => ({ ...prev, [discussionId]: [] }))
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
       clearQuestion(discussionId, null)
@@ -945,7 +978,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discId]: result.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, refreshDiscussions, loadMessages, environment.window, latchStreaming, reconcileStreaming])
+  }, [sessionToDiscussion, clearQuestion, refreshDiscussions, loadMessages, environment.window, latchStreaming, reconcileStreaming, acknowledgeRead])
 
   const handleUpstreamDisconnect = useCallback(() => {
     setUpstreamConnected(false)

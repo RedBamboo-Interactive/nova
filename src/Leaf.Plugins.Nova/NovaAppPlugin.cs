@@ -52,13 +52,15 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<IAgentWorkspacePathResolver>()));
         services.AddSingleton(sp =>
             new DiscussionStore(sp.GetRequiredKeyedService<IEntityStore>(PluginId), sp.GetRequiredService<IDiscussions>()));
+        services.AddSingleton<ConversationUnread>();
         services.AddSingleton(sp =>
             new EventInjector(
                 sp.GetRequiredService<IDiscussions>(),
                 sp.GetRequiredKeyedService<IPluginEvents>(PluginId),
                 sp.GetRequiredService<RedComputeClient>(),
                 sp.GetRequiredService<AgentDirectory>(),
-                sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
+                sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+                sp.GetRequiredService<ConversationUnread>()));
         services.AddSingleton(sp =>
             new LiveEvents(
                 sp.GetRequiredService<DiscussionStore>(),
@@ -141,6 +143,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<AgentWorkspaces>(),
                 sp.GetRequiredService<IAgentScratchSpace>(),
                 sp.GetRequiredService<ExtensionContributions>(),
+                sp.GetRequiredService<ConversationUnread>(),
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<MessagePipeline>>()));
     }
 

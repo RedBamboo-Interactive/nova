@@ -41,6 +41,7 @@ public sealed class MessagePipeline(
     AgentWorkspaces workspaces,
     IAgentScratchSpace scratchSpace,
     ExtensionContributions extensions,
+    ConversationUnread conversationUnread,
     ILogger<MessagePipeline> logger)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -143,6 +144,7 @@ public sealed class MessagePipeline(
         ResolvedDevice device, string input, string? delivery, string? idempotencyKey,
         string? displayContent, CancellationToken ct = default)
     {
+        discussion = await conversationUnread.EnsureBaselineAsync(discussion, ct);
         var sessionId = discussion.SessionId;
         var sessionIsNew = false;
         var computeOwnerId = discussion.OwnerId;

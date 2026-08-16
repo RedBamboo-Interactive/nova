@@ -104,9 +104,8 @@ public sealed class NovaAgentWelcomeProvider(
                 throw new InvalidOperationException(result.Error ?? "Nova returned an empty first greeting");
 
             var uid = MessageUid(messageKey);
-            await discussions.PostMessageIdempotentAsync(
+            await discussions.PostConversationMessageAsync(
                 discussion.EntityId,
-                "assistant",
                 result.Text.Trim(),
                 new JsonObject
                 {

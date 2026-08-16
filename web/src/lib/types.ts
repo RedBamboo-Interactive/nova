@@ -13,6 +13,8 @@ export interface DiscussionInfo {
   lastActivity: string
   messageCount: number
   lastReadAt: string | null
+  conversationRevision: number
+  readConversationRevision: number
   agentId: string | null
   qualityTier?: string | null
   provider?: string | null

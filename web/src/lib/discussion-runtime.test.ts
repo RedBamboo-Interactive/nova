@@ -15,6 +15,8 @@ function discussion(status: DiscussionInfo["status"] = "idle", type: DiscussionI
     lastActivity: "2026-08-07T00:00:00.000Z",
     messageCount: 1,
     lastReadAt: null,
+    conversationRevision: 0,
+    readConversationRevision: 0,
     agentId: "agent-a",
   }
 }
@@ -36,11 +38,10 @@ test("a settled session event clears the active indicator without a refresh", ()
     "discussion-a",
     "Idle",
     settledAt,
-    true,
   )
   assert.equal(updated?.status, "idle")
   assert.equal(updated?.lastActivity, settledAt)
-  assert.equal(updated?.lastReadAt, settledAt)
+  assert.equal(updated?.lastReadAt, null)
 })
 
 test("a stopped session settles without marking the discussion read", () => {
@@ -50,7 +51,6 @@ test("a stopped session settles without marking the discussion read", () => {
     "discussion-a",
     "Stopped",
     "2026-08-07T00:01:00.000Z",
-    true,
   )
   assert.equal(updated?.status, "stopped")
   assert.equal(updated?.lastReadAt, "2026-08-07T00:00:30.000Z")

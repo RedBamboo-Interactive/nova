@@ -66,7 +66,10 @@ public sealed record DiscussionRead(
     string? AgentId, string Type = "chat",
     string? LastContextJson = null, string? InjectedContext = null,
     string? QualityTier = null, string? Provider = null,
-    bool Confidential = false);
+    bool Confidential = false,
+    long ConversationRevision = 0,
+    long ReadConversationRevision = 0,
+    string? LastProcessedSessionAssistantUid = null);
 
 /// <summary>
 /// Centralized owner-scoping rules for user-owned resources. A resource is accessible
@@ -129,6 +132,9 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             ["app"] = "nova",
             ["owner_id"] = ownerId,
             ["type"] = type,
+            ["conversation_revision"] = 0,
+            ["read_conversation_revision"] = 0,
+            ["last_processed_session_assistant_uid"] = "",
         };
         if (qualityTier != null) data["quality_tier"] = qualityTier;
         if (provider != null) data["provider"] = provider;
@@ -165,6 +171,9 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             ["owner_id"] = ownerId,
             ["type"] = "chat",
             ["automation_attempt_job_id"] = key,
+            ["conversation_revision"] = 0,
+            ["read_conversation_revision"] = 0,
+            ["last_processed_session_assistant_uid"] = "",
         };
         var entity = await discussions.CreateAsync(null, agentId, data, ct);
         return Map(entity)!;
@@ -195,6 +204,9 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             ["owner_id"] = ownerId,
             ["type"] = type,
             ["creation_idempotency_key"] = idempotencyKey,
+            ["conversation_revision"] = 0,
+            ["read_conversation_revision"] = 0,
+            ["last_processed_session_assistant_uid"] = "",
         };
         if (qualityTier != null) data["quality_tier"] = qualityTier;
         if (provider != null) data["provider"] = provider;
@@ -242,6 +254,149 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             metadata["idempotency_key"] = idempotencyKey;
             await discussions.PostAsync(entityId, role, content, metadata, userId, ct);
             return true;
+        }, ct);
+
+    /// <summary>
+    /// Persists one proactive assistant message and advances the conversation
+    /// revision in the same per-discussion critical section. Reused idempotency
+    /// keys do neither, so retries cannot manufacture unread state.
+    /// </summary>
+    public Task<(bool Created, DiscussionRead? Discussion)> PostConversationMessageAsync(
+        Guid entityId, string content, JsonObject metadata, string? idempotencyKey,
+        string? userId = null, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync(entityId, async () =>
+        {
+            if (!string.IsNullOrWhiteSpace(idempotencyKey))
+            {
+                var existing = await discussions.GetMessagesAsync(entityId, ct: ct);
+                if (existing.Any(message => message.Metadata["idempotency_key"] is JsonValue value
+                    && value.TryGetValue<string>(out var key)
+                    && string.Equals(key, idempotencyKey, StringComparison.Ordinal)))
+                {
+                    var reusedEntity = await entities.GetAsync(entityId, ct);
+                    return (false, reusedEntity is null ? null : Map(reusedEntity));
+                }
+                metadata["idempotency_key"] = idempotencyKey;
+            }
+
+            await discussions.PostAsync(entityId, "assistant", content, metadata, userId, ct);
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity is null) return (true, null);
+            var mapped = Map(entity);
+            if (mapped is null) return (true, null);
+
+            var revision = Long(entity.Data, "conversation_revision") ?? 0;
+            var patch = new JsonObject
+            {
+                ["conversation_revision"] = revision + 1,
+                ["last_processed_session_assistant_uid"] =
+                    Str(entity.Data, "last_processed_session_assistant_uid") ?? "",
+            };
+            await entities.PatchAsync(entityId, patch, ct: ct);
+            var updated = mapped with
+            {
+                ConversationRevision = revision + 1,
+                LastProcessedSessionAssistantUid =
+                    Str(entity.Data, "last_processed_session_assistant_uid") ?? "",
+            };
+            return (true, updated);
+        }, ct);
+
+    /// <summary>
+    /// Baselines legacy discussions without notifying, then advances exactly
+    /// once for each newly observed provider-neutral assistant turn uid.
+    /// </summary>
+    public Task<DiscussionRead?> ReconcileConversationAsync(
+        Guid entityId, string? latestAssistantUid, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity is null) return null;
+            var current = Map(entity);
+            if (current is null) return null;
+
+            var normalizedUid = latestAssistantUid ?? "";
+            if (current.LastProcessedSessionAssistantUid is null)
+            {
+                await entities.PatchAsync(entityId, new JsonObject
+                {
+                    ["conversation_revision"] = current.ConversationRevision,
+                    ["read_conversation_revision"] = current.ConversationRevision,
+                    ["last_processed_session_assistant_uid"] = normalizedUid,
+                }, ct: ct);
+                return current with
+                {
+                    ReadConversationRevision = current.ConversationRevision,
+                    LastProcessedSessionAssistantUid = normalizedUid,
+                };
+            }
+
+            if (normalizedUid.Length == 0
+                || string.Equals(current.LastProcessedSessionAssistantUid, normalizedUid,
+                    StringComparison.Ordinal))
+                return current;
+
+            var nextRevision = current.ConversationRevision + 1;
+            await entities.PatchAsync(entityId, new JsonObject
+            {
+                ["conversation_revision"] = nextRevision,
+                ["last_processed_session_assistant_uid"] = normalizedUid,
+            }, ct: ct);
+            return current with
+            {
+                ConversationRevision = nextRevision,
+                LastProcessedSessionAssistantUid = normalizedUid,
+            };
+        }, ct);
+
+    /// <summary>
+    /// Acknowledges only the revision the client actually rendered. A newer
+    /// revision arriving concurrently remains unread.
+    /// </summary>
+    public Task<DiscussionRead?> MarkConversationReadAsync(
+        Guid entityId, long throughRevision, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity is null) return null;
+            var current = Map(entity);
+            if (current is null) return null;
+
+            var acknowledged = ConversationRevision.Acknowledge(
+                current.ConversationRevision, current.ReadConversationRevision, throughRevision);
+            var now = DateTime.UtcNow;
+            await entities.PatchAsync(entityId, new JsonObject
+            {
+                ["read_conversation_revision"] = acknowledged,
+                ["last_read_at"] = new DateTimeOffset(now).ToString("O"),
+            }, ct: ct);
+            return current with
+            {
+                ReadConversationRevision = acknowledged,
+                LastReadAt = now,
+            };
+        }, ct);
+
+    public Task<DiscussionRead?> ResetConversationReadAsync(
+        Guid entityId, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity is null) return null;
+            var current = Map(entity);
+            if (current is null) return null;
+            await entities.PatchAsync(entityId, new JsonObject
+            {
+                ["conversation_revision"] = 0,
+                ["read_conversation_revision"] = 0,
+                ["last_processed_session_assistant_uid"] = "",
+            }, ct: ct);
+            return current with
+            {
+                ConversationRevision = 0,
+                ReadConversationRevision = 0,
+                LastProcessedSessionAssistantUid = "",
+            };
         }, ct);
 
     /// <summary>
@@ -297,7 +452,12 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             Str(d, "injected_context"),
             Str(d, "quality_tier"),
             Str(d, "provider"),
-            Bool(d, "confidential") ?? false);
+            Bool(d, "confidential") ?? false,
+            Long(d, "conversation_revision") ?? 0,
+            Long(d, "read_conversation_revision") ?? 0,
+            d.ContainsKey("last_processed_session_assistant_uid")
+                ? Str(d, "last_processed_session_assistant_uid") ?? ""
+                : null);
     }
 
     public static object ToInfo(DiscussionRead d) => new
@@ -312,6 +472,8 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         lastActivity = d.LastActivity,
         messageCount = d.MessageCount,
         lastReadAt = d.LastReadAt,
+        conversationRevision = d.ConversationRevision,
+        readConversationRevision = d.ReadConversationRevision,
         agentId = d.AgentId,
         qualityTier = d.QualityTier,
         provider = d.Provider,
@@ -339,6 +501,16 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         if (node is not JsonValue v) return null;
         if (v.TryGetValue<int>(out var i)) return i;
         if (v.TryGetValue<double>(out var dbl)) return (int)dbl;
+        return null;
+    }
+
+    private static long? Long(JsonObject data, string key)
+    {
+        var node = data[key];
+        if (node is not JsonValue v) return null;
+        if (v.TryGetValue<long>(out var l)) return l;
+        if (v.TryGetValue<int>(out var i)) return i;
+        if (v.TryGetValue<double>(out var dbl)) return (long)dbl;
         return null;
     }
 

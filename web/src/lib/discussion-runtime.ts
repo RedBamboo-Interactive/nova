@@ -38,19 +38,16 @@ export function applySettledSessionStatus(
   discussionId: string,
   sessionStatus: string,
   activityAt: string,
-  markRead: boolean,
 ): DiscussionInfo[] {
   return discussions.map((discussion) => {
     if (discussion.id !== discussionId || discussion.status === "archived" || discussion.status === "archiving")
       return discussion
     const status = discussionStatusForSession(sessionStatus, discussion.type)
     if (!status || status === "thinking") return discussion
-    const stopped = status === "stopped"
     return {
       ...discussion,
       status,
       lastActivity: activityAt,
-      ...(markRead && !stopped ? { lastReadAt: activityAt } : {}),
     }
   })
 }

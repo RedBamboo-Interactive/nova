@@ -30,6 +30,11 @@ public class DiscussionConfidentialRequest
     public bool Confidential { get; set; }
 }
 
+public class DiscussionReadRequest
+{
+    public long? ConversationRevision { get; set; }
+}
+
 public class DiscussionEventRequest
 {
     public string Content { get; set; } = "";
@@ -100,48 +105,26 @@ public static class DiscussionEndpoints
             return Results.Ok(filtered.Select(DiscussionStore.ToInfo));
         });
 
-        group.MapGet("/discussions/pending", async (HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
+        group.MapGet("/discussions/pending", async (HttpContext ctx, DiscussionStore store) =>
         {
             var userId = UserId(ctx);
             var discussions = (await store.ListAsync())
-                .Where(d => !DiscussionStatus.IsClosed(d.Status) && d.SessionId != null)
+                .Where(d => !DiscussionStatus.IsClosed(d.Status))
                 // Heartbeat discussions never count as pending: no unread pill, no
                 // badge — the heartbeat is a place you visit, not one that calls you.
                 .Where(d => d.Type != HeartbeatService.DiscussionType)
                 .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
                 .ToList();
 
-            if (discussions.Count == 0)
-                return Results.Ok(new { count = 0 });
-
-            // Side effect kept from the standalone app: refresh cached message counts
-            // from RedCompute's session list before counting unread.
-            var sessions = await redCompute.GetSessionsAsync();
-            if (sessions != null)
-            {
-                var map = sessions.ToDictionary(s => s.Id);
-                for (var i = 0; i < discussions.Count; i++)
-                {
-                    var d = discussions[i];
-                    if (d.SessionId != null && map.TryGetValue(d.SessionId, out var s) && s.MessageCount > d.MessageCount)
-                    {
-                        await store.PatchAsync(d.EntityId, new JsonObject
-                        {
-                            ["message_count"] = s.MessageCount,
-                            ["last_activity"] = DateTimeOffset.UtcNow.ToString("O"),
-                        });
-                        discussions[i] = d with { MessageCount = s.MessageCount, LastActivity = DateTime.UtcNow };
-                    }
-                }
-            }
-
             var count = discussions.Count(d =>
-                d.MessageCount > 0 && (d.LastReadAt == null || d.LastActivity > d.LastReadAt));
+                d.Status == DiscussionStatus.Idle
+                && d.ConversationRevision > d.ReadConversationRevision);
 
             return Results.Ok(new { count });
         });
 
-        group.MapPost("/discussions/sync", async (HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
+        group.MapPost("/discussions/sync", async (HttpContext ctx, DiscussionStore store,
+            RedComputeClient redCompute, ConversationUnread conversationUnread) =>
         {
             var userId = UserId(ctx);
             var discussions = (await store.ListAsync())
@@ -183,6 +166,9 @@ public static class DiscussionEndpoints
                     if (applied != null)
                         discussions[i] = d with { Status = applied };
                 }
+
+                if (rcStatus == "Idle")
+                    discussions[i] = await conversationUnread.ReconcileSettledAsync(discussions[i]);
             }
 
             return Results.Ok(discussions.Select(DiscussionStore.ToInfo));
@@ -614,12 +600,16 @@ public static class DiscussionEndpoints
             if (discussion is null) return NotFound();
             if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
 
-            var now = DateTime.UtcNow;
-            await store.PatchAsync(discussion.EntityId, new JsonObject { ["last_read_at"] = new DateTimeOffset(now).ToString("O") });
-            return Results.Ok(DiscussionStore.ToInfo(discussion with { LastReadAt = now }));
+            DiscussionReadRequest? request = null;
+            try { request = await ctx.Request.ReadFromJsonAsync<DiscussionReadRequest>(JsonOptions); }
+            catch { /* compatibility with bodyless callers */ }
+            var updated = await store.MarkConversationReadAsync(discussion.EntityId,
+                request?.ConversationRevision ?? discussion.ConversationRevision);
+            return Results.Ok(DiscussionStore.ToInfo(updated ?? discussion));
         });
 
-        group.MapPut("/discussions/{id}/activity", async (string id, HttpContext ctx, DiscussionStore store) =>
+        group.MapPut("/discussions/{id}/activity", async (string id, HttpContext ctx,
+            DiscussionStore store, ConversationUnread conversationUnread) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
@@ -627,7 +617,11 @@ public static class DiscussionEndpoints
 
             var now = DateTime.UtcNow;
             await store.TouchAsync(discussion.EntityId);
-            return Results.Ok(DiscussionStore.ToInfo(discussion with { LastActivity = now }));
+            var updated = await conversationUnread.ReconcileSettledAsync(
+                discussion with { LastActivity = now });
+            var status = await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Idle);
+            if (status is not null) updated = updated with { Status = status };
+            return Results.Ok(DiscussionStore.ToInfo(updated));
         });
 
         group.MapPut("/discussions/{id}/stopped", async (string id, HttpContext ctx, DiscussionStore store) =>
@@ -742,6 +736,7 @@ public static class DiscussionEndpoints
                 ["last_context_json"] = null,
                 ["last_activity"] = DateTimeOffset.UtcNow.ToString("O"),
             });
+            await store.ResetConversationReadAsync(discussion.EntityId);
 
             // Day marker; the post bumps message_count back to 1.
             await store.PostMessageAsync(discussion.EntityId, "assistant", "New day. Timeline cleared.", new JsonObject
@@ -752,7 +747,11 @@ public static class DiscussionEndpoints
 
             await events.PublishAsync("discussion.cleared", new JsonObject { ["discussionId"] = id });
 
-            return Results.Ok(new { cleared = true, discussion = DiscussionStore.ToInfo(discussion with { SessionId = null, MessageCount = 1 }) });
+            var cleared = await store.GetAsync(id)
+                ?? discussion with { SessionId = null, MessageCount = 1,
+                    ConversationRevision = 0, ReadConversationRevision = 0,
+                    LastProcessedSessionAssistantUid = "" };
+            return Results.Ok(new { cleared = true, discussion = DiscussionStore.ToInfo(cleared) });
         });
 
         group.MapPost("/discussions/{id}/rotate", async (string id, HttpContext ctx, DiscussionStore store, AgentDirectory agents, DiscussionLifecycle lifecycle, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, MessagePipeline pipeline, DiscussionActivity activity, HeartbeatService heartbeat) =>
@@ -855,7 +854,7 @@ public static class DiscussionEndpoints
             return Results.Ok(new { success = true });
         });
 
-        group.MapPost("/discussions/{id}/nova-message", async (string id, NovaMessageRequest request, HttpContext ctx, DiscussionStore store, IDiscussions discussions, RedComputeClient redCompute, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, DiscussionActivity activity) =>
+        group.MapPost("/discussions/{id}/nova-message", async (string id, NovaMessageRequest request, HttpContext ctx, DiscussionStore store, ConversationUnread conversationUnread, RedComputeClient redCompute, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, DiscussionActivity activity) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
@@ -863,6 +862,8 @@ public static class DiscussionEndpoints
 
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });
+
+            discussion = await conversationUnread.EnsureBaselineAsync(discussion, ctx.RequestAborted);
 
             string? partsJson = null;
             if (!string.IsNullOrEmpty(request.AudioUrl))
@@ -885,18 +886,17 @@ public static class DiscussionEndpoints
                 ["sender_agent_id"] = request.SenderAgentId,
                 ["uid"] = uid,
             };
-            if (!string.IsNullOrWhiteSpace(request.IdempotencyKey))
-            {
-                var created = await store.PostMessageIdempotentAsync(discussion.EntityId,
-                    "assistant", request.Content, messageMetadata, request.IdempotencyKey,
-                    UserId(ctx), ctx.RequestAborted);
-                if (!created) return Results.Ok(new { success = true, reused = true });
-            }
-            else
-            {
-                await store.PostMessageAsync(discussion.EntityId, "assistant", request.Content,
-                    messageMetadata, UserId(ctx), ctx.RequestAborted);
-            }
+            var (created, revisedDiscussion) = await store.PostConversationMessageAsync(
+                discussion.EntityId, request.Content, messageMetadata, request.IdempotencyKey,
+                UserId(ctx), ctx.RequestAborted);
+            if (!created)
+                return Results.Ok(new
+                {
+                    success = true,
+                    reused = true,
+                    discussion = DiscussionStore.ToInfo(revisedDiscussion ?? discussion),
+                });
+            discussion = revisedDiscussion ?? discussion;
 
             var patch = new JsonObject { ["injected_context"] = request.Content };
             string? namePatch = null;
@@ -936,10 +936,12 @@ public static class DiscussionEndpoints
                 ["audioUrl"] = request.AudioUrl,
                 ["senderAgentId"] = request.SenderAgentId,
                 ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
+                ["conversationRevision"] = discussion.ConversationRevision,
+                ["readConversationRevision"] = discussion.ReadConversationRevision,
             });
 
             _ = activity.OnNovaMessage(id, discussion.Title, request.Content, discussion.Confidential);
-            return Results.Ok(new { success = true });
+            return Results.Ok(new { success = true, discussion = DiscussionStore.ToInfo(discussion) });
         });
 
         group.MapPost("/discussions/{id}/message", async (string id, DiscussionMessageRequest request, HttpContext ctx, DiscussionStore store, MessagePipeline pipeline, DeviceResolver devices, LiveEvents live, DiscussionActivity activity, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>

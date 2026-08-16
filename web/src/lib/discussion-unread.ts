@@ -1,10 +1,10 @@
 import type { DiscussionInfo } from "./types"
+import { hasUnreadConversation } from "@redbamboo/chat/conversation-read-state"
 
 export function isDiscussionUnread(discussion: DiscussionInfo): boolean {
   return discussion.type !== "heartbeat"
     && discussion.status === "idle"
-    && discussion.messageCount > 0
-    && (!discussion.lastReadAt || discussion.lastActivity > discussion.lastReadAt)
+    && hasUnreadConversation(discussion)
 }
 
 /**
@@ -16,7 +16,6 @@ export function applyDiscussionMessageArrival(
   discussions: DiscussionInfo[],
   discussionId: string,
   timestamp: string,
-  readAt: string | null,
 ): DiscussionInfo[] {
   return discussions.map((discussion) => {
     if (discussion.id !== discussionId) return discussion
@@ -28,7 +27,30 @@ export function applyDiscussionMessageArrival(
       // the same socket frame. Only establish that content exists here; the
       // next server refresh supplies the canonical exact count.
       messageCount: Math.max(1, discussion.messageCount),
-      ...(readAt ? { lastReadAt: readAt } : {}),
     }
   })
+}
+
+/** Apply a canonical conversational revision carried by a pushed message. */
+export function applyConversationMessageArrival(
+  discussions: DiscussionInfo[],
+  discussionId: string,
+  timestamp: string,
+  conversationRevision: number,
+  readConversationRevision?: number,
+): DiscussionInfo[] {
+  return discussions.map((discussion) => discussion.id !== discussionId
+    ? discussion
+    : {
+        ...discussion,
+        lastActivity: discussion.lastActivity > timestamp ? discussion.lastActivity : timestamp,
+        messageCount: Math.max(1, discussion.messageCount),
+        conversationRevision: Math.max(discussion.conversationRevision, conversationRevision),
+        ...(readConversationRevision === undefined ? {} : {
+          readConversationRevision: Math.max(
+            discussion.readConversationRevision,
+            readConversationRevision,
+          ),
+        }),
+      })
 }
