@@ -9,6 +9,7 @@ import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../l
 import { mergeDiscussionAndSessionBlocks, mergeRevalidatedMessages } from "../lib/discussion-transcript"
 import { applySessionStatus, preservesRecentStreamingLatch } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
+import { applyDiscussionMessageArrival } from "../lib/discussion-unread"
 import {
   clearDiscussionArchivePending,
   getDiscussionList,
@@ -471,17 +472,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
   }, [discussions, activeDiscussionId, loadMessages])
 
-  const autoSelected = useRef(false)
-  useEffect(() => {
-    if (autoSelected.current || activeDiscussionId) return
-    const live = visibleDiscussions.find((d) => d.type === "live")
-    const target = live ?? visibleDiscussions[0]
-    if (target) {
-      autoSelected.current = true
-      selectDiscussion(target.id)
-    }
-  }, [visibleDiscussions, activeDiscussionId, selectDiscussion])
-
   const createDiscussion = useCallback(async (agentId?: string, qualityTier?: string, provider?: string) => {
     setIsSpawning(true)
     try {
@@ -839,6 +829,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const { discussionId, content, source, senderAgentId, metadata, timestamp: serverTs } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; metadata?: Record<string, unknown> | null; timestamp?: string }
       if (!discussionId) return
       const ts = serverTs ?? new Date().toISOString()
+      const isViewing = activeIdRef.current === discussionId
+      const readAt = isViewing ? new Date().toISOString() : null
+      setDiscussions((prev) => applyDiscussionMessageArrival(prev, discussionId, ts, readAt))
+      if (isViewing) api.put(`/api/apps/nova/discussions/${discussionId}/read`).catch(() => {})
       setMessages((prev) => ({
         ...prev,
         [discussionId]: appendEvent(prev[discussionId] ?? [], {
@@ -852,6 +846,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
     } else if (event.type === "discussion.nova-message") {
       const { discussionId, content, audioUrl, senderAgentId, timestamp: serverTs } = event.data as { discussionId: string; content: string; audioUrl?: string; senderAgentId?: string; timestamp?: string }
       if (!discussionId) return
+      const ts = serverTs ?? new Date().toISOString()
+      const isViewing = activeIdRef.current === discussionId
+      const readAt = isViewing ? new Date().toISOString() : null
+      setDiscussions((prev) => applyDiscussionMessageArrival(prev, discussionId, ts, readAt))
+      if (isViewing) api.put(`/api/apps/nova/discussions/${discussionId}/read`).catch(() => {})
       setMessages((prev) => {
         const current = prev[discussionId] ?? []
         const parts: import("@redbamboo/chat").MessagePart[] = [{ type: "text", content }]
@@ -860,7 +859,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           id: `nova-msg-${Date.now()}`,
           role: "assistant",
           parts,
-          timestamp: serverTs ?? new Date().toISOString(),
+          timestamp: ts,
           senderAgentId,
         }
         return { ...prev, [discussionId]: [...current, newBlock].sort(byTimestamp) }

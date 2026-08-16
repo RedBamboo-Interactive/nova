@@ -24,3 +24,12 @@ test("a clicked discussion masks the old route until navigation catches up", () 
 test("route selection resumes authority after the pending handoff clears", () => {
   assert.equal(resolveRequestedDiscussionId("new-discussion", null), "new-discussion")
 })
+
+test("a deep link wins over the default LIVE discussion", () => {
+  assert.equal(resolveRequestedDiscussionId("chat-a", null, "live"), "chat-a")
+})
+
+test("the default discussion is used only when no route or handoff selects one", () => {
+  assert.equal(resolveRequestedDiscussionId(null, null, "live"), "live")
+  assert.equal(resolveRequestedDiscussionId(null, "chat-a", "live"), "chat-a")
+})

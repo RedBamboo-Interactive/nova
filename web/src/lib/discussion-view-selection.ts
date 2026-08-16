@@ -18,6 +18,7 @@ export function isDiscussionSelectionCurrent(
 export function resolveRequestedDiscussionId(
   requestedDiscussionId: string | null,
   pendingDiscussionId: string | null,
+  defaultDiscussionId: string | null = null,
 ): string | null {
-  return pendingDiscussionId ?? requestedDiscussionId
+  return pendingDiscussionId ?? requestedDiscussionId ?? defaultDiscussionId
 }

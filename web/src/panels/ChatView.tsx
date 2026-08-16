@@ -131,7 +131,6 @@ export function ChatView({
   const mobileClient = isMobileClient(environment.window.navigator)
   const requestedDiscussionId = floating ? selectedDiscussionId : (urlDiscussionId ?? null)
   const [pendingDiscussionId, setPendingDiscussionId] = useState<string | null>(null)
-  const synchronizedDiscussionId = resolveRequestedDiscussionId(requestedDiscussionId, pendingDiscussionId)
   const [mobileTab, setMobileTab] = useState(0)
   const floatingSurface = useUiSurface("nova:floating-chat")
 
@@ -183,6 +182,13 @@ export function ChatView({
     isLoadingEarlier,
     upstreamConnected,
   } = disc
+
+  const defaultDiscussionId = getSidebarDiscussionOrder(discussions, null)[0]?.id ?? null
+  const synchronizedDiscussionId = resolveRequestedDiscussionId(
+    requestedDiscussionId,
+    pendingDiscussionId,
+    defaultDiscussionId,
+  )
 
   const payloadSessionId = activeDiscussion?.sessionId ?? null
   const loadTranscriptPayload = useCallback<TranscriptPayloadLoader>((ref, range, signal) => {

@@ -3,6 +3,7 @@ import { ItemList, ItemListRow } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
 import type { DiscussionInfo, AgentInfo } from "../../lib/types"
 import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
+import { isDiscussionUnread } from "../../lib/discussion-unread"
 
 const statusColor: Record<string, string> = {
   thinking: "var(--color-accent-gold)",
@@ -22,11 +23,6 @@ interface Props {
   multiAgent?: boolean
 }
 
-function isUnread(d: DiscussionInfo): boolean {
-  return d.status === "idle" && d.messageCount > 0
-    && (!d.lastReadAt || d.lastActivity > d.lastReadAt)
-}
-
 export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, getAgent, multiAgent }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
@@ -40,12 +36,14 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
   }, [discussions])
 
   const renderLiveItem = useCallback((discussion: DiscussionInfo) => {
+    const unread = isDiscussionUnread(discussion)
     const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
     return (
       <div
         data-discussion-id={discussion.id}
         data-discussion-type={discussion.type}
         data-discussion-status={discussion.status}
+        data-discussion-unread={unread || undefined}
         data-discussion-selected={discussion.id === sidebarSelectionId || undefined}
       >
       <ItemListRow
@@ -70,6 +68,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         }
         className={[
           agent ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
+          unread ? "[&_[data-slot=item-list-title]]:font-semibold" : "",
         ].filter(Boolean).join(" ")}
         title={
           <span className="flex items-center gap-1.5">
@@ -79,13 +78,18 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         }
         subtitle={formatRelative(discussion.lastActivity)}
         trailing={
-          <button
-            onClick={(e) => { e.stopPropagation(); onRotate(discussion.id) }}
-            className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-accent-teal transition-all"
-            title="Rotate timeline"
-          >
-            <i className="ph-bold ph-arrows-clockwise text-xs" />
-          </button>
+          <div className="flex items-center gap-1.5">
+            {unread && (
+              <span aria-label="Unread" className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); onRotate(discussion.id) }}
+              className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-accent-teal transition-all"
+              title="Rotate timeline"
+            >
+              <i className="ph-bold ph-arrows-clockwise text-xs" />
+            </button>
+          </div>
         }
       />
       </div>
@@ -94,7 +98,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
 
   const renderChatItem = useCallback((discussion: DiscussionInfo) => {
     const alive = discussion.status !== "archived" && discussion.status !== "stopped"
-    const unread = alive && isUnread(discussion)
+    const unread = alive && isDiscussionUnread(discussion)
     const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
     return (
       <div
@@ -141,7 +145,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           discussion.status !== "archived" ? (
             <div className="flex items-center gap-1.5">
               {unread && (
-                <span className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
+                <span aria-label="Unread" className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
               )}
               <button
                 onClick={(e) => { e.stopPropagation(); onArchive(discussion.id) }}
