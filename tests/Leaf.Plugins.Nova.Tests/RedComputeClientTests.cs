@@ -19,6 +19,19 @@ public sealed class RedComputeClientTests
     }
 
     [Fact]
+    public void SessionMessageContractCarriesToolTranscriptFields()
+    {
+        using var document = JsonDocument.Parse(
+            """{"role":"assistant","eventType":"tool_result","toolName":"Bash","toolInput":{"command":"pwd"},"payloadRef":{"recordId":42,"kind":"tool-output","length":12,"contentType":"text/plain","encoding":"utf-8","sha256":"abc","available":true},"timestamp":"2026-08-16T15:25:28Z","messageUid":"turn-1"}""");
+
+        var message = RedComputeClient.ParseSessionMessage(document.RootElement);
+
+        Assert.Equal("Bash", message.ToolName);
+        Assert.Equal("{\"command\":\"pwd\"}", message.ToolInput);
+        Assert.Equal(42, message.PayloadRef?.GetProperty("recordId").GetInt32());
+    }
+
+    [Fact]
     public async Task SessionMutationsForwardStructuredProvenance()
     {
         var gateway = new RecordingComputeGateway();

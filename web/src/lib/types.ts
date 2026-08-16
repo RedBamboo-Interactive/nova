@@ -19,6 +19,9 @@ export interface DiscussionInfo {
   qualityTier?: string | null
   provider?: string | null
   confidential?: boolean
+  /** Internal first-turn identity. Raw RedCompute history includes this turn;
+   * clients hide it while retaining the real session and its tool trace. */
+  setupBootstrapMessageUid?: string | null
 }
 
 export interface AgentInfo {
@@ -61,6 +64,7 @@ export interface MessagePartDto {
   base64?: string
   mediaType?: string
   attachments?: import("@redbamboo/chat").UploadedAttachment[]
+  payloadRef?: import("@redbamboo/chat").TranscriptPayloadRef
 }
 
 export interface ClaudeStreamEvent {

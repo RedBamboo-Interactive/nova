@@ -10,6 +10,10 @@ public sealed class SessionMessage
     public string Role { get; set; } = "";
     public string EventType { get; set; } = "";
     public string? Content { get; set; }
+    public string? ToolName { get; set; }
+    public string? ToolInput { get; set; }
+    public string? ToolResult { get; set; }
+    public JsonElement? PayloadRef { get; set; }
     public DateTime Timestamp { get; set; }
 
     /// <summary>
@@ -363,11 +367,29 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         Role = el.GetProperty("role").GetString() ?? "unknown",
         EventType = el.TryGetProperty("eventType", out var et) ? et.GetString() ?? "text" : "text",
         Content = el.TryGetProperty("content", out var c) ? c.GetString() : null,
+        ToolName = el.TryGetProperty("toolName", out var toolName) && toolName.ValueKind == JsonValueKind.String
+            ? toolName.GetString()
+            : null,
+        ToolInput = ReadStringOrJson(el, "toolInput"),
+        ToolResult = ReadStringOrJson(el, "toolResult"),
+        PayloadRef = el.TryGetProperty("payloadRef", out var payloadRef)
+            && payloadRef.ValueKind == JsonValueKind.Object
+                ? payloadRef.Clone()
+                : null,
         Timestamp = el.TryGetProperty("timestamp", out var ts) ? ts.GetDateTimeOffset().UtcDateTime : DateTime.MinValue,
         MessageUid = el.TryGetProperty("messageUid", out var uid) && uid.ValueKind == JsonValueKind.String
             ? uid.GetString()
             : null,
     };
+
+    private static string? ReadStringOrJson(JsonElement parent, string propertyName)
+    {
+        if (!parent.TryGetProperty(propertyName, out var value)
+            || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return null;
+
+        return value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText();
+    }
 
     public sealed record SessionListEntry(string Id, string Status, int MessageCount);
 

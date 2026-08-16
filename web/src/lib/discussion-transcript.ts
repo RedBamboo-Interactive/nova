@@ -1,5 +1,16 @@
 import type { MessageBlock } from "@redbamboo/chat"
 
+/** Remove Nova's internal Meet Nova bootstrap from raw RedCompute history. */
+export function filterInternalBootstrapBlock(
+  blocks: MessageBlock[],
+  bootstrapMessageUid?: string | null,
+): MessageBlock[] {
+  if (!bootstrapMessageUid) return blocks
+  return blocks.filter((block) =>
+    block.id !== bootstrapMessageUid
+    && block.metadata?.messageUid !== bootstrapMessageUid)
+}
+
 /**
  * Combine Nova's authorized discussion projection with RedCompute's richer raw
  * transcript. The discussion endpoint contributes ambient events and a newly

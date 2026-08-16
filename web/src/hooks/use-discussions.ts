@@ -6,7 +6,7 @@ import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, Questio
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
-import { mergeDiscussionAndSessionBlocks, mergeRevalidatedMessages } from "../lib/discussion-transcript"
+import { filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeRevalidatedMessages } from "../lib/discussion-transcript"
 import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
@@ -101,6 +101,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
           base64: p.base64,
           mediaType: p.mediaType,
           attachments: p.attachments,
+          payloadRef: p.payloadRef,
         })),
       timestamp: m.timestamp,
       senderAgentId: m.senderAgentId,
@@ -323,7 +324,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
         try {
           const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
           if (data.messages?.length) {
-            sessionMsgs = rebuildBlocks(data.messages)
+            sessionMsgs = filterInternalBootstrapBlock(
+              rebuildBlocks(data.messages),
+              disc.setupBootstrapMessageUid,
+            )
             sessionHasEarlier = data.messages.length >= tail
           }
         } catch {}
@@ -361,7 +365,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
             try {
               const session = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
               if (session.messages?.length) {
-                sessionMsgs = rebuildBlocks(session.messages)
+                sessionMsgs = filterInternalBootstrapBlock(
+                  rebuildBlocks(session.messages),
+                  disc.setupBootstrapMessageUid,
+                )
                 sessionHasEarlier = session.messages.length >= tail
               }
             } catch {
@@ -392,7 +399,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
             api.put(`/api/apps/nova/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
           }
           if (data.messages?.length) {
-            commitMessages(cleanMessages(rebuildBlocks(data.messages), eventResolver))
+            commitMessages(cleanMessages(filterInternalBootstrapBlock(
+              rebuildBlocks(data.messages),
+              disc.setupBootstrapMessageUid,
+            ), eventResolver))
             commitHistory(data.messages.length >= tail)
             return
           }
@@ -401,7 +411,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
             await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
             const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
             if (data.messages?.length) {
-              commitMessages(cleanMessages(rebuildBlocks(data.messages), eventResolver))
+              commitMessages(cleanMessages(filterInternalBootstrapBlock(
+                rebuildBlocks(data.messages),
+                disc.setupBootstrapMessageUid,
+              ), eventResolver))
               commitHistory(data.messages.length >= tail)
               return
             }

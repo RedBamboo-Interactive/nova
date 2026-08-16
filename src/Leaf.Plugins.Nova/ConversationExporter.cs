@@ -176,7 +176,11 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
     {
         var result = new List<CollapsedMessage>();
 
-        foreach (var msg in raw)
+        foreach (var msg in raw
+            .Select((message, index) => (message, index))
+            .OrderBy(item => item.message.Timestamp)
+            .ThenBy(item => item.index)
+            .Select(item => item.message))
         {
             if (msg.EventType is "thinking" or "status") continue;
 
@@ -197,6 +201,10 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
                 Role = msg.Role,
                 EventType = msg.EventType,
                 Content = content,
+                ToolName = msg.ToolName,
+                ToolInput = msg.ToolInput,
+                ToolResult = msg.ToolResult,
+                PayloadRef = msg.PayloadRef,
                 Timestamp = msg.Timestamp,
                 // First record of the run wins, matching how the chat UI derives
                 // a block id in rebuildBlocks().
@@ -312,6 +320,10 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         public string Role { get; set; } = "";
         public string EventType { get; set; } = "";
         public string? Content { get; set; }
+        public string? ToolName { get; set; }
+        public string? ToolInput { get; set; }
+        public string? ToolResult { get; set; }
+        public JsonElement? PayloadRef { get; set; }
         public DateTime Timestamp { get; set; }
         public string? Source { get; set; }
         public string? MessageUid { get; set; }

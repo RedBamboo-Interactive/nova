@@ -480,6 +480,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         qualityTier = d.QualityTier,
         provider = d.Provider,
         confidential = d.Confidential,
+        setupBootstrapMessageUid = d.SetupBootstrapMessageUid,
     };
 
     private static string? Str(JsonObject data, string key)

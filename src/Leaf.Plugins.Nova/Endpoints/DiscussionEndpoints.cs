@@ -396,10 +396,12 @@ public static class DiscussionEndpoints
                             .Where(m => m.Metadata["source"]?.GetValue<string>() == "nova-message")
                             .Select(m => m.Metadata["uid"]?.GetValue<string>()));
                     var sessionMsgs = collapsed
-                        .Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content))
+                        .Where(IsVisibleSessionMessage)
                         .Select(m =>
                         {
-                            var content = ConversationExporter.StripInjectedTags(m.Content ?? "");
+                            var content = m.EventType == "text"
+                                ? ConversationExporter.StripInjectedTags(m.Content ?? "")
+                                : m.ToolResult ?? m.Content ?? "";
                             var saved = m.Role == "user" && m.MessageUid is not null
                                 ? userAttachmentsByUid.GetValueOrDefault(m.MessageUid)
                                 : null;
@@ -414,7 +416,7 @@ public static class DiscussionEndpoints
                                 role = m.Role,
                                 parts = saved is not null
                                     ? MapUserMessageParts(saved.Metadata["parts_json"]?.GetValue<string>(), content)
-                                    : MapParts(null, content),
+                                    : MapSessionMessageParts(m, content),
                                 timestamp = m.Timestamp.ToString("o"),
                                 senderAgentId = (string?)null,
                                 source = (string?)"session-transcript",
@@ -1315,6 +1317,47 @@ public static class DiscussionEndpoints
 
     private static bool IsAcceptedUserMessageSource(string? source)
         => source is "user-message" or "queued-user-message";
+
+    internal static bool IsVisibleSessionMessage(ConversationExporter.CollapsedMessage message)
+        => message.EventType switch
+        {
+            "text" => !string.IsNullOrWhiteSpace(message.Content),
+            "tool_use" => !string.IsNullOrWhiteSpace(message.ToolName),
+            "tool_result" => !string.IsNullOrWhiteSpace(message.ToolResult)
+                || !string.IsNullOrWhiteSpace(message.Content)
+                || message.PayloadRef is not null,
+            _ => false,
+        };
+
+    internal static object[] MapSessionMessageParts(
+        ConversationExporter.CollapsedMessage message,
+        string content)
+        => message.EventType switch
+        {
+            "tool_use" =>
+            [
+                new
+                {
+                    type = (string?)"tool_use",
+                    content = (string?)"",
+                    toolName = message.ToolName,
+                    toolInput = message.ToolInput,
+                    payloadRef = (JsonElement?)null,
+                },
+            ],
+            "tool_result" =>
+            [
+                new
+                {
+                    type = (string?)"tool_result",
+                    content = (string?)content,
+                    toolName = message.ToolName,
+                    toolInput = message.ToolInput,
+                    payloadRef = message.PayloadRef,
+                },
+            ],
+            _ => MapParts(null, content),
+        };
 
     internal static HashSet<string> FindPendingUserMessageUids(
         IEnumerable<string?> sessionUserUids,

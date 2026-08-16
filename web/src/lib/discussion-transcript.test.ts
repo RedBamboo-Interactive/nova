@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
+  filterInternalBootstrapBlock,
   mergeDiscussionAndSessionBlocks,
   mergeRevalidatedMessages,
 } from "./discussion-transcript.ts"
@@ -31,6 +32,21 @@ const rawReply: MessageBlock = {
   parts: [{ type: "tool_use", content: "", toolName: "Read", toolInput: "{}" }],
   metadata: undefined,
 }
+
+test("removes only the internal Meet Nova bootstrap from raw session history", () => {
+  const bootstrap: MessageBlock = {
+    id: "setup-bootstrap",
+    role: "user",
+    parts: [{ type: "text", content: "internal setup instruction" }],
+    timestamp: "2026-08-02T11:58:00.000Z",
+  }
+
+  assert.deepEqual(
+    filterInternalBootstrapBlock([bootstrap, rawReply], "setup-bootstrap"),
+    [rawReply],
+  )
+  assert.equal(filterInternalBootstrapBlock([rawReply], null)[0], rawReply)
+})
 
 test("uses raw session fidelity without duplicating the discussion transcript", () => {
   assert.deepEqual(

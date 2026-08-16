@@ -34,4 +34,35 @@ public sealed class ConversationExporterTests
 
         Assert.Equal("Authored text.", stripped);
     }
+
+    [Fact]
+    public void CollapseMessagesOrdersAsyncToolRecordsAndKeepsTheirDetails()
+    {
+        var turnUid = "turn-1";
+        var result = ConversationExporter.CollapseMessages(
+        [
+            new SessionMessage
+            {
+                Role = "assistant",
+                EventType = "tool_result",
+                MessageUid = turnUid,
+                Timestamp = new DateTime(2026, 8, 16, 15, 25, 29, DateTimeKind.Utc),
+                ToolResult = "done",
+            },
+            new SessionMessage
+            {
+                Role = "assistant",
+                EventType = "tool_use",
+                MessageUid = turnUid,
+                Timestamp = new DateTime(2026, 8, 16, 15, 25, 28, DateTimeKind.Utc),
+                ToolName = "Bash",
+                ToolInput = "{\"command\":\"pwd\"}",
+            },
+        ]);
+
+        Assert.Equal("tool_use", result[0].EventType);
+        Assert.Equal("Bash", result[0].ToolName);
+        Assert.Equal("tool_result", result[1].EventType);
+        Assert.Equal("done", result[1].ToolResult);
+    }
 }
