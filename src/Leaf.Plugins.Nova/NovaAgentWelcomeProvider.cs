@@ -21,9 +21,12 @@ public sealed class NovaAgentWelcomeProvider(
     RedComputeClient redCompute,
     IEntityStore entities) : IAgentWelcomeProvider
 {
-    private const string PromptResource = "nova-welcome-prompt.v1.md";
+    private const string FirstRunPromptResource = "nova-welcome-prompt.v1.md";
+    private const string ReviewPromptResource = "nova-review-welcome-prompt.v1.md";
+    private static readonly string[] WelcomeTools = ["Read", "Glob", "Grep"];
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates = new();
-    private static readonly string Prompt = ReadPrompt();
+    private static readonly string FirstRunPrompt = ReadPrompt(FirstRunPromptResource);
+    private static readonly string ReviewPrompt = ReadPrompt(ReviewPromptResource);
 
     public string TemplateId => "nova/default";
 
@@ -43,6 +46,7 @@ public sealed class NovaAgentWelcomeProvider(
                 qualityTier: context.QualityTierSlug,
                 provider: context.ProviderSlug,
                 ct: ct);
+            ValidateDiscussionBinding(discussion, context);
 
             var messageKey = context.IdempotencyKey + ":message";
             var existing = (await messages.GetMessagesAsync(discussion.EntityId, ct: ct))
@@ -65,16 +69,20 @@ public sealed class NovaAgentWelcomeProvider(
             agents.NovaAgentId = agent.Id;
 
             var scratch = scratchSpace.PrepareExecution(agent.Name, context.IdempotencyKey);
-            var workspace = await workspaces.GetForSessionAsync(agent, scratch, ct);
+            // Meet Nova is never allowed to fall back to a disposable scratch workspace.
+            // The welcome and the conversation that follows must use the Agent's real,
+            // durable identity and memory root.
+            var workspace = await workspaces.GetAsync(agent.Id, ct);
             workspace.GenerateClaudeMd();
+            var isReview = context.Purpose == AgentWelcomePurpose.ReviewExistingAgent;
             var body = new Dictionary<string, object?>
             {
-                ["prompt"] = Prompt,
+                ["prompt"] = PromptFor(context.Purpose),
                 ["qualityTier"] = context.QualityTierSlug,
                 ["provider"] = context.ProviderSlug,
                 ["workingDir"] = workspace.WorkspacePath,
-                ["allowedTools"] = Array.Empty<string>(),
-                ["maxTurns"] = 1,
+                ["allowedTools"] = WelcomeTools,
+                ["maxTurns"] = 8,
                 ["timeout"] = 180,
                 ["networkAccess"] = false,
                 ["env"] = scratch.Environment,
@@ -94,7 +102,7 @@ public sealed class NovaAgentWelcomeProvider(
                 ct: ct);
             var result = await redCompute.ExecuteAsync(
                 body,
-                "Nova: First hello",
+                isReview ? "Nova: Welcome back" : "Nova: First hello",
                 context.OwnerId,
                 180,
                 provenance,
@@ -137,10 +145,36 @@ public sealed class NovaAgentWelcomeProvider(
     private static string MessageUid(string key)
         => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
 
-    private static string ReadPrompt()
+    internal static string PromptFor(AgentWelcomePurpose purpose)
+        => purpose == AgentWelcomePurpose.ReviewExistingAgent
+            ? ReviewPrompt
+            : FirstRunPrompt;
+
+    internal static void ValidateDiscussionBinding(
+        DiscussionRead discussion,
+        AgentWelcomeContext context)
     {
-        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(PromptResource)
-            ?? throw new InvalidOperationException($"Embedded {PromptResource} is missing");
+        if (!string.Equals(discussion.AgentId, context.AgentId.ToString(),
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Meet Nova resolved a discussion bound to a different Agent");
+        if (!string.Equals(discussion.OwnerId, context.OwnerId, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Meet Nova resolved a discussion owned by a different user");
+        if (!string.Equals(discussion.Provider, context.ProviderSlug,
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Meet Nova resolved a discussion with a different inference provider");
+        if (!string.Equals(discussion.QualityTier, context.QualityTierSlug,
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Meet Nova resolved a discussion with a different quality tier");
+    }
+
+    private static string ReadPrompt(string resourceName)
+    {
+        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException($"Embedded {resourceName} is missing");
         using var reader = new StreamReader(stream, Encoding.UTF8);
         var prompt = reader.ReadToEnd().Trim();
         if (string.IsNullOrWhiteSpace(prompt))

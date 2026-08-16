@@ -43,6 +43,47 @@ public sealed class NovaAgentTemplateProviderTests
             null!, null!, null!, null!, null!, null!, null!);
 
         Assert.Equal("nova/default", provider.TemplateId);
+
+        var firstRun = NovaAgentWelcomeProvider.PromptFor(AgentWelcomePurpose.FirstRun);
+        var review = NovaAgentWelcomeProvider.PromptFor(AgentWelcomePurpose.ReviewExistingAgent);
+        Assert.Contains("just created", firstRun, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("workspace identity", firstRun, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("memory", firstRun, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("continuation", review, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("memory", review, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("tell you their name", review, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void WelcomeDiscussionMustRemainBoundToTheRequestedAgentAndWorkspaceSettings()
+    {
+        var agentId = Guid.NewGuid();
+        var context = new AgentWelcomeContext(
+            agentId,
+            "owner",
+            "codex-default",
+            "standard",
+            AgentWelcomePurpose.ReviewExistingAgent,
+            "welcome-key");
+        var discussion = new DiscussionRead(
+            "discussion", null, null, "idle",
+            DateTime.UtcNow, DateTime.UtcNow, 0, null, "owner", Guid.NewGuid(),
+            agentId.ToString(), QualityTier: "standard", Provider: "codex-default");
+
+        NovaAgentWelcomeProvider.ValidateDiscussionBinding(discussion, context);
+
+        var wrongAgent = discussion with { AgentId = Guid.NewGuid().ToString() };
+        Assert.Throws<InvalidOperationException>(() =>
+            NovaAgentWelcomeProvider.ValidateDiscussionBinding(wrongAgent, context));
+        var wrongOwner = discussion with { OwnerId = "someone-else" };
+        Assert.Throws<InvalidOperationException>(() =>
+            NovaAgentWelcomeProvider.ValidateDiscussionBinding(wrongOwner, context));
+        var wrongProvider = discussion with { Provider = "opencode-default" };
+        Assert.Throws<InvalidOperationException>(() =>
+            NovaAgentWelcomeProvider.ValidateDiscussionBinding(wrongProvider, context));
+        var wrongTier = discussion with { QualityTier = "fast" };
+        Assert.Throws<InvalidOperationException>(() =>
+            NovaAgentWelcomeProvider.ValidateDiscussionBinding(wrongTier, context));
     }
 
     private static string Combined(AgentTemplateDefinition template)
