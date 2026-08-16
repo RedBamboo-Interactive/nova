@@ -7,7 +7,7 @@ import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
 import { mergeDiscussionAndSessionBlocks, mergeRevalidatedMessages } from "../lib/discussion-transcript"
-import { applySessionStatus, preservesRecentStreamingLatch } from "../lib/discussion-runtime"
+import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyDiscussionMessageArrival } from "../lib/discussion-unread"
 import {
@@ -730,20 +730,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
         if (!known || isClosed(known.status) || isDiscussionArchivePending(discId)) return
         const isStopped = session.status === "Stopped" || session.status === "Error"
         const isLiveDisc = known.type === "live"
-        const discStatus = isStopped ? "stopped" as const : "idle" as const
         const now = new Date().toISOString()
         const isViewing = activeIdRef.current === discId
         setDiscussions((prev) =>
-          prev.map((d) => {
-            if (d.id !== discId || isClosed(d.status)) return d
-            if (d.status === "thinking") return d
-            return {
-              ...d,
-              status: discStatus,
-              lastActivity: now,
-              ...(isViewing && !isStopped ? { lastReadAt: now } : {}),
-            }
-          })
+          applySettledSessionStatus(prev, discId, session.status, now, isViewing)
         )
         if (isStopped) {
           api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})

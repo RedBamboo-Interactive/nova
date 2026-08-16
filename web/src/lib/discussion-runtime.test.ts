@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { applySessionStatus, discussionStatusForSession, preservesRecentStreamingLatch } from "./discussion-runtime.ts"
+import { applySessionStatus, applySettledSessionStatus, discussionStatusForSession, preservesRecentStreamingLatch } from "./discussion-runtime.ts"
 import type { DiscussionInfo } from "./types.ts"
 
 function discussion(status: DiscussionInfo["status"] = "idle", type: DiscussionInfo["type"] = "chat"): DiscussionInfo {
@@ -27,6 +27,33 @@ test("an active compute session makes the discussion indicator active", () => {
 test("an idle compute session clears the active discussion indicator", () => {
   const [updated] = applySessionStatus([discussion("thinking")], "discussion-a", "Idle")
   assert.equal(updated?.status, "idle")
+})
+
+test("a settled session event clears the active indicator without a refresh", () => {
+  const settledAt = "2026-08-07T00:01:00.000Z"
+  const [updated] = applySettledSessionStatus(
+    [discussion("thinking")],
+    "discussion-a",
+    "Idle",
+    settledAt,
+    true,
+  )
+  assert.equal(updated?.status, "idle")
+  assert.equal(updated?.lastActivity, settledAt)
+  assert.equal(updated?.lastReadAt, settledAt)
+})
+
+test("a stopped session settles without marking the discussion read", () => {
+  const original = discussion("thinking")
+  const [updated] = applySettledSessionStatus(
+    [{ ...original, lastReadAt: "2026-08-07T00:00:30.000Z" }],
+    "discussion-a",
+    "Stopped",
+    "2026-08-07T00:01:00.000Z",
+    true,
+  )
+  assert.equal(updated?.status, "stopped")
+  assert.equal(updated?.lastReadAt, "2026-08-07T00:00:30.000Z")
 })
 
 test("closed discussions ignore late session events", () => {

@@ -29,6 +29,33 @@ export function applySessionStatus(
 }
 
 /**
+ * Apply a non-active provider status and the activity metadata emitted when a
+ * turn settles. Keeping this projection pure prevents the WebSocket handler
+ * from accidentally preserving the very `thinking` state it needs to clear.
+ */
+export function applySettledSessionStatus(
+  discussions: DiscussionInfo[],
+  discussionId: string,
+  sessionStatus: string,
+  activityAt: string,
+  markRead: boolean,
+): DiscussionInfo[] {
+  return discussions.map((discussion) => {
+    if (discussion.id !== discussionId || discussion.status === "archived" || discussion.status === "archiving")
+      return discussion
+    const status = discussionStatusForSession(sessionStatus, discussion.type)
+    if (!status || status === "thinking") return discussion
+    const stopped = status === "stopped"
+    return {
+      ...discussion,
+      status,
+      lastActivity: activityAt,
+      ...(markRead && !stopped ? { lastReadAt: activityAt } : {}),
+    }
+  })
+}
+
+/**
  * A newly submitted local turn can be durably delivered before RedCompute's
  * provider lifecycle reaches Active. Ignore that transient non-active status;
  * terminal statuses and genuinely completed turns still clear immediately.
