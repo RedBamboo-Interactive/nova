@@ -36,6 +36,15 @@ public sealed class NovaAgentTemplateProviderTests
         Assert.Equal(first.DigestSha256, second.DigestSha256);
     }
 
+    [Fact]
+    public void WelcomeContributorOwnsTheSameTemplateAndLoadsItsVersionedPrompt()
+    {
+        IAgentWelcomeProvider provider = new NovaAgentWelcomeProvider(
+            null!, null!, null!, null!, null!, null!, null!);
+
+        Assert.Equal("nova/default", provider.TemplateId);
+    }
+
     private static string Combined(AgentTemplateDefinition template)
         => string.Join("\n", template.Name, template.Description, template.Identity,
             template.OutputProtocol, template.MemoryInstructions);

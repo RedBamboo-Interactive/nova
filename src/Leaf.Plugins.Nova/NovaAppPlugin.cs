@@ -30,6 +30,15 @@ public sealed class NovaAppPlugin : ILeafPlugin
     public void ConfigureServices(IServiceCollection services, PluginContext ctx)
     {
         services.AddSingleton<IAgentTemplateProvider, NovaAgentTemplateProvider>();
+        services.AddSingleton<IAgentWelcomeProvider>(sp =>
+            new NovaAgentWelcomeProvider(
+                sp.GetRequiredService<DiscussionStore>(),
+                sp.GetRequiredService<IDiscussions>(),
+                sp.GetRequiredService<AgentDirectory>(),
+                sp.GetRequiredService<AgentWorkspaces>(),
+                sp.GetRequiredService<IAgentScratchSpace>(),
+                sp.GetRequiredService<RedComputeClient>(),
+                sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
         services.AddSingleton<RedComputeClient>();
         services.AddSingleton(sp =>
             new AgentDirectory(

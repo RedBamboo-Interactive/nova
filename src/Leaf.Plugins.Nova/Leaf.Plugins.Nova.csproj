@@ -30,6 +30,7 @@
          assembly exposes — embedding the same file keeps them from drifting. -->
     <EmbeddedResource Include="..\..\plugin.json" LogicalName="plugin.json" />
     <EmbeddedResource Include="Templates\nova-agent-template.v1.json" LogicalName="nova-agent-template.v1.json" />
+    <EmbeddedResource Include="Templates\nova-welcome-prompt.v1.md" LogicalName="nova-welcome-prompt.v1.md" />
   </ItemGroup>
 
 </Project>
