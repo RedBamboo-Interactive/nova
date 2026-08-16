@@ -2,7 +2,11 @@ import { useState, useEffect, useRef } from "react"
 import { api } from "../lib/api"
 import type { AgentInfo } from "../lib/types"
 import { getSettings, setSettings } from "../lib/settings-store"
-import { getInitialAgentIndex, orderAgentsByName } from "../lib/new-discussion-picker"
+import {
+  getInitialAgentIndex,
+  orderAgentsByName,
+  reconcileHighlightedAgentId,
+} from "../lib/new-discussion-picker"
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -36,7 +40,9 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   const [loading, setLoading] = useState(false)
   const [filter, setFilter] = useState("")
   const [starting, setStarting] = useState(false)
-  const [highlighted, setHighlighted] = useState(0)
+  const [highlightedAgentId, setHighlightedAgentId] = useState<string | null>(
+    () => getSettings().lastUsedAgentId,
+  )
   const [qualityTier, setQualityTier] = useState("")
   const [tiers, setTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
@@ -47,11 +53,11 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
     if (!open) {
       setStarting(false)
       setFilter("")
-      setHighlighted(0)
+      setHighlightedAgentId(getSettings().lastUsedAgentId)
       setQualityTier("")
       return
     }
-    setLoading(true)
+    setLoading(agents.length === 0)
     const tiersP = api.get<{ tiers: QualityTierInfo[] }>("/ai-session/quality-modes")
       .then(data => { if (data.tiers?.length) setTiers(data.tiers); return data.tiers ?? [] })
       .catch(() => [] as QualityTierInfo[])
@@ -66,13 +72,23 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
       .catch(() => [] as ProviderInfo[])
     const agentsP = api.get<AgentInfo[]>("/api/apps/nova/agents")
       .catch(() => [] as AgentInfo[])
+      .then(agentList => {
+        const orderedAgents = orderAgentsByName(agentList)
+        const initialIndex = getInitialAgentIndex(orderedAgents, getSettings().lastUsedAgentId)
+        const initialAgent = orderedAgents[initialIndex]
+        setAgents(orderedAgents)
+        setHighlightedAgentId(currentId => reconcileHighlightedAgentId(
+          orderedAgents,
+          currentId,
+          initialAgent?.id ?? null,
+        ))
+        setLoading(false)
+        return orderedAgents
+      })
 
-    Promise.all([agentsP, providersP, tiersP]).then(([agentList, provList, tierList]) => {
-      const orderedAgents = orderAgentsByName(agentList)
+    Promise.all([agentsP, providersP, tiersP]).then(([orderedAgents, provList, tierList]) => {
       const initialIndex = getInitialAgentIndex(orderedAgents, getSettings().lastUsedAgentId)
       const initialAgent = orderedAgents[initialIndex]
-      setAgents(orderedAgents)
-      setHighlighted(initialIndex)
       if (initialAgent?.qualityTier && tierList.some(t => t.slug === initialAgent.qualityTier))
         setQualityTier(initialAgent.qualityTier)
       else
@@ -83,7 +99,6 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
         const def = provList.find(p => p.isDefault)
         if (def) setSelectedProvider(def.slug)
       }
-      setLoading(false)
     })
   }, [open])
 
@@ -91,6 +106,8 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
     a.name.toLowerCase().includes(filter.toLowerCase())
   )
 
+  const highlightedIndex = filtered.findIndex(agent => agent.id === highlightedAgentId)
+  const highlighted = highlightedIndex >= 0 ? highlightedIndex : 0
   const highlightedAgent = filtered[highlighted]
   useEffect(() => {
     if (highlightedAgent) applyAgentDefaults(highlightedAgent)
@@ -112,6 +129,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
 
   const selectAgent = (agentId: string) => {
     setStarting(true)
+    setHighlightedAgentId(agentId)
     setSettings({ lastUsedAgentId: agentId })
     onSelect(agentId, qualityTier, selectedProvider)
     onClose()
@@ -120,18 +138,14 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   const onInputKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault()
-      setHighlighted(i => {
-        const next = Math.min(i + 1, filtered.length - 1)
-        listRef.current?.children[next]?.scrollIntoView({ block: "nearest" })
-        return next
-      })
+      const next = Math.min(highlighted + 1, filtered.length - 1)
+      listRef.current?.children[next]?.scrollIntoView({ block: "nearest" })
+      setHighlightedAgentId(filtered[next]?.id ?? null)
     } else if (e.key === "ArrowUp") {
       e.preventDefault()
-      setHighlighted(i => {
-        const next = Math.max(i - 1, 0)
-        listRef.current?.children[next]?.scrollIntoView({ block: "nearest" })
-        return next
-      })
+      const next = Math.max(highlighted - 1, 0)
+      listRef.current?.children[next]?.scrollIntoView({ block: "nearest" })
+      setHighlightedAgentId(filtered[next]?.id ?? null)
     } else if (e.key === "Enter") {
       e.preventDefault()
       if (filtered.length > 0 && !starting) {
@@ -158,7 +172,13 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
             <input
               type="text"
               value={filter}
-              onChange={e => { setFilter(e.target.value); setHighlighted(0) }}
+              onChange={e => {
+                const value = e.target.value
+                setFilter(value)
+                const firstMatch = agents.find(agent =>
+                  agent.name.toLowerCase().includes(value.toLowerCase()))
+                setHighlightedAgentId(firstMatch?.id ?? null)
+              }}
               onKeyDown={onInputKeyDown}
               placeholder="Filter agents..."
               autoFocus
@@ -175,7 +195,10 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
             <button
               key={agent.id}
               disabled={starting}
-              onClick={() => { if (highlighted === i && !starting) selectAgent(agent.id); else setHighlighted(i) }}
+              onClick={() => {
+                if (highlightedAgent?.id === agent.id && !starting) selectAgent(agent.id)
+                else setHighlightedAgentId(agent.id)
+              }}
               onKeyDown={agents.length <= 1 ? onInputKeyDown : undefined}
               autoFocus={agents.length <= 1 && i === 0}
               className={`w-full text-left px-4 py-3 transition-colors border-b border-border-subtle last:border-b-0 ${

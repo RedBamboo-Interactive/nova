@@ -16,3 +16,13 @@ export function getInitialAgentIndex(
   const index = agents.findIndex(agent => agent.id === lastUsedAgentId)
   return index >= 0 ? index : 0
 }
+
+export function reconcileHighlightedAgentId(
+  agents: readonly AgentInfo[],
+  currentAgentId: string | null,
+  lastUsedAgentId: string | null,
+): string | null {
+  if (currentAgentId && agents.some(agent => agent.id === currentAgentId))
+    return currentAgentId
+  return agents[getInitialAgentIndex(agents, lastUsedAgentId)]?.id ?? null
+}
