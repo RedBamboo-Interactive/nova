@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react"
 import { api } from "../lib/api"
 import type { AgentInfo } from "../lib/types"
+import { getSettings, setSettings } from "../lib/settings-store"
+import { getInitialAgentIndex, orderAgentsByName } from "../lib/new-discussion-picker"
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -66,14 +68,17 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
       .catch(() => [] as AgentInfo[])
 
     Promise.all([agentsP, providersP, tiersP]).then(([agentList, provList, tierList]) => {
-      setAgents(agentList)
-      const first = agentList[0]
-      if (first?.qualityTier && tierList.some(t => t.slug === first.qualityTier))
-        setQualityTier(first.qualityTier)
+      const orderedAgents = orderAgentsByName(agentList)
+      const initialIndex = getInitialAgentIndex(orderedAgents, getSettings().lastUsedAgentId)
+      const initialAgent = orderedAgents[initialIndex]
+      setAgents(orderedAgents)
+      setHighlighted(initialIndex)
+      if (initialAgent?.qualityTier && tierList.some(t => t.slug === initialAgent.qualityTier))
+        setQualityTier(initialAgent.qualityTier)
       else
         setQualityTier(tierList.find(t => t.isDefault)?.slug ?? tierList[0]?.slug ?? "")
-      if (first?.provider && provList.some(p => p.slug === first.provider))
-        setSelectedProvider(first.provider)
+      if (initialAgent?.provider && provList.some(p => p.slug === initialAgent.provider))
+        setSelectedProvider(initialAgent.provider)
       else {
         const def = provList.find(p => p.isDefault)
         if (def) setSelectedProvider(def.slug)
@@ -91,6 +96,11 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
     if (highlightedAgent) applyAgentDefaults(highlightedAgent)
   }, [highlightedAgent?.id])
 
+  useEffect(() => {
+    if (!open || filtered.length === 0) return
+    listRef.current?.children[highlighted]?.scrollIntoView({ block: "nearest" })
+  }, [open, filter, highlighted, filtered.length])
+
   function applyAgentDefaults(agent: AgentInfo) {
     if (agent.qualityTier && tiers.some(t => t.slug === agent.qualityTier))
       setQualityTier(agent.qualityTier)
@@ -102,6 +112,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
 
   const selectAgent = (agentId: string) => {
     setStarting(true)
+    setSettings({ lastUsedAgentId: agentId })
     onSelect(agentId, qualityTier, selectedProvider)
     onClose()
   }
