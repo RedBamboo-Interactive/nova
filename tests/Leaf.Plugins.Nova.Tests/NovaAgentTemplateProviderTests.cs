@@ -44,13 +44,15 @@ public sealed class NovaAgentTemplateProviderTests
 
         Assert.Equal("nova/default", provider.TemplateId);
 
-        var firstRun = NovaAgentWelcomeProvider.PromptFor(AgentWelcomePurpose.FirstRun);
+        var firstRun = NovaAgentWelcomeProvider.PromptFor(AgentWelcomePurpose.FirstRun, "Laurent");
         var review = NovaAgentWelcomeProvider.PromptFor(AgentWelcomePurpose.ReviewExistingAgent);
         Assert.Contains("just created", firstRun, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Meet Nova", firstRun, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("first visible message", firstRun, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("workspace identity", firstRun, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("memory", firstRun, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Laurent", firstRun, StringComparison.Ordinal);
+        Assert.DoesNotContain("Invite the person to tell you their name", firstRun, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("continuation", review, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Meet Nova", review, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("memory", review, StringComparison.OrdinalIgnoreCase);
