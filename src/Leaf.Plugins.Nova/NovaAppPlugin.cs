@@ -4,6 +4,7 @@ using Leaf.Sdk;
 using Leaf.Sdk.Services;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Leaf.Plugins.Nova;
 
@@ -33,12 +34,11 @@ public sealed class NovaAppPlugin : ILeafPlugin
         services.AddSingleton<IAgentWelcomeProvider>(sp =>
             new NovaAgentWelcomeProvider(
                 sp.GetRequiredService<DiscussionStore>(),
-                sp.GetRequiredService<IDiscussions>(),
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredService<AgentWorkspaces>(),
-                sp.GetRequiredService<IAgentScratchSpace>(),
+                sp.GetRequiredService<MessagePipeline>(),
                 sp.GetRequiredService<RedComputeClient>(),
-                sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
+                sp.GetRequiredService<ILogger<NovaAgentWelcomeProvider>>()));
         services.AddSingleton<RedComputeClient>();
         services.AddSingleton(sp =>
             new AgentDirectory(

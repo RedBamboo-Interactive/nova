@@ -1,30 +1,29 @@
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json.Nodes;
 using System.Collections.Concurrent;
 using Leaf.Sdk.Services;
+using Microsoft.Extensions.Logging;
 
 namespace Leaf.Plugins.Nova;
 
 /// <summary>
-/// Creates Nova's first durable discussion and asks the selected provider to author
-/// the opening. The generation runs as an internal one-shot, so the user-facing
-/// transcript contains Nova's answer without a counterfeit visible user message.
+/// Creates Nova's first durable discussion and starts its real conversation session
+/// with an internal Meet Nova bootstrap turn. The same discussion and session carry
+/// the greeting, every setup reply, and the final handoff into Nova.
 /// </summary>
 public sealed class NovaAgentWelcomeProvider(
     DiscussionStore discussions,
-    IDiscussions messages,
     AgentDirectory agents,
     AgentWorkspaces workspaces,
-    IAgentScratchSpace scratchSpace,
+    MessagePipeline pipeline,
     RedComputeClient redCompute,
-    IEntityStore entities) : IAgentWelcomeProvider
+    ILogger<NovaAgentWelcomeProvider> logger) : IAgentWelcomeProvider
 {
     private const string FirstRunPromptResource = "nova-welcome-prompt.v1.md";
     private const string ReviewPromptResource = "nova-review-welcome-prompt.v1.md";
-    private static readonly string[] WelcomeTools = ["Read", "Glob", "Grep"];
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates = new();
+    private static readonly ConcurrentDictionary<string, Task> PendingWelcomes = new();
     private static readonly string FirstRunPrompt = ReadPrompt(FirstRunPromptResource);
     private static readonly string ReviewPrompt = ReadPrompt(ReviewPromptResource);
 
@@ -48,19 +47,22 @@ public sealed class NovaAgentWelcomeProvider(
                 ct: ct);
             ValidateDiscussionBinding(discussion, context);
 
-            var messageKey = context.IdempotencyKey + ":message";
-            var existing = (await messages.GetMessagesAsync(discussion.EntityId, ct: ct))
-                .FirstOrDefault(message =>
-                    message.Role == "assistant"
-                    && message.Metadata["idempotency_key"]?.GetValue<string>() == messageKey
-                    && !string.IsNullOrWhiteSpace(message.Content));
-            if (existing is not null)
+            var messageKey = context.IdempotencyKey + ":bootstrap";
+            var existing = discussion.SessionId is null
+                ? null
+                : await redCompute.GetSessionAsync(discussion.SessionId, ct);
+            var existingGreeting = existing?.Messages.LastOrDefault(message =>
+                message.Role == "assistant"
+                && message.EventType == "text"
+                && !string.IsNullOrWhiteSpace(message.Content));
+            if (existingGreeting is not null)
             {
                 agents.NovaAgentId = context.AgentId.ToString();
+                await discussions.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Idle, ct);
                 return new AgentWelcomeResult(
                     discussion.Id,
-                    null,
-                    existing.Metadata["uid"]?.GetValue<string>() ?? MessageUid(messageKey));
+                    discussion.SessionId,
+                    existingGreeting.MessageUid ?? MessageUid(messageKey));
             }
 
             var agent = (await agents.GetAgentsAsync(forceRefresh: true, ct))
@@ -68,77 +70,78 @@ public sealed class NovaAgentWelcomeProvider(
                 ?? throw new InvalidOperationException("The newly created Nova Agent could not be resolved");
             agents.NovaAgentId = agent.Id;
 
-            var scratch = scratchSpace.PrepareExecution(agent.Name, context.IdempotencyKey);
             // Meet Nova is never allowed to fall back to a disposable scratch workspace.
             // The welcome and the conversation that follows must use the Agent's real,
             // durable identity and memory root.
             var workspace = await workspaces.GetAsync(agent.Id, ct);
             workspace.GenerateClaudeMd();
-            var isReview = context.Purpose == AgentWelcomePurpose.ReviewExistingAgent;
-            var body = new Dictionary<string, object?>
-            {
-                ["prompt"] = PromptFor(context.Purpose),
-                ["qualityTier"] = context.QualityTierSlug,
-                ["provider"] = context.ProviderSlug,
-                ["workingDir"] = workspace.WorkspacePath,
-                ["allowedTools"] = WelcomeTools,
-                ["maxTurns"] = 8,
-                ["timeout"] = 180,
-                ["networkAccess"] = false,
-                ["env"] = scratch.Environment,
-                ["addDirs"] = new[] { scratch.Path },
-            };
-            var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(
-                entities, context.OwnerId, ct);
-            var provenance = await NovaComputeProvenance.CreateAsync(
-                entities,
-                agent,
-                beneficiary,
-                "setup:nova-welcome",
-                [new ComputeContextReference("discussion", discussion.Id),
-                 new ComputeContextReference("setup", context.IdempotencyKey)],
-                entrypointKind: "setup",
-                method: "POST",
-                ct: ct);
-            var result = await redCompute.ExecuteAsync(
-                body,
-                isReview ? "Nova: Welcome back" : "Nova: First hello",
-                context.OwnerId,
-                180,
-                provenance,
-                ct,
-                idempotencyKey: context.IdempotencyKey + ":generation");
-            if (!result.Success || string.IsNullOrWhiteSpace(result.Text))
-                throw new InvalidOperationException(result.Error ?? "Nova returned an empty first greeting");
-
             var uid = MessageUid(messageKey);
-            await discussions.PostConversationMessageAsync(
-                discussion.EntityId,
-                result.Text.Trim(),
-                new JsonObject
-                {
-                    ["source"] = "nova-message",
-                    ["sender_agent_id"] = agent.Id,
-                    ["uid"] = uid,
-                    ["setup_welcome"] = true,
-                },
-                messageKey,
-                context.OwnerId,
-                ct);
             await discussions.PatchAsync(
                 discussion.EntityId,
-                new JsonObject { ["injected_context"] = result.Text.Trim() },
+                new System.Text.Json.Nodes.JsonObject
+                {
+                    ["setup_bootstrap_message_uid"] = uid,
+                },
                 "Meet Nova",
                 ct);
+            await discussions.TrySetStatusAsync(
+                discussion.EntityId, DiscussionStatus.Thinking, ct);
+            _ = PendingWelcomes.GetOrAdd(
+                context.IdempotencyKey,
+                _ => GenerateWelcomeAsync(
+                    discussion,
+                    context,
+                    messageKey,
+                    uid));
 
-            return new AgentWelcomeResult(
-                discussion.Id,
-                result.SessionId,
-                uid);
+            // The real discussion is usable immediately. Its canonical status and
+            // transcript expose the background greeting as it progresses.
+            return new AgentWelcomeResult(discussion.Id, null, uid);
         }
         finally
         {
             gate.Release();
+        }
+    }
+
+    private async Task GenerateWelcomeAsync(
+        DiscussionRead discussion,
+        AgentWelcomeContext context,
+        string messageKey,
+        string messageUid)
+    {
+        try
+        {
+            var outcome = await pipeline.SendInternalAsync(
+                discussion,
+                context.OwnerId,
+                PromptFor(context.Purpose),
+                messageKey,
+                messageUid,
+                CancellationToken.None);
+            if (!outcome.Success)
+                throw new InvalidOperationException(
+                    outcome.ErrorMessage ?? "Nova's real discussion could not accept its Meet Nova bootstrap turn");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex,
+                "Nova welcome generation failed for discussion {DiscussionId} and Agent {AgentId}",
+                discussion.Id,
+                context.AgentId);
+            try
+            {
+                await discussions.TrySetStatusAsync(
+                    discussion.EntityId, DiscussionStatus.Stopped, CancellationToken.None);
+            }
+            catch
+            {
+                // Preserve the original generation failure in the log.
+            }
+        }
+        finally
+        {
+            PendingWelcomes.TryRemove(context.IdempotencyKey, out _);
         }
     }
 

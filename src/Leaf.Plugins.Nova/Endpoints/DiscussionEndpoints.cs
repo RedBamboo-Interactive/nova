@@ -334,7 +334,7 @@ public static class DiscussionEndpoints
             return Results.Text(markdown, "text/markdown");
         });
 
-        group.MapGet("/discussions/{id}", async (string id, HttpContext ctx, DiscussionStore store, IDiscussions discussions, RedComputeClient redCompute) =>
+        group.MapGet("/discussions/{id}", async (string id, HttpContext ctx, DiscussionStore store, IDiscussions discussions, RedComputeClient redCompute, ConversationUnread conversationUnread) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
@@ -353,6 +353,27 @@ public static class DiscussionEndpoints
                 var snapshot = await redCompute.GetSessionAsync(discussion.SessionId, tail: tail);
                 if (snapshot is { Messages.Count: > 0 })
                 {
+                    // This projection is consumed by Nova itself and by the embedded
+                    // Meet Nova chat. Reconcile the backing session here so every
+                    // surface observes one canonical status and conversation revision
+                    // without depending on Nova's separate list-sync timer.
+                    var sessionStatus = DiscussionStatus.FromSessionStatus(
+                        snapshot.Status,
+                        discussion.Type);
+                    if (sessionStatus is not null && sessionStatus != discussion.Status)
+                    {
+                        var applied = await store.TrySetStatusAsync(
+                            discussion.EntityId,
+                            sessionStatus,
+                            ctx.RequestAborted);
+                        if (applied is not null)
+                            discussion = discussion with { Status = applied };
+                    }
+                    if (snapshot.Status == "Idle")
+                        discussion = await conversationUnread.ReconcileSettledAsync(
+                            discussion,
+                            ctx.RequestAborted);
+
                     var records = await discussions.GetMessagesAsync(discussion.EntityId);
                     var userAttachmentsByUid = records
                         .Where(m => IsAcceptedUserMessageSource(m.Metadata["source"]?.GetValue<string>()))
@@ -360,7 +381,10 @@ public static class DiscussionEndpoints
                         .GroupBy(m => m.Metadata["uid"]!.GetValue<string>())
                         .ToDictionary(g => g.Key, g => g.OrderByDescending(m => m.CreatedAt).First());
 
-                    var collapsed = ConversationExporter.CollapseMessages(snapshot.Messages);
+                    var collapsed = ConversationExporter.CollapseMessages(snapshot.Messages)
+                        .Where(message => !(message.Role == "user"
+                            && message.MessageUid == discussion.SetupBootstrapMessageUid))
+                        .ToList();
                     var pendingUserUids = FindPendingUserMessageUids(
                         collapsed.Where(m => m.Role == "user").Select(m => m.MessageUid),
                         records

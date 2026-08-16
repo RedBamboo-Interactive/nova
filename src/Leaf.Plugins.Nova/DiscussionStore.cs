@@ -69,7 +69,8 @@ public sealed record DiscussionRead(
     bool Confidential = false,
     long ConversationRevision = 0,
     long ReadConversationRevision = 0,
-    string? LastProcessedSessionAssistantUid = null);
+    string? LastProcessedSessionAssistantUid = null,
+    string? SetupBootstrapMessageUid = null);
 
 /// <summary>
 /// Centralized owner-scoping rules for user-owned resources. A resource is accessible
@@ -457,7 +458,8 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             Long(d, "read_conversation_revision") ?? 0,
             d.ContainsKey("last_processed_session_assistant_uid")
                 ? Str(d, "last_processed_session_assistant_uid") ?? ""
-                : null);
+                : null,
+            Str(d, "setup_bootstrap_message_uid"));
     }
 
     public static object ToInfo(DiscussionRead d) => new

@@ -123,7 +123,32 @@ public sealed class MessagePipeline(
         string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
         CancellationToken ct = default)
         => SendCoreAsync(discussion, userId, content, images, null, device, input,
-            delivery, idempotencyKey, displayContent, ct);
+            delivery, idempotencyKey, displayContent, persistUserMessage: true,
+            requestedMessageUid: null, ct);
+
+    /// <summary>
+    /// Starts a real discussion turn while keeping its bootstrap instruction out of
+    /// the user-facing transcript. RedCompute receives the full instruction, but its
+    /// display content is blank and Nova's discussion stream does not persist a
+    /// counterfeit user message.
+    /// </summary>
+    public Task<SendMessageOutcome> SendInternalAsync(
+        DiscussionRead discussion, string? userId, string content,
+        string idempotencyKey, string messageUid, CancellationToken ct = default)
+        => SendCoreAsync(
+            discussion,
+            userId,
+            content,
+            images: null,
+            inputParts: null,
+            new ResolvedDevice { Name = "RedLeaf Setup", Type = "system", Platform = "RedLeaf" },
+            input: "internal",
+            delivery: null,
+            idempotencyKey,
+            displayContent: "",
+            persistUserMessage: false,
+            requestedMessageUid: messageUid,
+            ct);
 
     public Task<SendMessageOutcome> SendInputAsync(
         DiscussionRead discussion, string? userId,
@@ -135,14 +160,16 @@ public sealed class MessagePipeline(
             .Where(part => string.Equals(part.Type, "text", StringComparison.OrdinalIgnoreCase))
             .Select(part => part.Text ?? ""));
         return SendCoreAsync(discussion, userId, content, null, parts, device, input,
-            delivery, idempotencyKey, displayContent, ct);
+            delivery, idempotencyKey, displayContent, persistUserMessage: true,
+            requestedMessageUid: null, ct);
     }
 
     private async Task<SendMessageOutcome> SendCoreAsync(
         DiscussionRead discussion, string? userId,
         string content, ImageAttachmentDto[]? images, InputPartDto[]? inputParts,
         ResolvedDevice device, string input, string? delivery, string? idempotencyKey,
-        string? displayContent, CancellationToken ct = default)
+        string? displayContent, bool persistUserMessage, string? requestedMessageUid,
+        CancellationToken ct = default)
     {
         discussion = await conversationUnread.EnsureBaselineAsync(discussion, ct);
         var sessionId = discussion.SessionId;
@@ -318,7 +345,8 @@ public sealed class MessagePipeline(
                 input = typedInput,
                 delivery,
                 displayContent = displayContent ?? content,
-                metadata = new { app = "nova", discussionId = discussion.Id },
+                messageUid = requestedMessageUid,
+                metadata = new { app = "nova", discussionId = discussion.Id, internalMessage = !persistUserMessage },
             };
         }
         else
@@ -329,7 +357,8 @@ public sealed class MessagePipeline(
                 images,
                 delivery,
                 displayContent = displayContent ?? content,
-                metadata = new { app = "nova", discussionId = discussion.Id },
+                messageUid = requestedMessageUid,
+                metadata = new { app = "nova", discussionId = discussion.Id, internalMessage = !persistUserMessage },
             };
         }
 
@@ -373,6 +402,10 @@ public sealed class MessagePipeline(
             if (admission.TryGetProperty("item", out var itemElement))
                 item = itemElement.Clone();
         }
+
+        if (!persistUserMessage)
+            return new(true, sessionId, null, null, metadata, messageUid,
+                disposition, queueItemId, queue, item);
 
         JsonElement[] claimedAttachments = [];
         if (sendResult.Payload is { ValueKind: JsonValueKind.Object } attachmentPayload

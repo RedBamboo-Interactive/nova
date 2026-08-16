@@ -40,16 +40,19 @@ public sealed class NovaAgentTemplateProviderTests
     public void WelcomeContributorOwnsTheSameTemplateAndLoadsItsVersionedPrompt()
     {
         IAgentWelcomeProvider provider = new NovaAgentWelcomeProvider(
-            null!, null!, null!, null!, null!, null!, null!);
+            null!, null!, null!, null!, null!, null!);
 
         Assert.Equal("nova/default", provider.TemplateId);
 
         var firstRun = NovaAgentWelcomeProvider.PromptFor(AgentWelcomePurpose.FirstRun);
         var review = NovaAgentWelcomeProvider.PromptFor(AgentWelcomePurpose.ReviewExistingAgent);
         Assert.Contains("just created", firstRun, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Meet Nova", firstRun, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("first visible message", firstRun, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("workspace identity", firstRun, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("memory", firstRun, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("continuation", review, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Meet Nova", review, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("memory", review, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("tell you their name", review, StringComparison.OrdinalIgnoreCase);
     }

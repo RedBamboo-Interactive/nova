@@ -68,7 +68,10 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         List<SessionMessage> raw, IReadOnlyList<DiscussionMessage> records,
         List<DiscussionMessage> localEvents)
     {
-        var collapsed = CollapseMessages(raw);
+        var collapsed = CollapseMessages(raw)
+            .Where(message => !(message.Role == "user"
+                && message.MessageUid == disc.SetupBootstrapMessageUid))
+            .ToList();
         var textMessages = collapsed.Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content)).ToList();
         var userAttachmentsByUid = records
             .Where(m => m.Metadata["source"]?.GetValue<string>() is "user-message" or "queued-user-message")
