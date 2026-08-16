@@ -47,6 +47,24 @@ function messageFingerprint(message: MessageBlock): string {
 }
 
 /**
+ * Fingerprint durable transcript content while ignoring the streaming-only
+ * presentation flag. A terminal status may finalize `isPartial` while a
+ * canonical reload is in flight; that is not newer conversation content and
+ * must not replace a richer fetched block.
+ */
+function messageContentFingerprint(message: MessageBlock): string {
+  return JSON.stringify({
+    ...message,
+    parts: message.parts.map((part) => {
+      if (!("isPartial" in part)) return part
+      const contentPart = { ...part }
+      delete contentPart.isPartial
+      return contentPart
+    }),
+  })
+}
+
+/**
  * Merge a freshly fetched transcript with client-side changes that landed
  * while the request was in flight.
  *
@@ -62,14 +80,14 @@ export function mergeRevalidatedMessages(
   current: MessageBlock[],
 ): MessageBlock[] {
   const baselineFingerprints = new Map(
-    baseline.map((message) => [message.id, messageFingerprint(message)]),
+    baseline.map((message) => [message.id, messageContentFingerprint(message)]),
   )
   const changed = new Map<string, MessageBlock>()
   const currentById = new Map(current.map(message => [message.id, message]))
 
   for (const message of current) {
     const previous = baselineFingerprints.get(message.id)
-    if (previous === undefined || previous !== messageFingerprint(message)) {
+    if (previous === undefined || previous !== messageContentFingerprint(message)) {
       changed.set(message.id, message)
     }
   }

@@ -163,3 +163,32 @@ test("revalidation keeps a concurrent stream update over an older fetched block"
 
   assert.deepEqual(mergeRevalidatedMessages([fetched], [before], [streamed]), [streamed])
 })
+
+test("terminal presentation finalization cannot replace a richer authoritative tail", () => {
+  const before: MessageBlock = {
+    id: "turn",
+    role: "assistant",
+    parts: [
+      { type: "text", content: "Checking", isPartial: false },
+      { type: "tool_result", content: "done", isPartial: true },
+    ],
+    timestamp: "2026-08-16T20:20:34.000Z",
+  }
+  const finalized: MessageBlock = {
+    ...before,
+    parts: before.parts.map((part) => ({ ...part, isPartial: false })),
+  }
+  const authoritative: MessageBlock = {
+    ...before,
+    parts: [
+      { type: "text", content: "Checking" },
+      { type: "tool_result", content: "done" },
+      { type: "text", content: "Everything is synchronized." },
+    ],
+  }
+
+  assert.deepEqual(
+    mergeRevalidatedMessages([authoritative], [before], [finalized]),
+    [authoritative],
+  )
+})
