@@ -51,11 +51,13 @@ public sealed class NovaAgentTemplateProviderTests
         Assert.Contains("first visible message", firstRun, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("workspace identity", firstRun, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("memory", firstRun, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Complete setup", firstRun, StringComparison.Ordinal);
         Assert.Contains("Laurent", firstRun, StringComparison.Ordinal);
         Assert.DoesNotContain("Invite the person to tell you their name", firstRun, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("continuation", review, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Meet Nova", review, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("memory", review, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Complete setup", review, StringComparison.Ordinal);
         Assert.DoesNotContain("tell you their name", review, StringComparison.OrdinalIgnoreCase);
     }
 
