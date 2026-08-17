@@ -1,0 +1,4 @@
+interface:
+  display_name: "Emotional Dreaming"
+  short_description: "Process relational texture into mood"
+  default_prompt: "Use $emotional-dreaming to write the next mood state from recent conversations."

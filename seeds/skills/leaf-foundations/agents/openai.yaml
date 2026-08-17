@@ -1,0 +1,4 @@
+interface:
+  display_name: "Leaf Foundations"
+  short_description: "Leaf platform architecture and safe operation"
+  default_prompt: "Use $leaf-foundations to inspect and operate this Leaf installation safely."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Creative Dreaming"
+  short_description: "Develop opinionated creative proposals"
+  default_prompt: "Use $creative-dreaming to develop and record proposals for open creative questions."

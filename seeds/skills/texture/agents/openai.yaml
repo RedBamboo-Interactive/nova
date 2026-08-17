@@ -1,0 +1,4 @@
+interface:
+  display_name: "Texture"
+  short_description: "Preserve emotional conversation texture"
+  default_prompt: "Use $texture to preserve the emotional texture of this conversation."

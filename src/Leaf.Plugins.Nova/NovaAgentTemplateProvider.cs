@@ -33,6 +33,13 @@ public sealed class NovaAgentTemplateProvider : IAgentTemplateProvider
         Require(resource.Identity, "identity");
         Require(resource.OutputProtocol, "outputProtocol");
         Require(resource.MemoryInstructions, "memoryInstructions");
+        if (resource.DefaultSkillIds is null || resource.DefaultSkillIds.Count == 0)
+            throw new InvalidDataException("Nova Agent template requires defaultSkillIds");
+        if (resource.DefaultSkillIds.Any(value => !IsPackageQualifiedSkillId(value))
+            || resource.DefaultSkillIds.Distinct(StringComparer.Ordinal).Count()
+                != resource.DefaultSkillIds.Count)
+            throw new InvalidDataException(
+                "Nova Agent template defaultSkillIds must be unique plugin/skill references");
         if (resource.SchemaVersion != 1)
             throw new InvalidDataException($"Unsupported Nova Agent template schema {resource.SchemaVersion}");
 
@@ -45,7 +52,8 @@ public sealed class NovaAgentTemplateProvider : IAgentTemplateProvider
             resource.Description!,
             resource.Identity!,
             resource.OutputProtocol!,
-            resource.MemoryInstructions!);
+            resource.MemoryInstructions!,
+            resource.DefaultSkillIds);
     }
 
     public AgentTemplateDefinition Template { get; }
@@ -54,6 +62,15 @@ public sealed class NovaAgentTemplateProvider : IAgentTemplateProvider
     {
         if (string.IsNullOrWhiteSpace(value))
             throw new InvalidDataException($"Nova Agent template field '{field}' is required");
+    }
+
+    private static bool IsPackageQualifiedSkillId(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var segments = value.Split('/');
+        return segments.Length == 2 && segments.All(segment => segment.Length > 0
+            && segment.All(character => char.IsAsciiLetterLower(character)
+                || char.IsAsciiDigit(character) || character == '-'));
     }
 
     private sealed class TemplateResource
@@ -66,5 +83,6 @@ public sealed class NovaAgentTemplateProvider : IAgentTemplateProvider
         public string? Identity { get; init; }
         public string? OutputProtocol { get; init; }
         public string? MemoryInstructions { get; init; }
+        public IReadOnlyList<string>? DefaultSkillIds { get; init; }
     }
 }

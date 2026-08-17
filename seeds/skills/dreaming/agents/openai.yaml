@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dreaming"
+  short_description: "Consolidate durable memory safely"
+  default_prompt: "Use $dreaming to consolidate recent activity into durable memory."

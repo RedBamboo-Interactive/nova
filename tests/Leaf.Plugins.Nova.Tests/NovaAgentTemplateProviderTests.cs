@@ -13,7 +13,7 @@ public sealed class NovaAgentTemplateProviderTests
 
         Assert.Equal("nova/default", template.Id);
         Assert.Equal(1, template.SchemaVersion);
-        Assert.StartsWith("1.0.0-draft.", template.TemplateVersion);
+        Assert.StartsWith("1.1.0-draft.", template.TemplateVersion);
         Assert.Equal("Nova", template.Name);
         Assert.Contains("organizer", template.Identity, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("engineer", template.Identity, StringComparison.OrdinalIgnoreCase);
@@ -22,6 +22,11 @@ public sealed class NovaAgentTemplateProviderTests
         Assert.DoesNotContain("cyberpunk", Combined(template), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("provider", Combined(template), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("workspace", template.Identity, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal([
+            "nova/leaf-foundations",
+            "nova/leaf-engineering",
+            "nova/embed-redleaf-entity",
+        ], template.DefaultSkillIds);
         Assert.Equal(64, template.DigestSha256.Length);
         Assert.All(template.DigestSha256, character => Assert.True(Uri.IsHexDigit(character)));
     }
@@ -32,7 +37,8 @@ public sealed class NovaAgentTemplateProviderTests
         var first = new NovaAgentTemplateProvider().Template;
         var second = new NovaAgentTemplateProvider().Template;
 
-        Assert.Equal(first, second);
+        Assert.Equal(first with { DefaultSkillIds = [] }, second with { DefaultSkillIds = [] });
+        Assert.Equal(first.DefaultSkillIds, second.DefaultSkillIds);
         Assert.Equal(first.DigestSha256, second.DigestSha256);
     }
 

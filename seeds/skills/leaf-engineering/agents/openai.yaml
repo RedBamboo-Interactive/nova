@@ -1,0 +1,4 @@
+interface:
+  display_name: "Leaf Engineering"
+  short_description: "Build and verify Leaf changes safely"
+  default_prompt: "Use $leaf-engineering to implement and verify this Leaf change."

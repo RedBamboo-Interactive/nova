@@ -1,0 +1,4 @@
+interface:
+  display_name: "Embed RedLeaf Entity"
+  short_description: "Resolve and embed a Leaf entity card"
+  default_prompt: "Use $embed-redleaf-entity to find and embed the requested Leaf entity."
