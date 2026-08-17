@@ -164,6 +164,105 @@ test("revalidation keeps a concurrent stream update over an older fetched block"
   assert.deepEqual(mergeRevalidatedMessages([fetched], [before], [streamed]), [streamed])
 })
 
+test("revalidation restores authoritative tool spans around a concurrent final", () => {
+  const before: MessageBlock = {
+    id: "turn",
+    role: "assistant",
+    parts: [{ type: "thinking", content: "Checking" }],
+    timestamp: "2026-08-17T18:00:00.000Z",
+  }
+  const streamed: MessageBlock = {
+    ...before,
+    parts: [
+      { type: "thinking", content: "Checking" },
+      { type: "text", content: "Everything is fixed.", isPartial: true },
+    ],
+  }
+  const authoritative: MessageBlock = {
+    ...before,
+    parts: [
+      { type: "thinking", content: "Checking" },
+      { type: "tool_use", content: "", toolName: "PowerShell", toolInput: "{}" },
+      { type: "tool_result", content: "88 tests passed" },
+      { type: "text", content: "Everything is fixed." },
+    ],
+  }
+
+  assert.deepEqual(
+    mergeRevalidatedMessages([authoritative], [before], [streamed]),
+    [authoritative],
+  )
+})
+
+test("revalidation keeps a divergent live suffix instead of inventing a part merge", () => {
+  const before = block("turn", "Checking")
+  const authoritative: MessageBlock = {
+    ...before,
+    parts: [
+      { type: "text", content: "Checking" },
+      { type: "tool_result", content: "older result" },
+    ],
+  }
+  const streamed: MessageBlock = {
+    ...before,
+    parts: [
+      { type: "text", content: "Checking" },
+      { type: "tool_result", content: "new live result", isPartial: true },
+    ],
+  }
+
+  assert.deepEqual(
+    mergeRevalidatedMessages([authoritative], [before], [streamed]),
+    [streamed],
+  )
+})
+
+test("revalidation cannot roll back a settled block to a buffered older snapshot", () => {
+  const settled: MessageBlock = {
+    id: "turn",
+    role: "assistant",
+    parts: [
+      { type: "thinking", content: "Checking" },
+      { type: "tool_result", content: "done" },
+      { type: "text", content: "Complete." },
+    ],
+    timestamp: "2026-08-17T18:00:00.000Z",
+  }
+  const bufferedSnapshot: MessageBlock = {
+    ...settled,
+    parts: settled.parts.slice(0, 2),
+  }
+
+  assert.deepEqual(
+    mergeRevalidatedMessages([bufferedSnapshot], [settled], [settled]),
+    [settled],
+  )
+})
+
+test("a different buffered slice cannot displace visible settled content", () => {
+  const visible: MessageBlock = {
+    id: "turn",
+    role: "assistant",
+    parts: [
+      { type: "thinking", content: "Checking" },
+      { type: "text", content: "Complete." },
+    ],
+    timestamp: "2026-08-17T18:00:00.000Z",
+  }
+  const bufferedSnapshot: MessageBlock = {
+    ...visible,
+    parts: [
+      { type: "thinking", content: "Checking" },
+      { type: "tool_result", content: "done" },
+    ],
+  }
+
+  assert.deepEqual(
+    mergeRevalidatedMessages([bufferedSnapshot], [visible], [visible]),
+    [visible],
+  )
+})
+
 test("terminal presentation finalization cannot replace a richer authoritative tail", () => {
   const before: MessageBlock = {
     id: "turn",

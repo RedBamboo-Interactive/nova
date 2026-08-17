@@ -54,8 +54,10 @@ export function applySettledSessionStatus(
 
 /**
  * A newly submitted local turn can be durably delivered before RedCompute's
- * provider lifecycle reaches Active. Ignore that transient non-active status;
- * terminal statuses and genuinely completed turns still clear immediately.
+ * provider lifecycle reaches Active. Ignore a transient non-active status only
+ * until this client observes Active. Once Active was observed, Idle is the
+ * genuine settlement of that turn even when it completed inside the grace
+ * window.
  */
 export function preservesRecentStreamingLatch(
   sessionStatus: string,
@@ -63,8 +65,10 @@ export function preservesRecentStreamingLatch(
   lastSendAt: number,
   now: number,
   graceMs: number,
+  observedActiveAfterSend = false,
 ): boolean {
   return isStreaming
+    && !observedActiveAfterSend
     && sessionStatus !== "Stopped"
     && sessionStatus !== "Error"
     && now - lastSendAt < graceMs

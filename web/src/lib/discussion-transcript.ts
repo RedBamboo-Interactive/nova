@@ -1,4 +1,4 @@
-import type { MessageBlock } from "@redbamboo/chat"
+import type { MessageBlock, MessagePart } from "@redbamboo/chat"
 
 /** Remove Nova's internal Meet Nova bootstrap from raw RedCompute history. */
 export function filterInternalBootstrapBlock(
@@ -64,15 +64,54 @@ function messageContentFingerprint(message: MessageBlock): string {
   })
 }
 
+function partWithoutStreamingState(part: MessagePart): Omit<MessagePart, "isPartial"> {
+  const durable = { ...part }
+  delete durable.isPartial
+  return durable
+}
+
+function partContains(container: MessagePart, candidate: MessagePart): boolean {
+  const durableContainer = partWithoutStreamingState(container)
+  const durableCandidate = partWithoutStreamingState(candidate)
+
+  if (container.type !== "text" && container.type !== "thinking") {
+    return JSON.stringify(durableContainer) === JSON.stringify(durableCandidate)
+  }
+
+  const { content: containerContent, ...containerShape } = durableContainer
+  const { content: candidateContent, ...candidateShape } = durableCandidate
+  return JSON.stringify(containerShape) === JSON.stringify(candidateShape)
+    && containerContent.startsWith(candidateContent)
+}
+
+/**
+ * True when every durable part in `candidate` appears, in order, in
+ * `container`. Text and thinking may be a longer completed form of a streamed
+ * prefix. This is deliberately a dominance check rather than a general merge:
+ * if two snapshots genuinely diverge, the live one remains safer.
+ */
+function messagePartsContain(container: MessagePart[], candidate: MessagePart[]): boolean {
+  let containerIndex = 0
+  for (const candidatePart of candidate) {
+    while (containerIndex < container.length
+      && !partContains(container[containerIndex], candidatePart)) {
+      containerIndex++
+    }
+    if (containerIndex === container.length) return false
+    containerIndex++
+  }
+  return true
+}
+
 /**
  * Merge a freshly fetched transcript with client-side changes that landed
  * while the request was in flight.
  *
- * The fetched transcript is authoritative for everything that was already on
- * screen when the request began. Blocks added or changed afterwards are kept:
- * those are optimistic sends and WebSocket stream updates that the snapshot
- * may have raced. Matching changed ids replace the fetched version so a late
- * response cannot roll an actively streaming tool call backwards.
+ * New fetched blocks are authoritative, while matching blocks converge
+ * monotonically because RedCompute's durable mirror is buffered behind its
+ * live stream. A semantic superset wins because it fills a missed span without
+ * discarding anything already visible. Genuinely divergent concurrent content
+ * stays live, so a late response cannot roll an active tool call backwards.
  */
 export function mergeRevalidatedMessages(
   authoritative: MessageBlock[],
@@ -94,11 +133,21 @@ export function mergeRevalidatedMessages(
 
   const merged = authoritative.map((message) => {
     const concurrent = changed.get(message.id)
-    if (concurrent) return concurrent
     const existing = currentById.get(message.id)
-    return existing && messageFingerprint(existing) === messageFingerprint(message)
-      ? existing
-      : message
+    if (existing && messageFingerprint(existing) === messageFingerprint(message))
+      return existing
+
+    const local = concurrent ?? existing
+    if (local) {
+      if (messagePartsContain(message.parts, local.parts)) return message
+      // Transcript records are append-only, while RedCompute ships ordinary
+      // records through a buffered writer. A non-dominating snapshot may be a
+      // different incomplete slice, so keep the local block until a later
+      // snapshot proves it contains every visible part.
+      return local
+    }
+
+    return message
   })
   const authoritativeIds = new Set(authoritative.map((message) => message.id))
   for (const message of changed.values()) {

@@ -73,3 +73,10 @@ test("a transient idle event cannot clear a freshly submitted turn", () => {
   assert.equal(preservesRecentStreamingLatch("Stopped", true, 1_000, 1_500, 10_000), false)
   assert.equal(preservesRecentStreamingLatch("Idle", false, 1_000, 1_500, 10_000), false)
 })
+
+test("idle settles immediately after Active was observed for the submitted turn", () => {
+  assert.equal(
+    preservesRecentStreamingLatch("Idle", true, 1_000, 1_500, 10_000, true),
+    false,
+  )
+})

@@ -37,6 +37,10 @@ type EventResolver = (source: string) => EventType
 const INITIAL_HISTORY_TAIL = 500
 const HISTORY_TAIL_STEP = 500
 const MAX_HISTORY_TAIL = 10_000
+// RedCompute batches ordinary transcript records to RedLeaf every 500 ms.
+// Revalidate after that durability window instead of treating the first Idle
+// snapshot as fully flushed.
+const SETTLED_TRANSCRIPT_RELOAD_DELAY_MS = 750
 
 /**
  * Nova wraps every outgoing user message in context XML; the transcript shows
@@ -145,6 +149,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const loadedRef = useRef<Set<string>>(new Set())
   const historyTailRef = useRef<Record<string, number>>({})
   const loadGenerationRef = useRef<Record<string, number>>({})
+  const activeObservedAfterSendRef = useRef<Record<string, boolean>>({})
+  const sessionUpdateGenerationRef = useRef<Record<string, number>>({})
+  const handleWsEventRef = useRef<((event: WsEvent) => void) | null>(null)
 
   const activeDiscussion = discussions.find((d) => d.id === activeDiscussionId) ?? null
   const activeMessages = activeDiscussionId ? messages[activeDiscussionId] ?? [] : []
@@ -531,6 +538,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     const locallyStartedTurn = !!options?.idempotencyKey && !streamingRef.current[discussionId]
     if (locallyStartedTurn) {
       lastSendAtRef.current[discussionId] = Date.now()
+      activeObservedAfterSendRef.current[discussionId] = false
       latchStreaming(discussionId)
       setDiscussions((prev) =>
         prev.map((d) => d.id === discussionId ? { ...d, status: "thinking" as const } : d)
@@ -605,6 +613,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         })
       }
       lastSendAtRef.current[discussionId] = Date.now()
+      activeObservedAfterSendRef.current[discussionId] = false
       latchStreaming(discussionId)
       setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
       setResumePending((prev) => ({ ...prev, [discussionId]: false }))
@@ -660,6 +669,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     const requestId = payload?.requestId ?? pendingQuestionsRef.current[discussionId]?.requestId ?? null
     clearQuestion(discussionId, "answered")
     lastSendAtRef.current[discussionId] = Date.now()
+    activeObservedAfterSendRef.current[discussionId] = true
     setStreaming((prev) => ({ ...prev, [discussionId]: true }))
     setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
     setResumePending((prev) => ({ ...prev, [discussionId]: false }))
@@ -717,6 +727,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }))
       if (update.transition === "delivered") {
         lastSendAtRef.current[discId] = Date.now()
+        activeObservedAfterSendRef.current[discId] = false
         latchStreaming(discId)
         setDiscussions((prev) => applySessionStatus(prev, discId, "Active"))
         loadedRef.current.delete(discId)
@@ -728,6 +739,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const session = event.data as { id: string; status: string; title?: string }
       const discId = sessionToDiscussion.get(session.id)
       if (!discId) return
+      const updateGeneration = (sessionUpdateGenerationRef.current[discId] ?? 0) + 1
+      sessionUpdateGenerationRef.current[discId] = updateGeneration
       if (session.status !== "Active") {
         const known = discussionsRef.current.find((d) => d.id === discId)
         const nowMs = Date.now()
@@ -737,38 +750,50 @@ export function useDiscussions(eventResolver?: EventResolver) {
           lastSendAtRef.current[discId] ?? 0,
           nowMs,
           SEND_GRACE_MS,
+          !!activeObservedAfterSendRef.current[discId],
         )) {
-          environment.window.setTimeout(() => { void reconcileStreaming() },
-            Math.max(0, SEND_GRACE_MS - (nowMs - (lastSendAtRef.current[discId] ?? 0))) + 50)
+          environment.window.setTimeout(
+            () => {
+              // Re-run the one settlement path after the pre-Active grace.
+              // Any newer lifecycle event cancels this stale callback.
+              if (sessionUpdateGenerationRef.current[discId] === updateGeneration)
+                handleWsEventRef.current?.(event)
+            },
+            Math.max(0, SEND_GRACE_MS - (nowMs - (lastSendAtRef.current[discId] ?? 0))) + 50,
+          )
           return
         }
-        setStreaming((prev) => ({ ...prev, [discId]: false }))
-        setInterrupting((prev) => ({ ...prev, [discId]: false }))
-        setResumePending((prev) => ({ ...prev, [discId]: false }))
+        clearStreamingLatch(discId)
+        delete activeObservedAfterSendRef.current[discId]
         // Closed (archived/archiving) discussions are terminal: never echo
-        // session events back to the server for them. Checked via the ref —
-        // a setState updater's side effect is not guaranteed to have run here.
+        // session events back to the server for them.
         if (!known || isClosed(known.status) || isDiscussionArchivePending(discId)) return
         const isStopped = session.status === "Stopped" || session.status === "Error"
         const isLiveDisc = known.type === "live"
-        const now = new Date().toISOString()
-        const isViewing = activeIdRef.current === discId
         setDiscussions((prev) =>
-          applySettledSessionStatus(prev, discId, session.status, now)
+          applySettledSessionStatus(prev, discId, session.status, new Date().toISOString())
         )
         if (isStopped) {
           api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
         } else {
-          void api.put<DiscussionInfo>(`/api/apps/nova/discussions/${discId}/activity`)
-            .then(async (updated) => {
-              upsertDiscussion(updated)
-              if (!isViewing) return
+          const scheduleTranscriptReload = (conversationRevision?: number) => {
+            environment.window.setTimeout(async () => {
+              if (sessionUpdateGenerationRef.current[discId] !== updateGeneration) return
+              // Inactive discussions recover on their next selection.
               loadedRef.current.delete(discId)
+              if (activeIdRef.current !== discId) return
               const tail = historyTailRef.current[discId] ?? INITIAL_HISTORY_TAIL
               await loadMessages(discId, tail, true)
-              await acknowledgeRead(discId, updated.conversationRevision)
+              if (conversationRevision !== undefined)
+                await acknowledgeRead(discId, conversationRevision)
+            }, SETTLED_TRANSCRIPT_RELOAD_DELAY_MS)
+          }
+          void api.put<DiscussionInfo>(`/api/apps/nova/discussions/${discId}/activity`)
+            .then((updated) => {
+              upsertDiscussion(updated)
+              scheduleTranscriptReload(updated.conversationRevision)
             })
-            .catch(() => {})
+            .catch(() => scheduleTranscriptReload())
           // LIVE and heartbeat discussions own their titles — don't let
           // session auto-titles overwrite them (the session title drifts to
           // whatever topic was last discussed, which is confusing).
@@ -792,6 +817,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         // The discussion list and the transcript must describe the same runtime.
         // A turn can start in another window or through an automation, so the
         // local optimistic send is not an authoritative source of this state.
+        activeObservedAfterSendRef.current[discId] = true
         setDiscussions((prev) => applySessionStatus(prev, discId, session.status))
         // Active means a turn is running even when this client didn't start
         // it — an automation, the heartbeat, or the same discussion open on
@@ -799,13 +825,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
         // the composer looks idle and the message queue drains straight into a
         // live turn. A pending question is the exception: the turn is Active
         // but blocked on the user, and answers go through onAnswerQuestion.
-        if (!pendingQuestionsRef.current[discId])
-          setStreaming((prev) => ({ ...prev, [discId]: true }))
+        if (!pendingQuestionsRef.current[discId]) latchStreaming(discId)
       }
     } else if (event.type === "session.ended") {
       const { id } = event.data as { id: string }
       const discId = sessionToDiscussion.get(id)
       if (!discId) return
+      sessionUpdateGenerationRef.current[discId] =
+        (sessionUpdateGenerationRef.current[discId] ?? 0) + 1
+      delete activeObservedAfterSendRef.current[discId]
       setStreaming((prev) => ({ ...prev, [discId]: false }))
       // A card still up when the session died was never answered.
       clearQuestion(discId, pendingQuestionsRef.current[discId] ? "session_ended" : questionStatesRef.current[discId]?.outcome ?? null)
@@ -999,7 +1027,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discId]: result.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, refreshDiscussions, loadMessages, environment.window, latchStreaming, reconcileStreaming, acknowledgeRead])
+  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, loadMessages, environment.window, latchStreaming, acknowledgeRead])
+  handleWsEventRef.current = handleWsEvent
 
   const handleUpstreamDisconnect = useCallback(() => {
     setUpstreamConnected(false)
