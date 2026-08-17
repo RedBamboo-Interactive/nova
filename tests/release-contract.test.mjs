@@ -48,10 +48,10 @@ test("Nova is a protected, versioned backend-plus-frontend extension", () => {
 test("release input records only Leaf.Sdk and Nova's four actual shared package sources", () => {
   assert.deepEqual(producer.leafSdk, {
     repository: "RedBamboo-Interactive/redleaf",
-    commit: "10eb0ccb509cb86efe23a4d295a94ceeaab11313",
+    commit: "c7371b07594ae13fb7ebb4b24dbd860c20d3e14f",
     sourcePath: "src/Leaf.Sdk",
   })
-  assert.equal(producer.redleafReleaseToolCommit, "10eb0ccb509cb86efe23a4d295a94ceeaab11313")
+  assert.equal(producer.redleafReleaseToolCommit, "c7371b07594ae13fb7ebb4b24dbd860c20d3e14f")
   assert.deepEqual(producer.redbamboo.inputs.map(({ id, name, sourcePath }) => ({ id, name, sourcePath })), [
     { id: "redbamboo-chat", name: "@redbamboo/chat", sourcePath: "packages/chat" },
     { id: "redbamboo-ui", name: "@redbamboo/ui", sourcePath: "packages/ui" },
