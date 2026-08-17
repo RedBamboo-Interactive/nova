@@ -2,6 +2,7 @@ using System.Reflection;
 using Leaf.Plugins.Nova.Endpoints;
 using Leaf.Sdk;
 using Leaf.Sdk.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -53,6 +54,12 @@ public sealed class NovaAppPlugin : ILeafPlugin
         services.AddSingleton(sp =>
             new DiscussionStore(sp.GetRequiredKeyedService<IEntityStore>(PluginId), sp.GetRequiredService<IDiscussions>()));
         services.AddSingleton<ConversationUnread>();
+        services.AddSingleton(sp => new ConfidentialSessionBackfill(
+            sp.GetRequiredService<DiscussionStore>(),
+            sp.GetRequiredService<AgentDirectory>(),
+            sp.GetRequiredService<RedComputeClient>(),
+            sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+            sp.GetRequiredService<ILogger<ConfidentialSessionBackfill>>()));
         services.AddSingleton(sp =>
             new EventInjector(
                 sp.GetRequiredService<IDiscussions>(),
@@ -149,6 +156,13 @@ public sealed class NovaAppPlugin : ILeafPlugin
 
     public void MapEndpoints(RouteGroupBuilder group)
     {
+        // Discussion responses can contain private conversational state. Keep the
+        // whole app surface out of intermediary and browser HTTP caches.
+        group.AddEndpointFilter(async (context, next) =>
+        {
+            context.HttpContext.Response.Headers.CacheControl = "private, no-store";
+            return await next(context);
+        });
         DiscussionEndpoints.Map(group);
         AskEndpoints.Map(group);
         DelegateEndpoints.Map(group);
@@ -201,6 +215,9 @@ public sealed class NovaAppPlugin : ILeafPlugin
         // Ambient LIVE timeline (Spotify/Sonos/Hue). Plugins have no
         // shutdown hook, so the loop binds to ApplicationStopping, not the boot ct.
         var lifetime = host.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
+        var confidentialBackfill = host.GetRequiredService<ConfidentialSessionBackfill>();
+        _ = Task.Run(() => confidentialBackfill.RunAsync(lifetime.ApplicationStopping),
+            CancellationToken.None);
         var poller = host.GetRequiredService<LivePoller>();
         _ = Task.Run(() => poller.RunAsync(lifetime.ApplicationStopping), CancellationToken.None);
 

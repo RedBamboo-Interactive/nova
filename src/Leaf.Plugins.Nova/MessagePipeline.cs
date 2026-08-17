@@ -59,7 +59,7 @@ public sealed class MessagePipeline(
             {
                 var sessionId = await TryCreateSessionAsync(discussion.AgentId, discussion.OwnerId,
                     discussion.QualityTier, discussion.Provider,
-                    discussionId: discussion.Id);
+                    discussionId: discussion.Id, confidential: discussion.Confidential);
                 if (sessionId is null)
                 {
                     await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped);
@@ -87,7 +87,8 @@ public sealed class MessagePipeline(
         string? qualityTierOverride = null, string? providerOverride = null, CancellationToken ct = default,
         string? discussionId = null, string entrypointRoute = "/api/apps/nova/discussions/{id}/messages",
         IReadOnlyList<ComputeContextReference>? additionalContext = null,
-        string? correlationId = null, string? parentJobId = null)
+        string? correlationId = null, string? parentJobId = null,
+        bool confidential = false)
     {
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
         if (agent == null) return null;
@@ -107,6 +108,7 @@ public sealed class MessagePipeline(
         var effectiveProvider = providerOverride ?? agent.Provider;
         if (effectiveProvider != null)
             body["provider"] = effectiveProvider;
+        body["confidential"] = confidential;
 
         var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ct);
         var context = new List<ComputeContextReference>();
@@ -186,7 +188,8 @@ public sealed class MessagePipeline(
             try
             {
                 sessionId = await TryCreateSessionAsync(discussion.AgentId, computeOwnerId,
-                    discussion.QualityTier, discussion.Provider, ct, discussion.Id);
+                    discussion.QualityTier, discussion.Provider, ct, discussion.Id,
+                    confidential: discussion.Confidential);
             }
             catch (Exception ex)
             {
@@ -232,6 +235,9 @@ public sealed class MessagePipeline(
         var all = (await store.ListAsync(ct: ct))
             .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
             .Where(d => !DiscussionStatus.IsClosed(d.Status) || d.LastActivity >= cutoff)
+            // A confidential discussion is isolated even from the owning Agent's
+            // ambient context in other discussions. The Agent may read it only
+            // while acting inside that discussion.
             .Where(d => !d.Confidential || d.Id == discussion.Id)
             .ToList();
 

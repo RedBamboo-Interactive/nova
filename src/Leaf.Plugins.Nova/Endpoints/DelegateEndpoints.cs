@@ -155,12 +155,18 @@ public static class DelegateEndpoints
                         error = "discussion_not_found",
                         message = $"Discussion '{request.DiscussionId}' not found",
                     }, statusCode: StatusCodes.Status404NotFound);
-                if (!OwnerScope.CanAccess(discussion.OwnerId, callerId))
-                    return Results.Json(new
-                    {
-                        error = "forbidden",
-                        message = "You do not have access to this discussion",
-                    }, statusCode: StatusCodes.Status403Forbidden);
+                if (!DiscussionAccessPolicy.CanRead(discussion, ctx))
+                    return discussion.Confidential
+                        ? Results.Json(new
+                        {
+                            error = "discussion_not_found",
+                            message = $"Discussion '{request.DiscussionId}' not found",
+                        }, statusCode: StatusCodes.Status404NotFound)
+                        : Results.Json(new
+                        {
+                            error = "forbidden",
+                            message = "You do not have access to this discussion",
+                        }, statusCode: StatusCodes.Status403Forbidden);
             }
             resolvedAgent ??= discussion?.AgentId != null
                 ? await agentDir.GetAgentAsync(discussion.AgentId, ctx.RequestAborted)

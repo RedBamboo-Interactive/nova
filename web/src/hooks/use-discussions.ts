@@ -844,6 +844,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
       // Clients that did not originate the create have only the sparse event
       // payload. Hydrate the canonical record so title/session routing works.
       void refreshDiscussions()
+    } else if (event.type === "discussion.changed") {
+      const { discussionId } = event.data as { discussionId?: string }
+      if (!discussionId) return
+      void refreshDiscussions()
+      if (activeIdRef.current !== discussionId) return
+      loadedRef.current.delete(discussionId)
+      const tail = historyTailRef.current[discussionId] ?? INITIAL_HISTORY_TAIL
+      void loadMessages(discussionId, tail, true)
     } else if (event.type === "discussion.event") {
       const { discussionId, content, source, senderAgentId, metadata, timestamp: serverTs } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; metadata?: Record<string, unknown> | null; timestamp?: string }
       if (!discussionId) return

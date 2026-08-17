@@ -36,8 +36,10 @@ public static class AskEndpoints
                 if (discussion is null)
                     return Results.NotFound(new { error = $"Discussion '{request.DiscussionId}' not found. Omit discussionId to create a new one.", code = "discussion_not_found" });
 
-                if (!OwnerScope.CanAccess(discussion.OwnerId, userId))
-                    return Results.Json(new { error = "You do not have access to this discussion", code = "forbidden" }, statusCode: 403);
+                if (!DiscussionAccessPolicy.CanRead(discussion, ctx))
+                    return discussion.Confidential
+                        ? Results.Json(new { error = "Discussion not found", code = "discussion_not_found" }, statusCode: 404)
+                        : Results.Json(new { error = "You do not have access to this discussion", code = "forbidden" }, statusCode: 403);
             }
             else
             {

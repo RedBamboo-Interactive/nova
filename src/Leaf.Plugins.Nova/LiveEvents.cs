@@ -80,16 +80,24 @@ public sealed class EventInjector(
         if (persisted)
         {
             var timestamp = DateTimeOffset.UtcNow.ToString("O");
-            await events.PublishAsync("discussion.event", new JsonObject
-            {
-                ["discussionId"] = discussion.Id,
-                ["sessionId"] = discussion.SessionId,
-                ["content"] = content,
-                ["source"] = source ?? "automation",
-                ["senderAgentId"] = senderAgentId,
-                ["metadata"] = metadata is { } m ? JsonNode.Parse(m.GetRawText()) : null,
-                ["timestamp"] = timestamp,
-            }, ct);
+            if (discussion.Confidential)
+                await events.PublishAsync("discussion.changed", new JsonObject
+                {
+                    ["discussionId"] = discussion.Id,
+                    ["timestamp"] = timestamp,
+                    ["confidential"] = true,
+                }, ct);
+            else
+                await events.PublishAsync("discussion.event", new JsonObject
+                {
+                    ["discussionId"] = discussion.Id,
+                    ["sessionId"] = discussion.SessionId,
+                    ["content"] = content,
+                    ["source"] = source ?? "automation",
+                    ["senderAgentId"] = senderAgentId,
+                    ["metadata"] = metadata is { } m ? JsonNode.Parse(m.GetRawText()) : null,
+                    ["timestamp"] = timestamp,
+                }, ct);
         }
 
         var sessionId = discussion.SessionId;

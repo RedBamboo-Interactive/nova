@@ -63,6 +63,18 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         return session.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
     }
 
+    public async Task<bool> SetConfidentialAsync(string sessionId,
+        ComputeProvenance provenance, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Put,
+            $"/ai-session/sessions/{sessionId}/confidential")
+        {
+            Content = JsonContent.Create(new { confidential = true }, options: JsonOptions),
+        };
+        using var response = await gateway.SendAsync(request, provenance, ct);
+        return response.IsSuccessStatusCode;
+    }
+
     public sealed record ExecuteResult(
         bool Success, string? Text, string? Error, string? SessionId, Guid? JobId);
 
@@ -206,19 +218,28 @@ public sealed class RedComputeClient(IComputeGateway gateway)
 
     public async Task<bool> InjectAsync(string sessionId, object body, CancellationToken ct = default)
     {
-        var resp = await _http.PostAsJsonAsync($"/ai-session/sessions/{sessionId}/inject", body, JsonOptions, ct);
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/ai-session/sessions/{sessionId}/inject")
+        {
+            Content = JsonContent.Create(body, options: JsonOptions),
+        };
+        using var resp = await gateway.SendAsync(request, provenance: null, ct);
         return resp.IsSuccessStatusCode;
     }
 
     public async Task<bool> RegisterCallbackAsync(string sessionId, string url, bool force = false, CancellationToken ct = default)
     {
-        var resp = await _http.PostAsJsonAsync($"/ai-session/sessions/{sessionId}/callback", new { url, force }, JsonOptions, ct);
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/ai-session/sessions/{sessionId}/callback")
+        {
+            Content = JsonContent.Create(new { url, force }, options: JsonOptions),
+        };
+        using var resp = await gateway.SendAsync(request, provenance: null, ct);
         return resp.IsSuccessStatusCode;
     }
 
     public async Task<bool> StopAsync(string sessionId, CancellationToken ct = default)
     {
-        var resp = await _http.PostAsync($"/ai-session/sessions/{sessionId}/stop", null, ct);
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/ai-session/sessions/{sessionId}/stop");
+        using var resp = await gateway.SendAsync(request, provenance: null, ct);
         return resp.IsSuccessStatusCode;
     }
 
@@ -231,7 +252,11 @@ public sealed class RedComputeClient(IComputeGateway gateway)
 
     public async Task DismissAsync(string sessionId, CancellationToken ct = default)
     {
-        try { await _http.PostAsync($"/ai-session/sessions/{sessionId}/dismiss", null, ct); }
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"/ai-session/sessions/{sessionId}/dismiss");
+            using var response = await gateway.SendAsync(request, provenance: null, ct);
+        }
         catch { }
     }
 
@@ -244,7 +269,8 @@ public sealed class RedComputeClient(IComputeGateway gateway)
             var url = tail is { } count
                 ? $"/ai-session/sessions/{sessionId}?tail={count}"
                 : $"/ai-session/sessions/{sessionId}";
-            var resp = await _http.GetAsync(url, ct);
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            using var resp = await gateway.SendAsync(request, provenance: null, ct);
             if (!resp.IsSuccessStatusCode) return null;
             return JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
         }
@@ -283,7 +309,9 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     {
         try
         {
-            var resp = await _http.GetAsync($"/ai-session/sessions/{sessionId}", ct);
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                $"/ai-session/sessions/{sessionId}");
+            using var resp = await gateway.SendAsync(request, provenance: null, ct);
             if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
                 return new(true, false, null);
             if (!resp.IsSuccessStatusCode)
@@ -314,7 +342,9 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     {
         try
         {
-            var resp = await _http.GetAsync($"/ai-session/sessions/{sessionId}", ct);
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                $"/ai-session/sessions/{sessionId}");
+            using var resp = await gateway.SendAsync(request, provenance: null, ct);
             if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return new(true, null);
             if (!resp.IsSuccessStatusCode) return new(false, null);
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
@@ -398,7 +428,10 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         try
         {
             var url = limit is { } l ? $"/ai-session/sessions?limit={l}" : "/ai-session/sessions";
-            return await _http.GetFromJsonAsync<List<SessionListEntry>>(url, JsonOptions, ct);
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            using var response = await gateway.SendAsync(request, provenance: null, ct);
+            if (!response.IsSuccessStatusCode) return null;
+            return await response.Content.ReadFromJsonAsync<List<SessionListEntry>>(JsonOptions, ct);
         }
         catch
         {

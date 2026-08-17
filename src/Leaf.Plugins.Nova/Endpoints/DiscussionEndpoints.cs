@@ -80,6 +80,8 @@ public static class DiscussionEndpoints
 
     private static IResult Forbidden() => Results.Json(new { error = "Forbidden" }, statusCode: 403);
     private static IResult NotFound() => Results.NotFound(new { error = "Discussion not found" });
+    private static IResult AccessDenied(DiscussionRead discussion)
+        => discussion.Confidential ? NotFound() : Forbidden();
 
     public static void Map(RouteGroupBuilder group)
     {
@@ -99,21 +101,19 @@ public static class DiscussionEndpoints
             if (!string.IsNullOrEmpty(search))
                 filtered = filtered.Where(d => d.Title != null && d.Title.Contains(search, StringComparison.OrdinalIgnoreCase));
 
-            var userId = UserId(ctx);
-            filtered = filtered.Where(d => OwnerScope.CanAccess(d.OwnerId, userId));
+            filtered = filtered.Where(d => DiscussionAccessPolicy.CanRead(d, ctx));
 
             return Results.Ok(filtered.Select(DiscussionStore.ToInfo));
         });
 
         group.MapGet("/discussions/pending", async (HttpContext ctx, DiscussionStore store) =>
         {
-            var userId = UserId(ctx);
             var discussions = (await store.ListAsync())
                 .Where(d => !DiscussionStatus.IsClosed(d.Status))
                 // Heartbeat discussions never count as pending: no unread pill, no
                 // badge — the heartbeat is a place you visit, not one that calls you.
                 .Where(d => d.Type != HeartbeatService.DiscussionType)
-                .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
+                .Where(d => DiscussionAccessPolicy.CanRead(d, ctx))
                 .ToList();
 
             var count = discussions.Count(d =>
@@ -126,10 +126,9 @@ public static class DiscussionEndpoints
         group.MapPost("/discussions/sync", async (HttpContext ctx, DiscussionStore store,
             RedComputeClient redCompute, ConversationUnread conversationUnread) =>
         {
-            var userId = UserId(ctx);
             var discussions = (await store.ListAsync())
                 .Where(d => !DiscussionStatus.IsClosed(d.Status) && d.SessionId != null)
-                .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
+                .Where(d => DiscussionAccessPolicy.CanRead(d, ctx))
                 .ToList();
 
             if (discussions.Count == 0)
@@ -230,9 +229,9 @@ public static class DiscussionEndpoints
         group.MapGet("/discussions/live", async (HttpContext ctx, DiscussionStore store) =>
         {
             var agentFilter = ctx.Request.Query["agent"].FirstOrDefault();
-            var userId = UserId(ctx);
             var live = (await store.ListAsync(agentFilter))
-                .Where(d => d.Type == "live" && !DiscussionStatus.IsClosed(d.Status) && OwnerScope.CanAccess(d.OwnerId, userId))
+                .Where(d => d.Type == "live" && !DiscussionStatus.IsClosed(d.Status)
+                    && DiscussionAccessPolicy.CanRead(d, ctx))
                 .Select(DiscussionStore.ToInfo);
             return Results.Ok(live);
         });
@@ -260,9 +259,8 @@ public static class DiscussionEndpoints
                 SnippetsPerConversation = 3,
             });
 
-            var userId = UserId(ctx);
             var accessible = (await store.ListAsync())
-                .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
+                .Where(d => DiscussionAccessPolicy.CanRead(d, ctx))
                 .ToList();
             var byEntityId = accessible.ToDictionary(d => d.EntityId);
             var bySessionId = new Dictionary<string, DiscussionRead>();
@@ -316,7 +314,6 @@ public static class DiscussionEndpoints
 
         group.MapGet("/discussions/export", async (HttpContext ctx, DiscussionStore store, ConversationExporter exporter) =>
         {
-            var userId = UserId(ctx);
             var since = ctx.Request.Query["since"].FirstOrDefault() is { } s
                 ? DateTime.Parse(s, null, System.Globalization.DateTimeStyles.RoundtripKind)
                 : DateTime.UtcNow.AddDays(-7);
@@ -325,7 +322,7 @@ public static class DiscussionEndpoints
                 limit = Math.Clamp(parsed, 1, 200);
 
             var discussions = (await store.ListAsync())
-                .Where(d => d.LastActivity >= since && OwnerScope.CanAccess(d.OwnerId, userId))
+                .Where(d => d.LastActivity >= since && DiscussionAccessPolicy.CanRead(d, ctx))
                 .Where(d => !d.Confidential)
                 .Take(limit)
                 .ToList();
@@ -338,7 +335,7 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             DateTime? since = null;
             if (ctx.Request.Query["since"].FirstOrDefault() is { } sv)
@@ -543,7 +540,7 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             var records = await discussions.GetMessagesAsync(discussion.EntityId);
             var result = records
@@ -564,11 +561,11 @@ public static class DiscussionEndpoints
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
             var userId = UserId(ctx);
-            if (!OwnerScope.CanAccess(discussion.OwnerId, userId)) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             var cutoff = DateTime.UtcNow.AddDays(-2);
             var all = (await store.ListAsync())
-                .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
+                .Where(d => DiscussionAccessPolicy.CanRead(d, ctx))
                 .Where(d => !DiscussionStatus.IsClosed(d.Status) || d.LastActivity >= cutoff)
                 .Where(d => !d.Confidential || d.Id == id)
                 .ToList();
@@ -593,7 +590,7 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             var markdown = await exporter.ExportSingleAsync(discussion);
             return Results.Text(markdown, "text/markdown");
@@ -603,18 +600,46 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             await store.PatchAsync(discussion.EntityId, new JsonObject { ["title"] = request.Title },
                 name: request.Title ?? $"Discussion {id}");
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Title = request.Title }));
         });
 
-        group.MapPut("/discussions/{id}/confidential", async (string id, DiscussionConfidentialRequest request, HttpContext ctx, DiscussionStore store) =>
+        group.MapPut("/discussions/{id}/confidential", async (string id,
+            DiscussionConfidentialRequest request, HttpContext ctx, DiscussionStore store,
+            AgentDirectory agents, RedComputeClient redCompute,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanManageConfidentiality(discussion, ctx))
+                return AccessDenied(discussion);
+
+            if (request.Confidential && !discussion.Confidential && discussion.SessionId is not null)
+            {
+                var agent = discussion.AgentId is not null
+                    ? await agents.GetAgentAsync(discussion.AgentId, ctx.RequestAborted)
+                    : null;
+                if (agent is null)
+                    return Results.Json(new { error = "missing_agent" }, statusCode: 422);
+                var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(
+                    entities, discussion.OwnerId, ctx.RequestAborted);
+                var provenance = await NovaComputeProvenance.CreateAsync(
+                    entities, agent, beneficiary,
+                    $"/api/apps/nova/discussions/{id}/confidential",
+                    [new ComputeContextReference("discussion", id),
+                     new ComputeContextReference("session", discussion.SessionId)],
+                    method: "PUT", ct: ctx.RequestAborted);
+                if (!await redCompute.SetConfidentialAsync(
+                        discussion.SessionId, provenance, ctx.RequestAborted))
+                    return Results.Json(new
+                    {
+                        error = "confidentiality_propagation_failed",
+                        message = "RedCompute did not accept the confidential session boundary",
+                    }, statusCode: 502);
+            }
 
             await store.PatchAsync(discussion.EntityId, new JsonObject { ["confidential"] = request.Confidential });
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Confidential = request.Confidential }));
@@ -624,7 +649,7 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             DiscussionReadRequest? request = null;
             try { request = await ctx.Request.ReadFromJsonAsync<DiscussionReadRequest>(JsonOptions); }
@@ -639,7 +664,7 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             var now = DateTime.UtcNow;
             await store.TouchAsync(discussion.EntityId);
@@ -654,7 +679,7 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             var result = await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped);
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Status = result ?? discussion.Status }));
@@ -666,7 +691,7 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
             if (DiscussionStatus.IsClosed(discussion.Status))
                 return Results.Json(new { error = "closed", message = "Archived discussions cannot be resumed" }, statusCode: 409);
 
@@ -718,7 +743,7 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             if (discussion.Type == "live")
                 return Results.Json(new { error = "Live discussions cannot be archived" }, statusCode: 400);
@@ -742,7 +767,7 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             if (discussion.Type != "live")
                 return Results.Json(new { error = "Only LIVE discussions can be cleared" }, statusCode: 400);
@@ -800,7 +825,7 @@ public static class DiscussionEndpoints
                         || d.AgentId == agents.NovaAgentId));
             }
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             if (!string.IsNullOrWhiteSpace(idempotencyKey))
             {
@@ -869,7 +894,7 @@ public static class DiscussionEndpoints
                     && (agents.NovaAgentId == null || d.AgentId == null || d.AgentId == agents.NovaAgentId))
                 : await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });
@@ -884,7 +909,7 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
-            if (!OwnerScope.CanAccess(discussion.OwnerId, UserId(ctx))) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });
@@ -955,16 +980,26 @@ public static class DiscussionEndpoints
                 catch { /* best-effort — message is already persisted */ }
             }
 
-            await events.PublishAsync("discussion.nova-message", new JsonObject
-            {
-                ["discussionId"] = id,
-                ["content"] = request.Content,
-                ["audioUrl"] = request.AudioUrl,
-                ["senderAgentId"] = request.SenderAgentId,
-                ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
-                ["conversationRevision"] = discussion.ConversationRevision,
-                ["readConversationRevision"] = discussion.ReadConversationRevision,
-            });
+            var eventName = discussion.Confidential
+                ? "discussion.changed"
+                : "discussion.nova-message";
+            await events.PublishAsync(eventName, discussion.Confidential
+                ? new JsonObject
+                {
+                    ["discussionId"] = id,
+                    ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
+                    ["confidential"] = true,
+                }
+                : new JsonObject
+                {
+                    ["discussionId"] = id,
+                    ["content"] = request.Content,
+                    ["audioUrl"] = request.AudioUrl,
+                    ["senderAgentId"] = request.SenderAgentId,
+                    ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
+                    ["conversationRevision"] = discussion.ConversationRevision,
+                    ["readConversationRevision"] = discussion.ReadConversationRevision,
+                });
 
             _ = activity.OnNovaMessage(id, discussion.Title, request.Content, discussion.Confidential);
             return Results.Ok(new { success = true, discussion = DiscussionStore.ToInfo(discussion) });
@@ -975,7 +1010,7 @@ public static class DiscussionEndpoints
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
             var userId = UserId(ctx);
-            if (!OwnerScope.CanAccess(discussion.OwnerId, userId)) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             if (string.IsNullOrWhiteSpace(request.Content)
                 && (request.Images == null || request.Images.Length == 0)
@@ -1030,12 +1065,21 @@ public static class DiscussionEndpoints
                 // queue ghost and converges through session.input-queue.updated.
                 try
                 {
-                    await events.PublishAsync("discussion.user-message", new JsonObject
-                    {
-                        ["discussionId"] = id,
-                        ["sessionId"] = outcome.SessionId,
-                        ["messageUid"] = outcome.MessageUid,
-                    });
+                    await events.PublishAsync(
+                        discussion.Confidential ? "discussion.changed" : "discussion.user-message",
+                        discussion.Confidential
+                            ? new JsonObject
+                            {
+                                ["discussionId"] = id,
+                                ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
+                                ["confidential"] = true,
+                            }
+                            : new JsonObject
+                            {
+                                ["discussionId"] = id,
+                                ["sessionId"] = outcome.SessionId,
+                                ["messageUid"] = outcome.MessageUid,
+                            });
                 }
                 catch { /* best-effort convergence; reconnect/reselection revalidates */ }
             }
@@ -1095,7 +1139,7 @@ public static class DiscussionEndpoints
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
             var userId = UserId(ctx);
-            if (!OwnerScope.CanAccess(discussion.OwnerId, userId)) return Forbidden();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             var records = await discussions.GetReactionsAsync(discussion.EntityId);
             var reactions = AggregateReactions(records, userId);
@@ -1165,7 +1209,7 @@ public static class DiscussionEndpoints
         var discussion = await store.GetAsync(discussionId, ctx.RequestAborted);
         if (discussion is null) return NotFound();
         var userId = UserId(ctx);
-        if (!OwnerScope.CanAccess(discussion.OwnerId, userId)) return Forbidden();
+        if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
         if (discussion.SessionId is null)
         {
             if (emptyWhenSessionless)
@@ -1223,7 +1267,7 @@ public static class DiscussionEndpoints
         var discussion = await store.GetAsync(id);
         if (discussion is null) return NotFound();
         var userId = UserId(ctx);
-        if (!OwnerScope.CanAccess(discussion.OwnerId, userId)) return Forbidden();
+        if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
         if (string.IsNullOrWhiteSpace(request.Emoji) || string.IsNullOrWhiteSpace(request.MessageKey))
             return Results.BadRequest(new { error = "Emoji and messageKey are required" });

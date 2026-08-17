@@ -55,7 +55,8 @@ public static class CallbackEndpoints
 
             await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}");
 
-            _ = live.PostAsync("callback", $"Delegated session completed{(title != null ? $": {title}" : "")}");
+            if (!discussion.Confidential)
+                _ = live.PostAsync("callback", $"Delegated session completed{(title != null ? $": {title}" : "")}");
             return Results.Ok(new { handled = true, sessionId, discussionId, status });
         });
 
