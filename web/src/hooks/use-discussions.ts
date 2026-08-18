@@ -151,6 +151,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const loadGenerationRef = useRef<Record<string, number>>({})
   const activeObservedAfterSendRef = useRef<Record<string, boolean>>({})
   const sessionUpdateGenerationRef = useRef<Record<string, number>>({})
+  const lastLiveAssistantTurnRef = useRef<Record<string, { sessionId: string; messageUid: string }>>({})
   const handleWsEventRef = useRef<((event: WsEvent) => void) | null>(null)
 
   const activeDiscussion = discussions.find((d) => d.id === activeDiscussionId) ?? null
@@ -290,6 +291,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     force = false,
     sessionIdOverride?: string | null,
     preferDiscussionApi = false,
+    protectedAssistantTurnUid?: string | null,
   ) => {
     if (!force && loadedRef.current.has(id)) return
 
@@ -313,7 +315,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setMessages((prev) => {
         if (!isCurrentLoad()) return prev
         const current = prev[id] ?? []
-        const merged = mergeRevalidatedMessages(authoritative, baseline, current).sort(byTimestamp)
+        const merged = mergeRevalidatedMessages(
+          authoritative,
+          baseline,
+          current,
+          protectedAssistantTurnUid,
+        ).sort(byTimestamp)
         return { ...prev, [id]: merged }
       })
     }
@@ -770,6 +777,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
         if (!known || isClosed(known.status) || isDiscussionArchivePending(discId)) return
         const isStopped = session.status === "Stopped" || session.status === "Error"
         const isLiveDisc = known.type === "live"
+        const lastLiveTurn = lastLiveAssistantTurnRef.current[discId]
+        const protectedAssistantTurnUid = lastLiveTurn?.sessionId === session.id
+          ? lastLiveTurn.messageUid
+          : undefined
+        delete lastLiveAssistantTurnRef.current[discId]
         setDiscussions((prev) =>
           applySettledSessionStatus(prev, discId, session.status, new Date().toISOString())
         )
@@ -783,7 +795,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
               loadedRef.current.delete(discId)
               if (activeIdRef.current !== discId) return
               const tail = historyTailRef.current[discId] ?? INITIAL_HISTORY_TAIL
-              await loadMessages(discId, tail, true)
+              await loadMessages(
+                discId,
+                tail,
+                true,
+                undefined,
+                false,
+                protectedAssistantTurnUid,
+              )
               if (conversationRevision !== undefined)
                 await acknowledgeRead(discId, conversationRevision)
             }, SETTLED_TRANSCRIPT_RELOAD_DELAY_MS)
@@ -831,6 +850,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const { id } = event.data as { id: string }
       const discId = sessionToDiscussion.get(id)
       if (!discId) return
+      delete lastLiveAssistantTurnRef.current[discId]
       sessionUpdateGenerationRef.current[discId] =
         (sessionUpdateGenerationRef.current[discId] ?? 0) + 1
       delete activeObservedAfterSendRef.current[discId]
@@ -960,6 +980,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       clearQuestion(discussionId, null)
       setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
       setResumePending((prev) => ({ ...prev, [discussionId]: false }))
+      delete lastLiveAssistantTurnRef.current[discussionId]
       loadedRef.current.delete(discussionId)
       loadMessages(discussionId)
     } else if (event.type === "discussion.rotated") {
@@ -967,6 +988,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setDiscussions((prev) => prev.filter((d) => d.id !== oldDiscussionId))
       setMessages((prev) => { const next = { ...prev }; delete next[oldDiscussionId]; return next })
       loadedRef.current.delete(oldDiscussionId)
+      delete lastLiveAssistantTurnRef.current[oldDiscussionId]
       setActiveDiscussionId((current) => resolveRotatedDiscussionSelection(current, oldDiscussionId, newDiscussionId))
       refreshDiscussions()
     } else if (event.type === "session.stream") {
@@ -977,6 +999,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }
       const discId = sessionToDiscussion.get(sessionId)
       if (!discId) return
+      if (evt.messageUid) {
+        lastLiveAssistantTurnRef.current[discId] = {
+          sessionId,
+          messageUid: evt.messageUid,
+        }
+      }
 
       // Copied field by field rather than spread, so keep this in step with
       // ChatEvent: anything missed here is silently dropped, and `requestId` in

@@ -291,3 +291,91 @@ test("terminal presentation finalization cannot replace a richer authoritative t
     [authoritative],
   )
 })
+
+test("a lagging fetch cannot remove the assistant turn that was streaming when it began", () => {
+  const old = block("old", "old")
+  const partial: MessageBlock = {
+    id: "turn",
+    role: "assistant",
+    parts: [{ type: "text", content: "Answer", isPartial: true }],
+    timestamp: "2026-08-18T13:00:00.000Z",
+    metadata: { messageUid: "turn" },
+  }
+  const finalized: MessageBlock = {
+    ...partial,
+    parts: [{ type: "text", content: "Answer", isPartial: false }],
+  }
+
+  assert.deepEqual(
+    mergeRevalidatedMessages([old], [old, partial], [old, finalized]),
+    [old, finalized],
+  )
+})
+
+test("a lagging fetch preserves every visible segment of the active assistant turn", () => {
+  const first: MessageBlock = {
+    id: "turn",
+    role: "assistant",
+    parts: [{ type: "tool_use", content: "", toolName: "Read", toolInput: "{}" }],
+    timestamp: "2026-08-18T13:00:00.000Z",
+    metadata: { messageUid: "turn" },
+  }
+  const continuation: MessageBlock = {
+    id: "turn:segment:1",
+    role: "assistant",
+    parts: [{ type: "text", content: "Answer", isPartial: true }],
+    timestamp: "2026-08-18T13:00:01.000Z",
+    metadata: { messageUid: "turn" },
+  }
+
+  assert.deepEqual(
+    mergeRevalidatedMessages([], [first, continuation], [first, continuation]),
+    [first, continuation],
+  )
+})
+
+test("settlement protects the live-observed turn after terminal status finalized it", () => {
+  const finalized: MessageBlock = {
+    id: "turn",
+    role: "assistant",
+    parts: [{ type: "text", content: "Answer", isPartial: false }],
+    timestamp: "2026-08-18T13:00:00.000Z",
+    metadata: { messageUid: "turn" },
+  }
+  const continuation: MessageBlock = {
+    id: "turn:segment:1",
+    role: "assistant",
+    parts: [{ type: "tool_result", content: "done", isPartial: false }],
+    timestamp: "2026-08-18T13:00:01.000Z",
+    metadata: { messageUid: "turn" },
+  }
+
+  assert.deepEqual(
+    mergeRevalidatedMessages([], [finalized, continuation], [finalized, continuation], "turn"),
+    [finalized, continuation],
+  )
+})
+
+test("fetch absence still removes an unprotected settled block", () => {
+  const settled: MessageBlock = {
+    id: "settled",
+    role: "assistant",
+    parts: [{ type: "text", content: "Old answer" }],
+    timestamp: "2026-08-18T12:00:00.000Z",
+    metadata: { messageUid: "settled" },
+  }
+
+  assert.deepEqual(mergeRevalidatedMessages([], [settled], [settled]), [])
+})
+
+test("an explicit local clear cannot preserve an earlier streaming turn", () => {
+  const partial: MessageBlock = {
+    id: "turn",
+    role: "assistant",
+    parts: [{ type: "text", content: "Answer", isPartial: true }],
+    timestamp: "2026-08-18T13:00:00.000Z",
+    metadata: { messageUid: "turn" },
+  }
+
+  assert.deepEqual(mergeRevalidatedMessages([], [partial], [], "turn"), [])
+})

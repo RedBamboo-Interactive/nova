@@ -117,12 +117,24 @@ export function mergeRevalidatedMessages(
   authoritative: MessageBlock[],
   baseline: MessageBlock[],
   current: MessageBlock[],
+  protectedAssistantTurnUid?: string | null,
 ): MessageBlock[] {
   const baselineFingerprints = new Map(
     baseline.map((message) => [message.id, messageContentFingerprint(message)]),
   )
   const changed = new Map<string, MessageBlock>()
   const currentById = new Map(current.map(message => [message.id, message]))
+  const streamingTurnUids = new Set(
+    baseline.flatMap((message) => {
+      const uid = message.metadata?.messageUid
+      return message.role === "assistant"
+        && typeof uid === "string"
+        && message.parts.some(part => part.isPartial)
+        ? [uid]
+        : []
+    }),
+  )
+  if (protectedAssistantTurnUid) streamingTurnUids.add(protectedAssistantTurnUid)
 
   for (const message of current) {
     const previous = baselineFingerprints.get(message.id)
@@ -150,7 +162,18 @@ export function mergeRevalidatedMessages(
     return message
   })
   const authoritativeIds = new Set(authoritative.map((message) => message.id))
-  for (const message of changed.values()) {
+  const preserved = new Map(changed)
+  // A revalidation that starts while a provider turn is visibly streaming may
+  // race RedCompute's buffered transcript writer. Preserve every local segment
+  // of that one turn when the fetched tail omits it wholesale. This is narrower
+  // than treating fetch absence as non-authoritative for all history: settled
+  // blocks, optimistic user bridges, clear and rotation keep their old rules.
+  for (const message of current) {
+    const uid = message.metadata?.messageUid
+    if (message.role === "assistant" && typeof uid === "string" && streamingTurnUids.has(uid))
+      preserved.set(message.id, message)
+  }
+  for (const message of preserved.values()) {
     if (!authoritativeIds.has(message.id)) merged.push(message)
   }
   return merged
