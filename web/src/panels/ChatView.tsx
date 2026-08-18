@@ -238,6 +238,7 @@ export function ChatView({
   const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming, activeDiscussion)
   const share = useShare(activeDiscussion?.entityId)
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
+  const [confidentialityPending, setConfidentialityPending] = useState(false)
   const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [capturingContext, setCapturingContext] = useState(false)
@@ -546,10 +547,21 @@ export function ChatView({
     </div>
   )
 
-  const handleConfidentialToggle = useCallback((checked: boolean) => {
-    if (!activeDiscussionId) return
-    setConfidential(activeDiscussionId, checked)
-  }, [activeDiscussionId, setConfidential])
+  const handleConfidentialToggle = useCallback(async (checked: boolean) => {
+    if (!activeDiscussionId || confidentialityPending) return
+    setConfidentialityPending(true)
+    try {
+      await setConfidential(activeDiscussionId, checked)
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "Could not update confidentiality",
+        description: error instanceof Error ? error.message : "Unknown error",
+      })
+    } finally {
+      setConfidentialityPending(false)
+    }
+  }, [activeDiscussionId, confidentialityPending, setConfidential, toast])
 
   const handleShare = useCallback(() => {
     share.reset()
@@ -676,6 +688,8 @@ export function ChatView({
             className="mt-0.5 shrink-0"
             checked={activeDiscussion.confidential ?? false}
             onCheckedChange={handleConfidentialToggle}
+            disabled={confidentialityPending}
+            aria-busy={confidentialityPending}
             aria-label="Confidential discussion"
           />
         </div>

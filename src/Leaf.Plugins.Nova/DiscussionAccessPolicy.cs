@@ -14,6 +14,9 @@ public static class DiscussionAccessPolicy
     private const string ExecutionTokenUse = "execution";
     private const string ExecutionIdentityClaim = "execution_identity";
     private const string LocalDefaultAuthenticationType = "LocalDefault";
+    private const string LocalDefaultSubjectId = "local-user";
+    private const string NovaAppId = NovaAppPlugin.PluginId;
+    private const string NovaRoute = "/apps/nova";
 
     public static bool CanRead(DiscussionRead discussion, HttpContext context)
     {
@@ -39,11 +42,28 @@ public static class DiscussionAccessPolicy
     }
 
     public static bool CanManageConfidentiality(DiscussionRead discussion, HttpContext context)
-        => !IsExecution(context.User)
-            && IsExplicitHuman(context.User)
-            && !string.IsNullOrWhiteSpace(discussion.OwnerId)
-            && string.Equals(context.User.FindFirstValue("sub"), discussion.OwnerId,
-                StringComparison.OrdinalIgnoreCase);
+    {
+        if (string.IsNullOrWhiteSpace(discussion.OwnerId)) return false;
+
+        var userId = context.User.FindFirstValue("sub");
+        if (!string.Equals(userId, discussion.OwnerId, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (!IsExecution(context.User)) return IsExplicitHuman(context.User);
+        if (string.Equals(userId, LocalDefaultSubjectId, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return TryReadExecution(context.User, out var execution)
+            && execution is not null
+            && string.Equals(execution.AppId, NovaAppId, StringComparison.OrdinalIgnoreCase)
+            && execution.ActorKind.Equals("app", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(execution.ActorStableId, NovaAppId, StringComparison.OrdinalIgnoreCase)
+            && execution.BeneficiaryKind.Equals("user", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(execution.BeneficiaryId, discussion.OwnerId,
+                StringComparison.OrdinalIgnoreCase)
+            && execution.HasNovaBrowserContext
+            && execution.ParentExecutionId is null;
+    }
 
     public static bool IsExplicitHuman(ClaimsPrincipal principal)
         => principal.Identity?.IsAuthenticated == true
@@ -71,15 +91,27 @@ public static class DiscussionAccessPolicy
                 || !root.TryGetProperty("beneficiary", out var beneficiary))
                 return false;
 
+            var appId = root.TryGetProperty("app", out var app)
+                ? String(app, "id")
+                : null;
             var actorKind = String(actor, "kind");
-            var actorId = String(actor, "entityId") ?? String(actor, "id");
+            var actorStableId = String(actor, "id");
+            var actorId = String(actor, "entityId") ?? actorStableId;
             var beneficiaryKind = String(beneficiary, "kind");
             var beneficiaryId = String(beneficiary, "id");
             if (actorKind is null || actorId is null || beneficiaryKind is null)
                 return false;
 
+            var hasNovaBrowserContext = root.TryGetProperty("context", out var contexts)
+                && contexts.ValueKind == JsonValueKind.Array
+                && contexts.EnumerateArray().Any(item =>
+                    string.Equals(String(item, "kind"), "browser",
+                        StringComparison.OrdinalIgnoreCase)
+                    && IsNovaRoute(String(item, "route")));
             execution = new ParsedExecution(
-                actorKind, actorId, beneficiaryKind, beneficiaryId);
+                appId, actorKind, actorStableId, actorId,
+                beneficiaryKind, beneficiaryId, hasNovaBrowserContext,
+                String(root, "parentExecutionId"));
             return true;
         }
         catch (JsonException)
@@ -94,9 +126,17 @@ public static class DiscussionAccessPolicy
                 ? value.GetString()
                 : null;
 
+    private static bool IsNovaRoute(string? route)
+        => string.Equals(route, NovaRoute, StringComparison.OrdinalIgnoreCase)
+            || route?.StartsWith(NovaRoute + "/", StringComparison.OrdinalIgnoreCase) == true;
+
     private sealed record ParsedExecution(
+        string? AppId,
         string ActorKind,
+        string? ActorStableId,
         string ActorId,
         string BeneficiaryKind,
-        string? BeneficiaryId);
+        string? BeneficiaryId,
+        bool HasNovaBrowserContext,
+        string? ParentExecutionId);
 }

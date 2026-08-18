@@ -19,9 +19,10 @@ public sealed class DiscussionAccessPolicyTests
         Assert.True(DiscussionAccessPolicy.CanRead(discussion, Human(Owner)));
         Assert.False(DiscussionAccessPolicy.CanRead(discussion, Human("someone-else")));
         Assert.False(DiscussionAccessPolicy.CanRead(discussion, LocalDefault()));
-        Assert.True(DiscussionAccessPolicy.CanRead(discussion, Execution(Agent, Owner)));
-        Assert.False(DiscussionAccessPolicy.CanRead(discussion, Execution("another-agent", Owner)));
-        Assert.False(DiscussionAccessPolicy.CanRead(discussion, Execution(Agent, "another-user")));
+        Assert.True(DiscussionAccessPolicy.CanRead(discussion, AgentExecution(Agent, Owner)));
+        Assert.True(DiscussionAccessPolicy.CanRead(discussion, LegacyAgentExecution(Agent, Owner)));
+        Assert.False(DiscussionAccessPolicy.CanRead(discussion, AgentExecution("another-agent", Owner)));
+        Assert.False(DiscussionAccessPolicy.CanRead(discussion, AgentExecution(Agent, "another-user")));
     }
 
     [Fact]
@@ -30,13 +31,44 @@ public sealed class DiscussionAccessPolicyTests
         var discussion = ConfidentialDiscussion();
 
         Assert.True(DiscussionAccessPolicy.CanManageConfidentiality(discussion, Human(Owner)));
+        Assert.True(DiscussionAccessPolicy.CanManageConfidentiality(
+            discussion, BrowserExecution(Owner)));
         Assert.False(DiscussionAccessPolicy.CanManageConfidentiality(discussion, LocalDefault()));
-        Assert.False(DiscussionAccessPolicy.CanManageConfidentiality(discussion, Execution(Agent, Owner)));
+        Assert.False(DiscussionAccessPolicy.CanManageConfidentiality(
+            discussion, AgentExecution(Agent, Owner)));
     }
 
-    private static DiscussionRead ConfidentialDiscussion() => new(
+    [Fact]
+    public void BrowserMutationRequiresRootNovaAppContextAndExactOwner()
+    {
+        var discussion = ConfidentialDiscussion();
+
+        Assert.False(DiscussionAccessPolicy.CanManageConfidentiality(
+            discussion, BrowserExecution("another-user")));
+        Assert.False(DiscussionAccessPolicy.CanManageConfidentiality(
+            discussion, BrowserExecution(Owner, appId: "codered", actorId: "nova")));
+        Assert.False(DiscussionAccessPolicy.CanManageConfidentiality(
+            discussion, BrowserExecution(Owner, actorId: "codered")));
+        Assert.False(DiscussionAccessPolicy.CanManageConfidentiality(
+            discussion, BrowserExecution(Owner, actorKind: "agent")));
+        Assert.False(DiscussionAccessPolicy.CanManageConfidentiality(
+            discussion, BrowserExecution(Owner, route: "/apps/codered")));
+        Assert.False(DiscussionAccessPolicy.CanManageConfidentiality(
+            discussion, BrowserExecution(Owner, parentExecutionId: Guid.NewGuid().ToString())));
+    }
+
+    [Fact]
+    public void LocalDefaultCannotLaunderItselfThroughANovaBrowserToken()
+    {
+        var discussion = ConfidentialDiscussion("local-user");
+
+        Assert.False(DiscussionAccessPolicy.CanManageConfidentiality(
+            discussion, BrowserExecution("local-user")));
+    }
+
+    private static DiscussionRead ConfidentialDiscussion(string owner = Owner) => new(
         "discussion-1", "Private", "session-1", DiscussionStatus.Idle,
-        DateTime.UtcNow, DateTime.UtcNow, 1, null, Owner, Guid.NewGuid(), Agent,
+        DateTime.UtcNow, DateTime.UtcNow, 1, null, owner, Guid.NewGuid(), Agent,
         Confidential: true);
 
     private static DefaultHttpContext Human(string userId)
@@ -45,15 +77,51 @@ public sealed class DiscussionAccessPolicyTests
     private static DefaultHttpContext LocalDefault()
         => Context(new ClaimsIdentity([new Claim("sub", "local-user")], "LocalDefault"));
 
-    private static DefaultHttpContext Execution(string agentId, string beneficiaryId)
+    private static DefaultHttpContext AgentExecution(string agentId, string beneficiaryId)
     {
         var identity = JsonSerializer.Serialize(new
         {
+            app = new { id = "nova", name = "Nova" },
             actor = new { kind = "agent", id = "nova", entityId = agentId },
             beneficiary = new { kind = "user", id = beneficiaryId },
+            context = Array.Empty<object>(),
         });
+        return ExecutionContext(beneficiaryId, identity);
+    }
+
+    private static DefaultHttpContext LegacyAgentExecution(string agentId, string beneficiaryId)
+    {
+        var identity = JsonSerializer.Serialize(new
+        {
+            actor = new { kind = "agent", entityId = agentId },
+            beneficiary = new { kind = "user", id = beneficiaryId },
+        });
+        return ExecutionContext(beneficiaryId, identity);
+    }
+
+    private static DefaultHttpContext BrowserExecution(
+        string beneficiaryId,
+        string appId = "nova",
+        string actorId = "nova",
+        string actorKind = "app",
+        string route = "/apps/nova/chat/discussion-1",
+        string? parentExecutionId = null)
+    {
+        var identity = JsonSerializer.Serialize(new
+        {
+            app = new { id = appId, name = appId },
+            actor = new { kind = actorKind, id = actorId, name = actorId },
+            beneficiary = new { kind = "user", id = beneficiaryId },
+            context = new[] { new { kind = "browser", route } },
+            parentExecutionId,
+        });
+        return ExecutionContext(beneficiaryId, identity);
+    }
+
+    private static DefaultHttpContext ExecutionContext(string subjectId, string identity)
+    {
         return Context(new ClaimsIdentity([
-            new Claim("sub", beneficiaryId),
+            new Claim("sub", subjectId),
             new Claim("token_use", "execution"),
             new Claim("execution_identity", identity),
         ], "Bearer"));
