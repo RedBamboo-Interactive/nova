@@ -8,6 +8,11 @@ on:
         required: false
         default: ''
         type: string
+      source_commit:
+        description: Exact producer source commit supplied by trusted automation.
+        required: false
+        default: ''
+        type: string
     secrets:
       CROSS_REPO_TOKEN:
         description: Optional token that can read the pinned RedBamboo and RedLeaf commits.
@@ -39,7 +44,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: RedBamboo-Interactive/nova
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ inputs.source_commit || github.workflow_sha }}
           path: nova
           persist-credentials: false
 
@@ -77,7 +82,7 @@ jobs:
           $leafSdk = [string]$input.leafSdk.commit
           $redbamboo = [string]$input.redbamboo.commit
           $version = [string]$manifest.version
-          if ('${{ github.repository }}' -cne 'RedBamboo-Interactive/nova') { throw 'This producer is restricted to the canonical RedBamboo-Interactive/nova repository.' }
+          if ([string]::IsNullOrWhiteSpace('${{ inputs.source_commit }}') -and '${{ github.repository }}' -cne 'RedBamboo-Interactive/nova') { throw 'Cross-repository callers must supply the exact canonical Nova source commit.' }
           if ($redleaf -notmatch '^[a-f0-9]{40}$') { throw 'RedLeaf release-tool commit pin is unresolved; replace the single placeholder in release/producer-input.v1.json.' }
           if ($leafSdk -notmatch '^[a-f0-9]{40}$') { throw 'Leaf.Sdk commit must be one full immutable SHA.' }
           if ($redbamboo -notmatch '^[a-f0-9]{40}$') { throw 'RedBamboo commit must be one full immutable SHA.' }
@@ -136,7 +141,7 @@ jobs:
       - name: Verify exact checkouts
         shell: pwsh
         run: |
-          if ((git -C nova rev-parse HEAD).Trim() -cne '${{ github.workflow_sha }}') { throw 'Nova checkout does not match the called workflow commit.' }
+          if ((git -C nova rev-parse HEAD).Trim() -cne '${{ inputs.source_commit || github.workflow_sha }}') { throw 'Nova checkout does not match the selected workflow source.' }
           if ((git -C redbamboo-packages rev-parse HEAD).Trim() -cne '${{ steps.pins.outputs.redbamboo }}') { throw 'RedBamboo checkout does not match its producer pin.' }
           if ((git -C leaf-sdk rev-parse HEAD).Trim() -cne '${{ steps.pins.outputs.leaf_sdk }}') { throw 'Leaf.Sdk checkout does not match its producer pin.' }
           if ((git -C redleaf-release rev-parse HEAD).Trim() -cne '${{ steps.pins.outputs.redleaf }}') { throw 'RedLeaf checkout does not match its producer pin.' }
@@ -296,7 +301,7 @@ jobs:
       - name: Upload immutable unsigned handoff only
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: nova-${{ steps.pins.outputs.version }}-${{ github.workflow_sha }}-unsigned-release-inputs
+          name: nova-${{ steps.pins.outputs.version }}-${{ inputs.source_commit || github.workflow_sha }}-unsigned-release-inputs
           path: |
             nova/artifacts/nova-${{ steps.pins.outputs.version }}.leafpkg
             nova/artifacts/nova-${{ steps.pins.outputs.version }}.component-input.v1.json
@@ -318,11 +323,14 @@ jobs:
     permissions:
       actions: read
       contents: write
+    env:
+      GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || github.token }}
+      NOVA_SOURCE: ${{ inputs.source_commit || github.workflow_sha }}
     steps:
       - name: Download exact unsigned candidate inputs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: nova-${{ needs.candidate.outputs.version }}-${{ github.workflow_sha }}-unsigned-release-inputs
+          name: nova-${{ needs.candidate.outputs.version }}-${{ inputs.source_commit || github.workflow_sha }}-unsigned-release-inputs
           path: bridge-input
 
       - name: Prepare exactly two immutable bridge assets
@@ -364,7 +372,7 @@ jobs:
           $tag = 'nova-unsigned-candidates'
           $releaseJson = & gh release view $tag --json isDraft,isPrerelease,assets 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --prerelease --latest=false --target '${{ github.workflow_sha }}' `
+            gh release create $tag --prerelease --latest=false --target $env:NOVA_SOURCE `
               --title 'Rolling unsigned Nova candidates' `
               --notes 'Unsigned producer inputs for exact central component publication. Trust comes only from central signed metadata.'
             if ($LASTEXITCODE -ne 0) { throw 'Could not create the rolling Nova candidate prerelease.' }

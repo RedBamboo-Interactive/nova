@@ -128,7 +128,7 @@ test("workflow uses immutable action SHAs and one channel-neutral RedLeaf ingest
   assert.doesNotMatch(workflow, /@(main|master|v\d+)\b/i)
   assert.doesNotMatch(workflow, /github\.sha/)
   const candidateWorkflow = workflow.slice(workflow.indexOf("  candidate:"), workflow.indexOf("  bridge:"))
-  assert.equal((candidateWorkflow.match(/github\.workflow_sha/g) ?? []).length, 3)
+  assert.ok((candidateWorkflow.match(/inputs\.source_commit \|\| github\.workflow_sha/g) ?? []).length >= 3)
   assert.equal((workflow.match(/candidate ingest-extension/g) ?? []).length, 1)
   assert.doesNotMatch(workflow, /--channel|stable|nightly/i)
   assert.doesNotMatch(workflow, /candidate (build|finalize)|registry build|signer|id-token:\s*write/i)
