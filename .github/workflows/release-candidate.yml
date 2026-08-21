@@ -21,7 +21,8 @@ on:
         type: string
 
 permissions:
-  contents: read
+  actions: read
+  contents: write
 
 jobs:
   candidate:
