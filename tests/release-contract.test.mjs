@@ -26,8 +26,11 @@ test("repository SDK selection is exact and the packer runs inside the component
     },
   })
   const workflow = readFileSync(join(root, ".github/workflows/release-candidate.yml"), "utf8").replaceAll("\r\n", "\n")
-  assert.match(workflow, /workflow_dispatch: \{\}/)
-  assert.doesNotMatch(workflow, /^    inputs:\s*$/m)
+  assert.match(workflow, /workflow_call:\n    inputs:\n      version:/)
+  assert.match(workflow, /workflow_dispatch:\n    inputs:\n      version:/)
+  assert.match(workflow, /Apply requested release version ephemerally/)
+  assert.match(workflow, /\$producer\.component\.version = \$env:REQUESTED_VERSION/)
+  assert.match(workflow, /\$package\.version = \$env:REQUESTED_VERSION/)
   assert.match(workflow, /name: Invoke [^\n]*RedLeaf[^\n]*\n\s+working-directory: nova/)
   assert.doesNotMatch(workflow, /-notcmatch/)
   assert.match(readFileSync(join(root, ".gitignore"), "utf8"), /^artifacts\/$/m)

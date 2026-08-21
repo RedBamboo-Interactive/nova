@@ -2,11 +2,23 @@ name: Build Nova release candidates
 
 on:
   workflow_call:
+    inputs:
+      version:
+        description: Optional exact semantic version stamped into an automated candidate.
+        required: false
+        default: ''
+        type: string
     secrets:
       CROSS_REPO_TOKEN:
         description: Optional token that can read the pinned RedBamboo and RedLeaf commits.
         required: false
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional exact semantic version; empty keeps the committed manifest version.
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -29,6 +41,29 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: nova
           persist-credentials: false
+
+      - name: Apply requested release version ephemerally
+        if: ${{ inputs.version != '' }}
+        working-directory: nova
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if ($env:REQUESTED_VERSION -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+            throw 'Requested candidate version must be exact SemVer.'
+          }
+          $manifestPath = 'plugin.json'
+          $producerPath = 'release/producer-input.v1.json'
+          $packagePath = 'web/package.json'
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $producer = Get-Content -LiteralPath $producerPath -Raw | ConvertFrom-Json
+          $package = Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json
+          $manifest.version = $env:REQUESTED_VERSION
+          $producer.component.version = $env:REQUESTED_VERSION
+          $package.version = $env:REQUESTED_VERSION
+          $manifest | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
+          $producer | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $producerPath -Encoding utf8NoBOM
+          $package | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $packagePath -Encoding utf8NoBOM
 
       - name: Read and require immutable producer pins
         id: pins
