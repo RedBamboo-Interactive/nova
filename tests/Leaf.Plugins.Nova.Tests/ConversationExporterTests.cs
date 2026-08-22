@@ -98,20 +98,4 @@ public sealed class ConversationExporterTests
             });
     }
 
-    [Fact]
-    public void SettledTurnSuppressesCommentaryButPreservesToolsAndLegacyText()
-    {
-        var result = ConversationExporter.SuppressSettledCommentary(
-        [
-            new() { Role = "assistant", EventType = "text", Content = "Working", Phase = "commentary", MessageUid = "turn-1" },
-            new() { Role = "assistant", EventType = "tool_use", ToolName = "Read", MessageUid = "turn-1" },
-            new() { Role = "assistant", EventType = "text", Content = "Done", Phase = "final_answer", MessageUid = "turn-1" },
-            new() { Role = "assistant", EventType = "text", Content = "Legacy", MessageUid = "legacy" },
-        ]);
-
-        Assert.DoesNotContain(result, message => message.Content == "Working");
-        Assert.Contains(result, message => message.ToolName == "Read");
-        Assert.Contains(result, message => message.Content == "Done");
-        Assert.Contains(result, message => message.Content == "Legacy");
-    }
 }

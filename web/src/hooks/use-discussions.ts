@@ -6,7 +6,7 @@ import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, Questio
 import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
-import { filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeRevalidatedMessages } from "../lib/discussion-transcript"
+import { coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeRevalidatedMessages } from "../lib/discussion-transcript"
 import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
@@ -77,7 +77,7 @@ function cleanMessages(blocks: MessageBlock[], resolve?: EventResolver): Message
 }
 
 function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
-  return messages.map((m) => {
+  const blocks = messages.map((m) => {
     // Structured event metadata arrives as a sibling event_data part — stash it
     // on the block so formatEventMessage can fold it into the event part.
     let eventData: Record<string, unknown> | undefined
@@ -114,6 +114,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     }
   })
+  return coalesceDiscussionTurnBlocks(blocks)
 }
 
 export function useDiscussions(eventResolver?: EventResolver) {

@@ -1,5 +1,51 @@
 import type { MessageBlock, MessagePart } from "@redbamboo/chat"
 
+function assistantTurnUid(block: MessageBlock): string | null {
+  const uid = block.metadata?.messageUid
+  return block.role === "assistant" && typeof uid === "string" && uid ? uid : null
+}
+
+/**
+ * Rebuild Nova's record-shaped discussion response into the same assistant
+ * turn segments used by the live stream. Consecutive records from one provider
+ * turn are parts of one block; an intervening user/ambient record opens a new,
+ * uniquely keyed segment while retaining the canonical turn uid in metadata.
+ *
+ * Response phases are append-only content. In particular, final_answer closes
+ * a turn but never replaces an earlier commentary part.
+ */
+export function coalesceDiscussionTurnBlocks(blocks: MessageBlock[]): MessageBlock[] {
+  const result: MessageBlock[] = []
+  const segmentCounts = new Map<string, number>()
+
+  for (const block of blocks) {
+    const turnUid = assistantTurnUid(block)
+    if (!turnUid) {
+      result.push(block)
+      continue
+    }
+
+    const previous = result[result.length - 1]
+    if (previous && assistantTurnUid(previous) === turnUid) {
+      result[result.length - 1] = {
+        ...previous,
+        parts: [...previous.parts, ...block.parts],
+      }
+      continue
+    }
+
+    const segment = segmentCounts.get(turnUid) ?? 0
+    segmentCounts.set(turnUid, segment + 1)
+    result.push({
+      ...block,
+      id: segment === 0 ? turnUid : `${turnUid}:segment:${segment}`,
+      metadata: { ...block.metadata, messageUid: turnUid },
+    })
+  }
+
+  return result
+}
+
 /** Remove Nova's internal Meet Nova bootstrap from raw RedCompute history. */
 export function filterInternalBootstrapBlock(
   blocks: MessageBlock[],

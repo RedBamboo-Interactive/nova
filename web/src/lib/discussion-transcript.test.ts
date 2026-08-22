@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
+  coalesceDiscussionTurnBlocks,
   filterInternalBootstrapBlock,
   mergeDiscussionAndSessionBlocks,
   mergeRevalidatedMessages,
@@ -32,6 +33,52 @@ const rawReply: MessageBlock = {
   parts: [{ type: "tool_use", content: "", toolName: "Read", toolInput: "{}" }],
   metadata: undefined,
 }
+
+test("discussion projection keeps commentary and final answer in one canonical turn", () => {
+  const commentary: MessageBlock = {
+    id: "turn",
+    role: "assistant",
+    parts: [{ type: "text", content: "Working", phase: "commentary" }],
+    timestamp: "2026-08-22T06:01:40.000Z",
+    metadata: { messageUid: "turn", source: "session-transcript" },
+  }
+  const finalAnswer: MessageBlock = {
+    ...commentary,
+    parts: [{ type: "text", content: "Done", phase: "final_answer" }],
+    timestamp: "2026-08-22T06:01:49.000Z",
+  }
+
+  assert.deepEqual(coalesceDiscussionTurnBlocks([commentary, finalAnswer]), [{
+    ...commentary,
+    parts: [...commentary.parts, ...finalAnswer.parts],
+  }])
+})
+
+test("discussion projection gives interrupted segments stable unique identities", () => {
+  const first: MessageBlock = {
+    id: "turn",
+    role: "assistant",
+    parts: [{ type: "text", content: "Working", phase: "commentary" }],
+    timestamp: "2026-08-22T06:01:40.000Z",
+    metadata: { messageUid: "turn", source: "session-transcript" },
+  }
+  const ambient: MessageBlock = {
+    id: "event",
+    role: "user",
+    parts: [{ type: "text", content: "ambient" }],
+    timestamp: "2026-08-22T06:01:45.000Z",
+    metadata: { source: "event:heartbeat" },
+  }
+  const continuation: MessageBlock = {
+    ...first,
+    parts: [{ type: "text", content: "Done", phase: "final_answer" }],
+    timestamp: "2026-08-22T06:01:49.000Z",
+  }
+
+  const result = coalesceDiscussionTurnBlocks([first, ambient, continuation])
+  assert.deepEqual(result.map(block => block.id), ["turn", "event", "turn:segment:1"])
+  assert.equal(result[2].metadata?.messageUid, "turn")
+})
 
 test("removes only the internal Meet Nova bootstrap from raw session history", () => {
   const bootstrap: MessageBlock = {

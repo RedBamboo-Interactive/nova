@@ -68,7 +68,7 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         List<SessionMessage> raw, IReadOnlyList<DiscussionMessage> records,
         List<DiscussionMessage> localEvents)
     {
-        var collapsed = SuppressSettledCommentary(CollapseMessages(raw))
+        var collapsed = CollapseMessages(raw)
             .Where(message => !(message.Role == "user"
                 && message.MessageUid == disc.SetupBootstrapMessageUid))
             .ToList();
@@ -218,25 +218,6 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         }
 
         return result;
-    }
-
-    internal static List<CollapsedMessage> SuppressSettledCommentary(List<CollapsedMessage> messages)
-    {
-        var settledTurnUids = messages
-            .Where(message => message.Role == "assistant"
-                && message.EventType == "text"
-                && message.Phase == "final_answer"
-                && !string.IsNullOrWhiteSpace(message.MessageUid))
-            .Select(message => message.MessageUid!)
-            .ToHashSet(StringComparer.Ordinal);
-
-        return messages
-            .Where(message => !(message.Role == "assistant"
-                && message.EventType == "text"
-                && message.Phase == "commentary"
-                && message.MessageUid is { Length: > 0 } uid
-                && settledTurnUids.Contains(uid)))
-            .ToList();
     }
 
     internal static string StripInjectedTags(string content)

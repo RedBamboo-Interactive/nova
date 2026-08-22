@@ -378,8 +378,7 @@ public static class DiscussionEndpoints
                         .GroupBy(m => m.Metadata["uid"]!.GetValue<string>())
                         .ToDictionary(g => g.Key, g => g.OrderByDescending(m => m.CreatedAt).First());
 
-                    var collapsed = ConversationExporter.SuppressSettledCommentary(
-                            ConversationExporter.CollapseMessages(snapshot.Messages))
+                    var collapsed = ConversationExporter.CollapseMessages(snapshot.Messages)
                         .Where(message => !(message.Role == "user"
                             && message.MessageUid == discussion.SetupBootstrapMessageUid))
                         .ToList();
