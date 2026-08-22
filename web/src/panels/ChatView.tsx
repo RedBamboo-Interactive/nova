@@ -540,13 +540,6 @@ export function ChatView({
     }
   }, [activeDiscussionId, agentFilter, discussions, environment.document, floating, handleSelectDiscussion, openNewDiscussion])
 
-  const upstreamBanner = !upstreamConnected && (
-    <div className="flex items-center gap-2 px-4 py-2 bg-accent-teal-a15 border-b border-overlay-6 text-text-muted text-sm">
-      <i className="ph-bold ph-arrows-clockwise animate-spin" />
-      <span>Reconnecting to AI service…</span>
-    </div>
-  )
-
   const handleConfidentialToggle = useCallback(async (checked: boolean) => {
     if (!activeDiscussionId || confidentialityPending) return
     setConfidentialityPending(true)
@@ -718,8 +711,8 @@ export function ChatView({
     </PanelHeader>
   )
 
-  const renderStatusLine = useCallback(({ isStreaming, messages }: { isStreaming: boolean; messages: import("@redbamboo/chat").MessageBlock[] }) => (
-    <NovaStatusLine isStreaming={isStreaming} messages={messages} />
+  const renderStatusLine = useCallback(({ isStreaming, isReconnecting, messages }: { isStreaming: boolean; isReconnecting: boolean; messages: import("@redbamboo/chat").MessageBlock[] }) => (
+    <NovaStatusLine isStreaming={isStreaming} isReconnecting={isReconnecting} messages={messages} />
   ), [])
 
   const resolveAgentInfo = useCallback((agentId: string) => {
@@ -896,6 +889,7 @@ export function ChatView({
       <ChatPanel
         messages={activeMessages}
         isStreaming={isStreaming}
+        isReconnecting={!upstreamConnected}
         interrupting={isInterrupting}
         resumePending={isResumePending}
         onSend={handleSend}
@@ -917,7 +911,7 @@ export function ChatView({
         onLoadEarlier={handleLoadEarlier}
         isLoadingEarlier={isLoadingEarlier}
         placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}
-        header={<>{chatHeader}{upstreamBanner}</>}
+        header={chatHeader}
         speechBackend={speechBackend}
         pushToTalkKey={pushToTalk.key}
         globalPushToTalk={floating}
