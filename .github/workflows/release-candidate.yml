@@ -310,7 +310,7 @@ jobs:
             nova/artifacts/nova-signature-input.json
             nova/artifacts/nova-package-inventory.txt
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   bridge:
     name: Append unsigned Nova bytes to rolling prerelease
