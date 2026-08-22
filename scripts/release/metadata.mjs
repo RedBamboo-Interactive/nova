@@ -30,6 +30,34 @@ function facts(path) { return { sizeBytes: statSync(path).size, sha256: hashFile
 function cleanGit(root, label) {
   if (git(root, "status", "--porcelain=v1", "--untracked-files=all")) fail(`${label} checkout must be clean.`)
 }
+export function validateExactVersionOverride(head, current, expectedVersion) {
+  const headVersion = head.manifest.version
+  if (head.input.component.version !== headVersion || head.packageJson.version !== headVersion) fail("Committed Nova version fields are inconsistent.")
+  if (expectedVersion === headVersion) fail("An ephemeral release override must change the committed version.")
+  if (current.manifest.version !== expectedVersion || current.input.component.version !== expectedVersion || current.packageJson.version !== expectedVersion) fail("Ephemeral Nova version fields must match the requested version.")
+  const restored = structuredClone(current)
+  restored.manifest.version = headVersion
+  restored.input.component.version = headVersion
+  restored.packageJson.version = headVersion
+  if (canonical(restored.manifest) !== canonical(head.manifest)
+      || canonical(restored.input) !== canonical(head.input)
+      || canonical(restored.packageJson) !== canonical(head.packageJson)) fail("Nova checkout contains changes beyond the exact release version fields.")
+}
+function cleanNovaGit(root, input, manifest, packageJson) {
+  const status = git(root, "status", "--porcelain=v1", "--untracked-files=all")
+  if (!status) return
+  const expectedPaths = ["plugin.json", "release/producer-input.v1.json", "web/package.json"]
+  const entries = status.split(/\r?\n/)
+  if (entries.length !== expectedPaths.length
+      || entries.some((entry) => !entry.startsWith(" M "))
+      || entries.map((entry) => entry.slice(3)).sort(ordinal).some((path, index) => path !== expectedPaths[index])) fail("Nova checkout must be clean except for the exact workflow-owned version fields.")
+  const atHead = (path) => JSON.parse(git(root, "show", `HEAD:${path}`))
+  validateExactVersionOverride({
+    manifest: atHead("plugin.json"),
+    input: atHead("release/producer-input.v1.json"),
+    packageJson: atHead("web/package.json"),
+  }, { manifest, input, packageJson }, input.component.version)
+}
 function exactCommit(value, label) {
   if (!/^[a-f0-9]{40}$/.test(value)) fail(`${label} must be one full lowercase commit SHA.`)
 }
@@ -134,7 +162,7 @@ function collect(get) {
   const manifest = json(resolve(repository, "plugin.json"))
   const packageJson = json(resolve(repository, "web/package.json"))
   validateInput(input, manifest, packageJson)
-  cleanGit(repository, "Nova")
+  cleanNovaGit(repository, input, manifest, packageJson)
   cleanGit(redbamboo, "RedBamboo")
   cleanGit(leafSdk, "Leaf.Sdk")
   cleanGit(redleaf, "RedLeaf release tool")

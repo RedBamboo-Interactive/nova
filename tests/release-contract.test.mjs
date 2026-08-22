@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { readFileSync as readFileRaw, readdirSync, statSync } from "node:fs"
 import { join, resolve } from "node:path"
 import test from "node:test"
-import { buildMetadata, canonical, hashFile, validateInput } from "../scripts/release/metadata.mjs"
+import { buildMetadata, canonical, hashFile, validateExactVersionOverride, validateInput } from "../scripts/release/metadata.mjs"
 
 const root = resolve(import.meta.dirname, "..")
 const readFileSync = (path, encoding) => {
@@ -15,6 +15,12 @@ const manifest = readJson("plugin.json")
 const packageJson = readJson("web/package.json")
 const producer = readJson("release/producer-input.v1.json")
 const dotnetSdk = readJson("global.json")
+
+test("cross-repository bridge retains the scoped producer token", () => {
+  const workflow = readFileSync(join(root, ".github/workflows/release-candidate.yml"), "utf8")
+  assert.match(workflow, /GH_TOKEN: \$\{\{ secrets\.CROSS_REPO_TOKEN \|\| github\.token \}\}/)
+  assert.doesNotMatch(workflow, /GH_TOKEN: \$\{\{ github\.token \}\}/)
+})
 const validProducer = () => structuredClone(producer)
 
 test("repository SDK selection is exact and the packer runs inside the component checkout", () => {
@@ -46,6 +52,24 @@ test("Nova is a protected, versioned backend-plus-frontend extension", () => {
   assert.equal(input.classification, "protected")
   assert.equal(input.toolchain.node, "22.23.1")
   assert.equal(packageJson.engines.node, "22.23.1")
+})
+
+test("automated version stamping permits only the three exact version fields", () => {
+  const head = { manifest, input: producer, packageJson }
+  const current = structuredClone(head)
+  current.manifest.version = "0.1.99"
+  current.input.component.version = "0.1.99"
+  current.packageJson.version = "0.1.99"
+  assert.doesNotThrow(() => validateExactVersionOverride(head, current, "0.1.99"))
+
+  const extraChange = structuredClone(current)
+  extraChange.manifest.description = "unexpected mutation"
+  assert.throws(() => validateExactVersionOverride(head, extraChange, "0.1.99"), /beyond the exact release version fields/)
+
+  const inconsistent = structuredClone(current)
+  inconsistent.packageJson.version = manifest.version
+  assert.throws(() => validateExactVersionOverride(head, inconsistent, "0.1.99"), /must match the requested version/)
+  assert.throws(() => validateExactVersionOverride(head, head, manifest.version), /must change the committed version/)
 })
 
 test("release input records only Leaf.Sdk and Nova's four actual shared package sources", () => {
