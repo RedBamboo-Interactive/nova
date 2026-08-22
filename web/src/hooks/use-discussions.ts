@@ -90,6 +90,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
     }
     const metadata: Record<string, unknown> = {}
     if (m.source) metadata.source = m.source
+    if (m.messageUid) metadata.messageUid = m.messageUid
     if (eventData) metadata.eventData = eventData
     return {
       id: m.messageUid ?? m.id,
@@ -106,6 +107,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
           mediaType: p.mediaType,
           attachments: p.attachments,
           payloadRef: p.payloadRef,
+          phase: p.phase,
         })),
       timestamp: m.timestamp,
       senderAgentId: m.senderAgentId,
@@ -1021,6 +1023,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         payloadRef: evt.payloadRef ?? null,
         messageId: evt.messageId ?? null,
         messageUid: evt.messageUid ?? null,
+        phase: evt.phase ?? null,
         timestamp: serverTimestamp ?? new Date().toISOString(),
         requestId: evt.requestId ?? null,
       }

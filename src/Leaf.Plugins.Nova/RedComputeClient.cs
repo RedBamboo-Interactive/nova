@@ -14,6 +14,7 @@ public sealed class SessionMessage
     public string? ToolInput { get; set; }
     public string? ToolResult { get; set; }
     public JsonElement? PayloadRef { get; set; }
+    public string? Phase { get; set; }
     public DateTime Timestamp { get; set; }
 
     /// <summary>
@@ -406,6 +407,9 @@ public sealed class RedComputeClient(IComputeGateway gateway)
             && payloadRef.ValueKind == JsonValueKind.Object
                 ? payloadRef.Clone()
                 : null,
+        Phase = el.TryGetProperty("phase", out var phase) && phase.ValueKind == JsonValueKind.String
+            ? phase.GetString()
+            : null,
         Timestamp = el.TryGetProperty("timestamp", out var ts) ? ts.GetDateTimeOffset().UtcDateTime : DateTime.MinValue,
         MessageUid = el.TryGetProperty("messageUid", out var uid) && uid.ValueKind == JsonValueKind.String
             ? uid.GetString()

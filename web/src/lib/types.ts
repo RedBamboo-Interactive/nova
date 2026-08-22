@@ -65,6 +65,7 @@ export interface MessagePartDto {
   mediaType?: string
   attachments?: import("@redbamboo/chat").UploadedAttachment[]
   payloadRef?: import("@redbamboo/chat").TranscriptPayloadRef
+  phase?: import("@redbamboo/chat").MessagePhase
 }
 
 export interface ClaudeStreamEvent {
@@ -82,6 +83,7 @@ export interface ClaudeStreamEvent {
   payloadRef?: import("@redbamboo/chat").TranscriptPayloadRef | null
   messageId?: string | null
   messageUid?: string | null
+  phase?: import("@redbamboo/chat").MessagePhase | null
   /**
    * Correlation id for a tool call the session is parked on, carried by
    * "question" and echoed by "question_resolved". Live-only — it is not

@@ -57,4 +57,21 @@ public sealed class DiscussionSessionProjectionTests
         Assert.Contains("\"type\":\"tool_result\"", json);
         Assert.Contains("\"recordId\":42", json);
     }
+
+    [Fact]
+    public void TextPartCarriesItsCodexMessagePhase()
+    {
+        var message = new ConversationExporter.CollapsedMessage
+        {
+            Role = "assistant",
+            EventType = "text",
+            Content = "Done",
+            Phase = "final_answer",
+        };
+
+        var json = JsonSerializer.Serialize(
+            DiscussionEndpoints.MapSessionMessageParts(message, message.Content));
+
+        Assert.Contains("\"phase\":\"final_answer\"", json);
+    }
 }

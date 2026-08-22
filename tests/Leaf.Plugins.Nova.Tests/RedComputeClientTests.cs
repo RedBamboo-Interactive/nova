@@ -19,6 +19,17 @@ public sealed class RedComputeClientTests
     }
 
     [Fact]
+    public void SessionMessageContractCarriesCodexMessagePhase()
+    {
+        using var document = JsonDocument.Parse(
+            """{"role":"assistant","eventType":"text","content":"done","phase":"final_answer","timestamp":"2026-08-21T08:00:00Z","messageUid":"turn-1"}""");
+
+        var message = RedComputeClient.ParseSessionMessage(document.RootElement);
+
+        Assert.Equal("final_answer", message.Phase);
+    }
+
+    [Fact]
     public void SessionMessageContractCarriesToolTranscriptFields()
     {
         using var document = JsonDocument.Parse(

@@ -68,7 +68,7 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         List<SessionMessage> raw, IReadOnlyList<DiscussionMessage> records,
         List<DiscussionMessage> localEvents)
     {
-        var collapsed = CollapseMessages(raw)
+        var collapsed = SuppressSettledCommentary(CollapseMessages(raw))
             .Where(message => !(message.Role == "user"
                 && message.MessageUid == disc.SetupBootstrapMessageUid))
             .ToList();
@@ -186,7 +186,11 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
 
             var last = result.Count > 0 ? result[^1] : null;
 
-            if (msg.EventType == "text" && last is { EventType: "text" } && last.Role == msg.Role)
+            if (msg.EventType == "text"
+                && last is { EventType: "text" }
+                && last.Role == msg.Role
+                && last.Phase == msg.Phase
+                && last.MessageUid == msg.MessageUid)
             {
                 last.Content = (last.Content ?? "") + (msg.Content ?? "");
                 continue;
@@ -205,6 +209,7 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
                 ToolInput = msg.ToolInput,
                 ToolResult = msg.ToolResult,
                 PayloadRef = msg.PayloadRef,
+                Phase = msg.Phase,
                 Timestamp = msg.Timestamp,
                 // First record of the run wins, matching how the chat UI derives
                 // a block id in rebuildBlocks().
@@ -213,6 +218,25 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         }
 
         return result;
+    }
+
+    internal static List<CollapsedMessage> SuppressSettledCommentary(List<CollapsedMessage> messages)
+    {
+        var settledTurnUids = messages
+            .Where(message => message.Role == "assistant"
+                && message.EventType == "text"
+                && message.Phase == "final_answer"
+                && !string.IsNullOrWhiteSpace(message.MessageUid))
+            .Select(message => message.MessageUid!)
+            .ToHashSet(StringComparer.Ordinal);
+
+        return messages
+            .Where(message => !(message.Role == "assistant"
+                && message.EventType == "text"
+                && message.Phase == "commentary"
+                && message.MessageUid is { Length: > 0 } uid
+                && settledTurnUids.Contains(uid)))
+            .ToList();
     }
 
     internal static string StripInjectedTags(string content)
@@ -324,6 +348,7 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         public string? ToolInput { get; set; }
         public string? ToolResult { get; set; }
         public JsonElement? PayloadRef { get; set; }
+        public string? Phase { get; set; }
         public DateTime Timestamp { get; set; }
         public string? Source { get; set; }
         public string? MessageUid { get; set; }
