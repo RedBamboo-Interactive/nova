@@ -19,10 +19,32 @@ public sealed class DiscussionAccessPolicyTests
         Assert.True(DiscussionAccessPolicy.CanRead(discussion, Human(Owner)));
         Assert.False(DiscussionAccessPolicy.CanRead(discussion, Human("someone-else")));
         Assert.False(DiscussionAccessPolicy.CanRead(discussion, LocalDefault()));
+        Assert.True(DiscussionAccessPolicy.CanRead(discussion, BrowserExecution(Owner)));
         Assert.True(DiscussionAccessPolicy.CanRead(discussion, AgentExecution(Agent, Owner)));
         Assert.True(DiscussionAccessPolicy.CanRead(discussion, LegacyAgentExecution(Agent, Owner)));
         Assert.False(DiscussionAccessPolicy.CanRead(discussion, AgentExecution("another-agent", Owner)));
         Assert.False(DiscussionAccessPolicy.CanRead(discussion, AgentExecution(Agent, "another-user")));
+    }
+
+    [Fact]
+    public void BrowserReadRequiresRootNovaAppContextAndExactOwner()
+    {
+        var discussion = ConfidentialDiscussion();
+
+        Assert.False(DiscussionAccessPolicy.CanRead(
+            discussion, BrowserExecution("another-user")));
+        Assert.False(DiscussionAccessPolicy.CanRead(
+            discussion, BrowserExecution(Owner, subjectId: "local-user")));
+        Assert.False(DiscussionAccessPolicy.CanRead(
+            discussion, BrowserExecution(Owner, appId: "codered", actorId: "nova")));
+        Assert.False(DiscussionAccessPolicy.CanRead(
+            discussion, BrowserExecution(Owner, actorId: "codered")));
+        Assert.False(DiscussionAccessPolicy.CanRead(
+            discussion, BrowserExecution(Owner, actorKind: "agent")));
+        Assert.False(DiscussionAccessPolicy.CanRead(
+            discussion, BrowserExecution(Owner, route: "/apps/codered")));
+        Assert.False(DiscussionAccessPolicy.CanRead(
+            discussion, BrowserExecution(Owner, parentExecutionId: Guid.NewGuid().ToString())));
     }
 
     [Fact]
@@ -62,6 +84,8 @@ public sealed class DiscussionAccessPolicyTests
     {
         var discussion = ConfidentialDiscussion("local-user");
 
+        Assert.False(DiscussionAccessPolicy.CanRead(
+            discussion, BrowserExecution("local-user")));
         Assert.False(DiscussionAccessPolicy.CanManageConfidentiality(
             discussion, BrowserExecution("local-user")));
     }
@@ -105,7 +129,8 @@ public sealed class DiscussionAccessPolicyTests
         string actorId = "nova",
         string actorKind = "app",
         string route = "/apps/nova/chat/discussion-1",
-        string? parentExecutionId = null)
+        string? parentExecutionId = null,
+        string? subjectId = null)
     {
         var identity = JsonSerializer.Serialize(new
         {
@@ -115,7 +140,7 @@ public sealed class DiscussionAccessPolicyTests
             context = new[] { new { kind = "browser", route } },
             parentExecutionId,
         });
-        return ExecutionContext(beneficiaryId, identity);
+        return ExecutionContext(subjectId ?? beneficiaryId, identity);
     }
 
     private static DefaultHttpContext ExecutionContext(string subjectId, string identity)

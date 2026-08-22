@@ -30,12 +30,11 @@ public static class DiscussionAccessPolicy
         if (IsExecution(context.User))
             return TryReadExecution(context.User, out var execution)
                 && execution is not null
-                && execution.ActorKind.Equals("agent", StringComparison.OrdinalIgnoreCase)
-                && string.Equals(execution.ActorId, discussion.AgentId,
-                    StringComparison.OrdinalIgnoreCase)
-                && execution.BeneficiaryKind.Equals("user", StringComparison.OrdinalIgnoreCase)
-                && string.Equals(execution.BeneficiaryId, discussion.OwnerId,
-                    StringComparison.OrdinalIgnoreCase);
+                && (IsOwningAgentExecution(execution, discussion)
+                    || (string.Equals(userId, discussion.OwnerId,
+                            StringComparison.OrdinalIgnoreCase)
+                        && IsOwnerOperatedNovaBrowserExecution(
+                            execution, discussion.OwnerId)));
 
         return IsExplicitHuman(context.User)
             && string.Equals(userId, discussion.OwnerId, StringComparison.OrdinalIgnoreCase);
@@ -55,14 +54,7 @@ public static class DiscussionAccessPolicy
 
         return TryReadExecution(context.User, out var execution)
             && execution is not null
-            && string.Equals(execution.AppId, NovaAppId, StringComparison.OrdinalIgnoreCase)
-            && execution.ActorKind.Equals("app", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(execution.ActorStableId, NovaAppId, StringComparison.OrdinalIgnoreCase)
-            && execution.BeneficiaryKind.Equals("user", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(execution.BeneficiaryId, discussion.OwnerId,
-                StringComparison.OrdinalIgnoreCase)
-            && execution.HasNovaBrowserContext
-            && execution.ParentExecutionId is null;
+            && IsOwnerOperatedNovaBrowserExecution(execution, discussion.OwnerId);
     }
 
     public static bool IsExplicitHuman(ClaimsPrincipal principal)
@@ -74,6 +66,30 @@ public static class DiscussionAccessPolicy
     private static bool IsExecution(ClaimsPrincipal principal)
         => string.Equals(principal.FindFirstValue(TokenUseClaim), ExecutionTokenUse,
             StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsOwningAgentExecution(
+        ParsedExecution execution,
+        DiscussionRead discussion)
+        => execution.ActorKind.Equals("agent", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(execution.ActorId, discussion.AgentId,
+                StringComparison.OrdinalIgnoreCase)
+            && execution.BeneficiaryKind.Equals("user", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(execution.BeneficiaryId, discussion.OwnerId,
+                StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsOwnerOperatedNovaBrowserExecution(
+        ParsedExecution execution,
+        string ownerId)
+        => string.Equals(execution.AppId, NovaAppId, StringComparison.OrdinalIgnoreCase)
+            && execution.ActorKind.Equals("app", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(execution.ActorStableId, NovaAppId, StringComparison.OrdinalIgnoreCase)
+            && execution.BeneficiaryKind.Equals("user", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(execution.BeneficiaryId, ownerId,
+                StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(execution.BeneficiaryId, LocalDefaultSubjectId,
+                StringComparison.OrdinalIgnoreCase)
+            && execution.HasNovaBrowserContext
+            && execution.ParentExecutionId is null;
 
     private static bool TryReadExecution(
         ClaimsPrincipal principal,
