@@ -196,7 +196,7 @@ test("the unsigned prerelease bridge is serialized, append-only, and isolated fr
   assert.match(bridge, /Extension -ceq '\.leafpkg'/)
   assert.match(bridge, /existingNames -notcontains \$file\.Name/)
   assert.doesNotMatch(bridge, /--clobber|release delete|release edit|release delete-asset/i)
-  assert.match(bridge, /gh release download \$tag --pattern \$file\.Name/)
+  assert.match(bridge, /gh release download \$tag --repo \$env:GH_REPO --pattern \$file\.Name/)
   assert.match(bridge, /Get-FileHash -LiteralPath \$downloaded -Algorithm SHA256/)
 })
 
