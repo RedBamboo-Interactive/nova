@@ -330,7 +330,7 @@ jobs:
       actions: read
       contents: write
     env:
-      GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || github.token }}
+      GH_TOKEN: ${{ github.repository == 'RedBamboo-Interactive/nova' && github.token || secrets.CROSS_REPO_TOKEN }}
       NOVA_SOURCE: ${{ inputs.source_commit || github.workflow_sha }}
     steps:
       - name: Download exact unsigned candidate inputs
@@ -372,7 +372,7 @@ jobs:
       - name: Append and re-verify rolling unsigned prerelease assets
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.repository == 'RedBamboo-Interactive/nova' && github.token || secrets.CROSS_REPO_TOKEN }}
           GH_REPO: RedBamboo-Interactive/nova
         run: |
           $tag = 'nova-unsigned-candidates'

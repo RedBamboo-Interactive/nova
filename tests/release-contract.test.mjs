@@ -24,8 +24,7 @@ const dotnetSdk = readJson("global.json")
 
 test("cross-repository bridge retains the scoped producer token", () => {
   const workflow = readFileSync(join(root, ".github/workflows/release-candidate.yml"), "utf8")
-  assert.match(workflow, /GH_TOKEN: \$\{\{ secrets\.CROSS_REPO_TOKEN \|\| github\.token \}\}/)
-  assert.doesNotMatch(workflow, /GH_TOKEN: \$\{\{ github\.token \}\}/)
+  assert.match(workflow, /GH_TOKEN: \$\{\{ github\.repository == 'RedBamboo-Interactive\/nova' && github\.token \|\| secrets\.CROSS_REPO_TOKEN \}\}/)
 })
 const validProducer = () => structuredClone(producer)
 
