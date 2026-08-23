@@ -64,6 +64,12 @@ jobs:
           $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
           $producer = Get-Content -LiteralPath $producerPath -Raw | ConvertFrom-Json
           $package = Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json
+          if ([string]$manifest.version -ceq $env:REQUESTED_VERSION -and
+              [string]$producer.component.version -ceq $env:REQUESTED_VERSION -and
+              [string]$package.version -ceq $env:REQUESTED_VERSION) {
+            Write-Host 'Requested version already matches the committed source; no override is needed.'
+            exit 0
+          }
           $manifest.version = $env:REQUESTED_VERSION
           $producer.component.version = $env:REQUESTED_VERSION
           $package.version = $env:REQUESTED_VERSION
