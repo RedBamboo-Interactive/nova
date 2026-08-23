@@ -13,6 +13,12 @@ const readFileSync = (path, encoding) => {
 const readJson = (path) => JSON.parse(readFileSync(join(root, path), "utf8"))
 const manifest = readJson("plugin.json")
 const packageJson = readJson("web/package.json")
+
+test("git porcelain keeps its leading status column", () => {
+  const metadataSource = readFileSync(join(root, "scripts/release/metadata.mjs"), "utf8")
+  assert.match(metadataSource, /return result\.stdout\.trimEnd\(\)/)
+  assert.doesNotMatch(metadataSource, /return result\.stdout\.trim\(\)/)
+})
 const producer = readJson("release/producer-input.v1.json")
 const dotnetSdk = readJson("global.json")
 
