@@ -90,6 +90,8 @@ export interface ClaudeStreamEvent {
    * persisted, so a reloaded conversation never has one.
    */
   requestId?: string | null
+  epoch?: string | null
+  sequence?: number | null
 }
 
 export interface WsEvent {

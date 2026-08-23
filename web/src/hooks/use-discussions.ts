@@ -2,11 +2,11 @@ import { useState, useCallback, useEffect, useRef, useMemo, useSyncExternalStore
 import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
-import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, SendOptions, UploadedAttachment } from "@redbamboo/chat"
-import { processStreamEvent, rebuildBlocks } from "@redbamboo/chat"
+import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
+import { processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
-import { coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeRevalidatedMessages } from "../lib/discussion-transcript"
+import { coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks } from "../lib/discussion-transcript"
 import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
@@ -127,6 +127,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const setDiscussions = setDiscussionList
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Record<string, MessageBlock[]>>({})
+  const transcriptAccumulatorsRef = useRef(new Map<string, TranscriptAccumulator>())
+  const transcriptAccumulator = useCallback((discussionId: string) => {
+    let accumulator = transcriptAccumulatorsRef.current.get(discussionId)
+    if (!accumulator) {
+      accumulator = new TranscriptAccumulator()
+      transcriptAccumulatorsRef.current.set(discussionId, accumulator)
+    }
+    return accumulator
+  }, [])
   const [streaming, setStreaming] = useState<Record<string, boolean>>({})
   const [pendingQuestions, setPendingQuestions] = useState<Record<string, PendingQuestion | null>>({})
   // How each discussion's last question ended, so a resolved card can say
@@ -154,7 +163,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const loadGenerationRef = useRef<Record<string, number>>({})
   const activeObservedAfterSendRef = useRef<Record<string, boolean>>({})
   const sessionUpdateGenerationRef = useRef<Record<string, number>>({})
-  const lastLiveAssistantTurnRef = useRef<Record<string, { sessionId: string; messageUid: string }>>({})
   const handleWsEventRef = useRef<((event: WsEvent) => void) | null>(null)
 
   const activeDiscussion = discussions.find((d) => d.id === activeDiscussionId) ?? null
@@ -294,7 +302,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
     force = false,
     sessionIdOverride?: string | null,
     preferDiscussionApi = false,
-    protectedAssistantTurnUid?: string | null,
   ) => {
     if (!force && loadedRef.current.has(id)) return
 
@@ -311,19 +318,28 @@ export function useDiscussions(eventResolver?: EventResolver) {
     loadedRef.current.add(id)
     const generation = (loadGenerationRef.current[id] ?? 0) + 1
     loadGenerationRef.current[id] = generation
-    const baseline = messagesRef.current[id] ?? []
+    const accumulator = transcriptAccumulator(id)
+    accumulator.startSnapshot(generation)
     const isCurrentLoad = () => loadGenerationRef.current[id] === generation
-    const commitMessages = (authoritative: MessageBlock[]) => {
+    const commitMessages = (authoritative: MessageBlock[], cursor?: TranscriptCursor | null) => {
       if (!isCurrentLoad()) return
       setMessages((prev) => {
         if (!isCurrentLoad()) return prev
         const current = prev[id] ?? []
-        const merged = mergeRevalidatedMessages(
-          authoritative,
-          baseline,
-          current,
-          protectedAssistantTurnUid,
-        ).sort(byTimestamp)
+        const reconciled = accumulator.commitSnapshot(generation, authoritative, cursor).messages
+        const reconciledIds = new Set(reconciled.map(message => message.id))
+        const authoritativeUserContent = new Set(reconciled
+          .filter(message => message.role === "user")
+          .map(message => stripContextXml(message.parts[0]?.content ?? "")))
+        // Product-local overlays are not transcript arbitration: ambient Nova
+        // events and newly admitted user/error blocks can race the HTTP read.
+        const overlays = current.filter(message => !reconciledIds.has(message.id) && (
+          (typeof message.metadata?.source === "string" && message.metadata.source.startsWith("event:"))
+          || (message.role === "user"
+            && !authoritativeUserContent.has(stripContextXml(message.parts[0]?.content ?? "")))
+          || message.id.startsWith("error-")
+        ))
+        const merged = [...reconciled, ...overlays].sort(byTimestamp)
         return { ...prev, [id]: merged }
       })
     }
@@ -338,14 +354,16 @@ export function useDiscussions(eventResolver?: EventResolver) {
         // (events — tick digests are events in the heartbeat's stream)
         let sessionMsgs: MessageBlock[] = []
         let sessionHasEarlier = false
+        let sessionCursor: TranscriptCursor | null = null
         try {
-          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
           if (data.messages?.length) {
             sessionMsgs = filterInternalBootstrapBlock(
               rebuildBlocks(data.messages),
               disc.setupBootstrapMessageUid,
             )
             sessionHasEarlier = data.messages.length >= tail
+            sessionCursor = data.transcript ?? null
           }
         } catch {}
 
@@ -365,7 +383,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         // unaffected (the merge re-sorts by timestamp below).
         const merged = mergeDiscussionAndSessionBlocks(apiMsgs, sessionMsgs, stripContextXml)
 
-        commitMessages(cleanMessages(merged, eventResolver))
+        commitMessages(cleanMessages(merged, eventResolver), sessionCursor)
         commitHistory(sessionHasEarlier || apiHasEarlier)
         return
       }
@@ -378,15 +396,17 @@ export function useDiscussions(eventResolver?: EventResolver) {
           const data = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}?tail=${tail}`)
           let sessionMsgs: MessageBlock[] = []
           let sessionHasEarlier = false
+          let sessionCursor: TranscriptCursor | null = null
           if (disc.sessionId) {
             try {
-              const session = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+              const session = await api.get<{ session: { title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
               if (session.messages?.length) {
                 sessionMsgs = filterInternalBootstrapBlock(
                   rebuildBlocks(session.messages),
                   disc.setupBootstrapMessageUid,
                 )
                 sessionHasEarlier = session.messages.length >= tail
+                sessionCursor = session.transcript ?? null
               }
             } catch {
               // The authorized discussion projection remains a safe fallback.
@@ -397,7 +417,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             sessionMsgs,
             stripContextXml,
           )
-          commitMessages(cleanMessages(merged, eventResolver))
+          commitMessages(cleanMessages(merged, eventResolver), sessionCursor)
           commitHistory(data.messages.length >= tail || sessionHasEarlier)
           return
         } catch {
@@ -408,7 +428,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
       if (disc?.sessionId) {
         try {
-          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
           if (data.session?.title && data.session.title !== disc.title) {
             setDiscussions((prev) =>
               prev.map((d) => d.id === id ? { ...d, title: data.session.title! } : d)
@@ -419,19 +439,19 @@ export function useDiscussions(eventResolver?: EventResolver) {
             commitMessages(cleanMessages(filterInternalBootstrapBlock(
               rebuildBlocks(data.messages),
               disc.setupBootstrapMessageUid,
-            ), eventResolver))
+            ), eventResolver), data.transcript)
             commitHistory(data.messages.length >= tail)
             return
           }
         } catch {
           try {
             await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
-            const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[] }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+            const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
             if (data.messages?.length) {
               commitMessages(cleanMessages(filterInternalBootstrapBlock(
                 rebuildBlocks(data.messages),
                 disc.setupBootstrapMessageUid,
-              ), eventResolver))
+              ), eventResolver), data.transcript)
               commitHistory(data.messages.length >= tail)
               return
             }
@@ -449,7 +469,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     } finally {
       if (isCurrentLoad()) setLoadingDiscussionId((cur) => cur === id ? null : cur)
     }
-  }, [eventResolver])
+  }, [eventResolver, transcriptAccumulator])
 
   const loadEarlierMessages = useCallback(async (id: string) => {
     if (loadingEarlierDiscussionId === id || !hasEarlierMessages[id]) return
@@ -780,11 +800,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
         if (!known || isClosed(known.status) || isDiscussionArchivePending(discId)) return
         const isStopped = session.status === "Stopped" || session.status === "Error"
         const isLiveDisc = known.type === "live"
-        const lastLiveTurn = lastLiveAssistantTurnRef.current[discId]
-        const protectedAssistantTurnUid = lastLiveTurn?.sessionId === session.id
-          ? lastLiveTurn.messageUid
-          : undefined
-        delete lastLiveAssistantTurnRef.current[discId]
         setDiscussions((prev) =>
           applySettledSessionStatus(prev, discId, session.status, new Date().toISOString())
         )
@@ -804,7 +819,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
                 true,
                 undefined,
                 false,
-                protectedAssistantTurnUid,
               )
               if (conversationRevision !== undefined)
                 await acknowledgeRead(discId, conversationRevision)
@@ -853,7 +867,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const { id } = event.data as { id: string }
       const discId = sessionToDiscussion.get(id)
       if (!discId) return
-      delete lastLiveAssistantTurnRef.current[discId]
       sessionUpdateGenerationRef.current[discId] =
         (sessionUpdateGenerationRef.current[discId] ?? 0) + 1
       delete activeObservedAfterSendRef.current[discId]
@@ -979,19 +992,19 @@ export function useDiscussions(eventResolver?: EventResolver) {
         ? { ...discussion, conversationRevision: 0, readConversationRevision: 0 }
         : discussion))
       setMessages((prev) => ({ ...prev, [discussionId]: [] }))
+      transcriptAccumulatorsRef.current.get(discussionId)?.reset()
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
       clearQuestion(discussionId, null)
       setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
       setResumePending((prev) => ({ ...prev, [discussionId]: false }))
-      delete lastLiveAssistantTurnRef.current[discussionId]
       loadedRef.current.delete(discussionId)
       loadMessages(discussionId)
     } else if (event.type === "discussion.rotated") {
       const { oldDiscussionId, newDiscussionId } = event.data as { oldDiscussionId: string; newDiscussionId: string; agentId: string }
       setDiscussions((prev) => prev.filter((d) => d.id !== oldDiscussionId))
       setMessages((prev) => { const next = { ...prev }; delete next[oldDiscussionId]; return next })
+      transcriptAccumulatorsRef.current.delete(oldDiscussionId)
       loadedRef.current.delete(oldDiscussionId)
-      delete lastLiveAssistantTurnRef.current[oldDiscussionId]
       setActiveDiscussionId((current) => resolveRotatedDiscussionSelection(current, oldDiscussionId, newDiscussionId))
       refreshDiscussions()
     } else if (event.type === "session.stream") {
@@ -1002,13 +1015,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }
       const discId = sessionToDiscussion.get(sessionId)
       if (!discId) return
-      if (evt.messageUid) {
-        lastLiveAssistantTurnRef.current[discId] = {
-          sessionId,
-          messageUid: evt.messageUid,
-        }
-      }
-
       // Copied field by field rather than spread, so keep this in step with
       // ChatEvent: anything missed here is silently dropped, and `requestId` in
       // particular is the only handle on a parked question — without it the
@@ -1027,11 +1033,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
         phase: evt.phase ?? null,
         timestamp: serverTimestamp ?? new Date().toISOString(),
         requestId: evt.requestId ?? null,
+        epoch: evt.epoch ?? null,
+        sequence: evt.sequence ?? null,
       }
 
       setMessages((prev) => {
         const current = prev[discId] ?? []
         const result = processStreamEvent(current, true, chatEvent, resumePendingRef.current[discId] ?? false, questionStatesRef.current[discId])
+        const reconciled = transcriptAccumulator(discId).receiveLive(chatEvent, current)
         setStreaming((p) => ({ ...p, [discId]: result.isStreaming }))
         setInterrupting((p) => ({ ...p, [discId]: result.interrupting }))
         setResumePending((p) => ({ ...p, [discId]: result.resumePending }))
@@ -1056,10 +1065,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
           // the discussion is running.
           setDiscussions((p) => applySessionStatus(p, discId, "Active"))
         }
-        return { ...prev, [discId]: result.messages }
+        if (reconciled.gapDetected) {
+          const tail = historyTailRef.current[discId] ?? INITIAL_HISTORY_TAIL
+          queueMicrotask(() => void loadMessages(discId, tail, true, sessionId))
+        }
+        return { ...prev, [discId]: reconciled.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, loadMessages, environment.window, latchStreaming, acknowledgeRead])
+  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, loadMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator])
   handleWsEventRef.current = handleWsEvent
 
   const handleUpstreamDisconnect = useCallback(() => {
