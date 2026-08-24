@@ -21,7 +21,7 @@
   },
   "redbamboo": {
     "repository": "RedBamboo-Interactive/redbamboo-packages",
-    "commit": "6e56bb8ef7d700a33b160136bd332eef2b5dc166",
+    "commit": "d2010c0a39b80a06ee93d930135f5c58cac83ead",
     "lockPath": "pnpm-lock.yaml",
     "inputs": [
       {
