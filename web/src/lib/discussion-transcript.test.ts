@@ -4,6 +4,7 @@ import {
   coalesceDiscussionTurnBlocks,
   filterInternalBootstrapBlock,
   mergeDiscussionAndSessionBlocks,
+  mergeNovaMessageArrival,
 } from "./discussion-transcript.ts"
 import type { MessageBlock } from "@redbamboo/chat"
 
@@ -120,6 +121,69 @@ test("retains a persisted automation opening when its session replay is absent",
     mergeDiscussionAndSessionBlocks([automationOpening, projectedReply], [rawReply]),
     [automationOpening, rawReply],
   )
+})
+
+test("retains a persisted Agent audio card beside raw session history", () => {
+  const voiceCard: MessageBlock = {
+    id: "leni-voice-card",
+    role: "assistant",
+    parts: [
+      { type: "text", content: "Es war schön, mit dir zu sprechen." },
+      { type: "audio", content: "/api/assets/leni.mp3" },
+    ],
+    timestamp: "2026-08-24T20:44:35.426Z",
+    senderAgentId: "leni-agent",
+    metadata: { source: "nova-message" },
+  }
+
+  const merged = mergeDiscussionAndSessionBlocks(
+    [projectedReply, voiceCard],
+    [rawReply],
+  )
+
+  assert.deepEqual(merged, [rawReply, voiceCard])
+  assert.equal(merged[1].senderAgentId, "leni-agent")
+  assert.deepEqual(merged[1].parts[1], {
+    type: "audio",
+    content: "/api/assets/leni.mp3",
+  })
+})
+
+test("canonical live Agent audio cards are stable and duplicate delivery is idempotent", () => {
+  const arrival = {
+    content: "This is actually me now.",
+    audioUrl: "/api/assets/nova.mp3",
+    senderAgentId: "nova-agent",
+    messageUid: "voice-card",
+    timestamp: "2026-08-24T20:34:28.039Z",
+    fallbackId: "unused-fallback",
+  }
+  const once = mergeNovaMessageArrival([rawReply], arrival)
+
+  assert.equal(once[1].id, "voice-card")
+  assert.equal(once[1].senderAgentId, "nova-agent")
+  assert.deepEqual(once[1].metadata, {
+    source: "nova-message",
+    messageUid: "voice-card",
+  })
+  assert.deepEqual(once[1].parts[1], {
+    type: "audio",
+    content: "/api/assets/nova.mp3",
+  })
+  assert.equal(mergeNovaMessageArrival(once, arrival), once)
+})
+
+test("legacy live Agent cards do not become duplicate-preserving overlays", () => {
+  const result = mergeNovaMessageArrival([], {
+    content: "Legacy card",
+    audioUrl: "/api/assets/legacy.mp3",
+    senderAgentId: "nova-agent",
+    timestamp: "2026-08-24T20:34:28.039Z",
+    fallbackId: "legacy-fallback",
+  })
+
+  assert.equal(result[0].id, "legacy-fallback")
+  assert.equal(result[0].metadata, undefined)
 })
 
 test("accepted-message convergence keeps raw tool activity instead of replacing it with text only", () => {

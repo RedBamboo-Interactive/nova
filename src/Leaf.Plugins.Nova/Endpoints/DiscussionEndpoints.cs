@@ -996,6 +996,7 @@ public static class DiscussionEndpoints
                     ["content"] = request.Content,
                     ["audioUrl"] = request.AudioUrl,
                     ["senderAgentId"] = request.SenderAgentId,
+                    ["messageUid"] = uid,
                     ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
                     ["conversationRevision"] = discussion.ConversationRevision,
                     ["readConversationRevision"] = discussion.ReadConversationRevision,

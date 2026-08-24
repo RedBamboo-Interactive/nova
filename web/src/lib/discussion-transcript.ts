@@ -1,4 +1,45 @@
 import type { MessageBlock } from "@redbamboo/chat"
+import { byTimestamp } from "./message-order.ts"
+
+export interface NovaMessageArrival {
+  content: string
+  audioUrl?: string
+  senderAgentId?: string
+  messageUid?: string
+  timestamp: string
+  fallbackId: string
+}
+
+/**
+ * Project one persisted Nova message into the live discussion view.
+ *
+ * New backends provide the canonical message UID. That lets duplicate socket
+ * delivery collapse and lets a concurrent snapshot identify the same record.
+ * During a mixed-version reload an older backend can omit the UID; keep that
+ * legacy block visible, but do not mark it as a durable overlay that could sit
+ * beside the canonical snapshot as a duplicate.
+ */
+export function mergeNovaMessageArrival(
+  current: MessageBlock[],
+  arrival: NovaMessageArrival,
+): MessageBlock[] {
+  if (arrival.messageUid && current.some(message => message.id === arrival.messageUid))
+    return current
+
+  const parts: MessageBlock["parts"] = [{ type: "text", content: arrival.content }]
+  if (arrival.audioUrl) parts.push({ type: "audio", content: arrival.audioUrl })
+  const block: MessageBlock = {
+    id: arrival.messageUid ?? arrival.fallbackId,
+    role: "assistant",
+    parts,
+    timestamp: arrival.timestamp,
+    senderAgentId: arrival.senderAgentId,
+    metadata: arrival.messageUid
+      ? { source: "nova-message", messageUid: arrival.messageUid }
+      : undefined,
+  }
+  return [...current, block].sort(byTimestamp)
+}
 
 function assistantTurnUid(block: MessageBlock): string | null {
   const uid = block.metadata?.messageUid

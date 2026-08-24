@@ -6,7 +6,7 @@ import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, Questio
 import { processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
-import { coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks } from "../lib/discussion-transcript"
+import { coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeNovaMessageArrival } from "../lib/discussion-transcript"
 import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
@@ -436,11 +436,27 @@ export function useDiscussions(eventResolver?: EventResolver) {
             api.put(`/api/apps/nova/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
           }
           if (data.messages?.length) {
-            commitMessages(cleanMessages(filterInternalBootstrapBlock(
+            const sessionMsgs = filterInternalBootstrapBlock(
               rebuildBlocks(data.messages),
               disc.setupBootstrapMessageUid,
-            ), eventResolver), data.transcript)
-            commitHistory(data.messages.length >= tail)
+            )
+            let discussionMsgs: MessageBlock[] = []
+            let discussionHasEarlier = false
+            try {
+              const projected = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}?tail=${tail}`)
+              discussionMsgs = toChatMessages(projected.messages ?? [])
+              discussionHasEarlier = projected.messages.length >= tail
+            } catch {
+              // Raw session history remains authoritative when the discussion
+              // projection is temporarily unavailable.
+            }
+            const merged = mergeDiscussionAndSessionBlocks(
+              discussionMsgs,
+              sessionMsgs,
+              stripContextXml,
+            )
+            commitMessages(cleanMessages(merged, eventResolver), data.transcript)
+            commitHistory(data.messages.length >= tail || discussionHasEarlier)
             return
           }
         } catch {
@@ -448,11 +464,26 @@ export function useDiscussions(eventResolver?: EventResolver) {
             await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
             const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
             if (data.messages?.length) {
-              commitMessages(cleanMessages(filterInternalBootstrapBlock(
+              const sessionMsgs = filterInternalBootstrapBlock(
                 rebuildBlocks(data.messages),
                 disc.setupBootstrapMessageUid,
-              ), eventResolver), data.transcript)
-              commitHistory(data.messages.length >= tail)
+              )
+              let discussionMsgs: MessageBlock[] = []
+              let discussionHasEarlier = false
+              try {
+                const projected = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}?tail=${tail}`)
+                discussionMsgs = toChatMessages(projected.messages ?? [])
+                discussionHasEarlier = projected.messages.length >= tail
+              } catch {
+                // The resumed raw session remains a safe fallback.
+              }
+              const merged = mergeDiscussionAndSessionBlocks(
+                discussionMsgs,
+                sessionMsgs,
+                stripContextXml,
+              )
+              commitMessages(cleanMessages(merged, eventResolver), data.transcript)
+              commitHistory(data.messages.length >= tail || discussionHasEarlier)
               return
             }
           } catch {
@@ -932,12 +963,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
         }, eventResolver),
       }))
     } else if (event.type === "discussion.nova-message") {
-      const { discussionId, content, audioUrl, senderAgentId, timestamp: serverTs,
+      const { discussionId, content, audioUrl, senderAgentId, messageUid, timestamp: serverTs,
         conversationRevision, readConversationRevision } = event.data as {
           discussionId: string
           content: string
           audioUrl?: string
           senderAgentId?: string
+          messageUid?: string
           timestamp?: string
           conversationRevision?: number
           readConversationRevision?: number
@@ -956,16 +988,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
         : applyDiscussionMessageArrival(prev, discussionId, ts))
       setMessages((prev) => {
         const current = prev[discussionId] ?? []
-        const parts: import("@redbamboo/chat").MessagePart[] = [{ type: "text", content }]
-        if (audioUrl) parts.push({ type: "audio", content: audioUrl })
-        const newBlock: import("@redbamboo/chat").MessageBlock = {
-          id: `nova-msg-${Date.now()}`,
-          role: "assistant",
-          parts,
-          timestamp: ts,
+        const merged = mergeNovaMessageArrival(current, {
+          content,
+          audioUrl,
           senderAgentId,
-        }
-        return { ...prev, [discussionId]: [...current, newBlock].sort(byTimestamp) }
+          messageUid,
+          timestamp: ts,
+          fallbackId: `nova-msg-${Date.now()}`,
+        })
+        return merged === current ? prev : { ...prev, [discussionId]: merged }
       })
       if (isViewing && typeof conversationRevision === "number")
         void acknowledgeRead(discussionId, conversationRevision)
