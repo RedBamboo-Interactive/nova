@@ -21,11 +21,15 @@ public static class DiscussionStatus
 
     public static bool IsClosed(string status) => status is Archived or Archiving;
 
-    public static string? FromSessionStatus(string? sessionStatus, string discussionType)
+    public static string? FromSessionStatus(
+        string? sessionStatus,
+        string discussionType,
+        string? stopReason = null)
         => sessionStatus switch
         {
             "Active" => Thinking,
             "Idle" or "Starting" => Idle,
+            "Stopped" when stopReason is "maintenance_restart" or "orphaned_on_restart" => Idle,
             "Stopped" or "Error" => Stopped,
             _ => null,
         };

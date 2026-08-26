@@ -7,9 +7,13 @@ import type { DiscussionInfo } from "./types"
 export function discussionStatusForSession(
   sessionStatus: string,
   _discussionType: DiscussionInfo["type"],
+  stopReason?: string,
 ): DiscussionInfo["status"] | null {
   if (sessionStatus === "Active") return "thinking"
   if (sessionStatus === "Idle" || sessionStatus === "Starting") return "idle"
+  if (sessionStatus === "Stopped"
+      && (stopReason === "maintenance_restart" || stopReason === "orphaned_on_restart"))
+    return "idle"
   if (sessionStatus === "Stopped" || sessionStatus === "Error")
     return "stopped"
   return null
@@ -19,11 +23,12 @@ export function applySessionStatus(
   discussions: DiscussionInfo[],
   discussionId: string,
   sessionStatus: string,
+  stopReason?: string,
 ): DiscussionInfo[] {
   return discussions.map((discussion) => {
     if (discussion.id !== discussionId || discussion.status === "archived" || discussion.status === "archiving")
       return discussion
-    const status = discussionStatusForSession(sessionStatus, discussion.type)
+    const status = discussionStatusForSession(sessionStatus, discussion.type, stopReason)
     return status && status !== discussion.status ? { ...discussion, status } : discussion
   })
 }
@@ -38,11 +43,12 @@ export function applySettledSessionStatus(
   discussionId: string,
   sessionStatus: string,
   activityAt: string,
+  stopReason?: string,
 ): DiscussionInfo[] {
   return discussions.map((discussion) => {
     if (discussion.id !== discussionId || discussion.status === "archived" || discussion.status === "archiving")
       return discussion
-    const status = discussionStatusForSession(sessionStatus, discussion.type)
+    const status = discussionStatusForSession(sessionStatus, discussion.type, stopReason)
     if (!status || status === "thinking") return discussion
     return {
       ...discussion,

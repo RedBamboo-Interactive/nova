@@ -66,6 +66,12 @@ test("a stopped session requires recovery for LIVE and ordinary chats", () => {
   assert.equal(discussionStatusForSession("Stopped", "chat"), "stopped")
 })
 
+test("a planned or crash restart remains visibly resumable", () => {
+  assert.equal(discussionStatusForSession("Stopped", "chat", "maintenance_restart"), "idle")
+  assert.equal(discussionStatusForSession("Stopped", "chat", "orphaned_on_restart"), "idle")
+  assert.equal(discussionStatusForSession("Stopped", "chat", "user_stopped"), "stopped")
+})
+
 test("a transient idle event cannot clear a freshly submitted turn", () => {
   assert.equal(preservesRecentStreamingLatch("Idle", true, 1_000, 1_500, 10_000), true)
   assert.equal(preservesRecentStreamingLatch("Starting", true, 1_000, 1_500, 10_000), true)

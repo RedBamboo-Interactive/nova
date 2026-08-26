@@ -138,24 +138,30 @@ public static class DiscussionEndpoints
             if (sessions == null)
                 return Results.Ok(discussions.Select(DiscussionStore.ToInfo)); // RedCompute unreachable — leave as-is
 
-            var statuses = sessions.ToDictionary(s => s.Id, s => s.Status);
+            var statuses = sessions.ToDictionary(s => s.Id);
             for (var i = 0; i < discussions.Count; i++)
             {
                 var d = discussions[i];
                 if (d.SessionId == null) continue;
-                statuses.TryGetValue(d.SessionId, out var rcStatus);
+                statuses.TryGetValue(d.SessionId, out var rcSession);
 
                 // The session list is a recency window, not the full set — a quiet
                 // session falling out of it is no evidence it stopped. Probe it
                 // directly before declaring a live discussion dead; a null probe
                 // (RedCompute unreachable) leaves the status unchanged.
-                if (rcStatus == null && d.Status is "idle" or "thinking")
-                    rcStatus = await redCompute.GetSessionStatusAsync(d.SessionId);
+                if (rcSession == null && d.Status is "idle" or "thinking")
+                {
+                    var state = await redCompute.GetSessionStateAsync(d.SessionId);
+                    if (state is not null)
+                        rcSession = new RedComputeClient.SessionListEntry(
+                            d.SessionId, state.Status, 0, state.StopReason);
+                }
 
                 // Reconcile activity as well as liveness. Previously an Active
                 // RedCompute session remained `idle` in the discussion entity,
                 // so a refresh could turn a visibly running thread green.
-                var newStatus = DiscussionStatus.FromSessionStatus(rcStatus, d.Type);
+                var newStatus = DiscussionStatus.FromSessionStatus(
+                    rcSession?.Status, d.Type, rcSession?.StopReason);
 
                 if (newStatus != null && newStatus != d.Status)
                 {
@@ -166,7 +172,7 @@ public static class DiscussionEndpoints
                         discussions[i] = d with { Status = applied };
                 }
 
-                if (rcStatus == "Idle")
+                if (newStatus == DiscussionStatus.Idle)
                     discussions[i] = await conversationUnread.ReconcileSettledAsync(discussions[i]);
             }
 
@@ -356,7 +362,8 @@ public static class DiscussionEndpoints
                     // without depending on Nova's separate list-sync timer.
                     var sessionStatus = DiscussionStatus.FromSessionStatus(
                         snapshot.Status,
-                        discussion.Type);
+                        discussion.Type,
+                        snapshot.StopReason);
                     if (sessionStatus is not null && sessionStatus != discussion.Status)
                     {
                         var applied = await store.TrySetStatusAsync(

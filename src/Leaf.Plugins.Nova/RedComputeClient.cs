@@ -26,7 +26,11 @@ public sealed class SessionMessage
 }
 
 /// <summary>Point-in-time view of a RedCompute session: status, title, and raw messages.</summary>
-public sealed record SessionSnapshot(string? Status, string? Title, List<SessionMessage> Messages);
+public sealed record SessionSnapshot(
+    string? Status,
+    string? StopReason,
+    string? Title,
+    List<SessionMessage> Messages);
 
 /// <summary>
 /// RedCompute (port 18800) session gateway. Local plain-HTTP like the kernel's own
@@ -362,10 +366,24 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     /// <summary>Status of a single session ("Active", "Idle", ...), or null when unreachable/missing.</summary>
     public async Task<string?> GetSessionStatusAsync(string sessionId, CancellationToken ct = default)
     {
+        var state = await GetSessionStateAsync(sessionId, ct);
+        return state?.Status;
+    }
+
+    public sealed record SessionRuntimeState(string Status, string? StopReason);
+
+    public async Task<SessionRuntimeState?> GetSessionStateAsync(
+        string sessionId, CancellationToken ct = default)
+    {
         using var doc = await GetSessionRawAsync(sessionId, ct);
-        if (doc == null) return null;
-        return doc.RootElement.TryGetProperty("session", out var session)
-            && session.TryGetProperty("status", out var st) ? st.GetString() : null;
+        if (doc == null
+            || !doc.RootElement.TryGetProperty("session", out var session)
+            || !session.TryGetProperty("status", out var status)
+            || status.ValueKind != JsonValueKind.String)
+            return null;
+        var stopReason = session.TryGetProperty("stopReason", out var reason)
+            && reason.ValueKind == JsonValueKind.String ? reason.GetString() : null;
+        return new(status.GetString()!, stopReason);
     }
 
     public async Task<SessionSnapshot?> GetSessionAsync(
@@ -374,10 +392,12 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         using var doc = await GetSessionRawAsync(sessionId, ct, tail);
         if (doc == null) return null;
 
-        string? status = null, title = null;
+        string? status = null, stopReason = null, title = null;
         if (doc.RootElement.TryGetProperty("session", out var session))
         {
             if (session.TryGetProperty("status", out var st)) status = st.GetString();
+            if (session.TryGetProperty("stopReason", out var sr)
+                && sr.ValueKind == JsonValueKind.String) stopReason = sr.GetString();
             if (session.TryGetProperty("title", out var ti)) title = ti.GetString();
         }
 
@@ -390,7 +410,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
             }
         }
 
-        return new SessionSnapshot(status, title, messages);
+        return new SessionSnapshot(status, stopReason, title, messages);
     }
 
     internal static SessionMessage ParseSessionMessage(JsonElement el) => new()
@@ -425,7 +445,11 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         return value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText();
     }
 
-    public sealed record SessionListEntry(string Id, string Status, int MessageCount);
+    public sealed record SessionListEntry(
+        string Id,
+        string Status,
+        int MessageCount,
+        string? StopReason = null);
 
     public async Task<List<SessionListEntry>?> GetSessionsAsync(int? limit = null, CancellationToken ct = default)
     {

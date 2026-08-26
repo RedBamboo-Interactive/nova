@@ -797,7 +797,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         void refreshDiscussions()
       }
     } else if (event.type === "session.updated") {
-      const session = event.data as { id: string; status: string; title?: string }
+      const session = event.data as { id: string; status: string; stopReason?: string; title?: string }
       const discId = sessionToDiscussion.get(session.id)
       if (!discId) return
       const updateGeneration = (sessionUpdateGenerationRef.current[discId] ?? 0) + 1
@@ -829,10 +829,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
         // Closed (archived/archiving) discussions are terminal: never echo
         // session events back to the server for them.
         if (!known || isClosed(known.status) || isDiscussionArchivePending(discId)) return
-        const isStopped = session.status === "Stopped" || session.status === "Error"
+        const isRestartRecovery = session.status === "Stopped"
+          && (session.stopReason === "maintenance_restart" || session.stopReason === "orphaned_on_restart")
+        const isStopped = !isRestartRecovery
+          && (session.status === "Stopped" || session.status === "Error")
         const isLiveDisc = known.type === "live"
         setDiscussions((prev) =>
-          applySettledSessionStatus(prev, discId, session.status, new Date().toISOString())
+          applySettledSessionStatus(prev, discId, session.status, new Date().toISOString(), session.stopReason)
         )
         if (isStopped) {
           api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
@@ -895,7 +898,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         if (!pendingQuestionsRef.current[discId]) latchStreaming(discId)
       }
     } else if (event.type === "session.ended") {
-      const { id } = event.data as { id: string }
+      const { id, stopReason } = event.data as { id: string; stopReason?: string }
       const discId = sessionToDiscussion.get(id)
       if (!discId) return
       sessionUpdateGenerationRef.current[discId] =
@@ -908,10 +911,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setResumePending((prev) => ({ ...prev, [discId]: false }))
       const known = discussionsRef.current.find((d) => d.id === discId)
       const closed = !known || isClosed(known.status) || isDiscussionArchivePending(discId)
+      const isRestartRecovery = stopReason === "maintenance_restart" || stopReason === "orphaned_on_restart"
       setDiscussions((prev) =>
-        prev.map((d) => d.id === discId && !isClosed(d.status) ? { ...d, status: "stopped" as const } : d)
+        prev.map((d) => d.id === discId && !isClosed(d.status)
+          ? { ...d, status: isRestartRecovery ? "idle" as const : "stopped" as const }
+          : d)
       )
-      if (!closed) api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
+      if (!closed && !isRestartRecovery)
+        api.put(`/api/apps/nova/discussions/${discId}/stopped`).catch(() => {})
     } else if (event.type === "discussion.created") {
       const { discussionId, agentId, status, type } = event.data as { discussionId: string; agentId?: string; status?: string; type?: string }
       if (!discussionId) return
