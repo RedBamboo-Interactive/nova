@@ -10,6 +10,7 @@ import { coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscus
 import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
+import { LatestTaskCoordinator } from "../lib/latest-task-coordinator"
 import {
   clearDiscussionArchivePending,
   getDiscussionList,
@@ -128,6 +129,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Record<string, MessageBlock[]>>({})
   const transcriptAccumulatorsRef = useRef(new Map<string, TranscriptAccumulator>())
+  const snapshotCoordinatorRef = useRef(new LatestTaskCoordinator<string>())
   const transcriptAccumulator = useCallback((discussionId: string) => {
     let accumulator = transcriptAccumulatorsRef.current.get(discussionId)
     if (!accumulator) {
@@ -296,7 +298,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     syncAndRefresh()
   }, [syncAndRefresh])
 
-  const loadMessages = useCallback(async (
+  const loadMessagesUncoalesced = useCallback(async (
     id: string,
     tail = INITIAL_HISTORY_TAIL,
     force = false,
@@ -460,35 +462,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
             return
           }
         } catch {
-          try {
-            await api.post(`/ai-session/sessions/${disc.sessionId}/resume`)
-            const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
-            if (data.messages?.length) {
-              const sessionMsgs = filterInternalBootstrapBlock(
-                rebuildBlocks(data.messages),
-                disc.setupBootstrapMessageUid,
-              )
-              let discussionMsgs: MessageBlock[] = []
-              let discussionHasEarlier = false
-              try {
-                const projected = await api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(`/api/apps/nova/discussions/${id}?tail=${tail}`)
-                discussionMsgs = toChatMessages(projected.messages ?? [])
-                discussionHasEarlier = projected.messages.length >= tail
-              } catch {
-                // The resumed raw session remains a safe fallback.
-              }
-              const merged = mergeDiscussionAndSessionBlocks(
-                discussionMsgs,
-                sessionMsgs,
-                stripContextXml,
-              )
-              commitMessages(cleanMessages(merged, eventResolver), data.transcript)
-              commitHistory(data.messages.length >= tail || discussionHasEarlier)
-              return
-            }
-          } catch {
-            // Resume failed — fall through to legacy load
-          }
+          // A failed history read says nothing about provider lifecycle. Auth,
+          // network, and overloaded-store failures must not fan out into
+          // session resumes. Fall through to Nova's durable projection;
+          // stopped sessions resume only through the explicit lifecycle action.
         }
       }
 
@@ -501,6 +478,17 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (isCurrentLoad()) setLoadingDiscussionId((cur) => cur === id ? null : cur)
     }
   }, [eventResolver, transcriptAccumulator])
+
+  const loadMessages = useCallback((
+    id: string,
+    tail = INITIAL_HISTORY_TAIL,
+    force = false,
+    sessionIdOverride?: string | null,
+    preferDiscussionApi = false,
+  ) => snapshotCoordinatorRef.current.run(id, () =>
+    loadMessagesUncoalesced(id, tail, force, sessionIdOverride, preferDiscussionApi),
+    force,
+  ), [loadMessagesUncoalesced])
 
   const loadEarlierMessages = useCallback(async (id: string) => {
     if (loadingEarlierDiscussionId === id || !hasEarlierMessages[id]) return
