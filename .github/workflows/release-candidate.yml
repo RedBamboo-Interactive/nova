@@ -249,7 +249,8 @@ jobs:
               'redbamboo-ui=../redbamboo-packages',
               'redbamboo-utility=../redbamboo-packages',
               'redbamboo-workflow=../redbamboo-packages'
-            )
+            ) `
+            -AllowEphemeralVersionOverride
 
       - name: Validate actual artifact and lock facts
         working-directory: nova

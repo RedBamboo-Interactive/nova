@@ -81,10 +81,10 @@ test("automated version stamping permits only the three exact version fields", (
 test("release input records only Leaf.Sdk and Nova's four actual shared package sources", () => {
   assert.deepEqual(producer.leafSdk, {
     repository: "RedBamboo-Interactive/redleaf",
-    commit: "c7371b07594ae13fb7ebb4b24dbd860c20d3e14f",
+    commit: "9076a5791e79f368390ea4475c9c724a85ca6bea",
     sourcePath: "src/Leaf.Sdk",
   })
-  assert.equal(producer.redleafReleaseToolCommit, "c7371b07594ae13fb7ebb4b24dbd860c20d3e14f")
+  assert.equal(producer.redleafReleaseToolCommit, "9076a5791e79f368390ea4475c9c724a85ca6bea")
   assert.deepEqual(producer.redbamboo.inputs.map(({ id, name, sourcePath }) => ({ id, name, sourcePath })), [
     { id: "redbamboo-chat", name: "@redbamboo/chat", sourcePath: "packages/chat" },
     { id: "redbamboo-ui", name: "@redbamboo/ui", sourcePath: "packages/ui" },
@@ -180,6 +180,7 @@ test("workflow uses immutable action SHAs and one channel-neutral RedLeaf ingest
   assert.ok(releaseToolRestore >= 0, "workflow must locked-restore the pinned RedLeaf release tool")
   assert.ok(releaseToolBuild > releaseToolRestore, "workflow must build the release tool after restoring it")
   assert.ok(firstReleaseToolUse > releaseToolBuild, "workflow must build the release tool before the packer or DLL is used")
+  assert.match(workflow, /-AllowEphemeralVersionOverride/)
 })
 
 test("the unsigned prerelease bridge is serialized, append-only, and isolated from the candidate build", () => {
