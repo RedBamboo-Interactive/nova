@@ -39,7 +39,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<AgentWorkspaces>(),
                 sp.GetRequiredService<MessagePipeline>(),
                 sp.GetRequiredService<RedComputeClient>(),
-                sp.GetRequiredService<ILogger<NovaAgentWelcomeProvider>>()));
+                sp.GetRequiredService<ILogger<NovaAgentWelcomeProvider>>(),
+                sp.GetRequiredService<HeartbeatService>()));
         services.AddSingleton<RedComputeClient>();
         services.AddSingleton(sp =>
             new AgentDirectory(

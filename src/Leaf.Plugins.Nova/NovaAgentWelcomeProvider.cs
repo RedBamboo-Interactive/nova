@@ -19,7 +19,8 @@ public sealed class NovaAgentWelcomeProvider(
     AgentWorkspaces workspaces,
     MessagePipeline pipeline,
     RedComputeClient redCompute,
-    ILogger<NovaAgentWelcomeProvider> logger) : IAgentWelcomeProvider
+    ILogger<NovaAgentWelcomeProvider> logger,
+    HeartbeatService? heartbeat = null) : IAgentWelcomeProvider
 {
     private const string FirstRunPromptResource = "nova-welcome-prompt.v1.md";
     private const string ReviewPromptResource = "nova-review-welcome-prompt.v1.md";
@@ -59,6 +60,8 @@ public sealed class NovaAgentWelcomeProvider(
             if (existingGreeting is not null)
             {
                 agents.NovaAgentId = context.AgentId.ToString();
+                if (context.Purpose == AgentWelcomePurpose.FirstRun && heartbeat is not null)
+                    await heartbeat.ReconcileAsync(ct);
                 await discussions.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Idle, ct);
                 return new AgentWelcomeResult(
                     discussion.Id,
@@ -70,6 +73,8 @@ public sealed class NovaAgentWelcomeProvider(
                 .SingleOrDefault(candidate => candidate.Id == context.AgentId.ToString())
                 ?? throw new InvalidOperationException("The newly created Nova Agent could not be resolved");
             agents.NovaAgentId = agent.Id;
+            if (context.Purpose == AgentWelcomePurpose.FirstRun && heartbeat is not null)
+                await heartbeat.ReconcileAsync(ct);
 
             // Meet Nova is never allowed to fall back to a disposable scratch workspace.
             // The welcome and the conversation that follows must use the Agent's real,
