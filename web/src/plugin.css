@@ -84,6 +84,29 @@
   will-change: transform;
 }
 
+@media (max-width: 767px) {
+  .nova-chat-layout--mobile-avatar > [data-slot="tabs"] > [data-slot="tabs-list"] {
+    width: calc(100% - 5.5rem);
+    margin-left: 5.5rem;
+  }
+
+  .nova-chat-layout--mobile-avatar [data-slot="tabs-content"] [data-slot="panel-header"] {
+    padding-left: 6rem;
+  }
+
+  .nova-chat-layout [data-slot="chat-header-action"][data-mobile-icon-only="true"],
+  .nova-chat-layout [data-slot="session-info-trigger"] {
+    width: 1.75rem;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .nova-chat-layout [data-slot="chat-header-action"][data-mobile-icon-only="true"] > span,
+  .nova-chat-layout [data-slot="session-info-trigger"] > span {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .nova-agent-avatar-layer--incoming,
   .nova-agent-avatar--transitioning,

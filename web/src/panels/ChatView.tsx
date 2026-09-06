@@ -50,15 +50,20 @@ interface ProviderInfo {
 function ChatHeaderAction({
   icon,
   label,
+  mobileIconOnly = false,
   ...props
 }: {
   icon: string
   label: string
+  mobileIconOnly?: boolean
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
       type="button"
       {...props}
+      aria-label={props["aria-label"] ?? label}
+      data-mobile-icon-only={mobileIconOnly || undefined}
+      data-slot="chat-header-action"
       className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
     >
       <i aria-hidden="true" className={`${icon} text-sm`} />
@@ -623,6 +628,7 @@ export function ChatView({
           onClick={handleShare}
           icon="ph-bold ph-share-network"
           label="Share"
+          mobileIconOnly
           title="Share conversation"
         />
       )}
@@ -965,7 +971,7 @@ export function ChatView({
       {showAvatar && (
         <div
           data-avatar-bounce-frame
-          className="absolute top-4 left-1/2 -translate-x-1/2 w-[80px] h-[80px] z-20 rounded-full overflow-hidden md:hidden p-1.5"
+          className="absolute top-4 left-4 w-[80px] h-[80px] z-20 rounded-full overflow-hidden md:hidden p-1.5"
           style={{ backgroundColor: "var(--background)" }}
         >
           <TransitioningAgentAvatar
@@ -998,6 +1004,7 @@ export function ChatView({
       <MasterDetailLayout
         layoutKey={floating ? undefined : "nova-discussions"}
         presentation={floating ? "compact" : "responsive"}
+        className={!floating ? `nova-chat-layout${showAvatar ? " nova-chat-layout--mobile-avatar" : ""}` : undefined}
         mobileLabels={["Discussions", "Chat"]}
         mobileTab={mobileTab}
         onMobileTabChange={setMobileTab}
