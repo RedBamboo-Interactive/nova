@@ -122,7 +122,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<RedComputeClient>(),
                 sp.GetRequiredService<EventInjector>(),
                 sp.GetRequiredService<AgentDirectory>(),
-                sp.GetRequiredService<ExtensionContributions>()));
+                sp.GetRequiredService<ExtensionContributions>(),
+                sp.GetRequiredService<ILogger<HeartbeatService>>()));
         // Automation action "heartbeat-tick" — one tick of the per-agent heartbeat.
         services.AddSingleton(sp =>
             new HeartbeatTickHandler(
@@ -201,11 +202,10 @@ public sealed class NovaAppPlugin : ILeafPlugin
         // data.live owns the paired LIVE + Heartbeat lifecycle. The canonical
         // automation owns its schedule and workflow action configuration.
         var heartbeat = host.GetRequiredService<HeartbeatService>();
-        _ = Task.Run(async () =>
-        {
-            try { await heartbeat.ReconcileAsync(); }
-            catch { /* reconcile endpoint retries on demand */ }
-        }, CancellationToken.None);
+        var lifetime = host.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
+        _ = Task.Run(
+            () => heartbeat.RunStartupReconciliationAsync(lifetime.ApplicationStopping),
+            CancellationToken.None);
 
         // Optional extensions attach through generic backend slots. Nova does not
         // know which contributors are installed.
@@ -215,7 +215,6 @@ public sealed class NovaAppPlugin : ILeafPlugin
 
         // Ambient LIVE timeline (Spotify/Sonos/Hue). Plugins have no
         // shutdown hook, so the loop binds to ApplicationStopping, not the boot ct.
-        var lifetime = host.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
         var confidentialBackfill = host.GetRequiredService<ConfidentialSessionBackfill>();
         _ = Task.Run(() => confidentialBackfill.RunAsync(lifetime.ApplicationStopping),
             CancellationToken.None);

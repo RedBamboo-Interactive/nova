@@ -3,8 +3,12 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Leaf.Sdk;
 using Leaf.Sdk.Services;
+using Microsoft.Extensions.Logging;
 
 namespace Leaf.Plugins.Nova;
+
+internal sealed class PresenceSessionTerminalException(string message)
+    : InvalidOperationException(message);
 
 /// <summary>
 /// Per-agent heartbeat behavior plus a reference to its canonical automation.
@@ -81,11 +85,13 @@ public sealed class HeartbeatService(
     RedComputeClient redCompute,
     EventInjector injector,
     AgentDirectory agents,
-    ExtensionContributions extensions)
+    ExtensionContributions extensions,
+    ILogger<HeartbeatService> logger)
 {
     public const string DiscussionType = "heartbeat";
     public const string AutomationField = "heartbeat_automation";
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _rotationGates = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _recoveryGates = new();
     private readonly SemaphoreSlim _reconcileGate = new(1, 1);
 
     private static string AutomationSlug(string agentSlug) => $"system-heartbeat-{agentSlug}";
@@ -104,7 +110,12 @@ public sealed class HeartbeatService(
         await _reconcileGate.WaitAsync(ct);
         try
         {
-            var result = new JsonObject { ["provisioned"] = new JsonArray(), ["tornDown"] = new JsonArray() };
+            var result = new JsonObject
+            {
+                ["provisioned"] = new JsonArray(),
+                ["tornDown"] = new JsonArray(),
+                ["recoveredSessions"] = new JsonArray(),
+            };
             var agentEntities = await entities.QueryAsync(new EntityQuery { TypeSlug = "agent", Limit = 50 }, ct);
             var users = await entities.QueryAsync(new EntityQuery { TypeSlug = "user", Limit = 2 }, ct);
             var soleOwnerId = users.Count == 1 ? users[0].Id.ToString() : null;
@@ -154,6 +165,12 @@ public sealed class HeartbeatService(
                     agentId, soleOwnerId, "live", null, ct);
                 var heartbeat = await EnsureSingleDiscussionAsync(openHeartbeat, $"{agent.Name} Heartbeat",
                     agentId, soleOwnerId, DiscussionType, config.QualityTier, ct);
+                if (await TryAutoResumePresenceSessionAsync(
+                    live, "startup-reconcile", automation.Id, ct: ct))
+                    ((JsonArray)result["recoveredSessions"]!).Add(live.Id);
+                if (await TryAutoResumePresenceSessionAsync(
+                    heartbeat, "startup-reconcile", automation.Id, ct: ct))
+                    ((JsonArray)result["recoveredSessions"]!).Add(heartbeat.Id);
                 ((JsonArray)result["provisioned"]!).Add(new JsonObject
                 {
                     ["agent"] = agent.Slug,
@@ -165,6 +182,44 @@ public sealed class HeartbeatService(
             return result;
         }
         finally { _reconcileGate.Release(); }
+    }
+
+    /// <summary>
+    /// RedLeaf can load Nova before its managed RedCompute child is reachable.
+    /// Repeat the idempotent reconciliation for one bounded startup window so
+    /// restart recovery does not depend on service ordering or a human message.
+    /// </summary>
+    internal async Task RunStartupReconciliationAsync(
+        CancellationToken ct,
+        IReadOnlyList<TimeSpan>? retryDelays = null)
+    {
+        retryDelays ??=
+        [
+            TimeSpan.Zero,
+            TimeSpan.FromSeconds(2),
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(20),
+        ];
+
+        foreach (var delay in retryDelays)
+        {
+            try
+            {
+                if (delay > TimeSpan.Zero)
+                    await Task.Delay(delay, ct);
+                await ReconcileAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Nova presence startup reconciliation attempt failed");
+            }
+        }
     }
 
     public static bool IsLiveEnabled(JsonObject agentData)
@@ -322,6 +377,156 @@ public sealed class HeartbeatService(
         foreach (var duplicate in open.Skip(1))
             await lifecycle.BeginArchiveAsync(duplicate, ct);
         return canonical;
+    }
+
+    /// <summary>
+    /// Canonical LIVE and Heartbeat sessions are standing presence, so infrastructure
+    /// stops recover without a human wake-up message. Explicit user/policy terminals
+    /// remain stopped. No input is replayed and no replacement session is created.
+    /// </summary>
+    internal async Task<bool> TryAutoResumePresenceSessionAsync(
+        DiscussionRead discussion,
+        string trigger,
+        Guid? automationId = null,
+        Guid? parentJobId = null,
+        string? correlationId = null,
+        CancellationToken ct = default)
+    {
+        if (discussion.SessionId is not { } sessionId
+            || discussion.Type is not ("live" or DiscussionType)
+            || DiscussionStatus.IsClosed(discussion.Status))
+            return false;
+
+        var gate = _recoveryGates.GetOrAdd(sessionId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            var probe = await redCompute.ProbeSessionAsync(sessionId, ct);
+            if (!ShouldAutoResumePresence(probe)) return false;
+
+            var agent = discussion.AgentId != null
+                ? await agents.GetAgentAsync(discussion.AgentId, ct)
+                : null;
+            if (agent == null)
+            {
+                logger.LogWarning(
+                    "Cannot auto-resume {DiscussionType} discussion {DiscussionId}: linked Agent is missing",
+                    discussion.Type, discussion.Id);
+                return false;
+            }
+
+            var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(
+                entities, discussion.OwnerId, ct);
+            var context = new List<ComputeContextReference>
+            {
+                new("discussion", discussion.Id),
+                new("session", sessionId),
+                new("presence", discussion.Type),
+                new("recovery", trigger),
+            };
+            if (automationId is { } id)
+                context.Add(new ComputeContextReference("automation", id.ToString()));
+
+            var provenance = await NovaComputeProvenance.CreateAsync(
+                entities, agent, beneficiary, "presence:auto-resume", context,
+                entrypointKind: "automation", correlationId: correlationId,
+                parentJobId: parentJobId?.ToString(), ct: ct);
+            var resumed = await redCompute.ResumeAsync(sessionId, provenance, ct);
+            if (resumed)
+            {
+                // The provider can be ready before RedCompute's durable session
+                // projection catches up. Wait for the public probe to converge so
+                // an immediate discussion sync cannot flip the room back to stopped.
+                resumed = await WaitForResumedPresenceSessionAsync(sessionId, ct);
+            }
+            else
+            {
+                // A concurrent recovery may have won outside this process. Re-probe
+                // before reporting failure so the operation remains idempotent.
+                var after = await redCompute.ProbeSessionAsync(sessionId, ct);
+                resumed = after.Status is "Active" or "Idle" or "Starting";
+            }
+
+            if (!resumed)
+            {
+                logger.LogWarning(
+                    "Automatic {DiscussionType} recovery failed for discussion {DiscussionId}, session {SessionId}, reason {StopReason}",
+                    discussion.Type, discussion.Id, sessionId, probe.StopReason ?? "legacy-null");
+                return false;
+            }
+
+            await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Idle, ct);
+            logger.LogInformation(
+                "Automatically resumed {DiscussionType} discussion {DiscussionId}, session {SessionId}, trigger {Trigger}",
+                discussion.Type, discussion.Id, sessionId, trigger);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex,
+                "Automatic {DiscussionType} recovery could not inspect or resume discussion {DiscussionId}",
+                discussion.Type, discussion.Id);
+            return false;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<bool> WaitForResumedPresenceSessionAsync(
+        string sessionId, CancellationToken ct)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        do
+        {
+            var probe = await redCompute.ProbeSessionAsync(sessionId, ct);
+            if (probe.Status is "Active" or "Idle" or "Starting")
+                return true;
+            if (DateTimeOffset.UtcNow >= deadline)
+                return false;
+            await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+        }
+        while (true);
+    }
+
+    internal static bool ShouldAutoResumePresence(RedComputeClient.SessionProbe probe)
+    {
+        if (!probe.Reachable
+            || probe.Status is not ("Stopped" or "Error")
+            || string.IsNullOrWhiteSpace(probe.ProviderSessionId))
+            return false;
+
+        var reason = probe.StopReason?.Trim();
+        if (reason is not null && (reason.Equals("user_stopped", StringComparison.OrdinalIgnoreCase)
+            || reason.Equals("usage_limit", StringComparison.OrdinalIgnoreCase)
+            || reason.Equals("dismissed", StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        // Error is itself an infrastructure failure signal. For Stopped, every
+        // current explicit terminal has a reason above; null is retained only for
+        // legacy standing sessions created before stop reasons were persisted.
+        if (probe.Status == "Error" || string.IsNullOrWhiteSpace(reason))
+            return true;
+
+        return reason.Equals("maintenance_restart", StringComparison.OrdinalIgnoreCase)
+            || reason.Equals("orphaned_on_restart", StringComparison.OrdinalIgnoreCase)
+            || reason.StartsWith("process_exited", StringComparison.OrdinalIgnoreCase)
+            || reason.StartsWith("resume_failed", StringComparison.OrdinalIgnoreCase)
+            || reason.Equals("idle_ttl_expired", StringComparison.OrdinalIgnoreCase)
+            || reason.Equals("completed", StringComparison.OrdinalIgnoreCase)
+            || reason.Equals("cancelled", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public async Task<bool> TryAutoResumeLiveSessionAsync(
+        string agentId, HeartbeatConfig config, Guid? parentJobId = null,
+        string? correlationId = null, CancellationToken ct = default)
+    {
+        var live = (await store.ListAsync(agentId, ct)).FirstOrDefault(d =>
+            d.Type == "live" && !DiscussionStatus.IsClosed(d.Status));
+        return live != null && await TryAutoResumePresenceSessionAsync(
+            live, "heartbeat-tick", config.AutomationId, parentJobId,
+            correlationId, ct);
     }
 
     private async Task<LeafEntity?> ResolveAutomationAsync(LeafEntity agent, HeartbeatConfig? config,
@@ -549,24 +754,24 @@ public sealed class HeartbeatService(
 
             if (probe.Status is "Stopped" or "Error")
             {
-                var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
-                if (agent != null)
-                {
-                    var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, discussion.OwnerId, ct);
-                    var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
-                        "heartbeat:resume",
-                        [
-                            new ComputeContextReference("discussion", discussion.Id),
-                            new ComputeContextReference("automation", config.AutomationId?.ToString()),
-                            new ComputeContextReference("heartbeat", discussion.Id),
-                        ], entrypointKind: "automation",
-                        correlationId: correlationId,
-                        parentJobId: parentJobId?.ToString(), ct: ct);
-                    if (await redCompute.ResumeAsync(existing, provenance, ct))
-                        return (existing, false);
-                }
+                if (!ShouldAutoResumePresence(probe))
+                    throw new PresenceSessionTerminalException(
+                        $"heartbeat session is explicitly stopped ({probe.StopReason ?? "unknown reason"})");
+
+                if (await TryAutoResumePresenceSessionAsync(
+                    discussion, "heartbeat-tick", config.AutomationId,
+                    parentJobId, correlationId, ct))
+                    return (existing, false);
+
+                if (!string.IsNullOrWhiteSpace(probe.ProviderSessionId))
+                    throw new InvalidOperationException(
+                        $"Heartbeat session '{existing}' remains stopped ({probe.StopReason ?? "legacy-null"})");
             }
-            // Session is gone or unresumable — fall through to a fresh one.
+
+            if (probe.Status is not null)
+                throw new InvalidOperationException(
+                    $"Heartbeat session '{existing}' is in unsupported state '{probe.Status}'");
+            // A definitive 404 means no session exists and a fresh binding is safe.
         }
 
         var freshAgent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
@@ -799,11 +1004,26 @@ public sealed class HeartbeatTickHandler(
             return new JsonObject { ["summary"] = "end-of-day fallback: rotated", ["discussionId"] = discussion.Id, ["silent"] = true };
         }
 
+        // The existing heartbeat schedule is also the bounded runtime liveness
+        // trigger for LIVE. Startup reconciliation handles restarts immediately;
+        // this catches later provider/process errors without adding another poller.
+        await heartbeat.TryAutoResumeLiveSessionAsync(
+            agentId, config, context.AttemptJobId, context.CorrelationId, ct);
+
         if (discussion.Status == DiscussionStatus.Thinking)
             return Skip("previous tick still processing");
 
-        var (sessionId, isNew) = await heartbeat.EnsureSessionAsync(discussion, config,
-            context.AttemptJobId, context.CorrelationId, ct);
+        string sessionId;
+        bool isNew;
+        try
+        {
+            (sessionId, isNew) = await heartbeat.EnsureSessionAsync(discussion, config,
+                context.AttemptJobId, context.CorrelationId, ct);
+        }
+        catch (PresenceSessionTerminalException ex)
+        {
+            return Skip(ex.Message);
+        }
         var boundDiscussion = await store.GetAsync(discussion.Id, ct)
             ?? throw new InvalidOperationException("Heartbeat discussion vanished after session binding");
         var currentHeartbeat = await heartbeat.GetDiscussionAsync(agentId, ct);

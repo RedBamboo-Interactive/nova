@@ -63,6 +63,48 @@ public sealed class RedComputeClientTests
         Assert.Null(gateway.Requests[2].Provenance);
     }
 
+    [Fact]
+    public async Task SessionProbeCarriesRecoveryStateAndProviderThread()
+    {
+        var gateway = new StaticComputeGateway(
+            """{"session":{"status":"Stopped","stopReason":"maintenance_restart","providerSessionId":"thread-1"}}""");
+        var client = new RedComputeClient(gateway);
+
+        var probe = await client.ProbeSessionAsync("session-1");
+
+        Assert.True(probe.Reachable);
+        Assert.Equal("Stopped", probe.Status);
+        Assert.Equal("maintenance_restart", probe.StopReason);
+        Assert.Equal("thread-1", probe.ProviderSessionId);
+    }
+
+    [Theory]
+    [InlineData("Stopped", "maintenance_restart", true)]
+    [InlineData("Stopped", "orphaned_on_restart", true)]
+    [InlineData("Stopped", "process_exited", true)]
+    [InlineData("Stopped", null, true)]
+    [InlineData("Error", "provider_fault", true)]
+    [InlineData("Stopped", "user_stopped", false)]
+    [InlineData("Error", "usage_limit", false)]
+    [InlineData("Idle", null, false)]
+    public void PresenceRecoveryRespectsInfrastructureAndExplicitStopBoundaries(
+        string status, string? stopReason, bool expected)
+    {
+        var probe = new RedComputeClient.SessionProbe(
+            true, status, stopReason, "provider-thread");
+
+        Assert.Equal(expected, HeartbeatService.ShouldAutoResumePresence(probe));
+    }
+
+    [Fact]
+    public void PresenceRecoveryRequiresReachableResumableProviderState()
+    {
+        Assert.False(HeartbeatService.ShouldAutoResumePresence(
+            new RedComputeClient.SessionProbe(false, "Stopped", "maintenance_restart", "thread")));
+        Assert.False(HeartbeatService.ShouldAutoResumePresence(
+            new RedComputeClient.SessionProbe(true, "Stopped", "maintenance_restart", null)));
+    }
+
     private static ComputeProvenance Provenance() => new(
         ComputeProvenance.CurrentSchemaVersion,
         new ComputeOrigin("redleaf", new ComputeAppReference("app", "nova", null, "Nova"),
@@ -92,5 +134,15 @@ public sealed class RedComputeClientTests
                 Content = new StringContent(content, System.Text.Encoding.UTF8, "application/json"),
             });
         }
+    }
+
+    private sealed class StaticComputeGateway(string payload) : IComputeGateway
+    {
+        public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            ComputeProvenance? provenance = null, CancellationToken ct = default)
+            => Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json"),
+            });
     }
 }

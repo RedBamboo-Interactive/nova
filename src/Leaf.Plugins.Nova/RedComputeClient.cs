@@ -300,7 +300,11 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     /// <summary>Result of <see cref="ProbeSessionAsync"/>: <c>Reachable</c> false means we
     /// could not get an answer; <c>Status</c> null with <c>Reachable</c> true means the
     /// session no longer exists (a definitive "nothing is running").</summary>
-    public sealed record SessionProbe(bool Reachable, string? Status);
+    public sealed record SessionProbe(
+        bool Reachable,
+        string? Status,
+        string? StopReason = null,
+        string? ProviderSessionId = null);
 
     /// <summary>
     /// Provider-neutral state needed by the discussion resume path. A persisted
@@ -353,9 +357,16 @@ public sealed class RedComputeClient(IComputeGateway gateway)
             if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return new(true, null);
             if (!resp.IsSuccessStatusCode) return new(false, null);
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
-            var status = doc.RootElement.TryGetProperty("session", out var session)
-                && session.TryGetProperty("status", out var st) ? st.GetString() : null;
-            return new(true, status);
+            if (!doc.RootElement.TryGetProperty("session", out var session))
+                return new(true, null);
+
+            var status = session.TryGetProperty("status", out var st)
+                && st.ValueKind == JsonValueKind.String ? st.GetString() : null;
+            var stopReason = session.TryGetProperty("stopReason", out var reason)
+                && reason.ValueKind == JsonValueKind.String ? reason.GetString() : null;
+            var providerSessionId = session.TryGetProperty("providerSessionId", out var providerId)
+                && providerId.ValueKind == JsonValueKind.String ? providerId.GetString() : null;
+            return new(true, status, stopReason, providerSessionId);
         }
         catch
         {

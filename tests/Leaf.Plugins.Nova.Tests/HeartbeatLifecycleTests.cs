@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Leaf.Plugins.Nova;
 using Leaf.Sdk;
 using Leaf.Sdk.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Leaf.Plugins.Nova.Tests;
@@ -192,22 +193,117 @@ public sealed class HeartbeatLifecycleTests
         Assert.Single(fixture.OpenDiscussions(HeartbeatService.DiscussionType));
     }
 
+    [Fact]
+    public async Task Startup_reconciliation_resumes_both_infrastructure_stopped_presence_sessions_once()
+    {
+        var gateway = new RecoveryComputeGateway { StaleReadsAfterResume = 1 };
+        var fixture = new Fixture(live: true, computeGateway: gateway);
+        await fixture.Heartbeat.ReconcileAsync();
+        var live = Assert.Single(fixture.OpenDiscussions("live"));
+        var heartbeat = Assert.Single(fixture.OpenDiscussions(HeartbeatService.DiscussionType));
+        await fixture.BindStoppedSessionAsync(live, "live-session", "maintenance_restart", gateway);
+        await fixture.BindStoppedSessionAsync(heartbeat, "heartbeat-session", null, gateway);
+
+        var result = await fixture.Heartbeat.ReconcileAsync();
+
+        Assert.Equal(["live-session", "heartbeat-session"], gateway.ResumeRequests.Select(r => r.SessionId));
+        Assert.All(gateway.ResumeRequests, request =>
+        {
+            Assert.NotNull(request.Provenance);
+            Assert.Equal("agent", request.Provenance!.Actor.Kind);
+            Assert.Equal("automation", request.Provenance.Origin.Entrypoint.Kind);
+            Assert.Equal("presence:auto-resume", request.Provenance.Origin.Entrypoint.Route);
+        });
+        Assert.Equal(DiscussionStatus.Idle,
+            (await fixture.DiscussionStore.GetAsync(live.Data["discussion_id"]!.GetValue<string>()))!.Status);
+        Assert.Equal(DiscussionStatus.Idle,
+            (await fixture.DiscussionStore.GetAsync(heartbeat.Data["discussion_id"]!.GetValue<string>()))!.Status);
+        Assert.Equal(2, result["recoveredSessions"]!.AsArray().Count);
+
+        await fixture.Heartbeat.ReconcileAsync();
+        Assert.Equal(2, gateway.ResumeRequests.Count);
+    }
+
+    [Fact]
+    public async Task Startup_reconciliation_preserves_explicit_presence_stop()
+    {
+        var gateway = new RecoveryComputeGateway();
+        var fixture = new Fixture(live: true, computeGateway: gateway);
+        await fixture.Heartbeat.ReconcileAsync();
+        var live = Assert.Single(fixture.OpenDiscussions("live"));
+        await fixture.BindStoppedSessionAsync(live, "live-session", "user_stopped", gateway);
+
+        var result = await fixture.Heartbeat.ReconcileAsync();
+
+        Assert.Empty(gateway.ResumeRequests);
+        Assert.Empty(result["recoveredSessions"]!.AsArray());
+        Assert.Equal(DiscussionStatus.Stopped,
+            (await fixture.DiscussionStore.GetAsync(live.Data["discussion_id"]!.GetValue<string>()))!.Status);
+    }
+
+    [Fact]
+    public async Task Heartbeat_tick_skips_an_explicitly_stopped_persistent_session()
+    {
+        var gateway = new RecoveryComputeGateway();
+        var fixture = new Fixture(live: true, computeGateway: gateway);
+        await fixture.Heartbeat.ReconcileAsync();
+        var heartbeat = Assert.Single(fixture.OpenDiscussions(HeartbeatService.DiscussionType));
+        await fixture.BindStoppedSessionAsync(
+            heartbeat, "heartbeat-session", "user_stopped", gateway);
+        var automation = Assert.Single(fixture.Automations.Entities);
+        var handler = new HeartbeatTickHandler(
+            fixture.Heartbeat, fixture.DiscussionStore, fixture.Entities, null!);
+
+        var result = await handler.ExecuteAsync(new AutomationActionContext
+        {
+            Automation = automation,
+            Beneficiary = new ComputeBeneficiary("system", Reason: "test"),
+            AttemptJobId = Guid.NewGuid(),
+            CorrelationId = "test",
+        }, CancellationToken.None);
+
+        Assert.True(result!["skipped"]!.GetValue<bool>());
+        Assert.Contains("explicitly stopped", result["summary"]!.GetValue<string>());
+        Assert.Empty(gateway.ResumeRequests);
+    }
+
+    [Fact]
+    public async Task Startup_reconciliation_retries_when_compute_becomes_reachable_late()
+    {
+        var gateway = new RecoveryComputeGateway { UnavailableReadsRemaining = 1 };
+        var fixture = new Fixture(live: true, computeGateway: gateway);
+        await fixture.Heartbeat.ReconcileAsync();
+        var heartbeat = Assert.Single(fixture.OpenDiscussions(HeartbeatService.DiscussionType));
+        await fixture.BindStoppedSessionAsync(
+            heartbeat, "heartbeat-session", "orphaned_on_restart", gateway);
+
+        await fixture.Heartbeat.RunStartupReconciliationAsync(
+            CancellationToken.None, [TimeSpan.Zero, TimeSpan.Zero]);
+
+        Assert.Equal("heartbeat-session", Assert.Single(gateway.ResumeRequests).SessionId);
+        Assert.Equal(DiscussionStatus.Idle,
+            (await fixture.DiscussionStore.GetAsync(
+                heartbeat.Data["discussion_id"]!.GetValue<string>()))!.Status);
+    }
+
     private sealed class Fixture
     {
-        public Fixture(bool live, JsonObject? heartbeat = null)
+        public Fixture(bool live, JsonObject? heartbeat = null, IComputeGateway? computeGateway = null)
         {
             var deep = Entity("quality-tier", "deep", "Deep", new JsonObject());
             var standard = Entity("quality-tier", "standard", "Standard", new JsonObject());
             var agent = Entity("agent", "nova", "Nova", new JsonObject { ["live"] = live, ["quality_tier"] = deep.Id.ToString() });
+            var plugin = Entity("plugin", "nova", "Nova", new JsonObject());
             if (heartbeat != null) agent.Data["heartbeat"] = heartbeat;
-            Entities = new InMemoryEntityStore(agent, deep, standard);
+            Entities = new InMemoryEntityStore(agent, deep, standard, plugin);
             Discussions = new InMemoryDiscussions(Entities);
             DiscussionStore = new DiscussionStore(Entities, Discussions);
             Automations = new InMemoryAutomations(Entities);
-            var compute = new RedComputeClient(new UnusedComputeGateway());
+            var compute = new RedComputeClient(computeGateway ?? new UnusedComputeGateway());
             var lifecycle = new DiscussionLifecycle(DiscussionStore, compute);
+            var directory = new AgentDirectory(Entities, new InMemoryPluginEvents());
             Heartbeat = new HeartbeatService(Entities, Automations, Discussions, DiscussionStore,
-                lifecycle, null!, compute, null!, null!, null!);
+                lifecycle, null!, compute, null!, directory, null!, NullLogger<HeartbeatService>.Instance);
         }
 
         public LeafEntity Agent => Entities.All.Single(entity => entity.TypeSlug == "agent");
@@ -227,6 +323,18 @@ public sealed class HeartbeatLifecycleTests
         public IReadOnlyList<LeafEntity> DiscussionsOf(string type) => Entities.All
             .Where(e => e.TypeSlug == "discussion" && e.Data["type"]?.GetValue<string>() == type)
             .ToList();
+
+        public async Task BindStoppedSessionAsync(
+            LeafEntity discussion, string sessionId, string? stopReason,
+            RecoveryComputeGateway gateway)
+        {
+            await Entities.PatchAsync(discussion.Id, new JsonObject
+            {
+                ["session_id"] = sessionId,
+                ["status"] = DiscussionStatus.Stopped,
+            });
+            gateway.SetSession(sessionId, "Stopped", stopReason, $"provider-{sessionId}");
+        }
     }
 
     private sealed class InMemoryAutomations(InMemoryEntityStore store) : IWorkflowAutomations
@@ -393,6 +501,81 @@ public sealed class HeartbeatLifecycleTests
     {
         public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ComputeProvenance? provenance = null, CancellationToken ct = default)
             => throw new InvalidOperationException("This test must not contact RedCompute.");
+    }
+
+    private sealed class RecoveryComputeGateway : IComputeGateway
+    {
+        private readonly Dictionary<string, SessionState> sessions = [];
+        public List<(string SessionId, ComputeProvenance? Provenance)> ResumeRequests { get; } = [];
+        public int UnavailableReadsRemaining { get; set; }
+        public int StaleReadsAfterResume { get; set; }
+
+        public void SetSession(string id, string status, string? stopReason, string providerSessionId)
+            => sessions[id] = new(status, stopReason, providerSessionId);
+
+        public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            ComputeProvenance? provenance = null, CancellationToken ct = default)
+        {
+            var path = request.RequestUri?.IsAbsoluteUri == true
+                ? request.RequestUri.AbsolutePath
+                : request.RequestUri?.OriginalString ?? "";
+            var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var sessionId = parts.Length >= 3 ? parts[2] : "";
+            if (!sessions.TryGetValue(sessionId, out var session))
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+
+            if (request.Method == HttpMethod.Get && UnavailableReadsRemaining > 0)
+            {
+                UnavailableReadsRemaining--;
+                return Task.FromResult(new HttpResponseMessage(
+                    System.Net.HttpStatusCode.ServiceUnavailable));
+            }
+
+            if (request.Method == HttpMethod.Post && path.EndsWith("/resume", StringComparison.Ordinal))
+            {
+                ResumeRequests.Add((sessionId, provenance));
+                sessions[sessionId] = session with { Status = "Idle", StopReason = null };
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+            }
+
+            if (request.Method == HttpMethod.Get
+                && ResumeRequests.Any(request => request.SessionId == sessionId)
+                && StaleReadsAfterResume > 0)
+            {
+                StaleReadsAfterResume--;
+                session = session with
+                {
+                    Status = "Stopped",
+                    StopReason = "maintenance_restart",
+                };
+            }
+
+            var payload = JsonSerializer.Serialize(new
+            {
+                session = new
+                {
+                    id = sessionId,
+                    status = session.Status,
+                    stopReason = session.StopReason,
+                    providerSessionId = session.ProviderSessionId,
+                },
+            });
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json"),
+            });
+        }
+
+        private sealed record SessionState(string Status, string? StopReason, string ProviderSessionId);
+    }
+
+    private sealed class InMemoryPluginEvents : IPluginEvents
+    {
+        public Task PublishAsync(string eventType, JsonObject payload, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public IDisposable Subscribe(string eventType, Func<PluginEvent, Task> handler)
+            => new NoopDisposable();
     }
 
     private sealed class NoopDisposable : IDisposable { public void Dispose() { } }
