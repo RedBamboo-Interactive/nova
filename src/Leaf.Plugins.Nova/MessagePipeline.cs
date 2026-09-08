@@ -88,7 +88,7 @@ public sealed class MessagePipeline(
         string? discussionId = null, string entrypointRoute = "/api/apps/nova/discussions/{id}/messages",
         IReadOnlyList<ComputeContextReference>? additionalContext = null,
         string? correlationId = null, string? parentJobId = null,
-        bool confidential = false)
+        bool confidential = false, string? developerInstructions = null)
     {
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
         if (agent == null) return null;
@@ -109,6 +109,8 @@ public sealed class MessagePipeline(
         if (effectiveProvider != null)
             body["provider"] = effectiveProvider;
         body["confidential"] = confidential;
+        if (!string.IsNullOrWhiteSpace(developerInstructions))
+            body["developerInstructions"] = developerInstructions;
 
         var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ct);
         var context = new List<ComputeContextReference>();

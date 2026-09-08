@@ -128,6 +128,23 @@ public static class CallbackEndpoints
 
             return Results.Ok(new { handled = true, sessionId, replyToDiscussionId, respondingAgentId });
         });
+
+        group.MapPost("/callbacks/external-conversation", async (
+            HttpContext ctx, ExternalNovaConversationProvider provider) =>
+        {
+            if (!IsLoopback(ctx))
+                return Results.Json(new { error = "Local callers only" }, statusCode: 403);
+            JsonElement body;
+            try { body = await ctx.Request.ReadFromJsonAsync<JsonElement>(ctx.RequestAborted); }
+            catch { return Results.BadRequest(new { error = "invalid_body" }); }
+            var sessionId = body.TryGetProperty("sessionId", out var session)
+                            && session.ValueKind == JsonValueKind.String
+                ? session.GetString() : null;
+            if (string.IsNullOrWhiteSpace(sessionId))
+                return Results.BadRequest(new { error = "sessionId is required" });
+            await provider.NotifySettledAsync(sessionId, ctx.RequestAborted);
+            return Results.Ok(new { handled = true, sessionId });
+        });
     }
 
     private static bool IsLoopback(HttpContext ctx)

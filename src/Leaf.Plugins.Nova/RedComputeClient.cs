@@ -231,13 +231,14 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         return resp.IsSuccessStatusCode;
     }
 
-    public async Task<bool> RegisterCallbackAsync(string sessionId, string url, bool force = false, CancellationToken ct = default)
+    public async Task<bool> RegisterCallbackAsync(string sessionId, string url, bool force = false,
+        CancellationToken ct = default, ComputeProvenance? provenance = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/ai-session/sessions/{sessionId}/callback")
         {
             Content = JsonContent.Create(new { url, force }, options: JsonOptions),
         };
-        using var resp = await gateway.SendAsync(request, provenance: null, ct);
+        using var resp = await gateway.SendAsync(request, provenance, ct);
         return resp.IsSuccessStatusCode;
     }
 

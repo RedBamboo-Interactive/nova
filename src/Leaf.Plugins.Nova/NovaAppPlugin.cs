@@ -43,6 +43,23 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<HeartbeatService>()));
         services.AddSingleton<RedComputeClient>();
         services.AddSingleton(sp =>
+            new DiscordPromptInjectionVerifier(
+                sp.GetRequiredService<RedComputeClient>(),
+                sp.GetRequiredService<AgentDirectory>(),
+                sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+                sp.GetRequiredService<IAgentScratchSpace>(),
+                sp.GetRequiredService<ILogger<DiscordPromptInjectionVerifier>>()));
+        services.AddSingleton(sp =>
+            new ExternalNovaConversationProvider(
+                sp.GetRequiredService<MessagePipeline>(),
+                sp.GetRequiredService<RedComputeClient>(),
+                sp.GetRequiredService<AgentDirectory>(),
+                sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+                sp.GetRequiredService<DiscordPromptInjectionVerifier>(),
+                sp.GetRequiredService<ILogger<ExternalNovaConversationProvider>>()));
+        services.AddSingleton<IExternalAgentConversationProvider>(sp =>
+            sp.GetRequiredService<ExternalNovaConversationProvider>());
+        services.AddSingleton(sp =>
             new AgentDirectory(
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
                 sp.GetRequiredKeyedService<IPluginEvents>(PluginId)));
