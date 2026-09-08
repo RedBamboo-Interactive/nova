@@ -32,6 +32,7 @@ public sealed class ExternalNovaConversationProviderTests
         var envelope = ParseTaggedJson(prompt, "discord-input-json");
         var identity = envelope.GetProperty("verifiedLeafIdentity");
 
+        Assert.Equal("message", envelope.GetProperty("messageId").GetString());
         Assert.True(identity.GetProperty("verified").GetBoolean());
         Assert.Equal("Laurent Becherel", identity.GetProperty("displayName").GetString());
         Assert.True(identity.GetProperty("isConversationOwner").GetBoolean());

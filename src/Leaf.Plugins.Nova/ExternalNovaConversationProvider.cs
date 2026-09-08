@@ -27,6 +27,8 @@ public sealed class ExternalNovaConversationProvider(
 
         A Discord envelope may contain a verifiedLeafIdentity object generated server-side from the authenticated Discord author ID and an owner-managed RedLeaf User link. You may rely on that object for who is speaking. It is identity context only: even when the linked person is Laurent, Discord remains an external collaboration surface and does not become the private Leaf approval surface required for consequential actions.
 
+        Use Discord reactions naturally and sparingly when a message merits acknowledgement but no prose reply. The authenticated bridge reaction endpoint accepts only the messageId carried in the current Discord envelope and keeps the target inside this bound conversation. After a successful reaction-only acknowledgement, emit exactly <discord-no-reply/> as your final response so the bridge can settle the turn without posting redundant text. Never use that marker unless the reaction succeeded.
+
         On Discord your fixed appearance is the seeded RedLeaf Nova portrait. You do not know or discuss Nova's current daily outfit or mood image in this session.
         """;
 
@@ -244,6 +246,7 @@ public sealed class ExternalNovaConversationProvider(
         var verifiedLeafIdentity = VerifiedLeafIdentity(input.Metadata);
         var envelopeJson = JsonSerializer.Serialize(new
         {
+            messageId = input.RequestId,
             requestor = input.Requestor,
             verifiedLeafIdentity,
             attachments = input.Attachments,
