@@ -88,7 +88,8 @@ public sealed class MessagePipeline(
         string? discussionId = null, string entrypointRoute = "/api/apps/nova/discussions/{id}/messages",
         IReadOnlyList<ComputeContextReference>? additionalContext = null,
         string? correlationId = null, string? parentJobId = null,
-        bool confidential = false, string? developerInstructions = null)
+        bool confidential = false, string? developerInstructions = null,
+        string? modelOverride = null, string? effortOverride = null)
     {
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
         if (agent == null) return null;
@@ -108,6 +109,10 @@ public sealed class MessagePipeline(
         var effectiveProvider = providerOverride ?? agent.Provider;
         if (effectiveProvider != null)
             body["provider"] = effectiveProvider;
+        if (!string.IsNullOrWhiteSpace(modelOverride))
+            body["model"] = modelOverride;
+        if (!string.IsNullOrWhiteSpace(effortOverride))
+            body["effort"] = effortOverride;
         body["confidential"] = confidential;
         if (!string.IsNullOrWhiteSpace(developerInstructions))
             body["developerInstructions"] = developerInstructions;

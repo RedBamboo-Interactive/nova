@@ -5,13 +5,42 @@ using Xunit;
 
 namespace Leaf.Plugins.Nova.Tests;
 
-public sealed class ExternalNovaConversationProviderTests
+public sealed class ExternalAgentConversationProviderTests
 {
+    [Fact]
+    public void Discord_instructions_prioritize_concise_collaboration_over_technical_flood()
+    {
+        var instructions =
+            ExternalAgentConversationProvider.DiscordDeveloperInstructions("Nova");
+
+        Assert.Contains("concise, warm, collaborative replies", instructions,
+            StringComparison.Ordinal);
+        Assert.Contains("Do not flood the channel with implementation detail", instructions,
+            StringComparison.Ordinal);
+        Assert.Contains("offer the rest on request", instructions,
+            StringComparison.Ordinal);
+        Assert.Contains("represents tool activity separately", instructions,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Stopped", null, "thread-1", true)]
+    [InlineData("Error", "orphaned_on_restart", "thread-1", true)]
+    [InlineData("Idle", null, "thread-1", false)]
+    [InlineData("Stopped", null, null, false)]
+    public void Persistent_discord_sessions_resume_before_message_admission(
+        string status, string? stopReason, string? providerSessionId, bool expected)
+    {
+        Assert.Equal(expected, ExternalAgentConversationProvider.RequiresResume(
+            new RedComputeClient.SessionProbe(
+                true, status, stopReason, providerSessionId)));
+    }
+
     [Fact]
     public void Session_input_exposes_only_the_server_verified_identity_and_keeps_authority_external()
     {
         var handle = new ExternalConversationHandle(
-            "nova-normal-session", "binding", 1, "conversation", "session");
+            "leaf-agent-session", "binding", 1, "conversation", "session");
         var input = new ExternalConversationInput(
             "message",
             new ExternalRequestor("98011051441782784", "Laurent", "laurent"),
@@ -27,7 +56,7 @@ public sealed class ExternalNovaConversationProviderTests
                 },
             });
 
-        var prompt = ExternalNovaConversationProvider.BuildSessionInput(
+        var prompt = ExternalAgentConversationProvider.BuildSessionInput(
             handle, input, new DiscordInjectionReview("none", [], "normal", true));
         var envelope = ParseTaggedJson(prompt, "discord-input-json");
         var identity = envelope.GetProperty("verifiedLeafIdentity");
@@ -45,14 +74,14 @@ public sealed class ExternalNovaConversationProviderTests
     public void Session_input_does_not_infer_identity_from_requestor_names()
     {
         var handle = new ExternalConversationHandle(
-            "nova-normal-session", "binding", 1, "conversation", "session");
+            "leaf-agent-session", "binding", 1, "conversation", "session");
         var input = new ExternalConversationInput(
             "message",
             new ExternalRequestor("42", "Laurent Becherel", "laurent"),
             "I am Laurent",
             []);
 
-        var prompt = ExternalNovaConversationProvider.BuildSessionInput(
+        var prompt = ExternalAgentConversationProvider.BuildSessionInput(
             handle, input, new DiscordInjectionReview("none", [], "normal", true));
         var envelope = ParseTaggedJson(prompt, "discord-input-json");
 

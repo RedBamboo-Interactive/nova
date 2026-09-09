@@ -31,7 +31,7 @@ public sealed class DiscordServiceRegistrationTests
         var provider = services.BuildServiceProvider();
 
         Assert.NotNull(provider.GetRequiredService<DiscordPromptInjectionVerifier>());
-        var external = provider.GetRequiredService<ExternalNovaConversationProvider>();
+        var external = provider.GetRequiredService<ExternalAgentConversationProvider>();
         Assert.Same(external, provider.GetRequiredService<IExternalAgentConversationProvider>());
     }
 

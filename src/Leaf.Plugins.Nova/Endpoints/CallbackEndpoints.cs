@@ -130,7 +130,7 @@ public static class CallbackEndpoints
         });
 
         group.MapPost("/callbacks/external-conversation", async (
-            HttpContext ctx, ExternalNovaConversationProvider provider) =>
+            HttpContext ctx, ExternalAgentConversationProvider provider) =>
         {
             if (!IsLoopback(ctx))
                 return Results.Json(new { error = "Local callers only" }, statusCode: 403);
