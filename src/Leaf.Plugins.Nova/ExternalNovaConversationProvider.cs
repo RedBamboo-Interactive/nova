@@ -65,7 +65,6 @@ public sealed class ExternalAgentConversationProvider(
             entrypointRoute: "/api/apps/nova/external-conversations",
             additionalContext: context,
             correlationId: request.IdempotencyKey,
-            confidential: true,
             developerInstructions: DiscordDeveloperInstructions(agent.Name),
             modelOverride: request.SessionCompute?.Model,
             effortOverride: request.SessionCompute?.Effort)
