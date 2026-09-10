@@ -19,6 +19,10 @@ public sealed class ExtensionArchitectureTests
         Assert.Equal(PluginExtensionContracts.LiveEventV1,
             slots[ExtensionContributions.LiveSlot].Contract);
 
+        var frontendSlots = manifest.Frontend!.Slots.Select(slot => slot.Id).ToHashSet();
+        Assert.Contains("app-section", frontendSlots);
+        Assert.Contains("chat-avatar-overlay", frontendSlots);
+
         var production = string.Join('\n', Directory.GetFiles(
             Path.Combine(root.FullName, "src"), "*.cs", SearchOption.AllDirectories)
             .Select(File.ReadAllText));

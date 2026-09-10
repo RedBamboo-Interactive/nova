@@ -63,6 +63,10 @@
     ],
     "slots": [
       {
+        "id": "app-section",
+        "description": "Optional installed extensions may contribute an Agent-facing navigation section"
+      },
+      {
         "id": "chat-avatar-overlay",
         "description": "Optional action layered over an agent avatar in the Nova chat UI"
       }
