@@ -181,9 +181,10 @@ public sealed class ExternalAgentConversationProvider(
         Remember(handle);
         using var document = await redCompute.GetSessionRawAsync(handle.SessionId, ct, tail: 10_000);
         if (document is null) throw new InvalidOperationException("RedCompute transcript is unavailable");
+        var isQuiescent = IsQuiescent(document.RootElement);
         if (!document.RootElement.TryGetProperty("messages", out var messages)
             || messages.ValueKind != JsonValueKind.Array)
-            return new ExternalConversationPage([], after);
+            return new ExternalConversationPage([], after, isQuiescent);
 
         var currentEpoch = messages.EnumerateArray()
             .Select(ReadEpoch)
@@ -219,7 +220,25 @@ public sealed class ExternalAgentConversationProvider(
             if (projected.Count >= Math.Clamp(limit, 1, 500)) break;
         }
         var next = projected.LastOrDefault()?.Cursor ?? after;
-        return new ExternalConversationPage(projected, next);
+        return new ExternalConversationPage(projected, next, isQuiescent);
+    }
+
+    internal static bool IsQuiescent(JsonElement root)
+    {
+        if (!root.TryGetProperty("session", out var session)
+            || session.ValueKind != JsonValueKind.Object
+            || !session.TryGetProperty("status", out var statusNode)
+            || statusNode.ValueKind != JsonValueKind.String)
+            return false;
+        var status = statusNode.GetString();
+        if (status is not ("Idle" or "Stopped" or "Error"))
+            return false;
+        return root.TryGetProperty("inputQueue", out var queue)
+               && queue.ValueKind == JsonValueKind.Object
+               && queue.TryGetProperty("depth", out var depth)
+               && depth.ValueKind == JsonValueKind.Number
+               && depth.TryGetInt32(out var count)
+               && count == 0;
     }
 
     public IDisposable SubscribeSettled(

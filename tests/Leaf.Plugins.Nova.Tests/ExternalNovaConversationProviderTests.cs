@@ -78,6 +78,34 @@ public sealed class ExternalAgentConversationProviderTests
                 true, status, stopReason, providerSessionId)));
     }
 
+    [Theory]
+    [InlineData("Idle", 0, true)]
+    [InlineData("Stopped", 0, true)]
+    [InlineData("Error", 0, true)]
+    [InlineData("Active", 0, false)]
+    [InlineData("Starting", 0, false)]
+    [InlineData("Idle", 1, false)]
+    public void External_page_reports_quiescence_only_for_terminal_state_with_an_empty_queue(
+        string status, int depth, bool expected)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            session = new { status },
+            inputQueue = new { depth },
+        }));
+
+        Assert.Equal(expected,
+            ExternalAgentConversationProvider.IsQuiescent(document.RootElement));
+    }
+
+    [Fact]
+    public void External_page_fails_closed_when_queue_state_is_missing()
+    {
+        using var document = JsonDocument.Parse("""{"session":{"status":"Idle"}}""");
+
+        Assert.False(ExternalAgentConversationProvider.IsQuiescent(document.RootElement));
+    }
+
     [Fact]
     public void Session_input_exposes_only_the_server_verified_identity_and_keeps_authority_external()
     {
