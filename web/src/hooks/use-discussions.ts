@@ -11,6 +11,7 @@ import { applySessionStatus, applySettledSessionStatus, preservesRecentStreaming
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
 import { LatestTaskCoordinator } from "../lib/latest-task-coordinator"
+import { DeferredInvalidationCoordinator } from "../lib/deferred-invalidation-coordinator"
 import {
   clearDiscussionArchivePending,
   getDiscussionList,
@@ -166,6 +167,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const activeObservedAfterSendRef = useRef<Record<string, boolean>>({})
   const sessionUpdateGenerationRef = useRef<Record<string, number>>({})
   const handleWsEventRef = useRef<((event: WsEvent) => void) | null>(null)
+  const confidentialInvalidations = useMemo(() => new DeferredInvalidationCoordinator<string>({
+    setTimeout: (callback, delayMs) => environment.window.setTimeout(callback, delayMs),
+    clearTimeout: (handle) => environment.window.clearTimeout(handle),
+  }, SETTLED_TRANSCRIPT_RELOAD_DELAY_MS), [environment.window])
+
+  useEffect(() => () => confidentialInvalidations.clear(), [confidentialInvalidations])
 
   const activeDiscussion = discussions.find((d) => d.id === activeDiscussionId) ?? null
   const activeMessages = activeDiscussionId ? messages[activeDiscussionId] ?? [] : []
@@ -766,7 +773,27 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [discussions, toast])
 
   const handleWsEvent = useCallback((event: WsEvent) => {
-    if (event.type === "session.input-queue.updated") {
+    if (event.type === "ai-session.changed") {
+      const { sessionId } = event.data as { sessionId?: string }
+      if (!sessionId) return
+      const discId = sessionToDiscussion.get(sessionId)
+      if (!discId) return
+
+      // Confidential stream and lifecycle frames are deliberately replaced by
+      // this opaque invalidation. Recover through the authorized transcript API;
+      // never reconstruct content from the ambient WebSocket payload.
+      loadedRef.current.delete(discId)
+      if (activeIdRef.current !== discId) return
+      confidentialInvalidations.schedule(discId, () => {
+        const current = discussionsRef.current.find((discussion) => discussion.id === discId)
+        if (!current || current.sessionId !== sessionId || isClosed(current.status)) return
+        if (activeIdRef.current !== discId) return
+        loadedRef.current.delete(discId)
+        const tail = historyTailRef.current[discId] ?? INITIAL_HISTORY_TAIL
+        void loadMessages(discId, tail, true, sessionId)
+        void reconcileStreaming()
+      })
+    } else if (event.type === "session.input-queue.updated") {
       const update = event.data as { sessionId?: string; transition?: string }
       if (!update.sessionId) return
       const discId = sessionToDiscussion.get(update.sessionId)
@@ -1098,7 +1125,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discId]: reconciled.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, loadMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator])
+  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, loadMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming])
   handleWsEventRef.current = handleWsEvent
 
   const handleUpstreamDisconnect = useCallback(() => {
