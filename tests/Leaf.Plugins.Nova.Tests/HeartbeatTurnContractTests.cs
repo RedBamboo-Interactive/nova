@@ -46,6 +46,8 @@ public sealed class HeartbeatTurnContractTests
 
         Assert.Contains("conversation in the Heartbeat tab", HeartbeatPrompts.Morning("digest", config));
         Assert.Contains("Heartbeat tab is a conversation", HeartbeatPrompts.Tick("digest", null, config));
+        Assert.Contains("Leaf Discord community", HeartbeatPrompts.Morning("digest", config));
+        Assert.Contains("Leaf Discord", HeartbeatPrompts.Tick("digest", null, config));
         Assert.Contains("Do not use", HeartbeatPrompts.SpokenCompletionRequired);
     }
 
