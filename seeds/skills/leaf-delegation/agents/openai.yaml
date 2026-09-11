@@ -1,0 +1,4 @@
+interface:
+  display_name: "Leaf Delegation"
+  short_description: "Delegate work to persistent Code sessions"
+  default_prompt: "Use $leaf-delegation to delegate this task to a persistent Code session and verify the result."

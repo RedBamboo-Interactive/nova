@@ -13,7 +13,7 @@ public sealed class NovaAgentTemplateProviderTests
 
         Assert.Equal("nova/default", template.Id);
         Assert.Equal(1, template.SchemaVersion);
-        Assert.StartsWith("1.1.0-draft.", template.TemplateVersion);
+        Assert.StartsWith("1.2.0-draft.", template.TemplateVersion);
         Assert.Equal("Nova", template.Name);
         Assert.Contains("organizer", template.Identity, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("engineer", template.Identity, StringComparison.OrdinalIgnoreCase);
@@ -25,6 +25,7 @@ public sealed class NovaAgentTemplateProviderTests
         Assert.Equal([
             "nova/leaf-foundations",
             "nova/leaf-engineering",
+            "nova/leaf-delegation",
             "nova/embed-redleaf-entity",
         ], template.DefaultSkillIds);
         Assert.Equal(64, template.DigestSha256.Length);
