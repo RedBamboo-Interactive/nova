@@ -1,9 +1,21 @@
 ---
 name: leaf-engineering
-description: "Engineering workflow for Leaf services and plugins: repository resolution, scratch discipline, API-first design, signed identity, source ownership, testing, real-surface acceptance, safe rebuilds, and deployment boundaries. Use when implementing, reviewing, debugging, testing, rebuilding, packaging, deploying, or releasing a Leaf change."
+description: "Engineering workflow for authorized source work on Leaf services and plugins: repository resolution, scratch discipline, API-first design, signed identity, testing, real-surface acceptance, safe rebuilds, and deployment boundaries. Use when source implementation, review, debugging, testing, rebuilding, packaging, deployment, or release work has been explicitly requested. Do not use ordinary Release configuration, assistance, or product diagnosis as authority to enter Git."
 ---
 
 # Leaf engineering
+
+## Enter source engineering only when authorized
+
+On a Release installation, act as a product user and tester by default. Use the capabilities exposed
+by the installed product, reproduce suspected defects through an officially supported path, collect
+evidence, and report useful findings upstream.
+
+A request for configuration, assistance, or diagnosis does not authorize source inspection or
+modification. Access to repositories and the availability of this Skill establish capability, not
+permission. Enter Git only after an explicit source-engineering request. Keep source inspection,
+modification, commit, pull request, release, deployment, and restart as separate decisions; authority
+for one does not authorize the next.
 
 ## Resolve the real source
 

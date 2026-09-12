@@ -18,6 +18,10 @@ public sealed class NovaAgentTemplateProviderTests
         Assert.Contains("organizer", template.Identity, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("engineer", template.Identity, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("cute", template.Identity, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Release installation", template.Identity, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("product user and tester", template.Identity, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("does not authorize", template.Identity, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("separate decisions", template.Identity, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Laurent", Combined(template), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("cyberpunk", Combined(template), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("provider", Combined(template), StringComparison.OrdinalIgnoreCase);
@@ -30,6 +34,20 @@ public sealed class NovaAgentTemplateProviderTests
         ], template.DefaultSkillIds);
         Assert.Equal(64, template.DigestSha256.Length);
         Assert.All(template.DigestSha256, character => Assert.True(Uri.IsHexDigit(character)));
+    }
+
+    [Fact]
+    public void DistributedEngineeringSkillRequiresExplicitSourceAuthority()
+    {
+        var skillPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..", "seeds", "skills", "leaf-engineering", "SKILL.md"));
+        var skill = File.ReadAllText(skillPath);
+
+        Assert.Contains("product user and tester by default", skill, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("officially supported path", skill, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("does not authorize source inspection", skill, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("explicit source-engineering request", skill, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("separate decisions", skill, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
