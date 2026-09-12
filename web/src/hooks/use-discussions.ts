@@ -3,14 +3,14 @@ import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
 import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
-import { DurableTranscriptPager, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
+import { DurableTranscriptPager, processStreamEvent, rebuildBlocks, refreshRemoteMessageQueue, TranscriptAccumulator } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
 import { accumulateHistoryOverlays, coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeNovaMessageArrival, mergePagedDiscussionAndSessionBlocks } from "../lib/discussion-transcript"
 import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch, shouldRequestSessionTitleSync } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
-import { HistoryLifecycleTombstones, historyRevalidationDirection, invalidateHistoryGeneration, isCurrentHistoryGeneration, shouldAccumulatePushedHistoryOverlay, shouldCatchUpHistory } from "../lib/discussion-history-page"
+import { HistoryLifecycleTombstones, historyRevalidationDirection, invalidateHistoryGeneration, isCurrentHistoryGeneration, reconcileHistoryAfterQueueRefresh, shouldAccumulatePushedHistoryOverlay, shouldCatchUpHistory } from "../lib/discussion-history-page"
 import { LatestTaskCoordinator } from "../lib/latest-task-coordinator"
 import { DeferredInvalidationCoordinator } from "../lib/deferred-invalidation-coordinator"
 import {
@@ -1116,18 +1116,19 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (!update.sessionId) return
       const discId = sessionToDiscussion.get(update.sessionId)
       if (!discId) return
-      environment.window.dispatchEvent(new CustomEvent("nova:input-queue-updated", {
-        detail: { discussionId: discId, sessionId: update.sessionId, transition: update.transition },
-      }))
+      const queueRefresh = refreshRemoteMessageQueue(discId)
       if (update.transition === "delivered") {
         lastSendAtRef.current[discId] = Date.now()
         activeObservedAfterSendRef.current[discId] = false
         latchStreaming(discId)
         setDiscussions((prev) => applySessionStatus(prev, discId, "Active"))
         loadedRef.current.delete(discId)
-        void catchUpMessages(discId, update.sessionId, true)
+        void reconcileHistoryAfterQueueRefresh(
+          queueRefresh,
+          () => catchUpMessages(discId, update.sessionId, true),
+        )
         void refreshDiscussions()
-      }
+      } else void queueRefresh.catch(() => {})
     } else if (event.type === "session.updated") {
       const session = event.data as { id: string; status: string; stopReason?: string; title?: string }
       const discId = sessionToDiscussion.get(session.id)
@@ -1378,7 +1379,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (historyModesRef.current.get(discussionId) !== "v2"
         && messageUid
         && (messagesRef.current[discussionId] ?? []).some(message => message.id === messageUid)) return
-      void catchUpMessages(discussionId, sessionId, true)
+      void reconcileHistoryAfterQueueRefresh(
+        refreshRemoteMessageQueue(discussionId),
+        () => catchUpMessages(discussionId, sessionId, true),
+      )
     } else if (event.type === "discussion.cleared") {
       const { discussionId } = event.data as { discussionId: string }
       if (!discussionId) return

@@ -12,6 +12,7 @@ import {
   historyRevalidationDirection,
   invalidateHistoryGeneration,
   isCurrentHistoryGeneration,
+  reconcileHistoryAfterQueueRefresh,
   shouldAccumulatePushedHistoryOverlay,
   shouldCatchUpHistory,
 } from "./discussion-history-page.ts"
@@ -101,6 +102,41 @@ test("a loaded V2 window catches up after its anchor instead of unioning only th
   assert.equal(shouldCatchUpHistory("v2", "cursor-500", false), true)
   assert.equal(historyRevalidationDirection("v2", null), "newest")
   assert.equal(historyRevalidationDirection("legacy", "ignored"), "newest")
+})
+
+test("a delivered queue bridge learns its canonical identity before history mounts it", async () => {
+  let releaseQueue!: () => void
+  const queueRefresh = new Promise<void>(resolve => { releaseQueue = resolve })
+  const order: string[] = []
+  const reconciliation = reconcileHistoryAfterQueueRefresh(
+    queueRefresh.then(() => { order.push("queue") }),
+    () => { order.push("history") },
+  )
+
+  await Promise.resolve()
+  assert.deepEqual(order, [])
+  releaseQueue()
+  await reconciliation
+  assert.deepEqual(order, ["queue", "history"])
+})
+
+test("history still reconciles when queue refresh fails", async () => {
+  const order: string[] = []
+  await reconcileHistoryAfterQueueRefresh(
+    Promise.reject(new Error("queue unavailable")),
+    () => { order.push("history") },
+  )
+  assert.deepEqual(order, ["history"])
+})
+
+test("a stalled queue refresh cannot hide durable history indefinitely", async () => {
+  const order: string[] = []
+  await reconcileHistoryAfterQueueRefresh(
+    new Promise<void>(() => {}),
+    () => { order.push("history") },
+    1,
+  )
+  assert.deepEqual(order, ["history"])
 })
 
 test("cleanup leaves a monotonic tombstone that rejects an in-flight page", () => {

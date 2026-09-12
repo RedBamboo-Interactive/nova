@@ -30,6 +30,26 @@ export function shouldAccumulatePushedHistoryOverlay(
   return mode !== "legacy"
 }
 
+/**
+ * A delivered queue bridge and its canonical transcript row are two views of
+ * one message. Let the bridge learn the server UID before history can mount
+ * that row, even when the history endpoint is faster than queue refresh.
+ */
+export async function reconcileHistoryAfterQueueRefresh(
+  queueRefresh: Promise<void>,
+  reconcileHistory: () => void | Promise<void>,
+  maxWaitMs = 1_000,
+): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const queueSettled = queueRefresh.catch(() => {})
+  await Promise.race([
+    queueSettled,
+    new Promise<void>(resolve => { timeout = setTimeout(resolve, maxWaitMs) }),
+  ])
+  if (timeout !== undefined) clearTimeout(timeout)
+  await reconcileHistory()
+}
+
 /** Advance, rather than delete, the tombstone observed by in-flight requests. */
 export function invalidateHistoryGeneration(
   generations: Record<string, number>,
