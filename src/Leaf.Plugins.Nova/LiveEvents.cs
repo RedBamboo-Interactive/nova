@@ -92,6 +92,7 @@ public sealed class EventInjector(
                 {
                     ["discussionId"] = discussion.Id,
                     ["sessionId"] = discussion.SessionId,
+                    ["messageUid"] = uid,
                     ["content"] = content,
                     ["source"] = source ?? "automation",
                     ["senderAgentId"] = senderAgentId,

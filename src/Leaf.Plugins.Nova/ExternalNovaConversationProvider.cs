@@ -133,6 +133,15 @@ public sealed class ExternalAgentConversationProvider(
                 throw new InvalidOperationException(
                     "The persistent Discord Agent session could not be resumed");
         }
+        // RedCompute callbacks are process-local and disappear on restart. An
+        // attached Discord session can outlive that process, so renew the callback
+        // before every admission instead of assuming OpenAsync still owns one.
+        var callbackUrl = "http://127.0.0.1:18804/api/apps/nova/callbacks/external-conversation";
+        if (!await redCompute.RegisterCallbackAsync(
+                handle.SessionId, callbackUrl, force: true, ct: ct, provenance: provenance))
+            logger.LogWarning(
+                "Could not renew Discord completion callback for session {SessionId}",
+                handle.SessionId);
         var response = await redCompute.SendMessageDetailedAsync(handle.SessionId, new
         {
             content,
@@ -183,48 +192,152 @@ public sealed class ExternalAgentConversationProvider(
     {
         Validate(handle);
         Remember(handle);
-        using var document = await redCompute.GetSessionRawAsync(handle.SessionId, ct, tail: 10_000);
+        // Session detail remains the owner of input-queue quiescence. Its one-record
+        // compatibility tail is sufficient here; transcript content comes only from
+        // the canonical keyset page contract below.
+        using var document = await redCompute.GetSessionRawAsync(handle.SessionId, ct, tail: 1);
         if (document is null) throw new InvalidOperationException("RedCompute transcript is unavailable");
         var isQuiescent = IsQuiescent(document.RootElement);
-        if (!document.RootElement.TryGetProperty("messages", out var messages)
-            || messages.ValueKind != JsonValueKind.Array)
-            return new ExternalConversationPage([], after, isQuiescent);
 
-        var currentEpoch = messages.EnumerateArray()
-            .Select(ReadEpoch)
-            .LastOrDefault(value => !string.IsNullOrWhiteSpace(value));
-        var afterSequence = after is not null
-                            && string.Equals(after.Epoch, currentEpoch, StringComparison.Ordinal)
-            ? after.Sequence : 0;
-        var projected = new List<ExternalConversationMessage>();
-        foreach (var message in messages.EnumerateArray())
+        var requestedLimit = Math.Clamp(limit, 1, 500);
+        var newestResult = await redCompute.GetTranscriptPageAsync(
+            handle.SessionId,
+            requestedLimit,
+            ct: ct);
+        if (!newestResult.Success)
+            throw new InvalidOperationException(
+                $"RedCompute transcript page is unavailable (HTTP {newestResult.StatusCode})");
+
+        var newest = newestResult.Value!;
+        var currentEpoch = newest.Page.Epoch;
+        var currentPage = newest;
+        SessionTranscriptPage? immediatelyNewerPage = null;
+        var oldestCursor = newest.Page.OldestCursor;
+        var hasEarlier = newest.Page.HasEarlier;
+        var resumeSameEpoch = after is not null
+            && string.Equals(after.Epoch, currentEpoch, StringComparison.Ordinal);
+
+        // A real delivery cursor must resume from its first unseen sequence even
+        // when it predates the newest 500-record page. A null cursor deliberately
+        // stays on the newest page so startup reconciliation cannot replay a huge
+        // historical session or become stuck on an old fixed-tail prefix.
+        while (after is not null && hasEarlier && !string.IsNullOrWhiteSpace(oldestCursor))
         {
-            if (!TryReadLong(message, "sequence", out var sequence) || sequence <= afterSequence)
-                continue;
-            var epoch = ReadEpoch(message) ?? currentEpoch;
-            if (string.IsNullOrWhiteSpace(epoch)) continue;
-            var role = ReadString(message, "role") ?? "unknown";
-            var eventType = ReadString(message, "eventType") ?? "text";
-            var phase = ReadString(message, "phase");
+            var minimumSequence = currentPage.Messages
+                .Where(message => string.Equals(message.Epoch, currentEpoch, StringComparison.Ordinal))
+                .Select(message => message.Sequence)
+                .Where(sequence => sequence.HasValue)
+                .Select(sequence => sequence!.Value)
+                .DefaultIfEmpty(long.MaxValue)
+                .Min();
+            if (resumeSameEpoch && minimumSequence <= after.Sequence)
+                break;
+
+            var olderResult = await redCompute.GetTranscriptPageAsync(
+                handle.SessionId,
+                requestedLimit,
+                before: oldestCursor,
+                ct: ct);
+            if (!olderResult.Success)
+                throw new InvalidOperationException(
+                    $"RedCompute transcript page is unavailable (HTTP {olderResult.StatusCode})");
+            var older = olderResult.Value!;
+            if (!string.Equals(older.Page.Epoch, currentEpoch, StringComparison.Ordinal))
+                throw new InvalidOperationException("RedCompute transcript epoch changed during settled read");
+            if (older.Messages.Count == 0 && older.Page.HasEarlier)
+                throw new InvalidOperationException("RedCompute transcript cursor did not advance");
+            immediatelyNewerPage = currentPage;
+            currentPage = older;
+            oldestCursor = older.Page.OldestCursor;
+            hasEarlier = older.Page.HasEarlier;
+        }
+
+        // Only the page containing the resume point and its immediately newer
+        // page are needed to fill one soft-limited delivery window. This keeps an
+        // epoch reset or a very old cursor bounded without truncating correctness.
+        var canonical = immediatelyNewerPage is null
+            ? currentPage.Messages
+            : [.. currentPage.Messages, .. immediatelyNewerPage.Messages];
+        var selected = SelectSettledMessages(canonical, currentEpoch, after, limit);
+        var projected = new List<ExternalConversationMessage>();
+        foreach (var message in selected)
+        {
+            var sequence = message.Sequence!.Value;
+            var epoch = message.Epoch ?? currentEpoch;
+            var role = message.Role;
+            var eventType = message.EventType;
+            var phase = message.Phase;
             var kind = role == "assistant" && eventType == "text" && phase == "commentary"
                 ? "commentary" : eventType;
             projected.Add(new ExternalConversationMessage(
                 new ExternalConversationCursor(epoch, sequence),
-                ReadString(message, "messageUid") ?? $"sequence-{sequence}",
+                message.MessageUid ?? $"sequence-{sequence}",
                 role,
                 kind,
-                ReadString(message, "content"),
-                ReadTimestamp(message),
+                message.Content,
+                new DateTimeOffset(DateTime.SpecifyKind(message.Timestamp, DateTimeKind.Utc)),
                 new JsonObject { ["phase"] = phase },
-                ReadString(message, "toolName"),
-                ReadStringOrJson(message, "toolInput"),
-                ReadStringOrJson(message, "toolResult"),
-                ReadObject(message, "payloadRef"),
-                ReadString(message, "attachmentsJson")));
-            if (projected.Count >= Math.Clamp(limit, 1, 500)) break;
+                message.ToolName,
+                message.ToolInput,
+                message.ToolResult,
+                message.PayloadRef is { ValueKind: JsonValueKind.Object } payloadRef
+                    ? JsonNode.Parse(payloadRef.GetRawText()) as JsonObject
+                    : null,
+                message.AttachmentsJson));
         }
         var next = projected.LastOrDefault()?.Cursor ?? after;
-        return new ExternalConversationPage(projected, next, isQuiescent);
+        var hasMore = after is not null && (
+            immediatelyNewerPage?.Page.HasLater == true
+            || canonical.Any(message => message.Sequence.HasValue
+                && string.Equals(message.Epoch, currentEpoch, StringComparison.Ordinal)
+                && next is not null
+                && message.Sequence.Value > next.Sequence));
+        return new ExternalConversationPage(projected, next, isQuiescent)
+        {
+            HasMore = hasMore,
+        };
+    }
+
+    internal static IReadOnlyList<SessionMessage> SelectSettledMessages(
+        IEnumerable<SessionMessage> messages,
+        string currentEpoch,
+        ExternalConversationCursor? after,
+        int limit)
+    {
+        var boundedLimit = Math.Clamp(limit, 1, 500);
+        var sequenced = messages
+            .Where(message => message.Sequence.HasValue
+                && string.Equals(message.Epoch, currentEpoch, StringComparison.Ordinal))
+            .OrderBy(message => message.Sequence)
+            .ThenBy(message => message.Id)
+            .ToList();
+
+        // The newest RedCompute page already applied the caller's soft limit and
+        // expanded its boundary UID. Re-limiting it here would split that UID and
+        // advance the external cursor into the middle of a logical turn.
+        if (after is null)
+            return sequenced.ToArray();
+
+        var afterSequence = string.Equals(after.Epoch, currentEpoch, StringComparison.Ordinal)
+            ? after.Sequence
+            : 0;
+        var candidates = sequenced
+            .Where(message => message.Sequence > afterSequence)
+            .ToList();
+        var selected = candidates.Take(boundedLimit).ToList();
+        if (selected.Count == 0 || selected.Count == candidates.Count)
+            return selected;
+
+        var boundaryUid = selected[^1].MessageUid;
+        if (string.IsNullOrWhiteSpace(boundaryUid))
+            return selected;
+        for (var index = selected.Count; index < candidates.Count; index++)
+        {
+            if (!string.Equals(candidates[index].MessageUid, boundaryUid, StringComparison.Ordinal))
+                break;
+            selected.Add(candidates[index]);
+        }
+        return selected;
     }
 
     internal static bool IsQuiescent(JsonElement root)
@@ -405,38 +518,6 @@ public sealed class ExternalAgentConversationProvider(
             || string.IsNullOrWhiteSpace(handle.SessionId))
             throw new InvalidOperationException("External conversation handle is invalid");
     }
-
-    private static string? ReadString(JsonElement element, string property)
-        => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString() : null;
-
-    private static string? ReadEpoch(JsonElement element) => ReadString(element, "epoch");
-
-    private static string? ReadStringOrJson(JsonElement element, string property)
-    {
-        if (!element.TryGetProperty(property, out var value)
-            || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-            return null;
-        return value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText();
-    }
-
-    private static JsonObject? ReadObject(JsonElement element, string property)
-        => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Object
-            ? JsonNode.Parse(value.GetRawText()) as JsonObject
-            : null;
-
-    private static bool TryReadLong(JsonElement element, string property, out long value)
-    {
-        value = 0;
-        return element.TryGetProperty(property, out var node)
-               && node.ValueKind == JsonValueKind.Number && node.TryGetInt64(out value);
-    }
-
-    private static DateTimeOffset ReadTimestamp(JsonElement element)
-        => element.TryGetProperty("timestamp", out var value)
-           && value.ValueKind == JsonValueKind.String
-           && DateTimeOffset.TryParse(value.GetString(), out var parsed)
-            ? parsed : DateTimeOffset.UtcNow;
 
     private sealed class Subscription(Action dispose) : IDisposable
     {

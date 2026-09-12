@@ -7,6 +7,8 @@ namespace Leaf.Plugins.Nova;
 /// <summary>A single raw message from a RedCompute session transcript.</summary>
 public sealed class SessionMessage
 {
+    public long Id { get; set; }
+    public string? SessionId { get; set; }
     public string Role { get; set; } = "";
     public string EventType { get; set; } = "";
     public string? Content { get; set; }
@@ -15,7 +17,12 @@ public sealed class SessionMessage
     public string? ToolResult { get; set; }
     public JsonElement? PayloadRef { get; set; }
     public string? Phase { get; set; }
+    public string? MessageId { get; set; }
+    public string? Epoch { get; set; }
+    public long? Sequence { get; set; }
     public DateTime Timestamp { get; set; }
+    public DateTimeOffset? RecordCreatedAt { get; set; }
+    public string? AttachmentsJson { get; set; }
 
     /// <summary>
     /// Provider-neutral message uid. RedCompute mints one per turn, so every
@@ -31,6 +38,50 @@ public sealed record SessionSnapshot(
     string? StopReason,
     string? Title,
     List<SessionMessage> Messages);
+
+/// <summary>Session metadata carried by every transcript page.</summary>
+public sealed class SessionPageInfo
+{
+    public string Id { get; set; } = "";
+    public string? Status { get; set; }
+    public string? StopReason { get; set; }
+    public string? Title { get; set; }
+}
+
+/// <summary>Authoritative keyset facts returned by RedCompute.</summary>
+public sealed class SessionTranscriptPageMetadata
+{
+    public string Epoch { get; set; } = "";
+    public string Direction { get; set; } = "newest";
+    public string? OldestCursor { get; set; }
+    public string? NewestCursor { get; set; }
+    public bool HasEarlier { get; set; }
+    public bool HasLater { get; set; }
+    public long? FromSequence { get; set; }
+    public long? ThroughSequence { get; set; }
+    public bool BoundaryComplete { get; set; }
+}
+
+/// <summary>One raw, provider-neutral durable transcript page.</summary>
+public sealed class SessionTranscriptPage
+{
+    public SessionPageInfo Session { get; set; } = new();
+    public List<SessionMessage> Messages { get; set; } = [];
+    public SessionTranscriptPageMetadata Page { get; set; } = new();
+}
+
+/// <summary>
+/// A transcript-page call keeps RedCompute's status and machine-readable error
+/// intact so Nova can proxy cursor and authorization failures without guessing.
+/// </summary>
+public sealed record SessionTranscriptPageResult(
+    int StatusCode,
+    SessionTranscriptPage? Value,
+    string Content,
+    string ContentType)
+{
+    public bool Success => StatusCode is >= 200 and < 300 && Value is not null;
+}
 
 /// <summary>
 /// RedCompute (port 18800) session gateway. Local plain-HTTP like the kernel's own
@@ -425,8 +476,60 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         return new SessionSnapshot(status, stopReason, title, messages);
     }
 
+    public async Task<SessionTranscriptPageResult> GetTranscriptPageAsync(
+        string sessionId,
+        int limit,
+        string? before = null,
+        string? after = null,
+        CancellationToken ct = default)
+    {
+        if (!string.IsNullOrWhiteSpace(before) && !string.IsNullOrWhiteSpace(after))
+            throw new ArgumentException("before and after are mutually exclusive");
+
+        var query = new List<string> { $"limit={Math.Clamp(limit, 1, 500)}" };
+        if (!string.IsNullOrWhiteSpace(before))
+            query.Add($"before={Uri.EscapeDataString(before)}");
+        if (!string.IsNullOrWhiteSpace(after))
+            query.Add($"after={Uri.EscapeDataString(after)}");
+
+        var url = $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}/transcript-page?{string.Join("&", query)}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        using var response = await gateway.SendAsync(request, provenance: null, ct);
+        var content = await response.Content.ReadAsStringAsync(ct);
+        var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/json";
+
+        SessionTranscriptPage? page = null;
+        if (response.IsSuccessStatusCode)
+        {
+            try
+            {
+                page = JsonSerializer.Deserialize<SessionTranscriptPage>(content, JsonOptions);
+                if (page is null
+                    || page.Session is null
+                    || page.Page is null
+                    || page.Messages is null
+                    || string.IsNullOrWhiteSpace(page.Page.Epoch)
+                    || !string.Equals(page.Session.Id, sessionId, StringComparison.Ordinal)
+                    || page.Messages.Any(message => !string.IsNullOrWhiteSpace(message.SessionId)
+                        && !string.Equals(message.SessionId, sessionId, StringComparison.Ordinal)))
+                    page = null;
+            }
+            catch (JsonException)
+            {
+                // Keep the malformed upstream response available to the caller,
+                // but never present it as a successful typed page.
+            }
+        }
+
+        return new SessionTranscriptPageResult((int)response.StatusCode, page, content, contentType);
+    }
+
     internal static SessionMessage ParseSessionMessage(JsonElement el) => new()
     {
+        Id = el.TryGetProperty("id", out var id) && id.TryGetInt64(out var parsedId) ? parsedId : 0,
+        SessionId = el.TryGetProperty("sessionId", out var sessionId) && sessionId.ValueKind == JsonValueKind.String
+            ? sessionId.GetString()
+            : null,
         Role = el.GetProperty("role").GetString() ?? "unknown",
         EventType = el.TryGetProperty("eventType", out var et) ? et.GetString() ?? "text" : "text",
         Content = el.TryGetProperty("content", out var c) ? c.GetString() : null,
@@ -442,10 +545,28 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         Phase = el.TryGetProperty("phase", out var phase) && phase.ValueKind == JsonValueKind.String
             ? phase.GetString()
             : null,
+        MessageId = el.TryGetProperty("messageId", out var messageId) && messageId.ValueKind == JsonValueKind.String
+            ? messageId.GetString()
+            : null,
+        Epoch = el.TryGetProperty("epoch", out var epoch) && epoch.ValueKind == JsonValueKind.String
+            ? epoch.GetString()
+            : null,
+        Sequence = el.TryGetProperty("sequence", out var sequence) && sequence.TryGetInt64(out var parsedSequence)
+            ? parsedSequence
+            : null,
         Timestamp = el.TryGetProperty("timestamp", out var ts) ? ts.GetDateTimeOffset().UtcDateTime : DateTime.MinValue,
+        RecordCreatedAt = el.TryGetProperty("recordCreatedAt", out var recordCreatedAt)
+            && recordCreatedAt.ValueKind == JsonValueKind.String
+            && recordCreatedAt.TryGetDateTimeOffset(out var parsedRecordCreatedAt)
+                ? parsedRecordCreatedAt.ToUniversalTime()
+                : null,
         MessageUid = el.TryGetProperty("messageUid", out var uid) && uid.ValueKind == JsonValueKind.String
             ? uid.GetString()
             : null,
+        AttachmentsJson = el.TryGetProperty("attachmentsJson", out var attachmentsJson)
+            && attachmentsJson.ValueKind == JsonValueKind.String
+                ? attachmentsJson.GetString()
+                : null,
     };
 
     private static string? ReadStringOrJson(JsonElement parent, string propertyName)

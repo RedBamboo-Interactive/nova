@@ -43,6 +43,29 @@ public sealed class RedComputeClientTests
     }
 
     [Fact]
+    public async Task TranscriptPageCarriesCanonicalIdentityStorageBoundaryAndAttachments()
+    {
+        var gateway = new StaticComputeGateway(
+            """{"session":{"id":"session-1","status":"Idle","title":"Refined"},"messages":[{"id":42,"sessionId":"session-1","role":"user","eventType":"text","content":"hello","messageId":"provider-message","messageUid":"stable-uid","epoch":"epoch-1","sequence":81,"timestamp":"2026-09-12T12:00:00Z","recordCreatedAt":"2026-09-12T12:00:01Z","attachmentsJson":"[]"}],"page":{"epoch":"epoch-1","direction":"newest","oldestCursor":"older","newestCursor":"newer","hasEarlier":true,"hasLater":false,"fromSequence":81,"throughSequence":81,"boundaryComplete":true}}""");
+        var client = new RedComputeClient(gateway);
+
+        var result = await client.GetTranscriptPageAsync("session-1", 500);
+
+        Assert.True(result.Success);
+        var page = Assert.IsType<SessionTranscriptPage>(result.Value);
+        var message = Assert.Single(page.Messages);
+        Assert.Equal(42, message.Id);
+        Assert.Equal("session-1", message.SessionId);
+        Assert.Equal("provider-message", message.MessageId);
+        Assert.Equal("epoch-1", message.Epoch);
+        Assert.Equal(81, message.Sequence);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-12T12:00:01Z"), message.RecordCreatedAt);
+        Assert.Equal("[]", message.AttachmentsJson);
+        Assert.True(page.Page.HasEarlier);
+        Assert.Equal("newer", page.Page.NewestCursor);
+    }
+
+    [Fact]
     public async Task SessionMutationsForwardStructuredProvenance()
     {
         var gateway = new RecordingComputeGateway();

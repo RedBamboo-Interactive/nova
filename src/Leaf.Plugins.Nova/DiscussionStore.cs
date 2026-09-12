@@ -36,6 +36,19 @@ public static class DiscussionStatus
 }
 
 /// <summary>
+/// Provenance for a discussion title. Automatic session refinement is allowed
+/// only for titles Nova produced as a first-message fallback or prior session title.
+/// </summary>
+public static class DiscussionTitleSource
+{
+    public const string Fallback = "fallback";
+    public const string Session = "session";
+    public const string Manual = "manual";
+    public const string System = "system";
+    public const string LegacyLocked = "legacy-locked";
+}
+
+/// <summary>
 /// Per-discussion-entity write gate. The kernel's entity patch and message post are
 /// both read-modify-write over the whole data JSON with no concurrency control, so
 /// two overlapping writes lose one of them — even when they touch different keys
@@ -74,7 +87,8 @@ public sealed record DiscussionRead(
     long ConversationRevision = 0,
     long ReadConversationRevision = 0,
     string? LastProcessedSessionAssistantUid = null,
-    string? SetupBootstrapMessageUid = null);
+    string? SetupBootstrapMessageUid = null,
+    string? TitleSource = null);
 
 /// <summary>
 /// Centralized owner-scoping rules for user-owned resources. A resource is accessible
@@ -143,6 +157,8 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         };
         if (qualityTier != null) data["quality_tier"] = qualityTier;
         if (provider != null) data["provider"] = provider;
+        if (!string.IsNullOrWhiteSpace(title))
+            data["title_source"] = DiscussionTitleSource.System;
         var entity = await discussions.CreateAsync(title, agentId, data, ct);
         return Map(entity)!;
     }
@@ -240,6 +256,114 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
 
     public Task TouchAsync(Guid entityId, CancellationToken ct = default)
         => PatchAsync(entityId, new JsonObject { ["last_activity"] = DateTimeOffset.UtcNow.ToString("O") }, ct: ct);
+
+    /// <summary>Applies an explicit user rename and returns the canonical entity view.</summary>
+    public Task<DiscussionRead?> SetManualTitleAsync(
+        Guid entityId, string? title, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity is null || Map(entity) is null) return null;
+            await entities.PatchAsync(entityId, new JsonObject
+            {
+                ["title"] = title,
+                ["title_source"] = DiscussionTitleSource.Manual,
+            }, title ?? $"Discussion {Str(entity.Data, "discussion_id")}", ct);
+            var updated = await entities.GetAsync(entityId, ct);
+            return updated is null ? null : Map(updated);
+        }, ct);
+
+    /// <summary>
+    /// Applies the deterministic first-message title only while the discussion
+    /// remains genuinely untitled. Retried or late requests cannot replace a
+    /// title established by a user, system workflow, or session refinement.
+    /// </summary>
+    public Task<DiscussionRead?> TrySetFallbackTitleAsync(
+        Guid entityId, string title, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            var current = entity is null ? null : Map(entity);
+            if (entity is null || current is null) return null;
+            if (!string.IsNullOrWhiteSpace(current.Title)
+                || current.TitleSource is not (null or DiscussionTitleSource.Fallback))
+                return current;
+
+            var normalized = BuildFallbackTitle(title);
+            if (string.IsNullOrWhiteSpace(normalized)) return current;
+            await entities.PatchAsync(entityId, new JsonObject
+            {
+                ["title"] = normalized,
+                ["title_source"] = DiscussionTitleSource.Fallback,
+            }, normalized, ct);
+            var updated = await entities.GetAsync(entityId, ct);
+            return updated is null ? null : Map(updated);
+        }, ct);
+
+    /// <summary>
+    /// Recovers a semantic RedCompute title without weakening title ownership.
+    /// Untagged legacy titles are classified lazily: only an exact match for the
+    /// oldest accepted user-message fallback remains eligible; every other
+    /// nonblank legacy title is locked before returning.
+    /// </summary>
+    public Task<DiscussionRead?> TryApplySessionTitleAsync(
+        Guid entityId, string? title, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            var current = entity is null ? null : Map(entity);
+            if (entity is null || current is null || string.IsNullOrWhiteSpace(title)) return current;
+            if (!string.Equals(current.Type, "chat", StringComparison.Ordinal)) return current;
+
+            var source = current.TitleSource;
+            var eligible = source is DiscussionTitleSource.Fallback or DiscussionTitleSource.Session;
+            if (source is null)
+            {
+                if (string.IsNullOrWhiteSpace(current.Title))
+                {
+                    eligible = true;
+                }
+                else
+                {
+                    var firstAccepted = (await discussions.GetMessagesAsync(entityId, 1000, ct: ct))
+                        .FirstOrDefault(message => string.Equals(
+                            message.Metadata["source"]?.GetValue<string>(),
+                            "user-message", StringComparison.Ordinal));
+                    var legacyFallback = firstAccepted is null
+                        ? null
+                        : BuildFallbackTitle(ConversationExporter.StripInjectedTags(firstAccepted.Content));
+                    eligible = !string.IsNullOrWhiteSpace(legacyFallback)
+                        && string.Equals(current.Title, legacyFallback, StringComparison.Ordinal);
+                    if (!eligible)
+                    {
+                        await entities.PatchAsync(entityId, new JsonObject
+                        {
+                            ["title_source"] = DiscussionTitleSource.LegacyLocked,
+                        }, ct: ct);
+                        var locked = await entities.GetAsync(entityId, ct);
+                        return locked is null ? null : Map(locked);
+                    }
+                }
+            }
+
+            if (!eligible) return current;
+            var normalized = title.Trim();
+            if (source is DiscussionTitleSource.Session
+                && string.Equals(current.Title, normalized, StringComparison.Ordinal)) return current;
+            await entities.PatchAsync(entityId, new JsonObject
+            {
+                ["title"] = normalized,
+                ["title_source"] = DiscussionTitleSource.Session,
+            }, normalized, ct);
+            var updated = await entities.GetAsync(entityId, ct);
+            return updated is null ? null : Map(updated);
+        }, ct);
+
+    internal static string BuildFallbackTitle(string visibleText)
+    {
+        var title = visibleText.Trim();
+        return title.Length > 60 ? title[..59] + "…" : title;
+    }
 
     /// <summary>Message post routed through the per-entity gate (the kernel post also
     /// rewrites the discussion entity's data blob for message_count/last_activity).</summary>
@@ -463,7 +587,8 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             d.ContainsKey("last_processed_session_assistant_uid")
                 ? Str(d, "last_processed_session_assistant_uid") ?? ""
                 : null,
-            Str(d, "setup_bootstrap_message_uid"));
+            Str(d, "setup_bootstrap_message_uid"),
+            Str(d, "title_source"));
     }
 
     public static object ToInfo(DiscussionRead d) => new
@@ -473,6 +598,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         title = d.Title,
         sessionId = d.SessionId,
         status = d.Status,
+        titleSource = d.TitleSource,
         type = d.Type,
         createdAt = d.CreatedAt,
         lastActivity = d.LastActivity,

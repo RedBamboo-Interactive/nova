@@ -72,6 +72,30 @@ public class ReactionRequest
     public string? AgentName { get; set; }
 }
 
+internal sealed record HistoryOverlayDto(
+    string Id,
+    string? MessageUid,
+    string Role,
+    object[] Parts,
+    string Timestamp,
+    string? SenderAgentId,
+    string Source);
+
+internal sealed record OverlayPageRead(
+    IReadOnlyList<DiscussionMessage> Messages,
+    bool HasEarlier,
+    bool HasLater,
+    long? OldestId,
+    long? NewestId);
+
+internal sealed class HistoryOverlayPageTooLargeException : Exception
+{
+    public HistoryOverlayPageTooLargeException()
+        : base("One canonical history interval contains more than 10,000 Nova overlay records")
+    {
+    }
+}
+
 public static class DiscussionEndpoints
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -335,6 +359,262 @@ public static class DiscussionEndpoints
 
             var markdown = await exporter.ExportAsync(discussions, since);
             return Results.Text(markdown, "text/markdown");
+        });
+
+        group.MapGet("/discussions/{id}/history-page", async (
+            string id,
+            HttpContext ctx,
+            DiscussionStore store,
+            IDiscussions discussions,
+            RedComputeClient redCompute,
+            ConversationUnread conversationUnread) =>
+        {
+            var before = ctx.Request.Query["before"].FirstOrDefault();
+            var after = ctx.Request.Query["after"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(before) && !string.IsNullOrWhiteSpace(after))
+                return HistoryError(400, "invalid_pagination", "before and after are mutually exclusive");
+
+            var limit = 500;
+            var requestedLimit = ctx.Request.Query["limit"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(requestedLimit))
+            {
+                if (!int.TryParse(requestedLimit, out limit))
+                    return HistoryError(400, "invalid_pagination", "limit must be an integer");
+                limit = Math.Clamp(limit, 1, 500);
+            }
+
+            var discussion = await store.GetAsync(id);
+            if (discussion is null) return NotFound();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+
+            var direction = !string.IsNullOrWhiteSpace(before)
+                ? "before"
+                : !string.IsNullOrWhiteSpace(after) ? "after" : "newest";
+            var edge = direction == "before"
+                ? HistoryPageCursorEdge.Oldest
+                : HistoryPageCursorEdge.Newest;
+            var sessionlessEpoch = discussion.SessionId is null
+                ? $"discussion:{discussion.EntityId:N}"
+                : null;
+
+            HistoryPageCursor? cursor = null;
+            try
+            {
+                var encoded = direction == "before" ? before : after;
+                if (!string.IsNullOrWhiteSpace(encoded))
+                {
+                    cursor = HistoryPageCursorCodec.Decode(
+                        encoded,
+                        discussion.Id,
+                        discussion.SessionId,
+                        sessionlessEpoch,
+                        edge);
+                }
+            }
+            catch (HistoryPageCursorException ex)
+            {
+                return HistoryError(
+                    ex.Code == "invalid_cursor" ? 400 : 409,
+                    ex.Code,
+                    ex.Message);
+            }
+
+            SessionTranscriptPage? transcript = null;
+            if (discussion.SessionId is not null)
+            {
+                // An empty transcript has no Compute keyset anchor. Older requests
+                // then advance only the overlay half of the composite cursor.
+                var skipComputeBefore = direction == "before"
+                    && cursor is { ComputeCursor: null };
+                if (!skipComputeBefore)
+                {
+                    SessionTranscriptPageResult result;
+                    try
+                    {
+                        result = await redCompute.GetTranscriptPageAsync(
+                            discussion.SessionId,
+                            limit,
+                            before: direction == "before" ? cursor?.ComputeCursor : null,
+                            after: direction == "after" ? cursor?.ComputeCursor : null,
+                            ctx.RequestAborted);
+                    }
+                    catch (Exception ex) when (!ctx.RequestAborted.IsCancellationRequested)
+                    {
+                        return HistoryError(503, "redcompute_unavailable", ex.Message);
+                    }
+
+                    if (!result.Success)
+                    {
+                        if (result.StatusCode == 200)
+                            return HistoryError(502, "invalid_transcript_page", "RedCompute returned an invalid transcript page");
+
+                        var upstreamError = ReadErrorCode(result.Content);
+                        if (upstreamError == "transcript_cursor_stale")
+                            return HistoryError(409, "history_cursor_stale", "The history cursor belongs to an earlier transcript epoch");
+                        if (upstreamError == "transcript_cursor_mismatch")
+                            return HistoryError(409, "history_cursor_mismatch", "The history cursor does not match this discussion");
+                        return Results.Content(result.Content, result.ContentType, statusCode: result.StatusCode);
+                    }
+                    transcript = result.Value!;
+                }
+
+                if (cursor?.Epoch is { } cursorEpoch
+                    && transcript is not null
+                    && !string.Equals(cursorEpoch, transcript.Page.Epoch, StringComparison.Ordinal))
+                    return HistoryError(409, "history_cursor_stale", "The history cursor belongs to an earlier transcript epoch");
+
+                // A discussion can begin with overlays before its first canonical
+                // transcript record exists. If more than one canonical page then
+                // appears, treating the newest page as an ordinary `after` append
+                // would strand its older prefix because the prior composite cursor
+                // had no Compute anchor. Force the client through its existing
+                // per-discussion reset/newest path so it installs a truthful oldest
+                // cursor and hasEarlier fact.
+                if (RequiresCanonicalBackfillReset(direction, cursor, transcript))
+                    return HistoryError(
+                        409,
+                        "history_cursor_stale",
+                        "Canonical transcript history appeared behind an overlay-only cursor; restart at the newest page");
+
+                if (transcript is not null)
+                {
+                    if (transcript.Messages.Any(message => message.RecordCreatedAt is null))
+                        return HistoryError(502, "invalid_transcript_page", "RedCompute transcript records do not expose storage boundaries");
+
+                    var sessionStatus = DiscussionStatus.FromSessionStatus(
+                        transcript.Session.Status,
+                        discussion.Type,
+                        transcript.Session.StopReason);
+                    if (sessionStatus is not null && sessionStatus != discussion.Status)
+                    {
+                        var applied = await store.TrySetStatusAsync(
+                            discussion.EntityId,
+                            sessionStatus,
+                            ctx.RequestAborted);
+                        if (applied is not null)
+                            discussion = discussion with { Status = applied };
+                    }
+                    if (transcript.Session.Status == "Idle")
+                    {
+                        discussion = await conversationUnread.ReconcileSettledAsync(
+                            discussion,
+                            ctx.RequestAborted);
+                    }
+
+                    var titled = await store.TryApplySessionTitleAsync(
+                        discussion.EntityId,
+                        transcript.Session.Title,
+                        ctx.RequestAborted);
+                    if (titled is not null)
+                        discussion = titled;
+                }
+            }
+
+            var epoch = transcript?.Page.Epoch ?? cursor?.Epoch ?? sessionlessEpoch!;
+            OverlayPageRead overlayPage;
+            try
+            {
+                overlayPage = await ReadOverlayPageAsync(
+                    discussions,
+                    discussion,
+                    transcript,
+                    cursor,
+                    direction,
+                    limit,
+                    ctx.RequestAborted);
+            }
+            catch (HistoryOverlayPageTooLargeException ex)
+            {
+                return HistoryError(413, "history_overlay_page_too_large", ex.Message);
+            }
+            catch (NotSupportedException ex)
+            {
+                return HistoryError(503, "history_paging_unavailable", ex.Message);
+            }
+
+            var canonicalUserUids = (transcript?.Messages ?? [])
+                .Where(message => message.Role == "user" && !string.IsNullOrWhiteSpace(message.MessageUid))
+                .Select(message => message.MessageUid!)
+                .ToHashSet(StringComparer.Ordinal);
+            var canonicalAssistantUids = (transcript?.Messages ?? [])
+                .Where(message => message.Role == "assistant" && !string.IsNullOrWhiteSpace(message.MessageUid))
+                .Select(message => message.MessageUid!)
+                .ToHashSet(StringComparer.Ordinal);
+            var overlays = ProjectHistoryOverlays(
+                overlayPage.Messages,
+                canonicalUserUids,
+                canonicalAssistantUids,
+                sessionBacked: discussion.SessionId is not null,
+                allowUserBridges: direction != "before");
+
+            var canonicalMessages = transcript?.Messages ?? [];
+            var oldestBoundary = BoundaryAt(canonicalMessages, first: true)
+                ?? BoundaryAt(overlayPage.Messages, first: true)
+                ?? cursor?.Boundary;
+            var newestBoundary = MaxBoundary(
+                BoundaryAt(canonicalMessages, first: false),
+                BoundaryAt(overlayPage.Messages, first: false))
+                ?? cursor?.Boundary;
+            var oldestOverlayAnchor = canonicalMessages.Count > 0
+                ? canonicalMessages[0].Id
+                : overlayPage.OldestId ?? cursor?.OverlayAnchorId;
+            var newestOverlayAnchor = ResolveNewestOverlayAnchor(
+                direction,
+                overlayPage,
+                cursor);
+            // A null cursor on an authoritative Compute response means that edge is
+            // exhausted. Only retain the previous nested cursor when Compute was
+            // intentionally skipped for an already overlay-only older request.
+            var oldestComputeCursor = ResolveComputeCursor(transcript, cursor, oldest: true);
+            var newestComputeCursor = ResolveComputeCursor(
+                transcript,
+                cursor,
+                oldest: false,
+                preservePreviousOnEmpty: direction == "after");
+
+            var hasEarlier = (transcript?.Page.HasEarlier ?? false) || overlayPage.HasEarlier;
+            var hasLater = (transcript?.Page.HasLater ?? false) || overlayPage.HasLater;
+            var pageHasRecords = canonicalMessages.Count > 0 || overlayPage.Messages.Count > 0;
+            var oldestCursor = oldestBoundary is null
+                || !ShouldEmitHistoryCursor(direction, HistoryPageCursorEdge.Oldest, pageHasRecords, hasEarlier, hasLater)
+                ? null : HistoryPageCursorCodec.Encode(new(
+                discussion.Id,
+                discussion.SessionId,
+                epoch,
+                HistoryPageCursorEdge.Oldest,
+                oldestComputeCursor,
+                oldestBoundary,
+                oldestOverlayAnchor));
+            var newestCursor = newestBoundary is null
+                || !ShouldEmitHistoryCursor(direction, HistoryPageCursorEdge.Newest, pageHasRecords, hasEarlier, hasLater)
+                ? null : HistoryPageCursorCodec.Encode(new(
+                discussion.Id,
+                discussion.SessionId,
+                epoch,
+                HistoryPageCursorEdge.Newest,
+                newestComputeCursor,
+                newestBoundary,
+                newestOverlayAnchor));
+
+            return Results.Ok(new
+            {
+                discussion = DiscussionStore.ToInfo(discussion),
+                session = transcript?.Session,
+                messages = canonicalMessages,
+                overlays,
+                page = new
+                {
+                    epoch,
+                    direction,
+                    oldestCursor,
+                    newestCursor,
+                    hasEarlier,
+                    hasLater,
+                    fromSequence = transcript?.Page.FromSequence,
+                    throughSequence = transcript?.Page.ThroughSequence,
+                    boundaryComplete = transcript?.Page.BoundaryComplete ?? true,
+                },
+            });
         });
 
         group.MapGet("/discussions/{id}", async (string id, HttpContext ctx, DiscussionStore store, IDiscussions discussions, RedComputeClient redCompute, ConversationUnread conversationUnread) =>
@@ -609,9 +889,42 @@ public static class DiscussionEndpoints
             if (discussion is null) return NotFound();
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
-            await store.PatchAsync(discussion.EntityId, new JsonObject { ["title"] = request.Title },
-                name: request.Title ?? $"Discussion {id}");
-            return Results.Ok(DiscussionStore.ToInfo(discussion with { Title = request.Title }));
+            var updated = await store.SetManualTitleAsync(
+                discussion.EntityId, request.Title, ctx.RequestAborted);
+            return updated is null ? NotFound() : Results.Ok(DiscussionStore.ToInfo(updated));
+        });
+
+        group.MapPut("/discussions/{id}/title/fallback", async (string id, DiscussionTitleRequest request, HttpContext ctx, DiscussionStore store) =>
+        {
+            var discussion = await store.GetAsync(id);
+            if (discussion is null) return NotFound();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+
+            var updated = await store.TrySetFallbackTitleAsync(
+                discussion.EntityId, request.Title ?? "", ctx.RequestAborted);
+            return updated is null ? NotFound() : Results.Ok(DiscussionStore.ToInfo(updated));
+        });
+
+        // A session.updated event is only an invalidation signal. Re-read the
+        // linked session here so an old pushed title can never win a race with
+        // fresher RedCompute state or bypass the store's provenance policy.
+        group.MapPut("/discussions/{id}/title/session", async (
+            string id, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
+        {
+            var discussion = await store.GetAsync(id, ctx.RequestAborted);
+            if (discussion is null) return NotFound();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+            if (discussion.SessionId is null || !string.Equals(discussion.Type, "chat", StringComparison.Ordinal))
+                return Results.Ok(DiscussionStore.ToInfo(discussion));
+
+            var snapshot = await redCompute.GetSessionAsync(
+                discussion.SessionId, ctx.RequestAborted, tail: 1);
+            if (snapshot is null)
+                return Results.Json(new { error = "RedCompute session unavailable", code = "session_unavailable" }, statusCode: 503);
+
+            var updated = await store.TryApplySessionTitleAsync(
+                discussion.EntityId, snapshot.Title, ctx.RequestAborted);
+            return updated is null ? NotFound() : Results.Ok(DiscussionStore.ToInfo(updated));
         });
 
         group.MapPut("/discussions/{id}/confidential", async (string id,
@@ -961,10 +1274,12 @@ public static class DiscussionEndpoints
             if (!string.IsNullOrWhiteSpace(request.Title))
             {
                 patch["title"] = request.Title;
+                patch["title_source"] = DiscussionTitleSource.System;
                 namePatch = request.Title;
             }
             await store.PatchAsync(discussion.EntityId, patch, namePatch);
 
+            discussion = await store.GetAsync(id, ctx.RequestAborted) ?? discussion;
             // Best-effort inject into live session (message is already persisted above).
             // If the session isn't ready, SendAsync replays it when the user first
             // messages the discussion.
@@ -1349,6 +1664,307 @@ public static class DiscussionEndpoints
                 .ToArray();
         }
         return result;
+    }
+
+    private static IResult HistoryError(int status, string error, string message)
+        => Results.Json(new { error, message }, statusCode: status);
+
+    private static string? ReadErrorCode(string content)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            return document.RootElement.TryGetProperty("error", out var error)
+                && error.ValueKind == JsonValueKind.String
+                    ? error.GetString()
+                    : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task<OverlayPageRead> ReadOverlayPageAsync(
+        IDiscussions discussions,
+        DiscussionRead discussion,
+        SessionTranscriptPage? transcript,
+        HistoryPageCursor? cursor,
+        string direction,
+        int limit,
+        CancellationToken ct)
+    {
+        var canonical = transcript?.Messages ?? [];
+        if (discussion.SessionId is null || canonical.Count == 0 || direction == "after")
+        {
+            var direct = await discussions.GetMessagePageAsync(
+                discussion.EntityId,
+                new DiscussionMessagePageRequest(
+                    Limit: limit,
+                    BeforeId: direction == "before" ? cursor?.OverlayAnchorId : null,
+                    AfterId: direction == "after"
+                        ? ResolveOverlayAfterAnchor(cursor)
+                        : null,
+                    FromInclusive: direction == "after"
+                        && cursor is { OverlayAnchorId: null, Boundary: { } boundary }
+                            ? new DiscussionMessagePageBoundary(boundary.Timestamp, boundary.Id)
+                            : null),
+                ct);
+            return new(
+                direct.Messages,
+                direct.HasEarlier,
+                direct.HasLater,
+                direct.OldestId,
+                direct.NewestId);
+        }
+
+        var lower = ToSdkBoundary(canonical[0]);
+        var upper = direction == "before" && cursor?.Boundary is { } priorBoundary
+            ? new DiscussionMessagePageBoundary(priorBoundary.Timestamp, priorBoundary.Id)
+            : null;
+        var messages = await ReadCompleteOverlayIntervalAsync(
+            discussions,
+            discussion.EntityId,
+            lower,
+            upper,
+            ct);
+
+        var hasEarlier = transcript?.Page.HasEarlier ?? false;
+        if (!hasEarlier)
+        {
+            hasEarlier = await HasVisibleOverlayBeforeAsync(
+                discussions,
+                discussion.EntityId,
+                lower,
+                sessionBacked: true,
+                ct);
+        }
+
+        return new(
+            messages,
+            hasEarlier,
+            HasLater: transcript?.Page.HasLater ?? direction == "before",
+            messages.Count > 0 ? messages[0].Id : null,
+            messages.Count > 0 ? messages[^1].Id : null);
+    }
+
+    internal static async Task<IReadOnlyList<DiscussionMessage>> ReadCompleteOverlayIntervalAsync(
+        IDiscussions discussions,
+        Guid discussionId,
+        DiscussionMessagePageBoundary fromInclusive,
+        DiscussionMessagePageBoundary? toExclusive,
+        CancellationToken ct)
+    {
+        const int storagePageSize = 1000;
+        const int maxAlignedOverlayRecords = 10_000;
+        var result = new List<DiscussionMessage>();
+        long? beforeId = null;
+
+        while (true)
+        {
+            var page = await discussions.GetMessagePageAsync(
+                discussionId,
+                new DiscussionMessagePageRequest(
+                    Limit: storagePageSize,
+                    BeforeId: beforeId,
+                    FromInclusive: fromInclusive,
+                    ToExclusive: toExclusive),
+                ct);
+            if (page.Messages.Count == 0)
+                break;
+
+            result.InsertRange(0, page.Messages);
+            if (result.Count > maxAlignedOverlayRecords)
+                throw new HistoryOverlayPageTooLargeException();
+            if (!page.HasEarlier || page.OldestId is null)
+                break;
+            beforeId = page.OldestId;
+        }
+
+        return result;
+    }
+
+    private static async Task<bool> HasVisibleOverlayBeforeAsync(
+        IDiscussions discussions,
+        Guid discussionId,
+        DiscussionMessagePageBoundary boundary,
+        bool sessionBacked,
+        CancellationToken ct)
+    {
+        long? beforeId = null;
+        while (true)
+        {
+            var page = await discussions.GetMessagePageAsync(
+                discussionId,
+                new DiscussionMessagePageRequest(
+                    Limit: 1000,
+                    BeforeId: beforeId,
+                    ToExclusive: boundary),
+                ct);
+            if (page.Messages.Any(message => IsHistoryOverlaySourceVisible(
+                message.Metadata["source"]?.GetValue<string>(),
+                sessionBacked,
+                allowUserBridges: false)))
+                return true;
+            if (!page.HasEarlier || page.OldestId is null)
+                return false;
+            beforeId = page.OldestId;
+        }
+    }
+
+    private static DiscussionMessagePageBoundary ToSdkBoundary(SessionMessage message)
+        => new(message.RecordCreatedAt!.Value, message.Id);
+
+    private static HistoryPageBoundary? BoundaryAt(IReadOnlyList<SessionMessage> messages, bool first)
+    {
+        if (messages.Count == 0) return null;
+        var message = first ? messages[0] : messages[^1];
+        return message.RecordCreatedAt is { } createdAt
+            ? new HistoryPageBoundary(createdAt, message.Id)
+            : null;
+    }
+
+    private static HistoryPageBoundary? BoundaryAt(IReadOnlyList<DiscussionMessage> messages, bool first)
+    {
+        if (messages.Count == 0) return null;
+        var message = first ? messages[0] : messages[^1];
+        return new HistoryPageBoundary(message.CreatedAt, message.Id);
+    }
+
+    private static HistoryPageBoundary? MaxBoundary(
+        HistoryPageBoundary? left,
+        HistoryPageBoundary? right)
+    {
+        if (left is null) return right;
+        if (right is null) return left;
+        var timestamp = left.Timestamp.CompareTo(right.Timestamp);
+        return timestamp > 0 || (timestamp == 0 && left.Id >= right.Id) ? left : right;
+    }
+
+    internal static string? ResolveComputeCursor(
+        SessionTranscriptPage? transcript,
+        HistoryPageCursor? previous,
+        bool oldest,
+        bool preservePreviousOnEmpty = false)
+        => transcript is null
+            ? previous?.ComputeCursor
+            : preservePreviousOnEmpty && transcript.Messages.Count == 0
+                ? previous?.ComputeCursor
+            : oldest ? transcript.Page.OldestCursor : transcript.Page.NewestCursor;
+
+    internal static bool RequiresCanonicalBackfillReset(
+        string direction,
+        HistoryPageCursor? previous,
+        SessionTranscriptPage? transcript)
+        => direction == "after"
+            && previous is { ComputeCursor: null }
+            && transcript is { Messages.Count: > 0 }
+            && transcript.Page.HasEarlier;
+
+    internal static long? ResolveNewestOverlayAnchor(
+        string direction,
+        OverlayPageRead overlayPage,
+        HistoryPageCursor? previous)
+    {
+        // Compute and Nova overlays advance independently. The overlay keyset may
+        // advance only to an overlay row actually consumed, never to a later
+        // canonical record id. When no overlay has existed yet, the cursor's
+        // storage-time boundary keeps a later after-read from replaying old rows.
+        return overlayPage.NewestId
+            ?? (direction == "after" ? previous?.OverlayAnchorId : null);
+    }
+
+    internal static long? ResolveOverlayAfterAnchor(HistoryPageCursor? cursor)
+        => cursor?.OverlayAnchorId ?? cursor?.Boundary?.Id;
+
+    internal static bool ShouldEmitHistoryCursor(
+        string direction,
+        HistoryPageCursorEdge edge,
+        bool pageHasRecords,
+        bool hasEarlier,
+        bool hasLater)
+    {
+        if (direction == "before" && edge == HistoryPageCursorEdge.Oldest
+            && !pageHasRecords && !hasEarlier)
+            return false;
+        if (direction == "after" && edge == HistoryPageCursorEdge.Newest
+            && !pageHasRecords && !hasLater)
+            return false;
+        return true;
+    }
+
+    internal static bool IsHistoryOverlaySourceVisible(
+        string? source,
+        bool sessionBacked,
+        bool allowUserBridges)
+    {
+        if (source == "queued-user-message") return false;
+        if (!sessionBacked) return true;
+        if (source?.StartsWith("event:", StringComparison.Ordinal) == true) return true;
+        if (source == "nova-message") return true;
+        return allowUserBridges && source == "user-message";
+    }
+
+    internal static HistoryOverlayDto[] ProjectHistoryOverlays(
+        IReadOnlyList<DiscussionMessage> records,
+        IReadOnlySet<string> canonicalUserUids,
+        IReadOnlySet<string> canonicalAssistantUids,
+        bool sessionBacked,
+        bool allowUserBridges)
+    {
+        var selected = new Dictionary<string, DiscussionMessage>(StringComparer.Ordinal);
+        foreach (var message in records)
+        {
+            var source = message.Metadata["source"]?.GetValue<string>();
+            if (!IsHistoryOverlaySourceVisible(source, sessionBacked, allowUserBridges))
+                continue;
+
+            var uid = message.Metadata["uid"]?.GetValue<string>();
+            if (source == "user-message")
+            {
+                if (string.IsNullOrWhiteSpace(uid) || canonicalUserUids.Contains(uid))
+                    continue;
+            }
+            else if (source == "nova-message"
+                && !string.IsNullOrWhiteSpace(uid)
+                && canonicalAssistantUids.Contains(uid))
+            {
+                continue;
+            }
+
+            // User and Nova bridge records are last-write-wins under their stable
+            // UID. Ambient events remain distinct durable records.
+            var key = source is "user-message" or "nova-message"
+                && !string.IsNullOrWhiteSpace(uid)
+                    ? $"{source}:{uid}"
+                    : $"record:{message.Id}";
+            if (!selected.TryGetValue(key, out var existing) || existing.Id < message.Id)
+                selected[key] = message;
+        }
+
+        return selected.Values
+            .OrderBy(message => message.CreatedAt)
+            .ThenBy(message => message.Id)
+            .Select(message =>
+            {
+                var source = message.Metadata["source"]?.GetValue<string>() ?? "";
+                var timestamp = message.CreatedAt;
+                if (source.StartsWith("event:", StringComparison.Ordinal)
+                    && message.Metadata["timestamp"]?.GetValue<string>() is { } rawTimestamp
+                    && DateTimeOffset.TryParse(rawTimestamp, out var eventTimestamp))
+                    timestamp = eventTimestamp;
+                return new HistoryOverlayDto(
+                    message.Id.ToString(),
+                    message.Metadata["uid"]?.GetValue<string>(),
+                    message.Role,
+                    source == "user-message"
+                        ? MapUserMessageParts(message.Metadata["parts_json"]?.GetValue<string>(), message.Content)
+                        : MapParts(message.Metadata["parts_json"]?.GetValue<string>(), message.Content),
+                    timestamp.UtcDateTime.ToString("o"),
+                    message.Metadata["sender_agent_id"]?.GetValue<string>(),
+                    source);
+            })
+            .ToArray();
     }
 
     internal static object[] MapUserMessageParts(string? partsJson, string content)

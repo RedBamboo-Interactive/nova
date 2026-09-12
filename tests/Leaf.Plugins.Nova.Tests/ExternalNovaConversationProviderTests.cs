@@ -11,6 +11,133 @@ namespace Leaf.Plugins.Nova.Tests;
 public sealed class ExternalAgentConversationProviderTests
 {
     [Fact]
+    public void NullSettledCursorSelectsNewestWindowInsteadOfStalePrefix()
+    {
+        var messages = Enumerable.Range(1, 1_200)
+            .Select(sequence => TranscriptMessage(sequence, "epoch-1"))
+            .TakeLast(500)
+            .ToArray();
+
+        var selected = ExternalAgentConversationProvider.SelectSettledMessages(
+            messages,
+            "epoch-1",
+            after: null,
+            limit: 500);
+
+        Assert.Equal(500, selected.Count);
+        Assert.Equal(701, selected[0].Sequence);
+        Assert.Equal(1_200, selected[^1].Sequence);
+    }
+
+    [Fact]
+    public void SettledSelectionExtendsThroughSoftLimitBoundaryUid()
+    {
+        var messages = Enumerable.Range(1, 120)
+            .Select(sequence => TranscriptMessage(sequence, "epoch-1"))
+            .ToArray();
+        foreach (var message in messages.Skip(99).Take(11))
+            message.MessageUid = "expanded-boundary";
+
+        var selected = ExternalAgentConversationProvider.SelectSettledMessages(
+            messages,
+            "epoch-1",
+            new ExternalConversationCursor("epoch-1", 0),
+            limit: 100);
+
+        Assert.Equal(110, selected.Count);
+        Assert.Equal(110, selected[^1].Sequence);
+        Assert.DoesNotContain(selected.Skip(99), message => message.MessageUid != "expanded-boundary");
+    }
+
+    [Fact]
+    public void SettledCursorResumesAtFirstUnseenSequenceAndAdvances()
+    {
+        var messages = Enumerable.Range(3_900, 700)
+            .Select(sequence => TranscriptMessage(sequence, "epoch-1"))
+            .ToArray();
+
+        var first = ExternalAgentConversationProvider.SelectSettledMessages(
+            messages,
+            "epoch-1",
+            new ExternalConversationCursor("epoch-1", 4_149),
+            limit: 100);
+        var second = ExternalAgentConversationProvider.SelectSettledMessages(
+            messages,
+            "epoch-1",
+            new ExternalConversationCursor("epoch-1", first[^1].Sequence!.Value),
+            limit: 100);
+
+        Assert.Equal(4_150, first[0].Sequence);
+        Assert.Equal(4_249, first[^1].Sequence);
+        Assert.Equal(4_250, second[0].Sequence);
+        Assert.Equal(4_349, second[^1].Sequence);
+    }
+
+    [Fact]
+    public async Task SettledReadPagesBackwardToPersistedCursorWithoutLegacyTail()
+    {
+        var gateway = new PagedComputeGateway();
+        var provider = new ExternalAgentConversationProvider(
+            null!,
+            new RedComputeClient(gateway),
+            null!,
+            null!,
+            null!,
+            NullLogger<ExternalAgentConversationProvider>.Instance);
+        var handle = new ExternalConversationHandle(
+            "leaf-agent-session", "binding-1", 1, "conversation-1", "session-1");
+
+        var page = await provider.ReadSettledAsync(
+            handle,
+            new ExternalConversationCursor("epoch-1", 4_149),
+            100);
+
+        Assert.Equal(100, page.Messages.Count);
+        Assert.Equal(4_150, page.Messages[0].Cursor.Sequence);
+        Assert.Equal(4_249, page.NextCursor!.Sequence);
+        Assert.True(page.HasMore);
+        Assert.Contains(gateway.Paths, path => path.Contains("transcript-page?limit=100", StringComparison.Ordinal));
+        Assert.Contains(gateway.Paths, path => path.Contains("before=oldest-1", StringComparison.Ordinal));
+        Assert.DoesNotContain(gateway.Paths, path => path.Contains("tail=10000", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task NullSettledCursorReadsTheCurrentCanonicalTail()
+    {
+        var gateway = new PagedComputeGateway();
+        var provider = new ExternalAgentConversationProvider(
+            null!,
+            new RedComputeClient(gateway),
+            null!,
+            null!,
+            null!,
+            NullLogger<ExternalAgentConversationProvider>.Instance);
+        var handle = new ExternalConversationHandle(
+            "leaf-agent-session", "binding-1", 1, "conversation-1", "session-1");
+
+        var page = await provider.ReadSettledAsync(handle, null, 500);
+
+        Assert.Equal(500, page.Messages.Count);
+        Assert.Equal(4_500, page.Messages[0].Cursor.Sequence);
+        Assert.Equal(4_999, page.NextCursor!.Sequence);
+        Assert.False(page.HasMore);
+        Assert.DoesNotContain(gateway.Paths, path => path.Contains("before=", StringComparison.Ordinal));
+    }
+
+    private static SessionMessage TranscriptMessage(long sequence, string epoch) => new()
+    {
+        Id = sequence,
+        SessionId = "session-1",
+        Role = "assistant",
+        EventType = "text",
+        Content = $"message-{sequence}",
+        MessageUid = $"uid-{sequence}",
+        Epoch = epoch,
+        Sequence = sequence,
+        Timestamp = DateTime.UnixEpoch.AddSeconds(sequence),
+    };
+
+    [Fact]
     public async Task Discord_sessions_use_normal_non_confidential_semantics()
     {
         var scratchPath = Path.Combine(
@@ -91,6 +218,48 @@ public sealed class ExternalAgentConversationProviderTests
         Assert.Equal(expected, ExternalAgentConversationProvider.RequiresResume(
             new RedComputeClient.SessionProbe(
                 true, status, stopReason, providerSessionId)));
+    }
+
+    [Fact]
+    public async Task Reused_session_renews_process_local_callback_before_message_admission()
+    {
+        var agentId = Guid.NewGuid();
+        var entities = new FakeEntityStore(
+            Entity(agentId, "agent", "nova", "Nova"),
+            Entity(Guid.NewGuid(), "plugin", NovaAppPlugin.PluginId, "Nova"));
+        using var agents = new AgentDirectory(entities, new NoOpPluginEvents());
+        var gateway = new ReusedSessionGateway();
+        var redCompute = new RedComputeClient(gateway);
+        var verifier = new DiscordPromptInjectionVerifier(
+            redCompute, agents, entities, null!,
+            NullLogger<DiscordPromptInjectionVerifier>.Instance);
+        var provider = new ExternalAgentConversationProvider(
+            null!, redCompute, agents, entities, verifier,
+            NullLogger<ExternalAgentConversationProvider>.Instance);
+        var handle = new ExternalConversationHandle(
+            "leaf-agent-session", "binding-1", 1, "conversation-1", "session-1");
+
+        await provider.SendAsync(handle, new ExternalConversationInput(
+            "discord-message-1",
+            new ExternalRequestor("user-1", "Laurent"),
+            "hello",
+            [],
+            new JsonObject
+            {
+                ["agent_id"] = agentId.ToString(),
+                ["sentinel_agent_id"] = "missing-sentinel",
+                ["binding_id"] = "binding-1",
+                ["owner_user_id"] = "owner-1",
+            }));
+
+        var callbackIndex = gateway.Requests.FindIndex(request =>
+            request.Path == "/ai-session/sessions/session-1/callback");
+        var messageIndex = gateway.Requests.FindIndex(request =>
+            request.Path == "/ai-session/sessions/session-1/message");
+        Assert.True(callbackIndex >= 0);
+        Assert.True(messageIndex > callbackIndex);
+        using var callbackBody = JsonDocument.Parse(gateway.Requests[callbackIndex].Body);
+        Assert.True(callbackBody.RootElement.GetProperty("force").GetBoolean());
     }
 
     [Theory]
@@ -436,5 +605,86 @@ public sealed class ExternalAgentConversationProviderTests
             {
                 Content = new StringContent(content),
             };
+    }
+
+    private sealed class PagedComputeGateway : IComputeGateway
+    {
+        public List<string> Paths { get; } = [];
+
+        public Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            ComputeProvenance? provenance = null,
+            CancellationToken ct = default)
+        {
+            var path = request.RequestUri?.OriginalString ?? "";
+            Paths.Add(path);
+            if (path.Contains("?tail=1", StringComparison.Ordinal))
+                return Task.FromResult(Response(
+                    """{"session":{"status":"Idle"},"messages":[],"inputQueue":{"depth":0}}"""));
+
+            var older = path.Contains("before=oldest-1", StringComparison.Ordinal);
+            var first = older ? 4_000 : 4_500;
+            var messages = Enumerable.Range(first, 500).Select(sequence => new
+            {
+                id = sequence,
+                sessionId = "session-1",
+                role = "assistant",
+                eventType = "text",
+                content = $"message-{sequence}",
+                messageUid = $"uid-{sequence}",
+                epoch = "epoch-1",
+                sequence,
+                timestamp = DateTimeOffset.UnixEpoch.AddSeconds(sequence),
+            });
+            return Task.FromResult(Response(JsonSerializer.Serialize(new
+            {
+                session = new { id = "session-1", status = "Idle" },
+                messages,
+                page = new
+                {
+                    epoch = "epoch-1",
+                    direction = older ? "before" : "newest",
+                    oldestCursor = older ? "oldest-2" : "oldest-1",
+                    newestCursor = older ? "newest-2" : "newest-1",
+                    hasEarlier = true,
+                    hasLater = older,
+                    fromSequence = first,
+                    throughSequence = first + 499,
+                    boundaryComplete = true,
+                },
+            })));
+        }
+
+        private static HttpResponseMessage Response(string content)
+            => new(HttpStatusCode.OK)
+            {
+                Content = new StringContent(content),
+            };
+    }
+
+    private sealed class ReusedSessionGateway : IComputeGateway
+    {
+        public List<(string Path, string Body)> Requests { get; } = [];
+
+        public async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            ComputeProvenance? provenance = null,
+            CancellationToken ct = default)
+        {
+            var path = request.RequestUri?.OriginalString ?? "";
+            var body = request.Content is null
+                ? ""
+                : await request.Content.ReadAsStringAsync(ct);
+            Requests.Add((path, body));
+            var content = request.Method == HttpMethod.Get
+                ? """{"session":{"status":"Idle","providerSessionId":"thread-1"}}"""
+                : path.EndsWith("/message", StringComparison.Ordinal)
+                    ? """{"disposition":"delivered","queueItemId":"queue-1"}"""
+                    : "{}";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(content),
+            };
+        }
     }
 }
