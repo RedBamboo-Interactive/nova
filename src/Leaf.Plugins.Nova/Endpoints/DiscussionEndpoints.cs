@@ -609,9 +609,18 @@ public static class DiscussionEndpoints
             if (discussion is null) return NotFound();
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
-            await store.PatchAsync(discussion.EntityId, new JsonObject { ["title"] = request.Title },
-                name: request.Title ?? $"Discussion {id}");
-            return Results.Ok(DiscussionStore.ToInfo(discussion with { Title = request.Title }));
+            var updated = await store.SetManualTitleAsync(discussion.EntityId, request.Title);
+            return updated is null ? NotFound() : Results.Ok(DiscussionStore.ToInfo(updated));
+        });
+
+        group.MapPut("/discussions/{id}/suggested-title", async (string id, DiscussionTitleRequest request, HttpContext ctx, DiscussionStore store) =>
+        {
+            var discussion = await store.GetAsync(id);
+            if (discussion is null) return NotFound();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+
+            var updated = await store.TrySetSuggestedTitleAsync(discussion.EntityId, request.Title);
+            return updated is null ? NotFound() : Results.Ok(DiscussionStore.ToInfo(updated));
         });
 
         group.MapPut("/discussions/{id}/confidential", async (string id,
@@ -956,14 +965,11 @@ public static class DiscussionEndpoints
                 });
             discussion = revisedDiscussion ?? discussion;
 
-            var patch = new JsonObject { ["injected_context"] = request.Content };
-            string? namePatch = null;
+            await store.PatchAsync(discussion.EntityId,
+                new JsonObject { ["injected_context"] = request.Content });
             if (!string.IsNullOrWhiteSpace(request.Title))
-            {
-                patch["title"] = request.Title;
-                namePatch = request.Title;
-            }
-            await store.PatchAsync(discussion.EntityId, patch, namePatch);
+                discussion = await store.TrySetSuggestedTitleAsync(
+                    discussion.EntityId, request.Title, ctx.RequestAborted) ?? discussion;
 
             // Best-effort inject into live session (message is already persisted above).
             // If the session isn't ready, SendAsync replays it when the user first
