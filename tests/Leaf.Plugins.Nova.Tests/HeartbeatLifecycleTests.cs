@@ -11,6 +11,75 @@ namespace Leaf.Plugins.Nova.Tests;
 public sealed class HeartbeatLifecycleTests
 {
     [Fact]
+    public async Task Dream_cycle_default_is_sequential_confidential_and_delayed()
+    {
+        var skills = new[]
+        {
+            Entity("agent-skill", "dreaming", "Dreaming", []),
+            Entity("agent-skill", "emotional-dreaming", "Emotional dreaming", []),
+            Entity("agent-skill", "creative-dreaming", "Creative dreaming", []),
+        };
+        var agent = Entity("agent", "nova", "Nova", new JsonObject
+        {
+            ["skills"] = new JsonArray(skills.Select(skill =>
+                (JsonNode)skill.Id.ToString()).ToArray()),
+        });
+        var store = new InMemoryEntityStore([.. skills, agent]);
+        var automations = new InMemoryAutomations(store);
+        var service = new DreamCycleProvisioner(
+            store, automations, NullLogger<DreamCycleProvisioner>.Instance);
+
+        await service.EnsureDefaultAsync(agent);
+        await service.EnsureDefaultAsync(agent);
+
+        Assert.NotNull(automations.LastDefinition);
+        var definition = automations.LastDefinition!;
+        Assert.True(definition.Confidential);
+        Assert.Equal(600,
+            definition.Trigger["recovery_delay_seconds"]!.GetValue<int>());
+        var nodes = definition.WorkflowGraph!["nodes"]!.AsArray()
+            .OfType<JsonObject>().ToList();
+        Assert.Equal(
+            ["scheduled-entry", "dreaming", "emotional-dreaming", "creative-dreaming"],
+            nodes.Select(node => node["id"]!.GetValue<string>()).ToArray());
+        Assert.All(nodes.Skip(1), node =>
+            Assert.Equal(agent.Id,
+                node["data"]!["config"]!["agent"]!.GetValue<Guid>()));
+        Assert.Equal(3, definition.WorkflowGraph["edges"]!.AsArray().Count);
+        Assert.Equal(1, automations.EnsureCalls);
+    }
+
+    [Fact]
+    public async Task Dream_cycle_default_preserves_any_existing_dreaming_layout()
+    {
+        var skills = new[]
+        {
+            Entity("agent-skill", "dreaming", "Dreaming", []),
+            Entity("agent-skill", "emotional-dreaming", "Emotional dreaming", []),
+            Entity("agent-skill", "creative-dreaming", "Creative dreaming", []),
+        };
+        var agent = Entity("agent", "nova", "Nova", new JsonObject
+        {
+            ["skills"] = new JsonArray(skills.Select(skill =>
+                (JsonNode)skill.Id.ToString()).ToArray()),
+        });
+        var existing = Entity("automation", "my-three-cron-layout", "Custom", new JsonObject
+        {
+            ["agent"] = agent.Id,
+            ["prompt"] = "Use $dreaming with my custom rules.",
+        });
+        var store = new InMemoryEntityStore([.. skills, agent, existing]);
+        var automations = new InMemoryAutomations(store);
+        var service = new DreamCycleProvisioner(
+            store, automations, NullLogger<DreamCycleProvisioner>.Instance);
+
+        var result = await service.EnsureDefaultAsync(agent);
+
+        Assert.Null(result);
+        Assert.Equal(0, automations.EnsureCalls);
+    }
+
+    [Fact]
     public void Nova_seed_defines_the_agent_live_field()
     {
         var seedPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
@@ -341,10 +410,12 @@ public sealed class HeartbeatLifecycleTests
     {
         public List<LeafEntity> Entities { get; } = [];
         public int EnsureCalls { get; private set; }
+        public WorkflowAutomationDefinition? LastDefinition { get; private set; }
 
         public Task<LeafEntity> EnsureAsync(WorkflowAutomationDefinition definition, CancellationToken ct = default)
         {
             EnsureCalls++;
+            LastDefinition = definition;
             var existing = Entities.SingleOrDefault(e => e.Slug == definition.Slug);
             if (existing != null) return Task.FromResult(existing);
             return Task.FromResult(Add(definition));
@@ -353,6 +424,7 @@ public sealed class HeartbeatLifecycleTests
         public Task<LeafEntity> UpsertAsync(WorkflowAutomationDefinition definition, CancellationToken ct = default)
         {
             EnsureCalls++;
+            LastDefinition = definition;
             var existing = Entities.SingleOrDefault(e => e.Slug == definition.Slug);
             if (existing == null) return Task.FromResult(Add(definition));
             var workflowId = Guid.Parse(existing.Data["workflow"]!["entity_id"]!.GetValue<string>());
@@ -391,13 +463,14 @@ public sealed class HeartbeatLifecycleTests
             return entity;
         }
 
-        private static JsonObject Graph(WorkflowAutomationDefinition definition) => new()
-        {
-            ["nodes"] = new JsonArray
+        private static JsonObject Graph(WorkflowAutomationDefinition definition)
+            => definition.WorkflowGraph?.DeepClone() as JsonObject ?? new JsonObject
             {
-                new JsonObject { ["id"] = "action", ["data"] = new JsonObject { ["config"] = new JsonObject { ["action_config"] = definition.ActionConfig.DeepClone() } } },
-            },
-        };
+                ["nodes"] = new JsonArray
+                {
+                    new JsonObject { ["id"] = "action", ["data"] = new JsonObject { ["config"] = new JsonObject { ["action_config"] = definition.ActionConfig.DeepClone() } } },
+                },
+            };
     }
 
     private sealed class InMemoryEntityStore(params LeafEntity[] initial) : IEntityStore

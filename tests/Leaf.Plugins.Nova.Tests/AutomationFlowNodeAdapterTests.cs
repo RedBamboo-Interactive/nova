@@ -36,6 +36,8 @@ public sealed class AutomationFlowNodeAdapterTests
             Beneficiary = beneficiary,
             ParentJobId = parentId,
             CorrelationId = "correlation-1",
+            ComputeIdempotencyKey = "workflow:parent:node:session",
+            Confidential = true,
         }, CancellationToken.None);
 
         Assert.Equal("ok", output["summary"]?.GetValue<string>());
@@ -48,6 +50,9 @@ public sealed class AutomationFlowNodeAdapterTests
         Assert.Equal(beneficiary, action.Context.Beneficiary);
         Assert.Equal(parentId, action.Context.AttemptJobId);
         Assert.Equal("correlation-1", action.Context.CorrelationId);
+        Assert.Equal("workflow:parent:node:session", action.Context.IdempotencyKey);
+        Assert.Equal("session", action.Context.NodeId);
+        Assert.True(action.Context.Confidential);
     }
 
     private sealed class CapturingAction : IAutomationActionHandler

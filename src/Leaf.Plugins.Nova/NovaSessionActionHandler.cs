@@ -55,14 +55,18 @@ public sealed class NovaSessionActionHandler(
                 throw new InvalidOperationException(
                     "nova-session preCreateDiscussion requires an authored, verified user beneficiary");
             preCreated = await discussions.GetOrCreateAutomationDeliveryAsync(
-                context.AttemptJobId, agent.Id, context.Beneficiary.Id, ct);
+                context.AttemptJobId, agent.Id, context.Beneficiary.Id,
+                context.Confidential, ct);
             if (!string.Equals(preCreated.OwnerId, context.Beneficiary.Id,
                     StringComparison.Ordinal))
                 throw new InvalidOperationException(
                     $"Automation delivery discussion '{preCreated.Id}' belongs to '{preCreated.OwnerId}', not beneficiary '{context.Beneficiary.Id}'");
         }
 
-        var scratch = scratchSpace.PrepareExecution(agent.Name, context.AttemptJobId.ToString("N"));
+        var executionKey = context.NodeId is { Length: > 0 }
+            ? $"{context.AttemptJobId:N}-{SanitizeSegment(context.NodeId)}"
+            : context.AttemptJobId.ToString("N");
+        var scratch = scratchSpace.PrepareExecution(agent.Name, executionKey);
         var workspace = await workspaces.GetForSessionAsync(agent, scratch, ct);
         workspace.GenerateClaudeMd();
         var fullPrompt = ComposePrompt(automation.Name, agent, preCreated, prompt, isCodex, scratch.Path);
@@ -81,6 +85,7 @@ public sealed class NovaSessionActionHandler(
             ["networkAccess"] = isCodex,
             ["env"] = scratch.Environment,
             ["addDirs"] = new[] { scratch.Path },
+            ["confidential"] = context.Confidential,
         };
 
         var provenanceContext = new List<ComputeContextReference>
@@ -96,7 +101,8 @@ public sealed class NovaSessionActionHandler(
             parentJobId: context.AttemptJobId.ToString(), ct: ct);
         var result = await redCompute.ExecuteAsync(body, $"Nova: {automation.Name}",
             context.Beneficiary.Id, timeout, provenance, ct,
-            idempotencyKey: $"automation:{context.AttemptJobId:N}:nova-session");
+            idempotencyKey: context.IdempotencyKey
+                ?? $"automation:{context.AttemptJobId:N}:nova-session");
         if (!result.Success)
             throw new InvalidOperationException(result.Error ?? "AI session reported failure");
 
@@ -114,8 +120,18 @@ public sealed class NovaSessionActionHandler(
         {
             var target = await discussions.GetAsync(reportTo, ct);
             if (target != null)
+            {
+                if (context.Confidential
+                    && (!target.Confidential
+                        || !string.Equals(target.OwnerId, context.Beneficiary.Id,
+                            StringComparison.Ordinal)
+                        || !string.Equals(target.AgentId, agent.Id,
+                            StringComparison.Ordinal)))
+                    throw new InvalidOperationException(
+                        "Confidential automation output cannot be delivered to a non-confidential or differently owned discussion");
                 await injector.InjectAsync(target, summary, null, $"automation:{automation.Name}",
-                    idempotencyKey: $"automation:{context.AttemptJobId:N}:completion-report", ct: ct);
+                    idempotencyKey: $"{context.IdempotencyKey ?? $"automation:{context.AttemptJobId:N}:nova-session"}:completion-report", ct: ct);
+            }
         }
 
         var output = new JsonObject
@@ -232,6 +248,12 @@ public sealed class NovaSessionActionHandler(
 
     private static string? Str2(JsonObject? data, string key)
         => data?[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+
+    private static string SanitizeSegment(string value)
+        => string.Concat(value.Select(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '-' or '_'
+                ? character
+                : '-'));
 
     private static bool Bool(JsonObject? obj, string key)
     {

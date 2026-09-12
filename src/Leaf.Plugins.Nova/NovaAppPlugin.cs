@@ -12,8 +12,8 @@ namespace Leaf.Plugins.Nova;
 /// <summary>
 /// Nova-the-APP as a Leaf plugin: the chat/discussion UI and its glue endpoints
 /// (send, delegate, ask, callbacks, and journal). Nova-the-AGENT —
-/// the agent entity, workspace VFS mount, memory, dreaming automations — is a kernel
-/// capability and deliberately NOT here.
+/// the agent entity, workspace VFS mount, and memory are kernel capabilities. This
+/// plugin contributes Nova-specific defaults without owning those primitives.
 /// </summary>
 public sealed class NovaAppPlugin : ILeafPlugin
 {
@@ -72,6 +72,10 @@ public sealed class NovaAppPlugin : ILeafPlugin
         services.AddSingleton(sp =>
             new DiscussionStore(sp.GetRequiredKeyedService<IEntityStore>(PluginId), sp.GetRequiredService<IDiscussions>()));
         services.AddSingleton<ConversationUnread>();
+        services.AddSingleton(sp => new DreamCycleProvisioner(
+            sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+            sp.GetRequiredKeyedService<IWorkflowAutomations>(PluginId),
+            sp.GetRequiredService<ILogger<DreamCycleProvisioner>>()));
         services.AddSingleton(sp => new ConfidentialSessionBackfill(
             sp.GetRequiredService<DiscussionStore>(),
             sp.GetRequiredService<AgentDirectory>(),
@@ -215,6 +219,19 @@ public sealed class NovaAppPlugin : ILeafPlugin
         var agentEntities = await store.QueryAsync(new EntityQuery { TypeSlug = "agent", Limit = 50 }, ct);
         var nova = agentEntities.FirstOrDefault(a => a.Slug == "nova");
         agents.NovaAgentId = nova?.Id.ToString();
+        if (nova is not null)
+        {
+            try
+            {
+                await host.GetRequiredService<DreamCycleProvisioner>()
+                    .EnsureDefaultAsync(nova, ct);
+            }
+            catch (Exception ex)
+            {
+                host.GetRequiredService<ILogger<NovaAppPlugin>>()
+                    .LogWarning(ex, "Nova dream-cycle provisioning failed");
+            }
+        }
 
         // data.live owns the paired LIVE + Heartbeat lifecycle. The canonical
         // automation owns its schedule and workflow action configuration.

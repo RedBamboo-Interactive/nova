@@ -31,6 +31,9 @@ public sealed class NovaAgentTemplateProviderTests
             "nova/leaf-engineering",
             "nova/leaf-delegation",
             "nova/embed-redleaf-entity",
+            "nova/dreaming",
+            "nova/emotional-dreaming",
+            "nova/creative-dreaming",
         ], template.DefaultSkillIds);
         Assert.Equal(64, template.DigestSha256.Length);
         Assert.All(template.DigestSha256, character => Assert.True(Uri.IsHexDigit(character)));

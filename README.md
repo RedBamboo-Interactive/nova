@@ -25,9 +25,10 @@ pass `-p:LeafSdkProject=<path-to-Leaf.Sdk.csproj>`.
 ## Release candidate input
 
 `release/producer-input.v1.json` defines the compact, channel-neutral release
-producer. It intentionally blocks until the exact RedLeaf release-tool commit
-pin is present; the current release tool and `Leaf.Sdk` source both resolve to
-RedLeaf `c7371b07594ae13fb7ebb4b24dbd860c20d3e14f`. It never signs trusted metadata.
+producer. It intentionally blocks until the exact RedLeaf release-tool and
+`Leaf.Sdk` commit pins are present. The current release tool resolves to RedLeaf
+`9076a5791e79f368390ea4475c9c724a85ca6bea`; the SDK resolves to
+`8a49a45cf4d80d354925d0c950b76a38b838486b`. It never signs trusted metadata.
 The candidate derives only
 `https://github.com/RedBamboo-Interactive/nova/releases/download/nova-unsigned-candidates/nova-<version>.leafpkg`.
 The separate, serialized `nova-unsigned-candidates` prerelease bridge appends

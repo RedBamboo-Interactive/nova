@@ -168,7 +168,8 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
     /// recovered lease must not create a second user-visible thread for the same run.
     /// </summary>
     public async Task<DiscussionRead> GetOrCreateAutomationDeliveryAsync(
-        Guid attemptJobId, string? agentId, string? ownerId, CancellationToken ct = default)
+        Guid attemptJobId, string? agentId, string? ownerId, bool confidential = false,
+        CancellationToken ct = default)
     {
         var key = attemptJobId.ToString();
         var existing = await entities.QueryAsync(new EntityQuery
@@ -182,7 +183,20 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             Limit = 2,
         }, ct);
         var mapped = existing.Select(Map).FirstOrDefault(discussion => discussion is not null);
-        if (mapped is not null) return mapped;
+        if (mapped is not null)
+        {
+            if (confidential && !mapped.Confidential)
+            {
+                await PatchAsync(mapped.EntityId, new JsonObject
+                {
+                    ["confidential"] = true,
+                    ["owner_id"] = ownerId,
+                    ["owner_agent_id"] = agentId,
+                }, ct: ct);
+                return mapped with { Confidential = true, OwnerId = ownerId };
+            }
+            return mapped;
+        }
 
         var discussionId = Guid.NewGuid().ToString("N")[..8];
         var data = new JsonObject
@@ -190,6 +204,8 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             ["discussion_id"] = discussionId,
             ["app"] = "nova",
             ["owner_id"] = ownerId,
+            ["owner_agent_id"] = agentId,
+            ["confidential"] = confidential,
             ["type"] = "chat",
             ["automation_attempt_job_id"] = key,
             ["conversation_revision"] = 0,
