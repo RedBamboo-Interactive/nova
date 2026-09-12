@@ -78,6 +78,19 @@ function cleanMessages(blocks: MessageBlock[], resolve?: EventResolver): Message
   return orderMessages(prepared, resolve)
 }
 
+/**
+ * Session titles are suggestions. The backend arbitrates them against explicit
+ * user renames and returns the canonical discussion, which keeps every Nova
+ * window converged without briefly rendering a stale automatic title.
+ */
+async function applySuggestedTitle(discussionId: string, title: string): Promise<void> {
+  const updated = await api.put<DiscussionInfo>(
+    `/api/apps/nova/discussions/${discussionId}/suggested-title`,
+    { title },
+  )
+  upsertDiscussion(updated)
+}
+
 function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
   const blocks = messages.map((m) => {
     // Structured event metadata arrives as a sibling event_data part — stash it
@@ -439,10 +452,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         try {
           const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
           if (data.session?.title && data.session.title !== disc.title) {
-            setDiscussions((prev) =>
-              prev.map((d) => d.id === id ? { ...d, title: data.session.title! } : d)
-            )
-            api.put(`/api/apps/nova/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
+            void applySuggestedTitle(id, data.session.title).catch(() => {})
           }
           if (data.messages?.length) {
             const sessionMsgs = filterInternalBootstrapBlock(
@@ -615,7 +625,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setDiscussions((prev) =>
         prev.map((d) => d.id === discussionId ? { ...d, title } : d)
       )
-      api.put(`/api/apps/nova/discussions/${discussionId}/title`, { title }).catch(() => {})
+      void applySuggestedTitle(discussionId, title).catch(() => {})
     }
 
     type Admission = {
@@ -884,10 +894,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           // whatever topic was last discussed, which is confusing).
           if (!isLiveDisc && known.type !== "heartbeat") {
             const syncTitle = (name: string) => {
-              setDiscussions((prev) =>
-                prev.map((d) => d.id === discId ? { ...d, title: name } : d)
-              )
-              api.put(`/api/apps/nova/discussions/${discId}/title`, { title: name }).catch(() => {})
+              void applySuggestedTitle(discId, name).catch(() => {})
             }
             if (session.title) {
               syncTitle(session.title)
@@ -1208,8 +1215,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [toast, discussions])
 
   const renameDiscussion = useCallback(async (id: string, title: string) => {
-    await api.put(`/api/apps/nova/discussions/${id}/title`, { title })
-    setDiscussions((prev) => prev.map((d) => d.id === id ? { ...d, title } : d))
+    const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/title`, { title })
+    upsertDiscussion(updated)
   }, [])
 
   const setConfidential = useCallback(async (id: string, confidential: boolean) => {

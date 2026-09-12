@@ -140,6 +140,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             ["conversation_revision"] = 0,
             ["read_conversation_revision"] = 0,
             ["last_processed_session_assistant_uid"] = "",
+            ["title_is_manual"] = false,
         };
         if (qualityTier != null) data["quality_tier"] = qualityTier;
         if (provider != null) data["provider"] = provider;
@@ -179,6 +180,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             ["conversation_revision"] = 0,
             ["read_conversation_revision"] = 0,
             ["last_processed_session_assistant_uid"] = "",
+            ["title_is_manual"] = false,
         };
         var entity = await discussions.CreateAsync(null, agentId, data, ct);
         return Map(entity)!;
@@ -212,6 +214,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             ["conversation_revision"] = 0,
             ["read_conversation_revision"] = 0,
             ["last_processed_session_assistant_uid"] = "",
+            ["title_is_manual"] = false,
         };
         if (qualityTier != null) data["quality_tier"] = qualityTier;
         if (provider != null) data["provider"] = provider;
@@ -237,6 +240,70 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
 
     public Task PatchAsync(Guid entityId, JsonObject patch, string? name = null, CancellationToken ct = default)
         => DiscussionEntityGate.RunAsync(entityId, () => entities.PatchAsync(entityId, patch, name, ct), ct);
+
+    /// <summary>
+    /// Applies a provider/session-generated title only while the user has not
+    /// explicitly named the discussion. The check and write share the discussion
+    /// gate with manual renames, so a late session update cannot win that race.
+    /// </summary>
+    public Task<DiscussionRead?> TrySetSuggestedTitleAsync(
+        Guid entityId, string? title, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity == null) return null;
+
+            var manualState = Bool(entity.Data, "title_is_manual");
+            if (manualState == true)
+                return Map(entity);
+
+            // Existing installations have no provenance bit for discussion titles.
+            // A non-placeholder legacy title may have been chosen by the user, so
+            // preserve it and migrate it conservatively to the manual state. New
+            // discussions are born with title_is_manual=false and remain refreshable.
+            if (manualState is null)
+            {
+                var discussionId = Str(entity.Data, "discussion_id");
+                var legacyTitle = Str(entity.Data, "title")
+                    ?? (entity.Name == $"Discussion {discussionId}" ? null : entity.Name);
+                if (!string.IsNullOrWhiteSpace(legacyTitle))
+                {
+                    var migrated = await entities.PatchAsync(entityId,
+                        new JsonObject { ["title_is_manual"] = true }, legacyTitle, ct);
+                    return Map(migrated);
+                }
+            }
+
+            var updated = await entities.PatchAsync(entityId,
+                new JsonObject
+                {
+                    ["title"] = title,
+                    ["title_is_manual"] = false,
+                },
+                title ?? $"Discussion {Str(entity.Data, "discussion_id")}", ct);
+            return Map(updated);
+        }, ct);
+
+    /// <summary>
+    /// Records an explicit user title. Once set, suggested session titles are
+    /// ignored until another explicit rename changes it again.
+    /// </summary>
+    public Task<DiscussionRead?> SetManualTitleAsync(
+        Guid entityId, string? title, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity == null) return null;
+
+            var updated = await entities.PatchAsync(entityId,
+                new JsonObject
+                {
+                    ["title"] = title,
+                    ["title_is_manual"] = true,
+                },
+                title ?? $"Discussion {Str(entity.Data, "discussion_id")}", ct);
+            return Map(updated);
+        }, ct);
 
     public Task TouchAsync(Guid entityId, CancellationToken ct = default)
         => PatchAsync(entityId, new JsonObject { ["last_activity"] = DateTimeOffset.UtcNow.ToString("O") }, ct: ct);
