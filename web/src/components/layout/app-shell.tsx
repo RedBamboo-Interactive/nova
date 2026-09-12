@@ -133,7 +133,8 @@ interface Props {
 
 /**
  * Nova's internal chrome inside the Leaf shell. The shell exposes Chat as Nova's sole
- * app section; Workspace and Entities remain canonical RedLeaf surfaces.
+ * listed app section; Workspace and Entities remain canonical RedLeaf surfaces. The
+ * hidden Journal route is retained only as a Markdown deep-link reader.
  * This component provides conversation search and discussion commands.
  */
 export function AppShell({ children }: Props) {
