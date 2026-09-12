@@ -92,18 +92,6 @@ function resolveImageSrc(src: string): string | undefined {
   return src
 }
 
-function resolveFileLink(filePath: string, opts?: { line?: number }): (() => void) | undefined {
-  const norm = filePath.replace(/\\/g, "/")
-  // Expect absolute paths from the repository entity's machine-specific checkout.
-  const match = norm.match(/^([A-Za-z]:\/[^/]+\/[^/]+)\/(.+)$/)
-  if (!match) return undefined
-  const project = match[1]!
-  const relPath = match[2]!
-  const line = opts?.line ? `?line=${opts.line}` : ""
-  const codePath = `/code/${encodeURIComponent(project)}/${encodeURIComponent(relPath)}${line}`
-  return () => navigateCodeRed(codePath)
-}
-
 function navigateCodeRed(path: string) {
   // CodeRed is a plugin on this origin now: the kernel bridges codered.navigate
   // onto /ws and the shell routes to /apps/codered client-side.
@@ -240,6 +228,55 @@ export function ChatView({
   const pendingContext = useNovaPendingContext()
   const { toast } = useToast()
   const activeAgent = activeDiscussion ? getAgent(activeDiscussion.agentId) : undefined
+  const [fileRepositories, setFileRepositories] = useState<Array<{ path: string }>>([])
+
+  useEffect(() => {
+    api.get<{ items: Array<{ path: string }> }>("/api/apps/codered/repositories")
+      .then((catalog) => setFileRepositories(catalog.items))
+      .catch(() => setFileRepositories([]))
+  }, [])
+
+  const openLocalFile = useCallback(async (filePath: string, opts?: { line?: number }) => {
+    const normalizedPath = filePath.replace(/\\/g, "/")
+    const lowerPath = normalizedPath.toLowerCase()
+    const repository = fileRepositories
+      .map((item) => item.path.replace(/\\/g, "/").replace(/\/+$/, ""))
+      .filter((root) => lowerPath === root.toLowerCase() || lowerPath.startsWith(`${root.toLowerCase()}/`))
+      .sort((left, right) => right.length - left.length)[0]
+
+    if (repository) {
+      const relativePath = normalizedPath.slice(repository.length).replace(/^\/+/, "")
+      const file = relativePath ? `/${encodeURIComponent(relativePath)}` : ""
+      const line = opts?.line ? `?line=${opts.line}` : ""
+      navigateCodeRed(`/code/${encodeURIComponent(repository)}${file}${line}`)
+      return
+    }
+
+    try {
+      const result = await api.post<{ action: "markdown" | "workspace" | "explorer"; path: string }>(
+        "/api/apps/nova/file/open",
+        { path: filePath, agentId: activeAgent?.id ?? null },
+      )
+      if (result.action === "markdown" && activeAgent) {
+        setSettings({ agentFilter: activeAgent.id })
+        const routePath = result.path.split("/").map(encodeURIComponent).join("/")
+        navigate(`/apps/nova/journal/${routePath}`)
+      } else if (result.action === "workspace" && activeAgent?.workspaceId) {
+        navigate(`/workspace/${activeAgent.workspaceId}`)
+      }
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "Could not open file",
+        description: error instanceof Error ? error.message : "Unknown error",
+      })
+    }
+  }, [activeAgent, fileRepositories, navigate, toast])
+
+  const resolveFileLink = useCallback((filePath: string, opts?: { line?: number }) => (
+    () => { void openLocalFile(filePath, opts) }
+  ), [openLocalFile])
+
   const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming, activeDiscussion)
   const loadProviderUsage = useCallback((provider: string, forceRefresh = false) =>
     api.get<ProviderUsageSnapshot>(

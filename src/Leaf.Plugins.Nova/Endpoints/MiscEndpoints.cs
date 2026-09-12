@@ -11,6 +11,8 @@ public class MemoryFileRequest
     public string Content { get; set; } = "";
 }
 
+public sealed record OpenLocalFileRequest(string Path, string? AgentId);
+
 /// <summary>Journal/memory files, settings, and local media serving.</summary>
 public static class MiscEndpoints
 {
@@ -161,5 +163,68 @@ public static class MiscEndpoints
             ctx.Response.Headers.CacheControl = "public, max-age=3600";
             return Results.File(fullPath, mime);
         });
+
+        group.MapPost("/file/open", async (OpenLocalFileRequest request, AgentWorkspaces workspaces, CancellationToken ct) =>
+        {
+            if (!OperatingSystem.IsWindows())
+                return Results.BadRequest(new { error = "Opening local files is only supported on Windows" });
+
+            var validation = ResolveSafeLocalPath(request.Path);
+            if (!validation.Valid)
+                return Results.Json(new { error = validation.Error }, statusCode: 403);
+
+            var fullPath = validation.Path!;
+            if (!File.Exists(fullPath) && !Directory.Exists(fullPath))
+                return Results.NotFound(new { error = "File or directory not found" });
+
+            if (!string.IsNullOrWhiteSpace(request.AgentId))
+            {
+                var workspace = await workspaces.TryGetAsync(request.AgentId, ct);
+                if (workspace is not null && TryGetRelativePath(workspace.WorkspacePath, fullPath, out var relativePath))
+                {
+                    var markdown = File.Exists(fullPath)
+                        && Path.GetExtension(fullPath) is { } extension
+                        && (extension.Equals(".md", StringComparison.OrdinalIgnoreCase)
+                            || extension.Equals(".markdown", StringComparison.OrdinalIgnoreCase));
+                    return Results.Ok(new
+                    {
+                        action = markdown ? "markdown" : "workspace",
+                        path = relativePath.Replace('\\', '/'),
+                    });
+                }
+            }
+
+            var psi = new ProcessStartInfo { FileName = "explorer.exe", UseShellExecute = false };
+            psi.ArgumentList.Add(File.Exists(fullPath) ? $"/select,{fullPath}" : fullPath);
+            Process.Start(psi);
+            return Results.Ok(new { action = "explorer", path = fullPath });
+        });
+    }
+
+    private static (bool Valid, string? Path, string? Error) ResolveSafeLocalPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return (false, null, "Path is required");
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            if (fullPath.StartsWith(@"\\", StringComparison.Ordinal))
+                return (false, null, "UNC paths are not allowed");
+            var sysRoot = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            if (!string.IsNullOrEmpty(sysRoot) && fullPath.StartsWith(sysRoot, StringComparison.OrdinalIgnoreCase))
+                return (false, null, "System directory paths are not allowed");
+            return (true, fullPath, null);
+        }
+        catch
+        {
+            return (false, null, "Path could not be resolved");
+        }
+    }
+
+    private static bool TryGetRelativePath(string root, string path, out string relativePath)
+    {
+        relativePath = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(path));
+        return relativePath != ".."
+            && !relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            && !Path.IsPathRooted(relativePath);
     }
 }
