@@ -44,9 +44,14 @@ Match the repository entity by identity or remote, not by a remembered machine p
   "prompt": "<bounded outcome and acceptance criteria>",
   "discussionId": "<current discussion id>",
   "qualityTier": "deep",
-  "navigate": true
+  "navigate": false
 }
 ```
+
+For Agent-initiated and background delegation, omit `navigate` or keep it `false`. Successful
+delegation records a magenta marker in the requesting discussion; the user can open its detail and
+navigate to the Code session from the client they are using. Never set `navigate: true` from an Agent
+execution: delegation must not steal the active route on any connected Leaf client.
 
 For non-repository work, `agent` may select the Agent workspace. `projectPath` is compatibility-only
 and must exactly match an active Repository checkout. Creating a local repository, creating a remote
@@ -74,7 +79,8 @@ registers a fresh terminal callback.
 ## Verify delivery and completion
 
 Treat the response fields independently. Delegation succeeded only when `promptSent` is `true`.
-`callbackRegistered` proves notification wiring, not implementation quality. A newly created session
+`callbackRegistered` proves notification wiring, not implementation quality. `delegationEventRecorded`
+confirms that the requesting discussion received its semantic marker. A newly created session
 whose prompt cannot be accepted is cleaned up by Nova.
 
 With `discussionId`, terminal state produces a Nova session-complete event in that discussion.

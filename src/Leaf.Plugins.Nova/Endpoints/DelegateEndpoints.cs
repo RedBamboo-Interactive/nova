@@ -18,6 +18,8 @@ public class DelegateRequest
     public string? Agent { get; set; }
     public string Prompt { get; set; } = "";
     public string? DiscussionId { get; set; }
+    // Legacy opt-in hint. Delegation never broadcasts navigation; an explicit
+    // human caller receives a local route in the response instead.
     public bool? Navigate { get; set; }
     public string? Model { get; set; }
     public string? QualityTier { get; set; }
@@ -28,8 +30,9 @@ public class DelegateRequest
 
 /// <summary>
 /// POST /delegate — delegate work to a CodeRed session: creates the session on
-/// RedCompute, delivers the prompt, navigates the CodeRed UI, and registers a
-/// completion callback that reports back into the given discussion.
+/// RedCompute, delivers the prompt, records it in the requesting discussion, and registers a
+/// completion callback that reports back into the given discussion. Delegation
+/// records a semantic discussion event but never changes a browser route.
 /// </summary>
 public static class DelegateEndpoints
 {
@@ -38,7 +41,7 @@ public static class DelegateEndpoints
         group.MapPost("/delegate", async (HttpContext ctx, DelegateRequest request, RedComputeClient redCompute,
             AgentDirectory agentDir, AgentWorkspaces workspaces, DiscussionStore discussions,
             [FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities,
-            [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
+            EventInjector injector) =>
         {
             bool isContinuation = !string.IsNullOrWhiteSpace(request.SessionId);
             if (string.IsNullOrWhiteSpace(request.Prompt))
@@ -328,14 +331,42 @@ public static class DelegateEndpoints
                 }, statusCode: 502);
             }
 
-            // 3. Navigate CodeRed (best effort): "codered.navigate" is a dotted event
-            // type, so the plugin-events→WebSocket bridge forwards it un-namespaced —
-            // the shell listens on /ws and routes to /apps/codered.
-            if (request.Navigate != false)
+            // 3. Record the delegation where it was requested. This is a system
+            // event: it belongs in the visible discussion timeline but must not
+            // become another model-facing user turn.
+            bool delegationEventRecorded = false;
+            if (discussion is not null)
             {
-                try { await events.PublishAsync("codered.navigate", new JsonObject { ["session"] = sessionId }); }
+                try
+                {
+                    var eventData = JsonSerializer.SerializeToElement(new
+                    {
+                        sessionId,
+                        repositoryId = resolvedRepository?.Id,
+                        repository = resolvedRepository?.Name,
+                        continued = isContinuation,
+                        agent = resolvedAgent.Name,
+                        status = "started",
+                    });
+                    await injector.InjectAsync(
+                        discussion,
+                        $"Delegated to Code session {sessionId}",
+                        "system",
+                        "delegation",
+                        metadata: eventData,
+                        idempotencyKey: $"delegation:{sessionId}:{promptMessageUid}",
+                        ct: ctx.RequestAborted);
+                    delegationEventRecorded = true;
+                }
                 catch { }
             }
+
+            // Navigation is a client concern. A global plugin event would route
+            // every connected Leaf window, including windows that did not make
+            // this request. Explicit human callers can follow this returned path
+            // locally; Agent executions never receive a navigation instruction.
+            var navigationPath = RequestedNavigationPath(
+                ctx.User, request.Navigate, sessionId);
 
             // 4. Register completion callback with RedCompute
             bool callbackRegistered = false;
@@ -357,6 +388,8 @@ public static class DelegateEndpoints
                 continued = isContinuation,
                 agent = resolvedAgent?.Name,
                 repository = resolvedRepository?.Id,
+                delegationEventRecorded,
+                navigationPath,
             });
         });
     }
@@ -402,6 +435,12 @@ public static class DelegateEndpoints
             || subject.Equals("local-user", StringComparison.OrdinalIgnoreCase)
                 ? null : subject;
     }
+
+    internal static string? RequestedNavigationPath(
+        ClaimsPrincipal principal, bool? navigate, string sessionId)
+        => navigate == true && DiscussionAccessPolicy.IsExplicitHuman(principal)
+            ? $"/apps/codered/sessions/{Uri.EscapeDataString(sessionId)}"
+            : null;
 
     internal static bool IsExecutionIdentityFailure(Exception exception)
         => exception.GetType().Name.Equals(

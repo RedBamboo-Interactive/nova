@@ -27,6 +27,32 @@ public sealed class DelegateEndpointSecurityTests
         Assert.Equal(subject, DelegateEndpoints.TrustedCallerId(Principal(subject)));
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData(false)]
+    public void Omitted_or_false_navigation_never_returns_a_route(bool? navigate)
+    {
+        Assert.Null(DelegateEndpoints.RequestedNavigationPath(
+            Principal("user-1"), navigate, "session-1"));
+    }
+
+    [Fact]
+    public void Explicit_human_navigation_returns_a_client_local_route()
+    {
+        Assert.Equal("/apps/codered/sessions/session%2F1",
+            DelegateEndpoints.RequestedNavigationPath(
+                Principal("user-1"), true, "session/1"));
+    }
+
+    [Fact]
+    public void Agent_execution_never_receives_a_navigation_route()
+    {
+        var principal = Principal("user-1", new Claim("token_use", "execution"));
+
+        Assert.Null(DelegateEndpoints.RequestedNavigationPath(
+            principal, true, "session-1"));
+    }
+
     [Fact]
     public void Classifies_execution_identity_failures_without_an_apphost_dependency()
     {
@@ -90,8 +116,8 @@ public sealed class DelegateEndpointSecurityTests
         Assert.Empty(matches);
     }
 
-    private static ClaimsPrincipal Principal(string subject) => new(
-        new ClaimsIdentity([new Claim("sub", subject)], "test"));
+    private static ClaimsPrincipal Principal(string subject, params Claim[] claims) => new(
+        new ClaimsIdentity([new Claim("sub", subject), .. claims], "test"));
 
     private static LeafEntity Repository(string status, string path) => new(
         Guid.NewGuid(),

@@ -34,6 +34,7 @@ import {
 import { applyPendingVisibleContext } from "../lib/pending-visible-context-store"
 import { isDiscussionSelectionCurrent, resolveRequestedDiscussionId } from "../lib/discussion-view-selection"
 import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToContext, type MonitorVisualSource } from "../lib/visual-capture"
+import { delegationSessionPath } from "../lib/delegation-session-link"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -531,13 +532,20 @@ export function ChatView({
     if (followReplacement && newDiscussionId) handleSelectDiscussion(newDiscussionId)
   }, [activeDiscussionId, handleSelectDiscussion, rotateDiscussion])
 
-  // Discussion-activity events link back to the discussion they describe.
+  // Semantic events navigate only this router/client. Never round-trip through
+  // the global codered.navigate WebSocket event for delegation markers.
   const resolveEventLink = useCallback((event: ParsedEvent) => {
-    if (event.key !== "discussion") return undefined
-    const discussionId = event.data?.discussionId
-    if (typeof discussionId !== "string" || !discussionId) return undefined
-    return () => handleSelectDiscussion(discussionId)
-  }, [handleSelectDiscussion])
+    if (event.key === "discussion") {
+      const discussionId = event.data?.discussionId
+      if (typeof discussionId !== "string" || !discussionId) return undefined
+      return () => handleSelectDiscussion(discussionId)
+    }
+    if (event.key === "delegation") {
+      const path = delegationSessionPath(event.data)
+      return path ? () => navigate(path) : undefined
+    }
+    return undefined
+  }, [handleSelectDiscussion, navigate])
 
   const openNewDiscussion = useCallback(() => {
     if (onNewDiscussion) onNewDiscussion()

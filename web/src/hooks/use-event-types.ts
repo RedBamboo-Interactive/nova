@@ -1,14 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react"
 import { api } from "../lib/api"
 import type { EventType } from "../lib/types"
-
-const DEFAULT_EVENT: EventType = {
-  key: "default",
-  name: "Event",
-  icon: "ph-bold ph-radio-button",
-  color: null,
-  description: null,
-}
+import { resolveEventType } from "../lib/event-type-resolution"
 
 export function useEventTypes() {
   const [types, setTypes] = useState<EventType[]>([])
@@ -26,8 +19,7 @@ export function useEventTypes() {
   }, [types])
 
   const resolve = useCallback((source: string): EventType => {
-    const key = source.replace(/^event:/, "").split(":")[0] ?? ""
-    return lookup.get(key) ?? DEFAULT_EVENT
+    return resolveEventType(source, lookup)
   }, [lookup])
 
   return { types, resolve }
