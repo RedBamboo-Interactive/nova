@@ -183,6 +183,15 @@ public sealed class ExternalAgentConversationProviderTests
                         ["display_name"] = "Epheol",
                         ["status"] = "online",
                     }),
+                    ["server_map"] = new JsonObject
+                    {
+                        ["schema"] = "leaf-discord-guild-map/v1",
+                        ["channels"] = new JsonArray(new JsonObject
+                        {
+                            ["name"] = "workstreams",
+                            ["kind"] = "forum",
+                        }),
+                    },
                 },
             });
 
@@ -193,6 +202,9 @@ public sealed class ExternalAgentConversationProviderTests
         Assert.Equal("active", envelope.GetProperty("guildContext").GetProperty("mode").GetString());
         Assert.Equal("Epheol", envelope.GetProperty("guildContext").GetProperty("members")[0]
             .GetProperty("display_name").GetString());
+        Assert.Equal("workstreams", envelope.GetProperty("guildContext")
+            .GetProperty("server_map").GetProperty("channels")[0]
+            .GetProperty("name").GetString());
     }
 
     [Fact]
