@@ -1,15 +1,16 @@
 import { useState, useCallback, useEffect, useRef, useMemo, useSyncExternalStore, startTransition } from "react"
 import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
-import type { DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
-import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
-import { processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
+import type { DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
+import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
+import { DurableTranscriptPager, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
-import { coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeNovaMessageArrival } from "../lib/discussion-transcript"
-import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch } from "../lib/discussion-runtime"
+import { accumulateHistoryOverlays, coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeNovaMessageArrival, mergePagedDiscussionAndSessionBlocks } from "../lib/discussion-transcript"
+import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch, shouldRequestSessionTitleSync } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
+import { HistoryLifecycleTombstones, historyRevalidationDirection, invalidateHistoryGeneration, isCurrentHistoryGeneration, shouldAccumulatePushedHistoryOverlay, shouldCatchUpHistory } from "../lib/discussion-history-page"
 import { LatestTaskCoordinator } from "../lib/latest-task-coordinator"
 import { DeferredInvalidationCoordinator } from "../lib/deferred-invalidation-coordinator"
 import {
@@ -36,6 +37,7 @@ function stripContextXml(content: string): string {
 
 type EventResolver = (source: string) => EventType
 
+const HISTORY_PAGE_LIMIT = 500
 const INITIAL_HISTORY_TAIL = 500
 const HISTORY_TAIL_STEP = 500
 const MAX_HISTORY_TAIL = 10_000
@@ -43,6 +45,44 @@ const MAX_HISTORY_TAIL = 10_000
 // Revalidate after that durability window instead of treating the first Idle
 // snapshot as fully flushed.
 const SETTLED_TRANSCRIPT_RELOAD_DELAY_MS = 750
+
+type HistoryMode = "v2" | "legacy"
+
+function isHistoryPageResponse(value: unknown): value is DiscussionHistoryPageResponse {
+  if (!value || typeof value !== "object") return false
+  const candidate = value as Partial<DiscussionHistoryPageResponse>
+  const page = candidate.page
+  return !!candidate.discussion
+    && (candidate.session === null || (!!candidate.session && typeof candidate.session.id === "string"))
+    && Array.isArray(candidate.messages)
+    && Array.isArray(candidate.overlays)
+    && !!page
+    && (page.direction === "newest" || page.direction === "before" || page.direction === "after")
+    && (page.epoch === null || typeof page.epoch === "string")
+    && (page.oldestCursor === null || typeof page.oldestCursor === "string")
+    && (page.newestCursor === null || typeof page.newestCursor === "string")
+    && typeof page.hasEarlier === "boolean"
+    && typeof page.hasLater === "boolean"
+    && typeof page.boundaryComplete === "boolean"
+}
+
+function toPersistedTranscriptPage(data: DiscussionHistoryPageResponse): PersistedTranscriptPage {
+  return {
+    epoch: data.page.epoch,
+    records: data.messages,
+    oldestCursor: data.page.oldestCursor,
+    newestCursor: data.page.newestCursor,
+    hasEarlier: data.page.hasEarlier,
+    hasLater: data.page.hasLater,
+    fromSequence: data.page.fromSequence,
+    throughSequence: data.page.throughSequence,
+    boundaryComplete: data.page.boundaryComplete,
+  }
+}
+
+function historyResponseSessionId(data: DiscussionHistoryPageResponse): string | null {
+  return data.discussion.sessionId ?? data.session?.id ?? null
+}
 
 /**
  * Nova wraps every outgoing user message in context XML; the transcript shows
@@ -130,6 +170,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Record<string, MessageBlock[]>>({})
   const transcriptAccumulatorsRef = useRef(new Map<string, TranscriptAccumulator>())
+  const durableTranscriptPagersRef = useRef(new Map<string, DurableTranscriptPager>())
+  const historyOverlaysRef = useRef(new Map<string, Map<string, DiscussionHistoryOverlay>>())
+  const historySessionIdsRef = useRef(new Map<string, string | null>())
+  const historyModesRef = useRef(new Map<string, HistoryMode>())
+  const historyHardResetRef = useRef(new Set<string>())
+  const historyLifecycleRef = useRef(new HistoryLifecycleTombstones())
   const snapshotCoordinatorRef = useRef(new LatestTaskCoordinator<string>())
   const transcriptAccumulator = useCallback((discussionId: string) => {
     let accumulator = transcriptAccumulatorsRef.current.get(discussionId)
@@ -138,6 +184,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
       transcriptAccumulatorsRef.current.set(discussionId, accumulator)
     }
     return accumulator
+  }, [])
+  const durableTranscriptPager = useCallback((discussionId: string) => {
+    let pager = durableTranscriptPagersRef.current.get(discussionId)
+    if (!pager) {
+      pager = new DurableTranscriptPager()
+      durableTranscriptPagersRef.current.set(discussionId, pager)
+    }
+    return pager
   }, [])
   const [streaming, setStreaming] = useState<Record<string, boolean>>({})
   const [pendingQuestions, setPendingQuestions] = useState<Record<string, PendingQuestion | null>>({})
@@ -160,9 +214,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const [upstreamConnected, setUpstreamConnected] = useState(true)
   const [loadingDiscussionId, setLoadingDiscussionId] = useState<string | null>(null)
   const [loadingEarlierDiscussionId, setLoadingEarlierDiscussionId] = useState<string | null>(null)
+  const loadingEarlierRef = useRef(new Set<string>())
   const [hasEarlierMessages, setHasEarlierMessages] = useState<Record<string, boolean>>({})
   const loadedRef = useRef<Set<string>>(new Set())
-  const historyTailRef = useRef<Record<string, number>>({})
+  // Exists only for old servers that do not expose history-page. V2 never
+  // derives pagination state from an accumulating tail count.
+  const legacyHistoryTailRef = useRef<Record<string, number>>({})
   const loadGenerationRef = useRef<Record<string, number>>({})
   const activeObservedAfterSendRef = useRef<Record<string, boolean>>({})
   const sessionUpdateGenerationRef = useRef<Record<string, number>>({})
@@ -305,6 +362,130 @@ export function useDiscussions(eventResolver?: EventResolver) {
     syncAndRefresh()
   }, [syncAndRefresh])
 
+  const resetHistoryPaging = useCallback((id: string, forgetCapability = false) => {
+    // Invalidate any response already in flight before clearing its anchors.
+    invalidateHistoryGeneration(loadGenerationRef.current, id)
+    durableTranscriptPagersRef.current.get(id)?.reset()
+    historyOverlaysRef.current.delete(id)
+    historySessionIdsRef.current.delete(id)
+    historyHardResetRef.current.add(id)
+    transcriptAccumulatorsRef.current.get(id)?.reset()
+    legacyHistoryTailRef.current[id] = INITIAL_HISTORY_TAIL
+    if (forgetCapability) historyModesRef.current.delete(id)
+    setHasEarlierMessages((prev) => ({ ...prev, [id]: false }))
+  }, [])
+
+  const retireHistoryPaging = useCallback((id: string) => {
+    historyLifecycleRef.current.retire(id)
+    invalidateHistoryGeneration(loadGenerationRef.current, id)
+    transcriptAccumulatorsRef.current.get(id)?.reset()
+    durableTranscriptPagersRef.current.get(id)?.reset()
+    transcriptAccumulatorsRef.current.delete(id)
+    durableTranscriptPagersRef.current.delete(id)
+    historyOverlaysRef.current.delete(id)
+    historySessionIdsRef.current.delete(id)
+    historyModesRef.current.delete(id)
+    historyHardResetRef.current.delete(id)
+    delete legacyHistoryTailRef.current[id]
+    loadedRef.current.delete(id)
+  }, [])
+
+  const commitHistoryPage = useCallback((
+    id: string,
+    generation: number,
+    data: DiscussionHistoryPageResponse,
+    direction: "newest" | "before" | "after",
+    expectedCursor?: string | null,
+  ): boolean => {
+    // Rotation/archive/clear leave a monotonic tombstone. Reject the old page
+    // before it can mutate pager state, overlays, metadata, or visible blocks.
+    if (!historyLifecycleRef.current.canRun(id)
+      || !isCurrentHistoryGeneration(loadGenerationRef.current, id, generation))
+      return false
+    if (data.session && data.discussion.sessionId && data.session.id !== data.discussion.sessionId)
+      return false
+    // An overlay-only older page can omit session metadata while its outer
+    // cursor still belongs to the discussion's linked session.
+    const responseSessionId = historyResponseSessionId(data)
+    const hadSessionIdentity = historySessionIdsRef.current.has(id)
+    const previousSessionId = historySessionIdsRef.current.get(id) ?? null
+    const sessionChanged = hadSessionIdentity && previousSessionId !== responseSessionId
+    const hardResetPending = historyHardResetRef.current.has(id)
+    const pager = durableTranscriptPager(id)
+    const accumulator = transcriptAccumulator(id)
+
+    // An older/after response belongs to the anchor that requested it. If the
+    // discussion rotated to another session in flight, discard it and let the
+    // caller recover from the newest page.
+    if (sessionChanged) {
+      if (direction !== "newest") return false
+      pager.reset()
+      accumulator.reset()
+      historyOverlaysRef.current.delete(id)
+      pager.startNewestPage(generation)
+      accumulator.startSnapshot(generation)
+    }
+
+    const previousEpoch = pager.current().epoch
+    const page = toPersistedTranscriptPage(data)
+    const result = direction === "newest"
+      ? pager.commitNewestPage(generation, page)
+      : direction === "before"
+        ? pager.prependOlderPage(generation, expectedCursor ?? null, page)
+        : pager.appendNewerPage(generation, expectedCursor ?? null, page)
+    if (!result.accepted) return false
+
+    const epochChanged = previousEpoch !== null && previousEpoch !== result.epoch
+    if (epochChanged)
+      historyOverlaysRef.current.delete(id)
+    const overlays = accumulateHistoryOverlays(
+      historyOverlaysRef.current.get(id) ?? new Map(),
+      data.overlays,
+    )
+    historyOverlaysRef.current.set(id, overlays)
+    historySessionIdsRef.current.set(id, responseSessionId)
+    historyHardResetRef.current.delete(id)
+    historyModesRef.current.set(id, "v2")
+    setHasEarlierMessages((prev) =>
+      historyLifecycleRef.current.canRun(id)
+        && isCurrentHistoryGeneration(loadGenerationRef.current, id, generation)
+        ? { ...prev, [id]: result.hasEarlier }
+        : prev)
+    if (!historyLifecycleRef.current.canRun(id)
+      || !isCurrentHistoryGeneration(loadGenerationRef.current, id, generation))
+      return false
+    upsertDiscussion(data.discussion)
+
+    const sessionBlocks = filterInternalBootstrapBlock(
+      rebuildBlocks(result.records),
+      data.discussion.setupBootstrapMessageUid,
+    )
+    const overlayBlocks = toChatMessages([...overlays.values()])
+    const authoritative = cleanMessages(
+      mergePagedDiscussionAndSessionBlocks(overlayBlocks, sessionBlocks),
+      eventResolver,
+    )
+    const cursor: TranscriptCursor | null = result.epoch && result.throughSequence !== null
+      ? { epoch: result.epoch, throughSequence: result.throughSequence }
+      : null
+
+    setMessages((prev) => {
+      if (!historyLifecycleRef.current.canRun(id)
+        || loadGenerationRef.current[id] !== generation) return prev
+      const reconciled = accumulator.commitSnapshot(generation, authoritative, cursor).messages
+      const durableIds = new Set(reconciled.map(message => message.id))
+      // Keep only locally-created blocks with a stable id while their durable
+      // bridge is in flight. No V2 path compares message content or timestamps.
+      const transient = hardResetPending || sessionChanged || epochChanged
+        ? []
+        : (prev[id] ?? []).filter(message =>
+            !durableIds.has(message.id)
+            && (message.role === "user" || message.id.startsWith("error-")))
+      return { ...prev, [id]: [...reconciled, ...transient].sort(byTimestamp) }
+    })
+    return true
+  }, [durableTranscriptPager, eventResolver, transcriptAccumulator])
+
   const loadMessagesUncoalesced = useCallback(async (
     id: string,
     tail = INITIAL_HISTORY_TAIL,
@@ -312,6 +493,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     sessionIdOverride?: string | null,
     preferDiscussionApi = false,
   ) => {
+    if (!historyLifecycleRef.current.canRun(id)) return
     if (!force && loadedRef.current.has(id)) return
 
     const currentDiscussion = discussionsRef.current.find((d) => d.id === id)
@@ -354,10 +536,40 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
     const commitHistory = (hasEarlier: boolean) => {
       if (!isCurrentLoad()) return
-      historyTailRef.current[id] = tail
+      legacyHistoryTailRef.current[id] = tail
       setHasEarlierMessages((prev) => ({ ...prev, [id]: hasEarlier }))
     }
     try {
+      if (historyModesRef.current.get(id) !== "legacy") {
+        const pager = durableTranscriptPager(id)
+        pager.startNewestPage(generation)
+        try {
+          const data = await api.get<unknown>(
+            `/api/apps/nova/discussions/${encodeURIComponent(id)}/history-page?limit=${HISTORY_PAGE_LIMIT}`,
+          )
+          if (!isHistoryPageResponse(data)) {
+            // A 200 response without the V2 envelope is a capability mismatch,
+            // not a partially valid page. Fall back as one complete legacy path.
+            historyModesRef.current.set(id, "legacy")
+            historyOverlaysRef.current.delete(id)
+          } else {
+            if (!commitHistoryPage(id, generation, data, "newest"))
+              loadedRef.current.delete(id)
+            return
+          }
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 404) {
+            historyModesRef.current.set(id, "legacy")
+            historyOverlaysRef.current.delete(id)
+          } else {
+            // V2 server errors preserve the loaded window. Never reinterpret a
+            // failed cursor/page response as an old rolling-tail snapshot.
+            loadedRef.current.delete(id)
+            return
+          }
+        }
+      }
+
       if ((disc?.type === "live" || disc?.type === "heartbeat") && disc?.sessionId) {
         // LIVE + heartbeat: merge session messages (chat) with Nova API messages
         // (events — tick digests are events in the heartbeat's stream)
@@ -438,12 +650,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (disc?.sessionId) {
         try {
           const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
-          if (data.session?.title && data.session.title !== disc.title) {
-            setDiscussions((prev) =>
-              prev.map((d) => d.id === id ? { ...d, title: data.session.title! } : d)
-            )
-            api.put(`/api/apps/nova/discussions/${id}/title`, { title: data.session.title }).catch(() => {})
-          }
           if (data.messages?.length) {
             const sessionMsgs = filterInternalBootstrapBlock(
               rebuildBlocks(data.messages),
@@ -484,7 +690,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     } finally {
       if (isCurrentLoad()) setLoadingDiscussionId((cur) => cur === id ? null : cur)
     }
-  }, [eventResolver, transcriptAccumulator])
+  }, [commitHistoryPage, durableTranscriptPager, eventResolver, transcriptAccumulator])
 
   const loadMessages = useCallback((
     id: string,
@@ -497,21 +703,119 @@ export function useDiscussions(eventResolver?: EventResolver) {
     force,
   ), [loadMessagesUncoalesced])
 
-  const loadEarlierMessages = useCallback(async (id: string) => {
-    if (loadingEarlierDiscussionId === id || !hasEarlierMessages[id]) return
-    const currentTail = historyTailRef.current[id] ?? INITIAL_HISTORY_TAIL
-    if (currentTail >= MAX_HISTORY_TAIL) {
-      setHasEarlierMessages((prev) => ({ ...prev, [id]: false }))
-      return
+  /** Catch up from the retained newest outer cursor without replacing history. */
+  const catchUpMessages = useCallback((
+    id: string,
+    sessionIdOverride?: string | null,
+    preferDiscussionApi = false,
+  ) => {
+    if (!historyLifecycleRef.current.canRun(id)) return Promise.resolve()
+    const pager = durableTranscriptPagersRef.current.get(id)
+    if (!pager || historyRevalidationDirection(
+      historyModesRef.current.get(id),
+      pager?.current().newestCursor,
+    ) !== "after") {
+      const tail = legacyHistoryTailRef.current[id] ?? INITIAL_HISTORY_TAIL
+      return loadMessages(id, tail, true, sessionIdOverride, preferDiscussionApi)
     }
-    const nextTail = Math.min(MAX_HISTORY_TAIL, currentTail + HISTORY_TAIL_STEP)
+    const activePager = pager
+
+    return snapshotCoordinatorRef.current.run(id, async () => {
+      if (!historyLifecycleRef.current.canRun(id)) return
+      loadedRef.current.add(id)
+      while (true) {
+        const requestId = (loadGenerationRef.current[id] ?? 0) + 1
+        loadGenerationRef.current[id] = requestId
+        const expectedCursor = activePager.startNewerPage(requestId)
+        if (!expectedCursor) return
+        transcriptAccumulator(id).startSnapshot(requestId)
+        try {
+          const data = await api.get<unknown>(
+            `/api/apps/nova/discussions/${encodeURIComponent(id)}/history-page?limit=${HISTORY_PAGE_LIMIT}&after=${encodeURIComponent(expectedCursor)}`,
+          )
+          if (!isHistoryPageResponse(data)) {
+            loadedRef.current.delete(id)
+            return
+          }
+          if (historySessionIdsRef.current.has(id)
+            && historySessionIdsRef.current.get(id) !== historyResponseSessionId(data)) {
+            resetHistoryPaging(id)
+            loadedRef.current.delete(id)
+            void loadMessages(id, INITIAL_HISTORY_TAIL, true, sessionIdOverride)
+            return
+          }
+          if (!commitHistoryPage(id, requestId, data, "after", expectedCursor)) {
+            loadedRef.current.delete(id)
+            return
+          }
+          if (!activePager.current().hasLater) return
+        } catch (error) {
+          loadedRef.current.delete(id)
+          if (error instanceof ApiError && error.status === 409
+            && (error.code === "history_cursor_stale" || error.code === "history_cursor_mismatch")) {
+            resetHistoryPaging(id)
+            // Queue a fresh newest page behind this stale anchored request.
+            void loadMessages(id, INITIAL_HISTORY_TAIL, true, sessionIdOverride)
+          }
+          return
+        }
+      }
+    }, true)
+  }, [commitHistoryPage, loadMessages, resetHistoryPaging, transcriptAccumulator])
+
+  const loadEarlierMessages = useCallback(async (id: string) => {
+    if (!historyLifecycleRef.current.canRun(id)) return
+    if (loadingEarlierRef.current.has(id) || !hasEarlierMessages[id]) return
+    loadingEarlierRef.current.add(id)
     setLoadingEarlierDiscussionId(id)
     try {
+      if (historyModesRef.current.get(id) === "v2") {
+        await snapshotCoordinatorRef.current.run(id, async () => {
+          if (!historyLifecycleRef.current.canRun(id)) return
+          const pager = durableTranscriptPager(id)
+          const requestId = (loadGenerationRef.current[id] ?? 0) + 1
+          loadGenerationRef.current[id] = requestId
+          const expectedCursor = pager.startOlderPage(requestId)
+          if (!expectedCursor || !pager.current().hasEarlier) return
+          transcriptAccumulator(id).startSnapshot(requestId)
+          try {
+            const data = await api.get<unknown>(
+              `/api/apps/nova/discussions/${encodeURIComponent(id)}/history-page?limit=${HISTORY_PAGE_LIMIT}&before=${encodeURIComponent(expectedCursor)}`,
+            )
+            if (!isHistoryPageResponse(data)) return
+            if (historySessionIdsRef.current.has(id)
+              && historySessionIdsRef.current.get(id) !== historyResponseSessionId(data)) {
+              resetHistoryPaging(id)
+              loadedRef.current.delete(id)
+              void loadMessages(id, INITIAL_HISTORY_TAIL, true)
+              return
+            }
+            commitHistoryPage(id, requestId, data, "before", expectedCursor)
+          } catch (error) {
+            if (error instanceof ApiError && error.status === 409
+              && (error.code === "history_cursor_stale" || error.code === "history_cursor_mismatch")) {
+              resetHistoryPaging(id)
+              loadedRef.current.delete(id)
+              // Queue a newest-page recovery behind this anchored request.
+              void loadMessages(id, INITIAL_HISTORY_TAIL, true)
+            }
+          }
+        })
+        return
+      }
+
+      const currentTail = legacyHistoryTailRef.current[id] ?? INITIAL_HISTORY_TAIL
+      if (currentTail >= MAX_HISTORY_TAIL) {
+        setHasEarlierMessages((prev) => ({ ...prev, [id]: false }))
+        return
+      }
+      const nextTail = Math.min(MAX_HISTORY_TAIL, currentTail + HISTORY_TAIL_STEP)
       await loadMessages(id, nextTail, true)
     } finally {
+      loadingEarlierRef.current.delete(id)
       setLoadingEarlierDiscussionId((current) => current === id ? null : current)
     }
-  }, [hasEarlierMessages, loadMessages, loadingEarlierDiscussionId])
+  }, [commitHistoryPage, durableTranscriptPager, hasEarlierMessages, loadMessages, resetHistoryPaging, transcriptAccumulator])
 
   const reloadActiveMessages = useCallback((force?: boolean) => {
     const id = activeIdRef.current
@@ -522,8 +826,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
       return
     }
     loadedRef.current.delete(id)
-    loadMessages(id)
-  }, [loadMessages])
+    if (force && historyModesRef.current.get(id) === "v2")
+      void catchUpMessages(id)
+    else
+      void loadMessages(id)
+  }, [catchUpMessages, loadMessages])
 
   const selectDiscussion = useCallback((id: string) => {
     setActiveDiscussionId(id)
@@ -533,13 +840,21 @@ export function useDiscussions(eventResolver?: EventResolver) {
       // and network handoffs; revisiting a cached discussion is the durable
       // recovery boundary for any messages or tool calls missed in between.
       const wasLoaded = loadedRef.current.has(id)
-      const tail = historyTailRef.current[id] ?? INITIAL_HISTORY_TAIL
+      const tail = legacyHistoryTailRef.current[id] ?? INITIAL_HISTORY_TAIL
       const revision = discussionsRef.current.find((discussion) => discussion.id === id)
         ?.conversationRevision ?? 0
-      void loadMessages(id, tail, wasLoaded)
+      const pager = durableTranscriptPagersRef.current.get(id)
+      const refresh = shouldCatchUpHistory(
+        historyModesRef.current.get(id),
+        pager?.current().newestCursor,
+        wasLoaded,
+      )
+        ? catchUpMessages(id)
+        : loadMessages(id, tail, false)
+      void refresh
         .then(() => acknowledgeRead(id, revision))
     })
-  }, [acknowledgeRead, loadMessages])
+  }, [acknowledgeRead, catchUpMessages, loadMessages])
 
   const clearDiscussionSelection = useCallback(() => {
     setActiveDiscussionId(null)
@@ -564,6 +879,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (qualityTier) body.qualityTier = qualityTier
       if (provider) body.provider = provider
       const d = await api.post<DiscussionInfo>("/api/apps/nova/discussions", Object.keys(body).length ? body : undefined)
+      historyLifecycleRef.current.revive(d.id)
       // The creation websocket can beat the HTTP response and insert a sparse
       // placeholder. Always replace it with the authoritative returned record
       // so every surface gets the entity and session ids needed for chat.
@@ -613,9 +929,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
     if (!disc.title && disc.messageCount === 0) {
       const title = displayContent.length > 60 ? displayContent.slice(0, 59) + "…" : displayContent
       setDiscussions((prev) =>
-        prev.map((d) => d.id === discussionId ? { ...d, title } : d)
+        prev.map((d) => d.id === discussionId ? { ...d, title, titleSource: "fallback" } : d)
       )
-      api.put(`/api/apps/nova/discussions/${discussionId}/title`, { title }).catch(() => {})
+      api.put<DiscussionInfo>(
+        `/api/apps/nova/discussions/${discussionId}/title/fallback`,
+        { title },
+      ).then(upsertDiscussion).catch(() => {})
     }
 
     type Admission = {
@@ -789,8 +1108,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         if (!current || current.sessionId !== sessionId || isClosed(current.status)) return
         if (activeIdRef.current !== discId) return
         loadedRef.current.delete(discId)
-        const tail = historyTailRef.current[discId] ?? INITIAL_HISTORY_TAIL
-        void loadMessages(discId, tail, true, sessionId)
+        void catchUpMessages(discId, sessionId)
         void reconcileStreaming()
       })
     } else if (event.type === "session.input-queue.updated") {
@@ -807,18 +1125,23 @@ export function useDiscussions(eventResolver?: EventResolver) {
         latchStreaming(discId)
         setDiscussions((prev) => applySessionStatus(prev, discId, "Active"))
         loadedRef.current.delete(discId)
-        const tail = historyTailRef.current[discId] ?? INITIAL_HISTORY_TAIL
-        void loadMessages(discId, tail, true, update.sessionId, true)
+        void catchUpMessages(discId, update.sessionId, true)
         void refreshDiscussions()
       }
     } else if (event.type === "session.updated") {
       const session = event.data as { id: string; status: string; stopReason?: string; title?: string }
       const discId = sessionToDiscussion.get(session.id)
       if (!discId) return
+      const known = discussionsRef.current.find((d) => d.id === discId)
+      if (shouldRequestSessionTitleSync(known, session.title)) {
+        void api.put<DiscussionInfo>(`/api/apps/nova/discussions/${discId}/title/session`)
+          .then(upsertDiscussion)
+          .catch(() => {})
+      }
+
       const updateGeneration = (sessionUpdateGenerationRef.current[discId] ?? 0) + 1
       sessionUpdateGenerationRef.current[discId] = updateGeneration
       if (session.status !== "Active") {
-        const known = discussionsRef.current.find((d) => d.id === discId)
         const nowMs = Date.now()
         if (preservesRecentStreamingLatch(
           session.status,
@@ -848,7 +1171,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
           && (session.stopReason === "maintenance_restart" || session.stopReason === "orphaned_on_restart")
         const isStopped = !isRestartRecovery
           && (session.status === "Stopped" || session.status === "Error")
-        const isLiveDisc = known.type === "live"
         setDiscussions((prev) =>
           applySettledSessionStatus(prev, discId, session.status, new Date().toISOString(), session.stopReason)
         )
@@ -861,14 +1183,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
               // Inactive discussions recover on their next selection.
               loadedRef.current.delete(discId)
               if (activeIdRef.current !== discId) return
-              const tail = historyTailRef.current[discId] ?? INITIAL_HISTORY_TAIL
-              await loadMessages(
-                discId,
-                tail,
-                true,
-                undefined,
-                false,
-              )
+              await catchUpMessages(discId)
               if (conversationRevision !== undefined)
                 await acknowledgeRead(discId, conversationRevision)
             }, SETTLED_TRANSCRIPT_RELOAD_DELAY_MS)
@@ -879,24 +1194,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
               scheduleTranscriptReload(updated.conversationRevision)
             })
             .catch(() => scheduleTranscriptReload())
-          // LIVE and heartbeat discussions own their titles — don't let
-          // session auto-titles overwrite them (the session title drifts to
-          // whatever topic was last discussed, which is confusing).
-          if (!isLiveDisc && known.type !== "heartbeat") {
-            const syncTitle = (name: string) => {
-              setDiscussions((prev) =>
-                prev.map((d) => d.id === discId ? { ...d, title: name } : d)
-              )
-              api.put(`/api/apps/nova/discussions/${discId}/title`, { title: name }).catch(() => {})
-            }
-            if (session.title) {
-              syncTitle(session.title)
-            } else {
-              api.get<{ session: { title?: string } }>(`/ai-session/sessions/${session.id}`)
-                .then((data) => { if (data.session?.title) syncTitle(data.session.title) })
-                .catch(() => {})
-            }
-          }
         }
       } else {
         // The discussion list and the transcript must describe the same runtime.
@@ -937,6 +1234,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     } else if (event.type === "discussion.created") {
       const { discussionId, agentId, status, type } = event.data as { discussionId: string; agentId?: string; status?: string; type?: string }
       if (!discussionId) return
+      historyLifecycleRef.current.revive(discussionId)
       setDiscussions((prev) => {
         if (prev.some((d) => d.id === discussionId)) return prev
         const newDisc: DiscussionInfo = {
@@ -945,6 +1243,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           // this placeholder until the next discussions refresh fills it in.
           entityId: "",
           title: null,
+          titleSource: null,
           sessionId: null,
           status: (status ?? "idle") as DiscussionInfo["status"],
           type: (type ?? "chat") as DiscussionInfo["type"],
@@ -967,12 +1266,33 @@ export function useDiscussions(eventResolver?: EventResolver) {
       void refreshDiscussions()
       if (activeIdRef.current !== discussionId) return
       loadedRef.current.delete(discussionId)
-      const tail = historyTailRef.current[discussionId] ?? INITIAL_HISTORY_TAIL
-      void loadMessages(discussionId, tail, true)
+      void catchUpMessages(discussionId)
     } else if (event.type === "discussion.event") {
-      const { discussionId, content, source, senderAgentId, metadata, timestamp: serverTs } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; metadata?: Record<string, unknown> | null; timestamp?: string }
+      const { discussionId, content, source, senderAgentId, messageUid, metadata, timestamp: serverTs } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; messageUid?: string | null; metadata?: Record<string, unknown> | null; timestamp?: string }
       if (!discussionId) return
       const ts = serverTs ?? new Date().toISOString()
+      if (messageUid && shouldAccumulatePushedHistoryOverlay(
+        historyModesRef.current.get(discussionId),
+      )) {
+        const sourceTag = source ? `event:${source}` : "event:system"
+        const overlay: DiscussionHistoryOverlay = {
+          id: messageUid,
+          messageUid,
+          role: "assistant",
+          parts: [
+            { type: "text", content },
+            { type: "event_data", content: JSON.stringify(metadata ?? {}) },
+          ],
+          timestamp: ts,
+          senderAgentId,
+          source: sourceTag,
+        }
+        const overlays = accumulateHistoryOverlays(
+          historyOverlaysRef.current.get(discussionId) ?? new Map(),
+          [overlay],
+        )
+        historyOverlaysRef.current.set(discussionId, overlays)
+      }
       setDiscussions((prev) => applyDiscussionMessageArrival(prev, discussionId, ts))
       setMessages((prev) => ({
         ...prev,
@@ -998,6 +1318,26 @@ export function useDiscussions(eventResolver?: EventResolver) {
         }
       if (!discussionId) return
       const ts = serverTs ?? new Date().toISOString()
+      if (messageUid && shouldAccumulatePushedHistoryOverlay(
+        historyModesRef.current.get(discussionId),
+      )) {
+        const parts: DiscussionHistoryOverlay["parts"] = [{ type: "text", content }]
+        if (audioUrl) parts.push({ type: "audio", content: audioUrl })
+        const overlay: DiscussionHistoryOverlay = {
+          id: messageUid,
+          messageUid,
+          role: "assistant",
+          parts,
+          timestamp: ts,
+          senderAgentId,
+          source: "nova-message",
+        }
+        const overlays = accumulateHistoryOverlays(
+          historyOverlaysRef.current.get(discussionId) ?? new Map(),
+          [overlay],
+        )
+        historyOverlaysRef.current.set(discussionId, overlays)
+      }
       const isViewing = activeIdRef.current === discussionId
       setDiscussions((prev) => typeof conversationRevision === "number"
         ? applyConversationMessageArrival(
@@ -1035,9 +1375,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
       // views; this also converges other open clients and attachment-rich messages.
       loadedRef.current.delete(discussionId)
       if (activeIdRef.current !== discussionId) return
-      if (messageUid && (messagesRef.current[discussionId] ?? []).some(message => message.id === messageUid)) return
-      const tail = historyTailRef.current[discussionId] ?? INITIAL_HISTORY_TAIL
-      void loadMessages(discussionId, tail, true, sessionId, true)
+      if (historyModesRef.current.get(discussionId) !== "v2"
+        && messageUid
+        && (messagesRef.current[discussionId] ?? []).some(message => message.id === messageUid)) return
+      void catchUpMessages(discussionId, sessionId, true)
     } else if (event.type === "discussion.cleared") {
       const { discussionId } = event.data as { discussionId: string }
       if (!discussionId) return
@@ -1045,19 +1386,19 @@ export function useDiscussions(eventResolver?: EventResolver) {
         ? { ...discussion, conversationRevision: 0, readConversationRevision: 0 }
         : discussion))
       setMessages((prev) => ({ ...prev, [discussionId]: [] }))
-      transcriptAccumulatorsRef.current.get(discussionId)?.reset()
+      resetHistoryPaging(discussionId)
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
       clearQuestion(discussionId, null)
       setInterrupting((prev) => ({ ...prev, [discussionId]: false }))
       setResumePending((prev) => ({ ...prev, [discussionId]: false }))
       loadedRef.current.delete(discussionId)
-      loadMessages(discussionId)
+      loadMessages(discussionId, INITIAL_HISTORY_TAIL, true)
     } else if (event.type === "discussion.rotated") {
       const { oldDiscussionId, newDiscussionId } = event.data as { oldDiscussionId: string; newDiscussionId: string; agentId: string }
+      historyLifecycleRef.current.revive(newDiscussionId)
       setDiscussions((prev) => prev.filter((d) => d.id !== oldDiscussionId))
       setMessages((prev) => { const next = { ...prev }; delete next[oldDiscussionId]; return next })
-      transcriptAccumulatorsRef.current.delete(oldDiscussionId)
-      loadedRef.current.delete(oldDiscussionId)
+      retireHistoryPaging(oldDiscussionId)
       setActiveDiscussionId((current) => resolveRotatedDiscussionSelection(current, oldDiscussionId, newDiscussionId))
       refreshDiscussions()
     } else if (event.type === "session.stream") {
@@ -1119,13 +1460,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
           setDiscussions((p) => applySessionStatus(p, discId, "Active"))
         }
         if (reconciled.gapDetected) {
-          const tail = historyTailRef.current[discId] ?? INITIAL_HISTORY_TAIL
-          queueMicrotask(() => void loadMessages(discId, tail, true, sessionId))
+          queueMicrotask(() => void catchUpMessages(discId, sessionId))
         }
         return { ...prev, [discId]: reconciled.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, loadMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming])
+  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, loadMessages, catchUpMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming, resetHistoryPaging, retireHistoryPaging])
   handleWsEventRef.current = handleWsEvent
 
   const handleUpstreamDisconnect = useCallback(() => {
@@ -1164,6 +1504,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     if (activeIdRef.current === id) setActiveDiscussionId(null)
     try {
       await api.delete(`/api/apps/nova/discussions/${id}`)
+      setMessages((prev) => { const next = { ...prev }; delete next[id]; return next })
+      retireHistoryPaging(id)
       // Intent stays in the set after success: the server now owns the state
       // and default list fetches exclude closed discussions anyway.
     } catch (err) {
@@ -1171,13 +1513,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (disc) setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: disc.status } : d))
       toast({ variant: "error", title: "Failed to archive", description: err instanceof Error ? err.message : "Unknown error" })
     }
-  }, [toast])
+  }, [retireHistoryPaging, toast])
 
   const dismissDiscussion = useCallback((id: string) => {
     setDismissedIds((prev) => new Set(prev).add(id))
     setDiscussions((prev) => prev.filter((d) => d.id !== id))
+    setMessages((prev) => { const next = { ...prev }; delete next[id]; return next })
+    retireHistoryPaging(id)
     if (activeDiscussionId === id) setActiveDiscussionId(null)
-  }, [activeDiscussionId])
+  }, [activeDiscussionId, retireHistoryPaging])
 
   const rotateDiscussion = useCallback(async (id: string): Promise<string | null> => {
     try {
@@ -1193,9 +1537,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }
       setDiscussions((prev) => prev.filter((d) => d.id !== id))
       setMessages((prev) => { const next = { ...prev }; delete next[id]; return next })
-      loadedRef.current.delete(id)
+      retireHistoryPaging(id)
       if (newDiscussionId) {
         const replacementId = newDiscussionId
+        historyLifecycleRef.current.revive(replacementId)
         setActiveDiscussionId((current) => resolveRotatedDiscussionSelection(current, id, replacementId))
       }
       const label = disc?.type === "heartbeat" ? "Heartbeat" : "LIVE"
@@ -1205,11 +1550,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
       toast({ variant: "error", title: "Failed to rotate", description: err instanceof Error ? err.message : "Unknown error" })
       return null
     }
-  }, [toast, discussions])
+  }, [retireHistoryPaging, toast, discussions])
 
   const renameDiscussion = useCallback(async (id: string, title: string) => {
-    await api.put(`/api/apps/nova/discussions/${id}/title`, { title })
-    setDiscussions((prev) => prev.map((d) => d.id === id ? { ...d, title } : d))
+    const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/title`, { title })
+    upsertDiscussion(updated)
   }, [])
 
   const setConfidential = useCallback(async (id: string, confidential: boolean) => {

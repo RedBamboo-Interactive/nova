@@ -2,6 +2,7 @@ export interface DiscussionInfo {
   id: string
   entityId: string
   title: string | null
+  titleSource: "fallback" | "session" | "manual" | "system" | "legacy-locked" | null
   sessionId: string | null
   /** "archiving" = archive intent committed server-side, session stop not yet
    * confirmed. Treated exactly like "archived" everywhere in the UI. */
@@ -66,6 +67,43 @@ export interface MessagePartDto {
   attachments?: import("@redbamboo/chat").UploadedAttachment[]
   payloadRef?: import("@redbamboo/chat").TranscriptPayloadRef
   phase?: import("@redbamboo/chat").MessagePhase
+}
+
+/**
+ * One product overlay returned beside a canonical RedCompute transcript page.
+ * `source` is required on V2 so the browser can apply Nova presentation rules
+ * without guessing from message content.
+ */
+export interface DiscussionHistoryOverlay extends DiscussionMessage {
+  source: string
+}
+
+export interface DiscussionHistorySession {
+  id: string
+  status: string
+  stopReason?: string | null
+  title?: string | null
+}
+
+export interface DiscussionHistoryPageMetadata {
+  epoch: string | null
+  direction: "newest" | "before" | "after"
+  oldestCursor: string | null
+  newestCursor: string | null
+  hasEarlier: boolean
+  hasLater: boolean
+  fromSequence: number | null
+  throughSequence: number | null
+  boundaryComplete: boolean
+}
+
+/** Additive V2 history contract. The outer cursors cover transcript + overlays. */
+export interface DiscussionHistoryPageResponse {
+  discussion: DiscussionInfo
+  session: DiscussionHistorySession | null
+  messages: import("@redbamboo/chat").PersistedMessage[]
+  overlays: DiscussionHistoryOverlay[]
+  page: DiscussionHistoryPageMetadata
 }
 
 export interface ClaudeStreamEvent {

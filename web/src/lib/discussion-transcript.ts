@@ -1,4 +1,5 @@
 import type { MessageBlock } from "@redbamboo/chat"
+import type { DiscussionHistoryOverlay } from "./types.ts"
 import { byTimestamp } from "./message-order.ts"
 
 export interface NovaMessageArrival {
@@ -127,4 +128,56 @@ export function mergeDiscussionAndSessionBlocks(
       return true
     })
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+}
+
+/** Stable identity for a V2 overlay. Content and timestamp are never identity. */
+export function historyOverlayIdentity(overlay: DiscussionHistoryOverlay): string {
+  return overlay.messageUid ? `uid:${overlay.messageUid}` : `id:${overlay.id}`
+}
+
+/**
+ * Add a server-authored overlay page to the already loaded overlay window.
+ * Pages are immutable, but replacing the same stable identity makes retries
+ * and a pushed-event/HTTP overlap idempotent.
+ */
+export function accumulateHistoryOverlays(
+  current: Map<string, DiscussionHistoryOverlay>,
+  incoming: DiscussionHistoryOverlay[],
+): Map<string, DiscussionHistoryOverlay> {
+  const next = new Map(current)
+  for (const overlay of incoming)
+    next.set(historyOverlayIdentity(overlay), overlay)
+  return next
+}
+
+function stableBlockIdentity(block: MessageBlock): string {
+  const messageUid = block.metadata?.messageUid
+  return typeof messageUid === "string" && messageUid
+    ? `uid:${messageUid}`
+    : `id:${block.id}`
+}
+
+/**
+ * Merge a V2 overlay window with canonical session blocks using only stable
+ * identities. Ambient events keep Nova's richer event projection; canonical
+ * transcript blocks win over user bridges and injected Nova-message copies.
+ */
+export function mergePagedDiscussionAndSessionBlocks(
+  overlayBlocks: MessageBlock[],
+  sessionBlocks: MessageBlock[],
+): MessageBlock[] {
+  const eventOverlayKeys = new Set(overlayBlocks
+    .filter(block => typeof block.metadata?.source === "string"
+      && block.metadata.source.startsWith("event:"))
+    .map(stableBlockIdentity))
+  const canonicalKeys = new Set(sessionBlocks.map(stableBlockIdentity))
+
+  const retainedSession = sessionBlocks.filter(block => !eventOverlayKeys.has(stableBlockIdentity(block)))
+  const retainedOverlays = overlayBlocks.filter(block => {
+    const source = block.metadata?.source
+    return (typeof source === "string" && source.startsWith("event:"))
+      || !canonicalKeys.has(stableBlockIdentity(block))
+  })
+
+  return [...retainedOverlays, ...retainedSession].sort(byTimestamp)
 }

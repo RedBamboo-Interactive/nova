@@ -1,6 +1,18 @@
 import type { DiscussionInfo } from "./types"
 
 /**
+ * A pushed title is only a signal to ask Nova's server for the current
+ * RedCompute title. Selection is deliberately absent: inactive ordinary chats
+ * must refine too, while standing LIVE/heartbeat titles remain untouched.
+ */
+export function shouldRequestSessionTitleSync(
+  discussion: Pick<DiscussionInfo, "type"> | undefined,
+  pushedTitle: string | undefined,
+): boolean {
+
+  return discussion?.type === "chat" && !!pushedTitle?.trim()
+}
+/**
  * Project RedCompute's provider-neutral session lifecycle onto the smaller
  * discussion lifecycle used by the list indicator.
  */

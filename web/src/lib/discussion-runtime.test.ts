@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { applySessionStatus, applySettledSessionStatus, discussionStatusForSession, preservesRecentStreamingLatch } from "./discussion-runtime.ts"
+import { applySessionStatus, applySettledSessionStatus, discussionStatusForSession, preservesRecentStreamingLatch, shouldRequestSessionTitleSync } from "./discussion-runtime.ts"
 import type { DiscussionInfo } from "./types.ts"
 
 function discussion(status: DiscussionInfo["status"] = "idle", type: DiscussionInfo["type"] = "chat"): DiscussionInfo {
@@ -9,6 +9,7 @@ function discussion(status: DiscussionInfo["status"] = "idle", type: DiscussionI
     entityId: "entity-a",
     title: "A",
     sessionId: "session-a",
+    titleSource: null,
     status,
     type,
     createdAt: "2026-08-07T00:00:00.000Z",
@@ -27,8 +28,19 @@ test("an active compute session makes the discussion indicator active", () => {
 })
 
 test("an idle compute session clears the active discussion indicator", () => {
+
   const [updated] = applySessionStatus([discussion("thinking")], "discussion-a", "Idle")
   assert.equal(updated?.status, "idle")
+})
+
+test("an inactive ordinary discussion still requests server-authoritative title refinement", () => {
+  assert.equal(shouldRequestSessionTitleSync(discussion("idle", "chat"), "Refined"), true)
+})
+
+test("standing discussion titles never request session refinement", () => {
+  assert.equal(shouldRequestSessionTitleSync(discussion("idle", "live"), "Drift"), false)
+  assert.equal(shouldRequestSessionTitleSync(discussion("idle", "heartbeat"), "Drift"), false)
+  assert.equal(shouldRequestSessionTitleSync(discussion("idle", "chat"), "  "), false)
 })
 
 test("a settled session event clears the active indicator without a refresh", () => {
