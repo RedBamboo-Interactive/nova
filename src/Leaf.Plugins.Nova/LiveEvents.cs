@@ -32,7 +32,7 @@ public sealed class EventInjector(
         string? senderAgentId = null, string? replyToDiscussionId = null,
         JsonElement? metadata = null, string? userId = null,
         string? idempotencyKey = null, bool redeliverOnReuse = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default, string? deliveryIdempotencyKey = null)
     {
         var role = type is "assistant" or "system" ? type : "user";
         var sourceTag = $"event:{source ?? "automation"}";
@@ -55,11 +55,19 @@ public sealed class EventInjector(
         {
             if (!string.IsNullOrWhiteSpace(idempotencyKey))
             {
-                var existing = await discussions.GetMessagesAsync(discussion.EntityId, ct: ct);
-                if (existing.Any(message => message.Metadata["idempotency_key"] is JsonValue value
-                    && value.TryGetValue<string>(out var key)
-                    && string.Equals(key, idempotencyKey, StringComparison.Ordinal)))
-                    return false;
+                long afterId = 0;
+                while (true)
+                {
+                    var existing = await discussions.GetMessagesAsync(discussion.EntityId, limit: 1000, afterId: afterId, ct: ct);
+                    if (existing.Any(message => message.Metadata["idempotency_key"] is JsonValue value
+                        && value.TryGetValue<string>(out var key)
+                        && string.Equals(key, idempotencyKey, StringComparison.Ordinal)))
+                        return false;
+                    if (existing.Count < 1000) break;
+                    var nextId = existing.Max(message => message.Id);
+                    if (nextId <= afterId) throw new InvalidOperationException("Discussion event lookup did not advance");
+                    afterId = nextId;
+                }
             }
             await discussions.PostAsync(discussion.EntityId, role, content, new JsonObject
             {
@@ -139,6 +147,12 @@ public sealed class EventInjector(
                 [new ComputeContextReference("discussion", discussion.Id),
                  new ComputeContextReference("session", sessionId),
                  new ComputeContextReference("event", uid, NameSnapshot: source)], method: "POST", ct: ct);
+            // Retried callback delivery uses the existing durable admission contract.
+            // Other event callers (including heartbeat redelivery) keep their policy.
+            if (deliveryIdempotencyKey is not null)
+                return (await redCompute.SendMessageDetailedAsync(
+                    sessionId, messageBody, provenance, ct, idempotencyKey:
+                        "nova-event:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(deliveryIdempotencyKey))))).Success;
             return await redCompute.SendMessageAsync(
                 sessionId, messageBody, provenance, ct) != null;
         }

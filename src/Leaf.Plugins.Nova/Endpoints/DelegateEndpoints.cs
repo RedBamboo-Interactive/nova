@@ -375,7 +375,7 @@ public static class DelegateEndpoints
                 try
                 {
                     var callbackUrl = $"http://127.0.0.1:18804/api/apps/nova/callbacks/session-complete?discussionId={request.DiscussionId}";
-                    callbackRegistered = await redCompute.RegisterCallbackAsync(sessionId, callbackUrl);
+                    callbackRegistered = await redCompute.RegisterCallbackAsync(sessionId, callbackUrl, callbackId: promptMessageUid);
                 }
                 catch { }
             }

@@ -1311,6 +1311,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setMessages((prev) => ({
         ...prev,
         [discussionId]: appendEvent(prev[discussionId] ?? [], {
+          messageUid: messageUid ?? undefined,
           source: source ? `event:${source}` : "event:system",
           content,
           data: metadata ?? null,

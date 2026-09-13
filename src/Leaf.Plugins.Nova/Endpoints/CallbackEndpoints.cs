@@ -13,52 +13,73 @@ namespace Leaf.Plugins.Nova.Endpoints;
 /// </summary>
 public static class CallbackEndpoints
 {
+    internal static async Task<IResult> HandleSessionCompleteAsync(
+        HttpContext ctx, DiscussionStore store, EventInjector injector, LiveEvents live)
+    {
+        if (!IsLoopback(ctx))
+            return Results.Json(new { error = "Local callers only" }, statusCode: 403);
+
+        JsonElement body;
+        try { body = await ctx.Request.ReadFromJsonAsync<JsonElement>(ctx.RequestAborted); }
+        catch { return Results.BadRequest(new { error = "invalid_body" }); }
+
+        var sessionId = body.TryGetProperty("sessionId", out var s) ? s.GetString() : null;
+        string? callbackId = null;
+        if (body.TryGetProperty("callbackId", out var callback))
+        {
+            if (callback.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(callback.GetString())
+                || callback.GetString()!.Length > 200)
+                return Results.BadRequest(new { error = "invalid_callback_id" });
+            callbackId = callback.GetString();
+        }
+        var status = body.TryGetProperty("status", out var st) ? st.GetString() : null;
+        var discussionId = ctx.Request.Query["discussionId"].ToString();
+
+        if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(discussionId))
+            return Results.BadRequest(new { error = "sessionId and discussionId are required" });
+
+        var title = body.TryGetProperty("title", out var t) ? t.GetString() : null;
+        var stopReason = body.TryGetProperty("stopReason", out var sr) ? sr.GetString() : null;
+
+        var summary = (status, stopReason) switch
+        {
+            (_, "usage_limit") => $"Session {sessionId} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
+            ("Idle", _) => $"Session {sessionId} completed{(title != null ? $": {title}" : "")}",
+            ("Stopped", _) => $"Session {sessionId} was stopped",
+            ("Error" or "Ended", _) => $"Session {sessionId} ended with status: {status}",
+            _ => $"Session {sessionId} status: {status}",
+        };
+
+        var eventContent = $"""
+            <nova-event source="callback:session-complete" type="session-complete" stopReason="{stopReason ?? "unknown"}">
+            {summary}
+            </nova-event>
+            """;
+
+        var discussion = await store.GetAsync(discussionId);
+        if (discussion is null)
+            return Results.Json(new { error = "event_injection_failed", message = "Discussion not found" }, statusCode: 502);
+
+        // Legacy senders remain compatible. A session ID alone cannot identify a
+        // completion: later continuations of that same session must still arrive.
+        var key = callbackId is null ? null : $"session-complete:{sessionId}:{discussionId}:{callbackId}";
+        var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
+            idempotencyKey: key, redeliverOnReuse: key is not null,
+            deliveryIdempotencyKey: key, ct: ctx.RequestAborted);
+        // Do not introduce extra unkeyed retries from an older sender. Recovery
+        // is safe only when the callback carries its stable delivery identity.
+        if (key is not null && !forwarded && discussion.SessionId is not null)
+            return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
+
+        if (!discussion.Confidential)
+            await live.PostAsync("callback", $"Delegated session completed{(title != null ? $": {title}" : "")}",
+                idempotencyKey: key is null ? null : $"{key}:live", ct: ctx.RequestAborted);
+        return Results.Ok(new { handled = true, sessionId, discussionId, status });
+    }
+
     public static void Map(RouteGroupBuilder group)
     {
-        group.MapPost("/callbacks/session-complete", async (HttpContext ctx, DiscussionStore store, EventInjector injector, LiveEvents live) =>
-        {
-            if (!IsLoopback(ctx))
-                return Results.Json(new { error = "Local callers only" }, statusCode: 403);
-
-            JsonElement body;
-            try { body = await ctx.Request.ReadFromJsonAsync<JsonElement>(ctx.RequestAborted); }
-            catch { return Results.BadRequest(new { error = "invalid_body" }); }
-
-            var sessionId = body.TryGetProperty("sessionId", out var s) ? s.GetString() : null;
-            var status = body.TryGetProperty("status", out var st) ? st.GetString() : null;
-            var discussionId = ctx.Request.Query["discussionId"].ToString();
-
-            if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(discussionId))
-                return Results.BadRequest(new { error = "sessionId and discussionId are required" });
-
-            var title = body.TryGetProperty("title", out var t) ? t.GetString() : null;
-            var stopReason = body.TryGetProperty("stopReason", out var sr) ? sr.GetString() : null;
-
-            var summary = (status, stopReason) switch
-            {
-                (_, "usage_limit") => $"Session {sessionId} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
-                ("Idle", _) => $"Session {sessionId} completed{(title != null ? $": {title}" : "")}",
-                ("Stopped", _) => $"Session {sessionId} was stopped",
-                ("Error" or "Ended", _) => $"Session {sessionId} ended with status: {status}",
-                _ => $"Session {sessionId} status: {status}",
-            };
-
-            var eventContent = $"""
-                <nova-event source="callback:session-complete" type="session-complete" stopReason="{stopReason ?? "unknown"}">
-                {summary}
-                </nova-event>
-                """;
-
-            var discussion = await store.GetAsync(discussionId);
-            if (discussion is null)
-                return Results.Json(new { error = "event_injection_failed", message = "Discussion not found" }, statusCode: 502);
-
-            await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}");
-
-            if (!discussion.Confidential)
-                _ = live.PostAsync("callback", $"Delegated session completed{(title != null ? $": {title}" : "")}");
-            return Results.Ok(new { handled = true, sessionId, discussionId, status });
-        });
+        group.MapPost("/callbacks/session-complete", HandleSessionCompleteAsync);
 
         group.MapPost("/callbacks/agent-response", async (HttpContext ctx, DiscussionStore store, EventInjector injector, RedComputeClient redCompute) =>
         {

@@ -1,6 +1,6 @@
 // Subpath import, not the barrel: this module is exercised by node:test, which
 // cannot load the barrel's React components.
-import { isEventBlock } from "@redbamboo/chat/event-parts"
+import { isEventBlock, eventInputMessageUid } from "@redbamboo/chat/event-parts"
 import type { MessageBlock, MessagePart } from "@redbamboo/chat"
 import type { EventType } from "./types"
 
@@ -32,6 +32,8 @@ export type EventTypeResolver = (source: string) => EventType | undefined
 
 /** A frieze event as it arrives from the server, before becoming a message part. */
 export interface FriezeEvent {
+  /** Existing logical event/input UID, shared with the queue and history overlay. */
+  messageUid?: string
   /** Full source tag, e.g. `event:weather`. */
   source: string
   /** Event text, possibly still wrapped in a `<nova-event>` tag. */
@@ -69,6 +71,7 @@ export function buildEventPart(event: FriezeEvent, resolve?: EventTypeResolver):
   const text = unwrapEventText(event.content)
   return {
     type: "tool_use",
+    ...(event.messageUid ? { messageUid: event.messageUid } : {}),
     toolName: `event:${eventKey(event.source)}`,
     // The timestamp rides on the part, not the block: merged groups keep only
     // the first event's block timestamp, so the modal needs its own copy.
@@ -89,6 +92,7 @@ function toFriezeEvent(m: MessageBlock): FriezeEvent {
   const data = m.metadata?.eventData
   return {
     source,
+    messageUid: typeof m.metadata?.messageUid === "string" && m.metadata.messageUid ? m.metadata.messageUid : m.id,
     content: m.parts[0]?.content ?? "",
     data: data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null,
     timestamp: m.timestamp,
@@ -100,7 +104,7 @@ function newEventBlock(event: FriezeEvent, part: MessagePart, index: number): Me
   return {
     // Timestamp alone collides for events landing in the same millisecond, and a
     // duplicate React key drops blocks from the rendered list.
-    id: `event-${event.timestamp}-${index}`,
+    id: event.messageUid ? `event-${event.messageUid}` : `event-${event.timestamp}-${index}`,
     role: "assistant",
     parts: [part],
     timestamp: event.timestamp,
@@ -132,19 +136,29 @@ function chronologicalEventParts(parts: MessagePart[]): MessagePart[] {
  */
 export function orderMessages(blocks: MessageBlock[], resolve?: EventTypeResolver): MessageBlock[] {
   const out: MessageBlock[] = []
+  const seen = new Set<string>()
   for (const block of [...blocks].sort(byTimestamp)) {
-    if (!isRawEventMessage(block)) {
+    if (!isRawEventMessage(block) && !isEventBlock(block)) {
       out.push(block)
       continue
     }
+    // Already projected groups must retain every part and its identity/payload.
     const event = toFriezeEvent(block)
-    const part = buildEventPart(event, resolve)
+    const parts = isEventBlock(block) ? block.parts : [buildEventPart(event, resolve)]
+    const unique = parts.filter(part => {
+      const uid = eventInputMessageUid(part)
+      if (!uid) return true
+      if (seen.has(uid)) return false
+      seen.add(uid)
+      return true
+    })
+    if (!unique.length) continue
     const last = out[out.length - 1]
     if (last && isEventBlock(last)) {
-      out[out.length - 1] = { ...last, parts: [...last.parts, part] }
+      out[out.length - 1] = { ...last, parts: [...last.parts, ...unique] }
       continue
     }
-    out.push(newEventBlock(event, part, out.length))
+    out.push(isEventBlock(block) ? { ...block, parts: unique } : newEventBlock(event, unique[0]!, out.length))
   }
   return out
 }
@@ -159,6 +173,8 @@ export function appendEvent(
   event: FriezeEvent,
   resolve?: EventTypeResolver,
 ): MessageBlock[] {
+  if (event.messageUid && blocks.some(block => block.parts.some(part => eventInputMessageUid(part) === event.messageUid)))
+    return blocks
   const part = buildEventPart(event, resolve)
   let index = blocks.length
   const eventTime = new Date(event.timestamp).getTime()

@@ -283,11 +283,11 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     }
 
     public async Task<bool> RegisterCallbackAsync(string sessionId, string url, bool force = false,
-        CancellationToken ct = default, ComputeProvenance? provenance = null)
+        CancellationToken ct = default, ComputeProvenance? provenance = null, string? callbackId = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/ai-session/sessions/{sessionId}/callback")
         {
-            Content = JsonContent.Create(new { url, force }, options: JsonOptions),
+            Content = JsonContent.Create(callbackId is null ? (object)new { url, force } : new { url, force, callbackId }, options: JsonOptions),
         };
         using var resp = await gateway.SendAsync(request, provenance, ct);
         return resp.IsSuccessStatusCode;

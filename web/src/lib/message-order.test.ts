@@ -179,3 +179,23 @@ test("tool activity streamed after an event stays after it", () => {
 
   assert.deepEqual(live.map((block) => block.parts[0]?.toolName ?? block.role), ["user", "before", "event:weather", "after"])
 })
+
+
+test("event identity survives grouping, renormalization and repeated push", () => {
+  const first = { ...event(6, "same"), id: "first", metadata: { source: "event:coordination", messageUid: "first" } }
+  const second = { ...event(6, "same"), id: "second", metadata: { source: "event:coordination", messageUid: "second" } }
+  const grouped = orderMessages([first, second, first])
+  assert.deepEqual(grouped.flatMap(b => b.parts.map(p => p.messageUid)), ["first", "second"])
+  assert.deepEqual(orderMessages(grouped), grouped)
+  const repeated = appendEvent(grouped, { messageUid: "second", source: "event:coordination", content: "same", data: null, timestamp: at(6) })
+  assert.equal(repeated, grouped)
+  const next = appendEvent(grouped, { messageUid: "third", source: "event:coordination", content: "same", data: null, timestamp: at(6) })
+  assert.deepEqual(next.flatMap(b => b.parts.map(p => p.messageUid)), ["first", "second", "third"])
+})
+
+test("legacy events and unknown live identities are preserved without content matching", () => {
+  const one = event(6, "same"), two = event(6, "same")
+  assert.equal(orderMessages([one, two]).flatMap(b => b.parts).length, 2)
+  const arrival = { source: "event:coordination", content: "same", data: null, timestamp: at(6) }
+  assert.equal(appendEvent(appendEvent([], arrival), arrival).flatMap(b => b.parts).length, 2)
+})
