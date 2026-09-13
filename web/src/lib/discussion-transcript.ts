@@ -1,4 +1,4 @@
-import type { MessageBlock } from "@redbamboo/chat"
+import type { MessageBlock, PersistedMessage } from "@redbamboo/chat"
 import type { DiscussionHistoryOverlay } from "./types.ts"
 import { byTimestamp } from "./message-order.ts"
 
@@ -113,10 +113,13 @@ export function mergeDiscussionAndSessionBlocks(
   const discussionOnly = sessionBlocks.length > 0
     ? discussionBlocks.filter((message) => message.metadata?.source !== "session-transcript")
     : discussionBlocks
+  const representedInputs = new Set(sessionBlocks.filter(block => block.role === "user")
+    .flatMap(block => block.inputMessageUids ?? []))
   const seen = new Set<string>()
 
   return [...discussionOnly, ...sessionBlocks]
     .filter((message) => {
+      if (message.role === "user" && representedInputs.has(message.id) && !sessionBlocks.includes(message)) return false
       const idKey = message.id == null ? null : `id:${message.id}`
       const content = message.parts[0]?.content ?? ""
       const dedupContent = message.role === "user" ? normalizeUserContent(content) : content
@@ -157,6 +160,100 @@ function stableBlockIdentity(block: MessageBlock): string {
     : `id:${block.id}`
 }
 
+function stableRecordIdentity(record: PersistedMessage): string {
+  return record.messageUid
+    ? `uid:${record.messageUid}`
+    : `id:${record.id}`
+}
+
+function timelineTimestamp(timestamp: string): number {
+  const parsed = Date.parse(timestamp)
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+/** Match the canonical record order used by @redbamboo/chat rebuildBlocks. */
+function orderPagedTranscriptRecords(records: PersistedMessage[]): PersistedMessage[] {
+  const indexed = records.map((record, index) => ({ record, index }))
+  const byLegacyTime = (a: typeof indexed[number], b: typeof indexed[number]) =>
+    timelineTimestamp(a.record.timestamp) - timelineTimestamp(b.record.timestamp)
+    || a.index - b.index
+  const legacy = indexed
+    .filter(({ record }) => record.sequence == null)
+    .sort(byLegacyTime)
+  const sequenced = indexed
+    .filter(({ record }) => record.sequence != null)
+    .sort((a, b) => {
+      if (a.record.epoch !== b.record.epoch) return byLegacyTime(a, b)
+      return a.record.sequence! - b.record.sequence! || a.index - b.index
+    })
+  return [...legacy, ...sequenced].map(({ record }) => record)
+}
+
+/**
+ * Merge a V2 overlay window with raw transcript records before rebuilding
+ * assistant turns. An ambient event is a chronological boundary: later parts
+ * of a still-growing turn must remain after that event when history catches up.
+ */
+export function mergePagedDiscussionRecordsAndOverlays(
+  overlayBlocks: MessageBlock[],
+  records: PersistedMessage[],
+  rebuildRecords: (records: PersistedMessage[]) => MessageBlock[],
+): MessageBlock[] {
+  const eventOverlayKeys = new Set(overlayBlocks
+    .filter(block => typeof block.metadata?.source === "string"
+      && block.metadata.source.startsWith("event:"))
+    .map(stableBlockIdentity))
+  const canonicalUserBlocks = rebuildRecords(records.filter(record => record.role === "user"))
+  const canonicalKeys = new Set([
+    ...records.filter(record => record.eventType !== "status")
+      .map(stableRecordIdentity),
+    ...canonicalUserBlocks.flatMap(block => (block.inputMessageUids ?? []).flatMap(uid => [`uid:${uid}`, `id:${uid}`])),
+  ])
+
+  const retainedRecords = records.filter(record =>
+    !eventOverlayKeys.has(stableRecordIdentity(record)))
+  const retainedOverlays = overlayBlocks.filter(block => {
+    const source = block.metadata?.source
+    return (typeof source === "string" && source.startsWith("event:"))
+      || !canonicalKeys.has(stableBlockIdentity(block))
+  })
+
+  const orderedRecords = orderPagedTranscriptRecords(retainedRecords)
+  const orderedOverlays = retainedOverlays
+    .map((block, order) => ({ block, order }))
+    .sort((a, b) =>
+      timelineTimestamp(a.block.timestamp) - timelineTimestamp(b.block.timestamp)
+      || a.order - b.order)
+    .map(({ block }) => block)
+
+  const merged: MessageBlock[] = []
+  let recordSpan: PersistedMessage[] = []
+  let overlayIndex = 0
+  const flushRecords = () => {
+    if (recordSpan.length === 0) return
+    merged.push(...rebuildRecords(recordSpan))
+    recordSpan = []
+  }
+
+  for (const record of orderedRecords) {
+    while (overlayIndex < orderedOverlays.length
+      && timelineTimestamp(orderedOverlays[overlayIndex]!.timestamp)
+        <= timelineTimestamp(record.timestamp)) {
+      flushRecords()
+      merged.push(orderedOverlays[overlayIndex]!)
+      overlayIndex++
+    }
+    recordSpan.push(record)
+  }
+  flushRecords()
+  while (overlayIndex < orderedOverlays.length) {
+    merged.push(orderedOverlays[overlayIndex]!)
+    overlayIndex++
+  }
+
+  return coalesceDiscussionTurnBlocks(merged)
+}
+
 /**
  * Merge a V2 overlay window with canonical session blocks using only stable
  * identities. Ambient events keep Nova's richer event projection; canonical
@@ -170,7 +267,11 @@ export function mergePagedDiscussionAndSessionBlocks(
     .filter(block => typeof block.metadata?.source === "string"
       && block.metadata.source.startsWith("event:"))
     .map(stableBlockIdentity))
-  const canonicalKeys = new Set(sessionBlocks.map(stableBlockIdentity))
+  const canonicalKeys = new Set(sessionBlocks.flatMap(block => [
+    stableBlockIdentity(block),
+    ...(block.role === "user" ? block.inputMessageUids ?? [] : []).map(uid => `uid:${uid}`),
+    ...(block.role === "user" ? block.inputMessageUids ?? [] : []).map(uid => `id:${uid}`),
+  ]))
 
   const retainedSession = sessionBlocks.filter(block => !eventOverlayKeys.has(stableBlockIdentity(block)))
   const retainedOverlays = overlayBlocks.filter(block => {

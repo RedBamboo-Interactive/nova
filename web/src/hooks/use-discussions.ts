@@ -3,16 +3,15 @@ import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
 import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
-import { DurableTranscriptPager, processStreamEvent, rebuildBlocks, refreshRemoteMessageQueue, TranscriptAccumulator } from "@redbamboo/chat"
+import { canonicalUserMessageUids, DeferredInvalidationCoordinator, DurableTranscriptPager, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
-import { accumulateHistoryOverlays, coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeNovaMessageArrival, mergePagedDiscussionAndSessionBlocks } from "../lib/discussion-transcript"
+import { accumulateHistoryOverlays, coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeNovaMessageArrival, mergePagedDiscussionRecordsAndOverlays } from "../lib/discussion-transcript"
 import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch, shouldRequestSessionTitleSync } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
-import { HistoryLifecycleTombstones, historyRevalidationDirection, invalidateHistoryGeneration, isCurrentHistoryGeneration, reconcileHistoryAfterQueueRefresh, shouldAccumulatePushedHistoryOverlay, shouldCatchUpHistory } from "../lib/discussion-history-page"
+import { HistoryLifecycleTombstones, historyRevalidationDirection, invalidateHistoryGeneration, isCurrentHistoryGeneration, shouldAccumulatePushedHistoryOverlay, shouldCatchUpHistory } from "../lib/discussion-history-page"
 import { LatestTaskCoordinator } from "../lib/latest-task-coordinator"
-import { DeferredInvalidationCoordinator } from "../lib/deferred-invalidation-coordinator"
 import {
   clearDiscussionArchivePending,
   getDiscussionList,
@@ -456,13 +455,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
       return false
     upsertDiscussion(data.discussion)
 
-    const sessionBlocks = filterInternalBootstrapBlock(
-      rebuildBlocks(result.records),
-      data.discussion.setupBootstrapMessageUid,
-    )
+    const sessionRecords = data.discussion.setupBootstrapMessageUid
+      ? result.records.filter(record =>
+          record.messageUid !== data.discussion.setupBootstrapMessageUid)
+      : result.records
     const overlayBlocks = toChatMessages([...overlays.values()])
     const authoritative = cleanMessages(
-      mergePagedDiscussionAndSessionBlocks(overlayBlocks, sessionBlocks),
+      mergePagedDiscussionRecordsAndOverlays(overlayBlocks, sessionRecords, rebuildBlocks),
       eventResolver,
     )
     const cursor: TranscriptCursor | null = result.epoch && result.throughSequence !== null
@@ -473,7 +472,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (!historyLifecycleRef.current.canRun(id)
         || loadGenerationRef.current[id] !== generation) return prev
       const reconciled = accumulator.commitSnapshot(generation, authoritative, cursor).messages
-      const durableIds = new Set(reconciled.map(message => message.id))
+      const durableIds = new Set([...reconciled.map(message => message.id), ...canonicalUserMessageUids(reconciled)])
       // Keep only locally-created blocks with a stable id while their durable
       // bridge is in flight. No V2 path compares message content or timestamps.
       const transient = hardResetPending || sessionChanged || epochChanged
@@ -948,8 +947,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
 
     const body = input
-      ? { input, inputMethod: options?.inputMethod, delivery: options?.delivery, displayContent }
-      : { content, images, inputMethod: options?.inputMethod, delivery: options?.delivery, displayContent }
+      ? { input, inputMethod: options?.inputMethod, delivery: options?.delivery, displayContent, messageUid: options?.messageUid }
+      : { content, images, inputMethod: options?.inputMethod, delivery: options?.delivery, displayContent, messageUid: options?.messageUid }
     let res: Admission
     try {
       res = options?.idempotencyKey
@@ -1101,34 +1100,48 @@ export function useDiscussions(eventResolver?: EventResolver) {
       // Confidential stream and lifecycle frames are deliberately replaced by
       // this opaque invalidation. Recover through the authorized transcript API;
       // never reconstruct content from the ambient WebSocket payload.
-      loadedRef.current.delete(discId)
-      if (activeIdRef.current !== discId) return
+      if (activeIdRef.current !== discId) {
+        loadedRef.current.delete(discId)
+        return
+      }
       confidentialInvalidations.schedule(discId, () => {
         const current = discussionsRef.current.find((discussion) => discussion.id === discId)
         if (!current || current.sessionId !== sessionId || isClosed(current.status)) return
-        if (activeIdRef.current !== discId) return
+        if (activeIdRef.current !== discId) {
+          loadedRef.current.delete(discId)
+          return
+        }
+        environment.window.dispatchEvent(new CustomEvent("nova:input-queue-updated", {
+          detail: { discussionId: discId, sessionId },
+        }))
         loadedRef.current.delete(discId)
         void catchUpMessages(discId, sessionId)
         void reconcileStreaming()
       })
     } else if (event.type === "session.input-queue.updated") {
-      const update = event.data as { sessionId?: string; transition?: string }
+      const update = event.data as {
+        sessionId?: string
+        transition?: string
+      }
       if (!update.sessionId) return
       const discId = sessionToDiscussion.get(update.sessionId)
       if (!discId) return
-      const queueRefresh = refreshRemoteMessageQueue(discId)
+      environment.window.dispatchEvent(new CustomEvent("nova:input-queue-updated", {
+        detail: {
+          discussionId: discId,
+          sessionId: update.sessionId,
+          transition: update.transition,
+        },
+      }))
       if (update.transition === "delivered") {
         lastSendAtRef.current[discId] = Date.now()
         activeObservedAfterSendRef.current[discId] = false
         latchStreaming(discId)
         setDiscussions((prev) => applySessionStatus(prev, discId, "Active"))
         loadedRef.current.delete(discId)
-        void reconcileHistoryAfterQueueRefresh(
-          queueRefresh,
-          () => catchUpMessages(discId, update.sessionId, true),
-        )
+        void catchUpMessages(discId, update.sessionId, true)
         void refreshDiscussions()
-      } else void queueRefresh.catch(() => {})
+      }
     } else if (event.type === "session.updated") {
       const session = event.data as { id: string; status: string; stopReason?: string; title?: string }
       const discId = sessionToDiscussion.get(session.id)
@@ -1379,10 +1392,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (historyModesRef.current.get(discussionId) !== "v2"
         && messageUid
         && (messagesRef.current[discussionId] ?? []).some(message => message.id === messageUid)) return
-      void reconcileHistoryAfterQueueRefresh(
-        refreshRemoteMessageQueue(discussionId),
-        () => catchUpMessages(discussionId, sessionId, true),
-      )
+      void catchUpMessages(discussionId, sessionId, true)
     } else if (event.type === "discussion.cleared") {
       const { discussionId } = event.data as { discussionId: string }
       if (!discussionId) return
@@ -1489,6 +1499,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
     // authoritatively the next time it is selected.
     loadedRef.current.clear()
     refreshDiscussions()
+    const activeId = activeIdRef.current
+    if (activeId) environment.window.dispatchEvent(new CustomEvent("nova:input-queue-updated", {
+      detail: { discussionId: activeId },
+    }))
     reloadActiveMessages(true)
     // Anything that stayed latched while the socket was down has to be settled
     // against the server: the events that would have cleared it were emitted

@@ -62,6 +62,7 @@ public class DiscussionMessageRequest
     public string? InputMethod { get; set; }
     public string? Delivery { get; set; }
     public string? DisplayContent { get; set; }
+    public string? MessageUid { get; set; }
 }
 
 public class ReactionRequest
@@ -1354,11 +1355,11 @@ public static class DiscussionEndpoints
                 ? await pipeline.SendInputAsync(
                     discussion, userId, request.Input, resolved,
                     request.InputMethod ?? "typed", request.Delivery,
-                    idempotencyKey, request.DisplayContent)
+                    idempotencyKey, request.DisplayContent, request.MessageUid)
                 : await pipeline.SendAsync(
                     discussion, userId, request.Content, request.Images, resolved,
                     request.InputMethod ?? "typed", request.Delivery,
-                    idempotencyKey, request.DisplayContent);
+                    idempotencyKey, request.DisplayContent, request.MessageUid);
 
             if (!outcome.Success)
             {

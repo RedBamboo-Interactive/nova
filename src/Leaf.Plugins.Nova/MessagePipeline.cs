@@ -130,10 +130,11 @@ public sealed class MessagePipeline(
         DiscussionRead discussion, string? userId,
         string content, ImageAttachmentDto[]? images, ResolvedDevice device, string input,
         string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
+        string? requestedMessageUid = null,
         CancellationToken ct = default)
         => SendCoreAsync(discussion, userId, content, images, null, device, input,
             delivery, idempotencyKey, displayContent, persistUserMessage: true,
-            requestedMessageUid: null, ct);
+            requestedMessageUid, ct);
 
     /// <summary>
     /// Starts a real discussion turn while keeping its bootstrap instruction out of
@@ -163,6 +164,7 @@ public sealed class MessagePipeline(
         DiscussionRead discussion, string? userId,
         InputPartDto[] parts, ResolvedDevice device, string input,
         string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
+        string? requestedMessageUid = null,
         CancellationToken ct = default)
     {
         var content = string.Join("\n", parts
@@ -170,7 +172,7 @@ public sealed class MessagePipeline(
             .Select(part => part.Text ?? ""));
         return SendCoreAsync(discussion, userId, content, null, parts, device, input,
             delivery, idempotencyKey, displayContent, persistUserMessage: true,
-            requestedMessageUid: null, ct);
+            requestedMessageUid, ct);
     }
 
     private async Task<SendMessageOutcome> SendCoreAsync(
@@ -392,8 +394,9 @@ public sealed class MessagePipeline(
                 sendResult.ErrorCode ?? "redcompute_unavailable",
                 sendResult.ErrorMessage ?? "RedCompute could not deliver the message to the session.");
         }
-        // RedCompute mints the message uid at ingestion; carry it so Nova's copy of this
-        // message and the frontend's optimistic block share the transcript record's identity.
+        // RedCompute owns the message uid at ingestion, echoing the caller's stable
+        // identity when supplied and minting one otherwise. Carry the accepted value
+        // so Nova's bridge and the canonical transcript share one identity.
         if (sendResult.Payload is { ValueKind: JsonValueKind.Object } payload
             && payload.TryGetProperty("messageUid", out var muEl))
             messageUid = muEl.GetString();
