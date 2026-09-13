@@ -141,16 +141,24 @@ jobs:
         shell: pwsh
         run: |
           corepack enable
+          if ($LASTEXITCODE -ne 0) { throw 'Corepack enable failed.' }
           corepack prepare pnpm@11.0.9 --activate
+          if ($LASTEXITCODE -ne 0) { throw 'Corepack did not prepare pnpm 11.0.9.' }
           if ((corepack pnpm --version).Trim() -cne '11.0.9') { throw 'Corepack did not activate pnpm 11.0.9.' }
 
-      - name: Verify exact checkouts
+      - name: Verify exact checkouts and current shared package pin
         shell: pwsh
         run: |
           if ((git -C nova rev-parse HEAD).Trim() -cne '${{ inputs.source_commit || github.workflow_sha }}') { throw 'Nova checkout does not match the selected workflow source.' }
           if ((git -C redbamboo-packages rev-parse HEAD).Trim() -cne '${{ steps.pins.outputs.redbamboo }}') { throw 'RedBamboo checkout does not match its producer pin.' }
           if ((git -C leaf-sdk rev-parse HEAD).Trim() -cne '${{ steps.pins.outputs.leaf_sdk }}') { throw 'Leaf.Sdk checkout does not match its producer pin.' }
           if ((git -C redleaf-release rev-parse HEAD).Trim() -cne '${{ steps.pins.outputs.redleaf }}') { throw 'RedLeaf checkout does not match its producer pin.' }
+          $remoteHead = @(git -C redbamboo-packages ls-remote --exit-code origin refs/heads/main)
+          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the current RedBamboo main commit.' }
+          if ($remoteHead.Count -ne 1) { throw 'Expected exactly one RedBamboo main reference.' }
+          $currentRedBamboo = [string](($remoteHead[0] -split '\s+')[0])
+          if ($currentRedBamboo -notmatch '^[a-f0-9]{40}$') { throw 'RedBamboo main did not resolve to one exact commit.' }
+          if ($currentRedBamboo -cne '${{ steps.pins.outputs.redbamboo }}') { throw "RedBamboo producer pin is stale: expected current main $currentRedBamboo." }
 
       - name: Require PowerShell 7 and derive the only producer artifact URL
         working-directory: nova
@@ -177,7 +185,9 @@ jobs:
         shell: pwsh
         run: |
           corepack pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Shared package frozen restore failed.' }
           corepack pnpm --filter @redbamboo/chat --filter @redbamboo/ui --filter @redbamboo/utility --filter @redbamboo/workflow build
+          if ($LASTEXITCODE -ne 0) { throw 'Shared package build failed.' }
 
       - name: Locked backend and test restore, build, and test
         working-directory: nova
@@ -202,9 +212,13 @@ jobs:
         shell: pwsh
         run: |
           corepack pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Nova frontend frozen restore failed.' }
           corepack pnpm run typecheck
+          if ($LASTEXITCODE -ne 0) { throw 'Nova frontend typecheck failed.' }
           corepack pnpm run build:pkg
+          if ($LASTEXITCODE -ne 0) { throw 'Nova frontend build failed.' }
           corepack pnpm test
+          if ($LASTEXITCODE -ne 0) { throw 'Nova frontend tests failed.' }
           if (-not (Test-Path -LiteralPath 'dist/plugin.js')) { throw 'build:pkg did not produce web/dist/plugin.js.' }
 
       - name: Run release contract tests

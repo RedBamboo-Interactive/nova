@@ -183,6 +183,27 @@ test("workflow uses immutable action SHAs and one channel-neutral RedLeaf ingest
   assert.match(workflow, /-AllowEphemeralVersionOverride/)
 })
 
+test("release production rejects stale shared packages and every frontend native-command failure", () => {
+  const workflow = readFileSync(join(root, ".github/workflows/release-candidate.yml"), "utf8").replaceAll("\r\n", "\n")
+  assert.match(workflow, /git -C redbamboo-packages ls-remote --exit-code origin refs\/heads\/main/)
+  assert.match(workflow, /RedBamboo producer pin is stale/)
+
+  const checkedCommands = [
+    ["corepack enable", "Corepack enable failed."],
+    ["corepack prepare pnpm@11.0.9 --activate", "Corepack did not prepare pnpm 11.0.9."],
+    ["corepack pnpm install --frozen-lockfile", "Shared package frozen restore failed."],
+    ["corepack pnpm --filter @redbamboo/chat --filter @redbamboo/ui --filter @redbamboo/utility --filter @redbamboo/workflow build", "Shared package build failed."],
+    ["corepack pnpm install --frozen-lockfile", "Nova frontend frozen restore failed."],
+    ["corepack pnpm run typecheck", "Nova frontend typecheck failed."],
+    ["corepack pnpm run build:pkg", "Nova frontend build failed."],
+    ["corepack pnpm test", "Nova frontend tests failed."],
+  ]
+  for (const [command, error] of checkedCommands) {
+    const guarded = `${command}\n          if ($LASTEXITCODE -ne 0) { throw '${error}' }`
+    assert.ok(workflow.includes(guarded), `${command} must fail the release immediately`)
+  }
+})
+
 test("the unsigned prerelease bridge is serialized, append-only, and isolated from the candidate build", () => {
   const workflow = readFileSync(join(root, ".github/workflows/release-candidate.yml"), "utf8")
   const candidate = workflow.slice(workflow.indexOf("  candidate:"), workflow.indexOf("  bridge:"))
