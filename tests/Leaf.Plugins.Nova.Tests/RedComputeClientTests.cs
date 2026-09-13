@@ -87,6 +87,21 @@ public sealed class RedComputeClientTests
     }
 
     [Fact]
+    public async Task InputAttachmentDownloadUsesAuthorizedGatewayWithoutLeakingItsUrl()
+    {
+        var gateway = new BinaryComputeGateway();
+        var client = new RedComputeClient(gateway);
+
+        var attachment = await client.GetInputAttachmentAsync("att image/1");
+
+        Assert.NotNull(attachment);
+        Assert.Equal(new byte[] { 1, 2, 3 }, attachment.Bytes);
+        Assert.Equal("image/png", attachment.MediaType);
+        Assert.Equal("/ai-session/input-attachments/att%20image%2F1", gateway.Path);
+        Assert.Null(gateway.Provenance);
+    }
+
+    [Fact]
     public async Task SessionProbeCarriesRecoveryStateAndProviderThread()
     {
         var gateway = new StaticComputeGateway(
@@ -167,5 +182,24 @@ public sealed class RedComputeClientTests
             {
                 Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json"),
             });
+    }
+
+    private sealed class BinaryComputeGateway : IComputeGateway
+    {
+        public string? Path { get; private set; }
+        public ComputeProvenance? Provenance { get; private set; }
+
+        public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            ComputeProvenance? provenance = null, CancellationToken ct = default)
+        {
+            Path = request.RequestUri?.OriginalString;
+            Provenance = provenance;
+            var content = new ByteArrayContent([1, 2, 3]);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = content,
+            });
+        }
     }
 }

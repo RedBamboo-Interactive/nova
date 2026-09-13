@@ -130,7 +130,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<DiscussionStore>(),
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredService<RedComputeClient>(),
-                sp.GetRequiredService<IDiscussions>()));
+                sp.GetRequiredService<IDiscussions>(),
+                sp.GetRequiredService<IAssets>()));
         services.AddSingleton<LivePoller>();
         services.AddSingleton(sp =>
             new HeartbeatService(

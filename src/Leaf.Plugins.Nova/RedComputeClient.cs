@@ -39,6 +39,8 @@ public sealed record SessionSnapshot(
     string? Title,
     List<SessionMessage> Messages);
 
+public sealed record InputAttachmentContent(byte[] Bytes, string MediaType);
+
 /// <summary>Session metadata carried by every transcript page.</summary>
 public sealed class SessionPageInfo
 {
@@ -474,6 +476,21 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         }
 
         return new SessionSnapshot(status, stopReason, title, messages);
+    }
+
+    public async Task<InputAttachmentContent?> GetInputAttachmentAsync(
+        string attachmentId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(attachmentId)) return null;
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"/ai-session/input-attachments/{Uri.EscapeDataString(attachmentId)}");
+        using var response = await gateway.SendAsync(request, provenance: null, ct);
+        if (!response.IsSuccessStatusCode) return null;
+
+        var bytes = await response.Content.ReadAsByteArrayAsync(ct);
+        if (bytes.Length == 0) return null;
+        var mediaType = response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
+        return new InputAttachmentContent(bytes, mediaType);
     }
 
     public async Task<SessionTranscriptPageResult> GetTranscriptPageAsync(
