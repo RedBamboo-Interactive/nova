@@ -14,7 +14,7 @@ export function MemoryPanel() {
   const navigate = useNavigate()
   const [files, setFiles] = useState<string[]>([])
   const [content, setContent] = useState("")
-  const [mobileTab, setMobileTab] = useState(0)
+  const [mobileTab, setMobileTab] = useState(() => splatPath && splatPath !== "journal" ? 1 : 0)
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set())
   const { agents, defaultAgentId } = useAgents()
   const { toast } = useToast()
@@ -30,6 +30,11 @@ export function MemoryPanel() {
   // On the index route the host's /apps/nova/* splat ("journal") leaks through
   // the merged params — only a deeper path is an actual file selection.
   const selectedFile = splatPath && splatPath !== "journal" ? splatPath : null
+
+  // Deep links and browser navigation select a document without a sidebar click.
+  useEffect(() => {
+    setMobileTab(selectedFile ? 1 : 0)
+  }, [selectedFile])
 
   useBreadcrumbLabel(
     selectedFile ? `/apps/nova/journal/${selectedFile}` : undefined,
