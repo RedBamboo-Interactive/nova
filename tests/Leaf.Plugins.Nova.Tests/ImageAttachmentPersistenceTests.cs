@@ -136,6 +136,73 @@ public sealed class ImageAttachmentPersistenceTests
         Assert.Equal("image/webp", image.MediaType);
     }
 
+    [Fact]
+    public async Task ShareResolutionCopiesAssistantRedLeafImagesAndRemovesPrivateUrls()
+    {
+        const string content =
+            "Before\n\n![Terrain](http://127.0.0.1:18804/api/assets/asset-1)\n\nAfter";
+        var enricher = new NovaShareEnricher(
+            null!, null!, new RedComputeClient(new AttachmentGateway()), null!, new AssetStub());
+
+        var resolved = await enricher.ResolveAssistantShareContentAsync(content, CancellationToken.None);
+
+        var image = Assert.Single(resolved.Images);
+        Assert.Equal("BAUG", image.Base64);
+        Assert.Equal("image/webp", image.MediaType);
+        Assert.Equal("Terrain", image.AltText);
+        Assert.DoesNotContain("127.0.0.1", resolved.Content);
+        Assert.Contains("Before", resolved.Content);
+        Assert.Contains("After", resolved.Content);
+    }
+
+    [Fact]
+    public async Task ShareResolutionCopiesTheTwoTerrainAssistantAssetsInOrder()
+    {
+        const string content =
+            "Fixed. These are now proper chat assets:\n\n" +
+            "![Verdant Valley atmospheric opening](http://127.0.0.1:18804/api/assets/f55ff946-c58a-48b7-aaaa-1e3f8a4f49e4.png)\n\n" +
+            "![Verdant Valley distant vegetation and hill detail](http://127.0.0.1:18804/api/assets/fa89ed4d-63a1-4f0e-811c-551983e8fe8a.png)";
+        var enricher = new NovaShareEnricher(
+            null!, null!, new RedComputeClient(new AttachmentGateway()), null!, new AssetStub());
+
+        var resolved = await enricher.ResolveAssistantShareContentAsync(content, CancellationToken.None);
+
+        Assert.Equal(2, resolved.Images.Count);
+        Assert.Equal("Verdant Valley atmospheric opening", resolved.Images[0].AltText);
+        Assert.Equal("Verdant Valley distant vegetation and hill detail", resolved.Images[1].AltText);
+        Assert.All(resolved.Images, image => Assert.Equal("image/png", image.MediaType));
+        Assert.Equal("Fixed. These are now proper chat assets:", resolved.Content);
+    }
+
+    [Fact]
+    public async Task ShareResolutionStripsScratchImagesButPreservesExternalImages()
+    {
+        const string content =
+            "![Private](</C:/Users/laure/AppData/Local/RedLeaf/Scratch/private.png>)\n\n" +
+            "![Public](https://example.com/public.png)";
+        var enricher = new NovaShareEnricher(
+            null!, null!, new RedComputeClient(new AttachmentGateway()), null!, new AssetStub());
+
+        var resolved = await enricher.ResolveAssistantShareContentAsync(content, CancellationToken.None);
+
+        Assert.Empty(resolved.Images);
+        Assert.DoesNotContain("C:/Users", resolved.Content);
+        Assert.Contains("![Public](https://example.com/public.png)", resolved.Content);
+    }
+
+    [Fact]
+    public async Task ShareResolutionFailsWhenAssistantAssetIsGone()
+    {
+        const string content = "![Missing](/api/assets/gone.png)";
+        var enricher = new NovaShareEnricher(
+            null!, null!, new RedComputeClient(new AttachmentGateway()), null!, new AssetStub());
+
+        var error = await Assert.ThrowsAsync<ShareSnapshotException>(() =>
+            enricher.ResolveAssistantShareContentAsync(content, CancellationToken.None));
+
+        Assert.Equal("share_image_unavailable", error.Code);
+    }
+
     private sealed class AttachmentGateway : IComputeGateway
     {
         public string? Path { get; private set; }
@@ -161,8 +228,14 @@ public sealed class ImageAttachmentPersistenceTests
         public string GetUrl(string assetId) => $"/api/assets/{assetId}";
 
         public Task<AssetFile?> ReadAsync(string assetId, CancellationToken ct = default) =>
-            Task.FromResult<AssetFile?>(assetId == "asset-1"
-                ? new AssetFile([4, 5, 6], "image/webp")
-                : null);
+            Task.FromResult<AssetFile?>(assetId switch
+            {
+                "asset-1" => new AssetFile([4, 5, 6], "image/webp"),
+                "f55ff946-c58a-48b7-aaaa-1e3f8a4f49e4.png" =>
+                    new AssetFile([7, 8, 9], "image/png"),
+                "fa89ed4d-63a1-4f0e-811c-551983e8fe8a.png" =>
+                    new AssetFile([10, 11, 12], "image/png"),
+                _ => null,
+            });
     }
 }

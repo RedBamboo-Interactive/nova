@@ -16,6 +16,10 @@ public sealed class NovaShareEnricher(
     private static readonly Regex PriorTag = new(
         @"<nova-prior-message[s]?[^>]*>[\s\S]*?</nova-prior-message[s]?>\s*", RegexOptions.Compiled);
 
+    private static readonly Regex MarkdownImage = new(
+        """!\[(?<alt>[^\]]*)\]\(\s*(?:<(?<angled>[^>]+)>|(?<plain>[^)\s]+))\s*\)""",
+        RegexOptions.Compiled);
+
     public async Task<ShareCustomization?> EnrichAsync(Guid discussionEntityId, CancellationToken ct = default)
     {
         var allDiscussions = await store.ListAsync(ct: ct);
@@ -150,6 +154,12 @@ public sealed class NovaShareEnricher(
                     userPartsByUid.TryGetValue(msg.MessageUid ?? "", out var persistedParts);
                     messageImages = await ResolveShareImagesAsync(msg.AttachmentsJson, persistedParts, ct);
                 }
+                else if (msg.Role != "user")
+                {
+                    var assistantContent = await ResolveAssistantShareContentAsync(content, ct);
+                    content = assistantContent.Content;
+                    messageImages = assistantContent.Images;
+                }
                 if (string.IsNullOrWhiteSpace(content) && messageImages.Count == 0) continue;
 
                 if (pendingRole != null && pendingRole != msg.Role)
@@ -172,11 +182,19 @@ public sealed class NovaShareEnricher(
                 if (source.StartsWith("event:")) continue;
 
                 var content = ExtractTextContent(m);
-                var images = m.Role == "user"
-                    ? await ResolveShareImagesAsync(
+                List<ShareableImage> images;
+                if (m.Role == "user")
+                {
+                    images = await ResolveShareImagesAsync(
                         transcriptJson: null,
-                        m.Metadata["parts_json"]?.GetValue<string>(), ct)
-                    : [];
+                        m.Metadata["parts_json"]?.GetValue<string>(), ct);
+                }
+                else
+                {
+                    var assistantContent = await ResolveAssistantShareContentAsync(content, ct);
+                    content = assistantContent.Content;
+                    images = assistantContent.Images;
+                }
                 if (string.IsNullOrWhiteSpace(content) && images.Count == 0) continue;
 
                 messages.Add(new ShareableMessage
@@ -246,6 +264,52 @@ public sealed class NovaShareEnricher(
             });
         }
         return result;
+    }
+
+    internal async Task<AssistantShareContent> ResolveAssistantShareContentAsync(
+        string content, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(content)) return new AssistantShareContent(content, []);
+
+        var images = new List<ShareableImage>();
+        var rewritten = new System.Text.StringBuilder(content.Length);
+        var copiedThrough = 0;
+
+        foreach (Match match in MarkdownImage.Matches(content))
+        {
+            var url = match.Groups["angled"].Success
+                ? match.Groups["angled"].Value
+                : match.Groups["plain"].Value;
+            var assetId = AssetIdFromAssistantImageUrl(url);
+            var removeFromPublicText = assetId is not null || IsPrivateImageReference(url);
+            if (!removeFromPublicText) continue;
+
+            rewritten.Append(content, copiedThrough, match.Index - copiedThrough);
+            copiedThrough = match.Index + match.Length;
+
+            if (assetId is null) continue;
+
+            var file = await assets.ReadAsync(assetId, ct)
+                ?? throw new ShareSnapshotException("share_image_unavailable",
+                    "An image authored in the discussion is no longer available in RedLeaf");
+            if (!IsShareableImageType(file.ContentType))
+                throw new ShareSnapshotException("invalid_share_image",
+                    $"Authored image media type '{file.ContentType}' cannot be shared");
+
+            images.Add(new ShareableImage
+            {
+                Base64 = Convert.ToBase64String(file.Bytes),
+                MediaType = file.ContentType,
+                AltText = string.IsNullOrWhiteSpace(match.Groups["alt"].Value)
+                    ? "Shared image"
+                    : match.Groups["alt"].Value,
+            });
+        }
+
+        if (copiedThrough == 0) return new AssistantShareContent(content, images);
+
+        rewritten.Append(content, copiedThrough, content.Length - copiedThrough);
+        return new AssistantShareContent(rewritten.ToString().Trim(), images);
     }
 
     internal static List<ShareImageSource> ExtractShareImageSources(string? json)
@@ -335,6 +399,34 @@ public sealed class NovaShareEnricher(
         return id.Length > 0 && !id.Contains('/') && !id.Contains('?') && !id.Contains('#') ? id : null;
     }
 
+    private static string? AssetIdFromAssistantImageUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        var direct = AssetIdFromUrl(url.Trim());
+        if (direct is not null) return direct;
+
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri)
+            || uri.Scheme is not ("http" or "https")
+            || !uri.IsLoopback
+            || uri.Port != 18804)
+            return null;
+
+        return AssetIdFromUrl(uri.AbsolutePath);
+    }
+
+    private static bool IsPrivateImageReference(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        var value = url.Trim();
+        if (value.StartsWith("/", StringComparison.Ordinal)
+            || value.StartsWith(@"\\", StringComparison.Ordinal)
+            || Regex.IsMatch(value, @"^/?[a-zA-Z]:[\\/]", RegexOptions.CultureInvariant))
+            return true;
+
+        return Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            && (uri.IsFile || (uri.Scheme is "http" or "https" && uri.IsLoopback));
+    }
+
     private static bool IsShareableImageType(string mediaType) => mediaType.ToLowerInvariant() is
         "image/png" or "image/jpeg" or "image/gif" or "image/webp";
 
@@ -384,4 +476,6 @@ public sealed class NovaShareEnricher(
 
     internal sealed record ShareImageSource(
         string Kind, string? Id, string? Base64, string? MediaType, string AltText);
+
+    internal sealed record AssistantShareContent(string Content, List<ShareableImage> Images);
 }
