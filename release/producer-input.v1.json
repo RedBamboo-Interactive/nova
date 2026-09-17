@@ -53,6 +53,11 @@
   "backendProject": "src/Leaf.Plugins.Nova/Leaf.Plugins.Nova.csproj",
   "testProject": "tests/Leaf.Plugins.Nova.Tests/Leaf.Plugins.Nova.Tests.csproj",
   "frontendDirectory": "web",
-  "dependencies": [],
+  "dependencies": [
+    {
+      "id": "redleaf",
+      "versionRange": ">=0.1.25 <0.2.0"
+    }
+  ],
   "runtimeRequirements": []
 }

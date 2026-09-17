@@ -267,7 +267,11 @@ public static class DiscussionEndpoints
             return Results.Ok(live);
         });
 
-        group.MapGet("/discussions/search", async (HttpContext ctx, DiscussionStore store, ISearch search) =>
+        group.MapGet("/discussions/search", async (
+            HttpContext ctx,
+            DiscussionStore store,
+            ISearch search,
+            ISearchAccessScopeProvider searchAccess) =>
         {
             var q = ctx.Request.Query["q"].FirstOrDefault();
             if (string.IsNullOrWhiteSpace(q))
@@ -282,13 +286,15 @@ public static class DiscussionEndpoints
             // messages — keyed by the discussion entity) and session-messages (the
             // actual transcript, keyed by the ai-session entity and mapped back to
             // the discussion through its session_id).
+            var accessScope = await searchAccess.ResolveAsync(ctx.User, ctx.RequestAborted);
             var result = await search.SearchConversationsAsync(new ConversationSearchQuery
             {
                 Query = q,
                 Streams = ["nova-messages", "session-messages"],
                 Limit = 100,
                 SnippetsPerConversation = 3,
-            });
+                AccessScope = accessScope,
+            }, ctx.RequestAborted);
 
             var accessible = (await store.ListAsync())
                 .Where(d => DiscussionAccessPolicy.CanRead(d, ctx))

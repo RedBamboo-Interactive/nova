@@ -58,6 +58,9 @@ test("Nova is a protected, versioned backend-plus-frontend extension", () => {
   assert.equal(input.classification, "protected")
   assert.equal(input.toolchain.node, "22.23.1")
   assert.equal(packageJson.engines.node, "22.23.1")
+  assert.deepEqual(input.dependencies, [
+    { id: "redleaf", versionRange: ">=0.1.25 <0.2.0" },
+  ])
 })
 
 test("automated version stamping permits only the three exact version fields", () => {

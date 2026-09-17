@@ -99,7 +99,10 @@ export function validateInput(input, manifest, packageJson) {
   for (const [, name, sourcePath] of expected) {
     if (packageJson.dependencies[name] !== `link:../../redbamboo-packages/${sourcePath}`) fail(`${name} must remain the local development link to its declared source path.`)
   }
-  if (!Array.isArray(input.dependencies) || input.dependencies.length !== 0 || !Array.isArray(input.runtimeRequirements) || input.runtimeRequirements.length !== 0) fail("Nova currently has no extension dependencies or packaged runtime requirements.")
+  if (JSON.stringify(input.dependencies) !== JSON.stringify([
+    { id: "redleaf", versionRange: ">=0.1.25 <0.2.0" },
+  ])) fail("Nova must declare the RedLeaf version that supplies its compiled Leaf.Sdk ABI.")
+  if (!Array.isArray(input.runtimeRequirements) || input.runtimeRequirements.length !== 0) fail("Nova currently has no packaged runtime requirements.")
 }
 
 export function buildMetadata(input, manifest, source) {

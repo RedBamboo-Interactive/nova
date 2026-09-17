@@ -544,7 +544,8 @@ public sealed class MessagePipeline(
         }
     }
 
-    private async Task<List<string>> GetRecentReactionLinesAsync(DiscussionRead discussion, DateTime since, CancellationToken ct)
+    internal async Task<List<string>> GetRecentReactionLinesAsync(
+        DiscussionRead discussion, DateTime since, CancellationToken ct)
     {
         var lines = new List<string>();
         try
@@ -558,13 +559,32 @@ public sealed class MessagePipeline(
             var messages = await discussions.GetMessagesAsync(discussion.EntityId, ct: ct);
             var msgByUid = new Dictionary<string, string>();
             foreach (var m in messages)
+                AddReactionPreview(
+                    msgByUid,
+                    m.Metadata["uid"]?.GetValue<string>(),
+                    m.Content);
+
+            var targetMessageUids = records
+                .Where(record => (record.Data["action"]?.GetValue<string>() ?? "add") == "add")
+                .Select(record => record.Data["message_key"]?.GetValue<string>())
+                .Where(messageKey => !string.IsNullOrWhiteSpace(messageKey))
+                .Select(messageKey => messageKey!)
+                .ToHashSet(StringComparer.Ordinal);
+            var unresolved = targetMessageUids.Any(messageKey => !msgByUid.ContainsKey(messageKey));
+
+            if (unresolved && !string.IsNullOrWhiteSpace(discussion.SessionId))
             {
-                var uid = m.Metadata["uid"]?.GetValue<string>();
-                if (uid != null && !msgByUid.ContainsKey(uid))
+                var snapshot = await redCompute.GetSessionAsync(
+                    discussion.SessionId, ct, tail: 500);
+                if (snapshot != null)
+                    AddSessionReactionPreviews(msgByUid, snapshot.Messages, targetMessageUids);
+
+                unresolved = targetMessageUids.Any(messageKey => !msgByUid.ContainsKey(messageKey));
+                if (unresolved && snapshot?.Messages.Count == 500)
                 {
-                    var preview = m.Content.Replace("\n", " ");
-                    if (preview.Length > 60) preview = preview[..57] + "...";
-                    msgByUid[uid] = preview;
+                    snapshot = await redCompute.GetSessionAsync(discussion.SessionId, ct);
+                    if (snapshot != null)
+                        AddSessionReactionPreviews(msgByUid, snapshot.Messages, targetMessageUids);
                 }
             }
 
@@ -585,6 +605,56 @@ public sealed class MessagePipeline(
         }
         catch { }
         return lines;
+    }
+
+    internal static void AddReactionPreview(
+        IDictionary<string, string> previews,
+        string? messageUid,
+        string? content)
+    {
+        if (string.IsNullOrWhiteSpace(messageUid)
+            || string.IsNullOrWhiteSpace(content)
+            || previews.ContainsKey(messageUid))
+            return;
+
+        var preview = content.Replace("\r", "").Replace("\n", " ");
+        if (preview.Length > 60) preview = preview[..57] + "...";
+        previews[messageUid] = preview;
+    }
+
+    internal static void AddSessionReactionPreviews(
+        IDictionary<string, string> previews,
+        IEnumerable<SessionMessage> messages,
+        IReadOnlySet<string>? targetMessageUids = null)
+    {
+        var candidates = ConversationExporter.CollapseMessages(messages.ToList())
+            .Where(message => message.EventType == "text"
+                && message.Role is "user" or "assistant"
+                && !string.IsNullOrWhiteSpace(message.MessageUid)
+                && !string.IsNullOrWhiteSpace(message.Content)
+                && (targetMessageUids is null || targetMessageUids.Contains(message.MessageUid!)))
+            .GroupBy(message => message.MessageUid!, StringComparer.Ordinal);
+
+        foreach (var turn in candidates)
+        {
+            var selected = turn
+                .Select((message, index) => new
+                {
+                    Message = message,
+                    Index = index,
+                    Priority = message.Phase switch
+                    {
+                        "final_answer" => 3,
+                        null or "" => 2,
+                        "commentary" => 1,
+                        _ => 0,
+                    },
+                })
+                .OrderByDescending(candidate => candidate.Priority)
+                .ThenByDescending(candidate => candidate.Index)
+                .First().Message;
+            AddReactionPreview(previews, turn.Key, selected.Content);
+        }
     }
 
     private static DateTime? ParseTimestamp(DiscussionMessage m)
