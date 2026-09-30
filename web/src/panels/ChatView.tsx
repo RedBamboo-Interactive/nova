@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type ProviderUsageSnapshot, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
@@ -51,19 +51,16 @@ interface ProviderInfo {
 function ChatHeaderAction({
   icon,
   label,
-  mobileIconOnly = false,
   ...props
 }: {
   icon: string
   label: string
-  mobileIconOnly?: boolean
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
       type="button"
       {...props}
       aria-label={props["aria-label"] ?? label}
-      data-mobile-icon-only={mobileIconOnly || undefined}
       data-slot="chat-header-action"
       className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
     >
@@ -285,6 +282,8 @@ export function ChatView({
     ), [])
   const share = useShare(activeDiscussion?.entityId)
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
+  const [sessionInfoOpen, setSessionInfoOpen] = useState(false)
+  const [titleEditing, setTitleEditing] = useState(false)
   const [confidentialityPending, setConfidentialityPending] = useState(false)
   const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
@@ -295,6 +294,11 @@ export function ChatView({
   const [monitorSources, setMonitorSources] = useState<MonitorVisualSource[]>([])
   const [monitorSourcesLoading, setMonitorSourcesLoading] = useState(false)
   const [monitorSourcesError, setMonitorSourcesError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setSessionInfoOpen(false)
+    setTitleEditing(false)
+  }, [activeDiscussionId])
 
   useEffect(() => {
     api.get<{ tiers: QualityTierInfo[] }>("/ai-session/quality-modes")
@@ -616,6 +620,12 @@ export function ChatView({
     setShareDialogOpen(true)
   }, [share])
 
+  const handleCloseDiscussion = useCallback(() => {
+    if (!activeDiscussion || activeDiscussion.type !== "chat") return
+    void archiveDiscussion(activeDiscussion.id)
+    navigate("/apps/nova/chat")
+  }, [activeDiscussion, archiveDiscussion, navigate])
+
   const liveHeartbeatPair = findLiveHeartbeatPair(discussions, activeDiscussion)
 
   const liveHeartbeatTabs = liveHeartbeatPair && (
@@ -661,6 +671,31 @@ export function ChatView({
     </Tabs>
   )
 
+  const canManageDiscussion = activeDiscussion?.type === "chat"
+
+  const sessionInfoContent = activeDiscussion && (
+    <div className="flex items-start justify-between gap-3 rounded-lg border border-overlay-6 bg-overlay-3 px-3 py-2.5">
+      <div className="flex min-w-0 items-start gap-2.5">
+        <i className="ph-bold ph-lock-simple mt-0.5 text-sm text-text-muted" aria-hidden="true" />
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-contrast">Confidential</div>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
+            Excludes this discussion from Live activity, heartbeat and other discussions&apos; context, and bulk exports. The share control is hidden. It remains stored and accessible here.
+          </p>
+        </div>
+      </div>
+      <Switch
+        size="sm"
+        className="mt-0.5 shrink-0"
+        checked={activeDiscussion.confidential ?? false}
+        onCheckedChange={handleConfidentialToggle}
+        disabled={confidentialityPending}
+        aria-busy={confidentialityPending}
+        aria-label="Confidential discussion"
+      />
+    </div>
+  )
+
   const chatHeader = activeDiscussion && (
     <PanelHeader
       leading={
@@ -668,29 +703,112 @@ export function ChatView({
           <EditableTitle
             title={activeDiscussion.title || "New discussion"}
             onRename={(title) => renameDiscussion(activeDiscussion.id, title)}
+            editing={titleEditing}
+            onEditingChange={setTitleEditing}
           />
         )
       }
     >
-      {!floating && !activeDiscussion.confidential && (
-        <ChatHeaderAction
-          onClick={handleShare}
-          icon="ph-bold ph-share-network"
-          label="Share"
-          mobileIconOnly
-          title="Share conversation"
-        />
-      )}
-      {!floating && floatingSurface?.supported && (
-        <ChatHeaderAction
-          onClick={() => void runUiSurfaceAction("nova:floating-chat", "open", { discussionId: activeDiscussion.id })}
-          icon="ph-bold ph-picture-in-picture"
-          label="Float"
-          data-slot="floating-surface-trigger"
-          data-ui-surface="nova:floating-chat"
-          data-ui-action="open"
-          title="Float Nova (Ctrl+Alt+N)"
-        />
+      {!floating && (
+        <>
+          <div className="nova-chat-header-desktop-actions flex items-center">
+            {canManageDiscussion && (
+              <>
+                <ChatHeaderAction
+                  onClick={() => setTitleEditing(true)}
+                  icon="ph-bold ph-pen"
+                  label="Rename"
+                  title="Rename discussion"
+                />
+                <ChatHeaderAction
+                  onClick={handleCloseDiscussion}
+                  icon="ph-bold ph-x"
+                  label="Close"
+                  title="Close discussion"
+                />
+              </>
+            )}
+            {!activeDiscussion.confidential && (
+              <ChatHeaderAction
+                onClick={handleShare}
+                icon="ph-bold ph-share-network"
+                label="Share"
+                title="Share conversation"
+              />
+            )}
+            {floatingSurface?.supported && (
+              <ChatHeaderAction
+                onClick={() => void runUiSurfaceAction("nova:floating-chat", "open", { discussionId: activeDiscussion.id })}
+                icon="ph-bold ph-picture-in-picture"
+                label="Float"
+                data-slot="floating-surface-trigger"
+                data-ui-surface="nova:floating-chat"
+                data-ui-action="open"
+                title="Float Nova (Ctrl+Alt+N)"
+              />
+            )}
+            <SessionInfoButton
+              stats={sessionStats}
+              messages={activeMessages}
+              agent={activeAgent ? {
+                id: activeAgent.id,
+                name: activeAgent.name,
+                avatarUrl: activeAgent.avatarUrl,
+                href: getEntityHref("agent", activeAgent.id),
+              } : null}
+              qualityTierOptions={qualityTiers.map(t => ({ value: t.slug, label: t.label, color: t.color, icon: t.icon }))}
+              providerOptions={providers.map(p => ({
+                value: p.slug,
+                aliases: [p.backend],
+                label: p.name,
+                color: p.color,
+                icon: p.icon,
+                iconSvgPath: p.iconSvgPath,
+              }))}
+              loadProviderUsage={loadProviderUsage}
+              open={sessionInfoOpen}
+              onOpenChange={setSessionInfoOpen}
+            >
+              {sessionInfoContent}
+            </SessionInfoButton>
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className="nova-chat-header-mobile-menu h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
+              aria-label="Conversation actions"
+              title="Conversation actions"
+            >
+              <i aria-hidden="true" className="ph-bold ph-dots-three-vertical text-base" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" sideOffset={4}>
+              {canManageDiscussion && (
+                <DropdownMenuItem onClick={() => setTitleEditing(true)}>
+                  <i aria-hidden="true" className="ph-bold ph-pen size-4" />
+                  Rename
+                </DropdownMenuItem>
+              )}
+              {!activeDiscussion.confidential && (
+                <DropdownMenuItem onClick={handleShare}>
+                  <i aria-hidden="true" className="ph-bold ph-share-network size-4" />
+                  Share
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onClick={() => setSessionInfoOpen(true)}>
+                <i aria-hidden="true" className="ph-bold ph-info size-4" />
+                Info
+              </DropdownMenuItem>
+              {canManageDiscussion && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onClick={handleCloseDiscussion}>
+                    <i aria-hidden="true" className="ph-bold ph-x size-4" />
+                    Close
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
       )}
       {floating && onDock && (
         <ChatHeaderAction
@@ -702,47 +820,30 @@ export function ChatView({
           title="Dock in RedLeaf"
         />
       )}
-      <SessionInfoButton
-        stats={sessionStats}
-        messages={activeMessages}
-        agent={activeAgent ? {
-          id: activeAgent.id,
-          name: activeAgent.name,
-          avatarUrl: activeAgent.avatarUrl,
-          href: getEntityHref("agent", activeAgent.id),
-        } : null}
-        qualityTierOptions={qualityTiers.map(t => ({ value: t.slug, label: t.label, color: t.color, icon: t.icon }))}
-        providerOptions={providers.map(p => ({
-          value: p.slug,
-          aliases: [p.backend],
-          label: p.name,
-          color: p.color,
-          icon: p.icon,
-          iconSvgPath: p.iconSvgPath,
-        }))}
-        loadProviderUsage={loadProviderUsage}
-      >
-        <div className="flex items-start justify-between gap-3 rounded-lg border border-overlay-6 bg-overlay-3 px-3 py-2.5">
-          <div className="flex min-w-0 items-start gap-2.5">
-            <i className="ph-bold ph-lock-simple mt-0.5 text-sm text-text-muted" aria-hidden="true" />
-            <div className="min-w-0">
-              <div className="text-xs font-medium text-contrast">Confidential</div>
-              <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
-                Excludes this discussion from Live activity, heartbeat and other discussions&apos; context, and bulk exports. The share control is hidden. It remains stored and accessible here.
-              </p>
-            </div>
-          </div>
-          <Switch
-            size="sm"
-            className="mt-0.5 shrink-0"
-            checked={activeDiscussion.confidential ?? false}
-            onCheckedChange={handleConfidentialToggle}
-            disabled={confidentialityPending}
-            aria-busy={confidentialityPending}
-            aria-label="Confidential discussion"
-          />
-        </div>
-      </SessionInfoButton>
+      {floating && (
+        <SessionInfoButton
+          stats={sessionStats}
+          messages={activeMessages}
+          agent={activeAgent ? {
+            id: activeAgent.id,
+            name: activeAgent.name,
+            avatarUrl: activeAgent.avatarUrl,
+            href: getEntityHref("agent", activeAgent.id),
+          } : null}
+          qualityTierOptions={qualityTiers.map(t => ({ value: t.slug, label: t.label, color: t.color, icon: t.icon }))}
+          providerOptions={providers.map(p => ({
+            value: p.slug,
+            aliases: [p.backend],
+            label: p.name,
+            color: p.color,
+            icon: p.icon,
+            iconSvgPath: p.iconSvgPath,
+          }))}
+          loadProviderUsage={loadProviderUsage}
+        >
+          {sessionInfoContent}
+        </SessionInfoButton>
+      )}
     </PanelHeader>
   )
 

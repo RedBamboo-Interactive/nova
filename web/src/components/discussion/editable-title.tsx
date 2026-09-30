@@ -3,13 +3,20 @@ import { useState, useEffect, useRef } from "react"
 interface Props {
   title: string
   onRename: (title: string) => void
+  editing?: boolean
+  onEditingChange?: (editing: boolean) => void
 }
 
 /** Discussion title that turns into an inline input on click. Enter/blur saves, Escape cancels. */
-export function EditableTitle({ title, onRename }: Props) {
-  const [editing, setEditing] = useState(false)
+export function EditableTitle({ title, onRename, editing: controlledEditing, onEditingChange }: Props) {
+  const [uncontrolledEditing, setUncontrolledEditing] = useState(false)
+  const editing = controlledEditing ?? uncontrolledEditing
   const [value, setValue] = useState(title)
   const inputRef = useRef<HTMLInputElement>(null)
+  const setEditing = (nextEditing: boolean) => {
+    if (controlledEditing === undefined) setUncontrolledEditing(nextEditing)
+    onEditingChange?.(nextEditing)
+  }
 
   useEffect(() => {
     setValue(title)
