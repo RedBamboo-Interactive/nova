@@ -69,6 +69,7 @@ public sealed class DiscussionTitlePolicyTests
 
     [Theory]
     [InlineData(DiscussionTitleSource.Manual)]
+    [InlineData(DiscussionTitleSource.Generated)]
     [InlineData(DiscussionTitleSource.System)]
     [InlineData(DiscussionTitleSource.LegacyLocked)]
     public async Task ProtectedSourcesRejectSessionTitles(string source)
@@ -139,6 +140,23 @@ public sealed class DiscussionTitlePolicyTests
 
         Assert.Equal("Mine", result!.Title);
         Assert.Equal(DiscussionTitleSource.Manual, result.TitleSource);
+    }
+
+    [Fact]
+    public async Task GeneratedTitleReturnsCanonicalGeneratedSourceAndBlocksSessionDrift()
+    {
+        var fixture = new Fixture();
+        var discussion = fixture.Add("Old", DiscussionTitleSource.Session);
+
+        var generated = await fixture.Store.SetGeneratedTitleAsync(
+            discussion.EntityId, "Generated title");
+        var afterSessionUpdate = await fixture.Store.TryApplySessionTitleAsync(
+            discussion.EntityId, "Late session title");
+
+        Assert.Equal("Generated title", generated!.Title);
+        Assert.Equal(DiscussionTitleSource.Generated, generated.TitleSource);
+        Assert.Equal("Generated title", afterSessionUpdate!.Title);
+        Assert.Equal(DiscussionTitleSource.Generated, afterSessionUpdate.TitleSource);
     }
 
     private static DiscussionMessage Message(Guid entityId, long id, string source, string content)

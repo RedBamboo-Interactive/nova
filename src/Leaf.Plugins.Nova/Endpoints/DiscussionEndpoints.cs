@@ -901,6 +901,72 @@ public static class DiscussionEndpoints
             return updated is null ? NotFound() : Results.Ok(DiscussionStore.ToInfo(updated));
         });
 
+        group.MapPost("/discussions/{id}/title/generate", async (
+            string id, HttpContext ctx, DiscussionStore store, AgentDirectory agents,
+            RedComputeClient redCompute,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities) =>
+        {
+            var discussion = await store.GetAsync(id, ctx.RequestAborted);
+            if (discussion is null) return NotFound();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+            if (!string.Equals(discussion.Type, "chat", StringComparison.Ordinal))
+                return Results.Json(new { error = "title_generation_not_supported", message = "Only chat discussions can generate a title." }, statusCode: 409);
+            if (discussion.SessionId is null)
+                return Results.Json(new { error = "session_required", message = "This discussion has no session transcript yet." }, statusCode: 409);
+
+            var agent = discussion.AgentId is not null
+                ? await agents.GetAgentAsync(discussion.AgentId, ctx.RequestAborted)
+                : null;
+            if (agent is null)
+                return Results.Json(new { error = "missing_agent", message = "The discussion agent is unavailable." }, statusCode: 422);
+
+            var snapshot = await redCompute.GetSessionAsync(
+                discussion.SessionId, ctx.RequestAborted, tail: 500);
+            if (snapshot is null)
+                return Results.Json(new { error = "session_unavailable", message = "The discussion transcript is unavailable." }, statusCode: 503);
+            var prompt = DiscussionTitleGeneration.BuildPrompt(discussion.Title, snapshot.Messages);
+            if (prompt is null)
+                return Results.Json(new { error = "transcript_empty", message = "There is not enough conversation to generate a title." }, statusCode: 409);
+
+            var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(
+                entities, discussion.OwnerId, ctx.RequestAborted);
+            var provenance = await NovaComputeProvenance.CreateAsync(
+                entities, agent, beneficiary,
+                $"/api/apps/nova/discussions/{id}/title/generate",
+                [new ComputeContextReference("discussion", id),
+                 new ComputeContextReference("session", discussion.SessionId)],
+                method: "POST", ct: ctx.RequestAborted);
+            var generated = await redCompute.GenerateAsync(new
+            {
+                mode = "oneshot",
+                qualityTier = "fast",
+                system = "Write a concise, specific title for this conversation in at most six words. Output only the title, with no label, quotes, or ending punctuation.",
+                messages = new[] { new { role = "user", content = prompt } },
+                maxTokens = 48,
+                confidential = discussion.Confidential,
+            }, "Update Nova discussion title", provenance, ctx.RequestAborted);
+
+            var title = DiscussionTitleGeneration.CleanGeneratedTitle(generated.Text);
+            if (!generated.Success || title is null)
+                return Results.Json(new
+                {
+                    error = "title_generation_failed",
+                    message = generated.Error ?? "The fast model did not return a usable title.",
+                    jobId = generated.JobId,
+                }, statusCode: generated.StatusCode is >= 400 and < 600 ? generated.StatusCode : 502);
+
+            var updated = await store.SetGeneratedTitleAsync(
+                discussion.EntityId, title, ctx.RequestAborted);
+            return updated is null
+                ? NotFound()
+                : Results.Ok(new
+                {
+                    discussion = DiscussionStore.ToInfo(updated),
+                    jobId = generated.JobId,
+                    qualityTier = "fast",
+                });
+        });
+
         group.MapPut("/discussions/{id}/title/fallback", async (string id, DiscussionTitleRequest request, HttpContext ctx, DiscussionStore store) =>
         {
             var discussion = await store.GetAsync(id);

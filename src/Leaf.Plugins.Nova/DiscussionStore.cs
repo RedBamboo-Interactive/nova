@@ -43,6 +43,7 @@ public static class DiscussionTitleSource
 {
     public const string Fallback = "fallback";
     public const string Session = "session";
+    public const string Generated = "generated";
     public const string Manual = "manual";
     public const string System = "system";
     public const string LegacyLocked = "legacy-locked";
@@ -285,6 +286,31 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
                 ["title"] = title,
                 ["title_source"] = DiscussionTitleSource.Manual,
             }, title ?? $"Discussion {Str(entity.Data, "discussion_id")}", ct);
+            var updated = await entities.GetAsync(entityId, ct);
+            return updated is null ? null : Map(updated);
+        }, ct);
+
+    /// <summary>
+    /// Applies an explicit AI-generated title. Generated titles are user-requested
+    /// and therefore protected from later automatic session-title refinements.
+    /// </summary>
+    public Task<DiscussionRead?> SetGeneratedTitleAsync(
+        Guid entityId, string title, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            var current = entity is null ? null : Map(entity);
+            if (entity is null || current is null || string.IsNullOrWhiteSpace(title)) return current;
+            if (!string.Equals(current.Type, "chat", StringComparison.Ordinal)) return current;
+
+            var normalized = title.Trim();
+            if (current.TitleSource is DiscussionTitleSource.Generated
+                && string.Equals(current.Title, normalized, StringComparison.Ordinal)) return current;
+            await entities.PatchAsync(entityId, new JsonObject
+            {
+                ["title"] = normalized,
+                ["title_source"] = DiscussionTitleSource.Generated,
+            }, normalized, ct);
             var updated = await entities.GetAsync(entityId, ct);
             return updated is null ? null : Map(updated);
         }, ct);

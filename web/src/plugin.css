@@ -88,6 +88,16 @@
   display: none;
 }
 
+@media (max-width: 1023px) {
+  .nova-chat-header-desktop-actions {
+    display: none;
+  }
+
+  .nova-chat-header-mobile-menu {
+    display: inline-flex;
+  }
+}
+
 @media (max-width: 767px) {
   .nova-chat-layout--mobile-avatar > [data-slot="tabs"] > [data-slot="tabs-list"] {
     width: calc(100% - 5.5rem);
@@ -98,13 +108,6 @@
     padding-left: 6rem;
   }
 
-  .nova-chat-header-desktop-actions {
-    display: none;
-  }
-
-  .nova-chat-header-mobile-menu {
-    display: inline-flex;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

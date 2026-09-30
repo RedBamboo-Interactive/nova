@@ -87,6 +87,30 @@ public sealed class RedComputeClientTests
     }
 
     [Fact]
+    public async Task StatelessGenerationCarriesFastTierConfidentialityAndProvenance()
+    {
+        var gateway = new GenerateComputeGateway();
+        var client = new RedComputeClient(gateway);
+        var provenance = Provenance();
+
+        var result = await client.GenerateAsync(new
+        {
+            mode = "oneshot",
+            qualityTier = "fast",
+            confidential = true,
+        }, "Update title", provenance);
+
+        Assert.True(result.Success);
+        Assert.Equal("A concise title", result.Text);
+        Assert.Equal(Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"), result.JobId);
+        Assert.Equal("/ai-session/generate", gateway.Path);
+        Assert.Equal("Update title", gateway.JobName);
+        Assert.Equal(provenance, gateway.Provenance);
+        Assert.Contains("\"qualityTier\":\"fast\"", gateway.Body);
+        Assert.Contains("\"confidential\":true", gateway.Body);
+    }
+
+    [Fact]
     public async Task InputAttachmentDownloadUsesAuthorizedGatewayWithoutLeakingItsUrl()
     {
         var gateway = new BinaryComputeGateway();
@@ -182,6 +206,32 @@ public sealed class RedComputeClientTests
             {
                 Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json"),
             });
+    }
+
+    private sealed class GenerateComputeGateway : IComputeGateway
+    {
+        public string? Path { get; private set; }
+        public string? Body { get; private set; }
+        public string? JobName { get; private set; }
+        public ComputeProvenance? Provenance { get; private set; }
+
+        public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            ComputeProvenance? provenance = null, CancellationToken ct = default)
+        {
+            Path = request.RequestUri?.OriginalString;
+            Body = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
+            JobName = request.Headers.TryGetValues("X-Job-Name", out var values)
+                ? values.SingleOrDefault() : null;
+            Provenance = provenance;
+            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"success\":true,\"text\":\"A concise title\"}",
+                    System.Text.Encoding.UTF8, "application/json"),
+            };
+            response.Headers.Add("X-Job-Id", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+            return response;
+        }
     }
 
     private sealed class BinaryComputeGateway : IComputeGateway

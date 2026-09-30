@@ -1576,6 +1576,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
     upsertDiscussion(updated)
   }, [])
 
+  const updateDiscussionTitle = useCallback(async (id: string) => {
+    const result = await api.post<{ discussion: DiscussionInfo; jobId?: string; qualityTier: "fast" }>(
+      `/api/apps/nova/discussions/${id}/title/generate`,
+    )
+    upsertDiscussion(result.discussion)
+    return result.discussion
+  }, [])
+
   const setConfidential = useCallback(async (id: string, confidential: boolean) => {
     await api.put(`/api/apps/nova/discussions/${id}/confidential`, { confidential })
     setDiscussions((prev) => prev.map((d) => d.id === id ? { ...d, confidential } : d))
@@ -1603,6 +1611,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     rotateDiscussion,
     dismissDiscussion,
     renameDiscussion,
+    updateDiscussionTitle,
     setConfidential,
     resumeDiscussion,
     loadEarlierMessages,

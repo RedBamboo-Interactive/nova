@@ -136,6 +136,78 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     public sealed record ExecuteResult(
         bool Success, string? Text, string? Error, string? SessionId, Guid? JobId);
 
+    public sealed record GenerateResult(
+        bool Success, string? Text, string? Error, Guid? JobId, int StatusCode);
+
+    /// <summary>Provider-neutral stateless generation with a signed execution identity.</summary>
+    public async Task<GenerateResult> GenerateAsync(
+        object body, string jobName, ComputeProvenance provenance,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/ai-session/generate")
+            {
+                Content = JsonContent.Create(body, options: JsonOptions),
+            };
+            request.Headers.Add("X-Job-Name", jobName);
+            using var response = await gateway.SendAsync(request, provenance, ct);
+            var raw = await response.Content.ReadAsStringAsync(ct);
+            var jobId = response.Headers.TryGetValues("X-Job-Id", out var jobValues)
+                && Guid.TryParse(jobValues.FirstOrDefault(), out var parsedJobId)
+                    ? parsedJobId : (Guid?)null;
+
+            JsonElement root = default;
+            try
+            {
+                using var document = JsonDocument.Parse(raw);
+                root = document.RootElement.Clone();
+            }
+            catch { }
+
+            var text = root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("text", out var textValue)
+                && textValue.ValueKind == JsonValueKind.String
+                    ? textValue.GetString() : null;
+            var error = root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("error", out var errorValue)
+                && errorValue.ValueKind == JsonValueKind.String
+                    ? errorValue.GetString() : null;
+            if (string.IsNullOrWhiteSpace(error)
+                && root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("message", out var messageValue)
+                && messageValue.ValueKind == JsonValueKind.String)
+                error = messageValue.GetString();
+
+            var success = response.IsSuccessStatusCode
+                && root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("success", out var successValue)
+                && successValue.ValueKind == JsonValueKind.True;
+            if (!success && string.IsNullOrWhiteSpace(error))
+                error = response.IsSuccessStatusCode
+                    ? "RedCompute returned an invalid generation response"
+                    : $"RedCompute HTTP {(int)response.StatusCode}";
+            return new(success, text, error, jobId, (int)response.StatusCode);
+        }
+        catch (Exception ex) when (ex.GetType().Name.Equals(
+            "ExecutionIdentityValidationException", StringComparison.Ordinal))
+        {
+            return new(false, null, ex.Message, null, 403);
+        }
+        catch (TaskCanceledException ex)
+        {
+            return new(false, null, ex.Message, null, 504);
+        }
+        catch (HttpRequestException ex)
+        {
+            return new(false, null, ex.Message, null, 502);
+        }
+        catch (Exception ex)
+        {
+            return new(false, null, ex.Message, null, 500);
+        }
+    }
+
     /// <summary>
     /// One-shot blocking execution via /ai-session/execute — used by automation runs.
     /// The call returns when the session completes (or <paramref name="timeoutSeconds"/>

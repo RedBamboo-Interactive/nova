@@ -62,7 +62,7 @@ function ChatHeaderAction({
       {...props}
       aria-label={props["aria-label"] ?? label}
       data-slot="chat-header-action"
-      className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
+      className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50 disabled:pointer-events-none disabled:opacity-50"
     >
       <i aria-hidden="true" className={`${icon} text-sm`} />
       <span>{label}</span>
@@ -165,6 +165,7 @@ export function ChatView({
     rotateDiscussion,
     dismissDiscussion,
     renameDiscussion,
+    updateDiscussionTitle,
     setConfidential,
     resumeDiscussion,
     loadEarlierMessages,
@@ -284,6 +285,7 @@ export function ChatView({
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false)
   const [titleEditing, setTitleEditing] = useState(false)
+  const [titleUpdatePending, setTitleUpdatePending] = useState(false)
   const [confidentialityPending, setConfidentialityPending] = useState(false)
   const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
@@ -298,6 +300,7 @@ export function ChatView({
   useEffect(() => {
     setSessionInfoOpen(false)
     setTitleEditing(false)
+    setTitleUpdatePending(false)
   }, [activeDiscussionId])
 
   useEffect(() => {
@@ -620,6 +623,23 @@ export function ChatView({
     setShareDialogOpen(true)
   }, [share])
 
+  const handleUpdateTitle = useCallback(async () => {
+    if (!activeDiscussionId || titleUpdatePending) return
+    setTitleUpdatePending(true)
+    try {
+      const updated = await updateDiscussionTitle(activeDiscussionId)
+      toast({ variant: "success", title: "Title updated", description: updated.title || "New discussion" })
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "Could not update title",
+        description: error instanceof Error ? error.message : "Unknown error",
+      })
+    } finally {
+      setTitleUpdatePending(false)
+    }
+  }, [activeDiscussionId, titleUpdatePending, toast, updateDiscussionTitle])
+
   const handleCloseDiscussion = useCallback(() => {
     if (!activeDiscussion || activeDiscussion.type !== "chat") return
     void archiveDiscussion(activeDiscussion.id)
@@ -721,6 +741,14 @@ export function ChatView({
                   title="Rename discussion"
                 />
                 <ChatHeaderAction
+                  onClick={() => void handleUpdateTitle()}
+                  icon={titleUpdatePending ? "ph-bold ph-spinner-gap animate-spin" : "ph-bold ph-sparkle"}
+                  label="Update title"
+                  title="Generate a new title with the fast model"
+                  disabled={titleUpdatePending}
+                  aria-busy={titleUpdatePending}
+                />
+                <ChatHeaderAction
                   onClick={handleCloseDiscussion}
                   icon="ph-bold ph-x"
                   label="Close"
@@ -782,10 +810,20 @@ export function ChatView({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" sideOffset={4}>
               {canManageDiscussion && (
-                <DropdownMenuItem onClick={() => setTitleEditing(true)}>
-                  <i aria-hidden="true" className="ph-bold ph-pen size-4" />
-                  Rename
-                </DropdownMenuItem>
+                <>
+                  <DropdownMenuItem onClick={() => setTitleEditing(true)}>
+                    <i aria-hidden="true" className="ph-bold ph-pen size-4" />
+                    Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => void handleUpdateTitle()}
+                    disabled={titleUpdatePending}
+                    aria-busy={titleUpdatePending}
+                  >
+                    <i aria-hidden="true" className={`${titleUpdatePending ? "ph-bold ph-spinner-gap animate-spin" : "ph-bold ph-sparkle"} size-4`} />
+                    Update title
+                  </DropdownMenuItem>
+                </>
               )}
               {!activeDiscussion.confidential && (
                 <DropdownMenuItem onClick={handleShare}>

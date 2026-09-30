@@ -2,7 +2,7 @@ export interface DiscussionInfo {
   id: string
   entityId: string
   title: string | null
-  titleSource: "fallback" | "session" | "manual" | "system" | "legacy-locked" | null
+  titleSource: "fallback" | "session" | "generated" | "manual" | "system" | "legacy-locked" | null
   sessionId: string | null
   /** "archiving" = archive intent committed server-side, session stop not yet
    * confirmed. Treated exactly like "archived" everywhere in the UI. */
