@@ -731,50 +731,8 @@ export function ChatView({
     >
       {!floating && (
         <>
-          <div className="nova-chat-header-desktop-actions flex items-center">
-            {canManageDiscussion && (
-              <>
-                <ChatHeaderAction
-                  onClick={() => setTitleEditing(true)}
-                  icon="ph-bold ph-pen"
-                  label="Rename"
-                  title="Rename discussion"
-                />
-                <ChatHeaderAction
-                  onClick={() => void handleUpdateTitle()}
-                  icon={titleUpdatePending ? "ph-bold ph-spinner-gap animate-spin" : "ph-bold ph-sparkle"}
-                  label="Update title"
-                  title="Generate a new title with the fast model"
-                  disabled={titleUpdatePending}
-                  aria-busy={titleUpdatePending}
-                />
-                <ChatHeaderAction
-                  onClick={handleCloseDiscussion}
-                  icon="ph-bold ph-x"
-                  label="Close"
-                  title="Close discussion"
-                />
-              </>
-            )}
-            {!activeDiscussion.confidential && (
-              <ChatHeaderAction
-                onClick={handleShare}
-                icon="ph-bold ph-share-network"
-                label="Share"
-                title="Share conversation"
-              />
-            )}
-            {floatingSurface?.supported && (
-              <ChatHeaderAction
-                onClick={() => void runUiSurfaceAction("nova:floating-chat", "open", { discussionId: activeDiscussion.id })}
-                icon="ph-bold ph-picture-in-picture"
-                label="Float"
-                data-slot="floating-surface-trigger"
-                data-ui-surface="nova:floating-chat"
-                data-ui-action="open"
-                title="Float Nova (Ctrl+Alt+N)"
-              />
-            )}
+          {/* The controlled modal portals outside this hidden legacy trigger. */}
+          <div className="hidden">
             <SessionInfoButton
               stats={sessionStats}
               messages={activeMessages}
@@ -802,7 +760,7 @@ export function ChatView({
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger
-              className="nova-chat-header-mobile-menu h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
               aria-label="Conversation actions"
               title="Conversation actions"
             >
@@ -829,6 +787,19 @@ export function ChatView({
                 <DropdownMenuItem onClick={handleShare}>
                   <i aria-hidden="true" className="ph-bold ph-share-network size-4" />
                   Share
+                </DropdownMenuItem>
+              )}
+              {floatingSurface?.supported && (
+                <DropdownMenuItem
+                  className="hidden lg:flex"
+                  onClick={() => void runUiSurfaceAction("nova:floating-chat", "open", { discussionId: activeDiscussion.id })}
+                  data-slot="floating-surface-trigger"
+                  data-ui-surface="nova:floating-chat"
+                  data-ui-action="open"
+                  title="Float Nova (Ctrl+Alt+N)"
+                >
+                  <i aria-hidden="true" className="ph-bold ph-picture-in-picture size-4" />
+                  Float
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem onClick={() => setSessionInfoOpen(true)}>
