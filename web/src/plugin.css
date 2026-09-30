@@ -84,6 +84,13 @@
   will-change: transform;
 }
 
+/* Float retains the desktop eligibility of its former header action. */
+@media (max-width: 1023px) {
+  .nova-chat-menu-float {
+    display: none;
+  }
+}
+
 @media (max-width: 767px) {
   .nova-chat-layout--mobile-avatar > [data-slot="tabs"] > [data-slot="tabs-list"] {
     width: calc(100% - 5.5rem);

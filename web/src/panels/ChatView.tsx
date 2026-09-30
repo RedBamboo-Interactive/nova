@@ -791,7 +791,7 @@ export function ChatView({
               )}
               {floatingSurface?.supported && (
                 <DropdownMenuItem
-                  className="hidden lg:flex"
+                  className="nova-chat-menu-float"
                   onClick={() => void runUiSurfaceAction("nova:floating-chat", "open", { discussionId: activeDiscussion.id })}
                   data-slot="floating-surface-trigger"
                   data-ui-surface="nova:floating-chat"
