@@ -13,10 +13,13 @@ after the final query is not globally serialized by this bounded repair.
 
 Disclosure defaults to ConfidentialOnly. OwnerApprovedSummary is for trusted
 contributors that independently obtained owner approval; it deliberately allows public
-targets. Private contributors must use ConfidentialOnly and minimal public
-invalidations with private retrieval. Confidential targets retain existing minimal
-discussion.changed invalidations. Scoped keys are namespaced by user/Agent; durable
+targets. ConfidentialOnly remains the safe default when that approval isn't carried.
+Recipient-bearing delivery always emits minimal discussion.changed invalidations with
+the target's actual confidential flag, including non-confidential targets: no content
+or metadata/evidence link is mirrored onto the public bus. Authoritative message reads
+retain normal target permissions. Unscoped legacy Presence retains discussion.event.
+Scoped keys are namespaced by user/Agent; durable
 discussion dedup is unchanged. No transcript ownership/provider/queue/reconciliation
 changes. Tests cover correct scope, concurrent retry, wrong user/Agent, unknown/closed/
 ambiguous targets, disclosure policies, admission races and legacy Presence. Backend:
-215 passed. Loaded-suite acceptance is separate.
+220 passed. Loaded-suite acceptance is separate.

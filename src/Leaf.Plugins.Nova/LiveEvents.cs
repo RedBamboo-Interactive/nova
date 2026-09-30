@@ -150,12 +150,15 @@ public sealed class EventInjector(
         if (persisted)
         {
             var timestamp = DateTimeOffset.UtcNow.ToString("O");
-            if (discussion.Confidential)
+            // Scoped projections always invalidate for authoritative retrieval, even
+            // when an owner-approved summary is admitted to a non-confidential LIVE.
+            // Do not mirror that summary/evidence link into the public plugin bus.
+            if (discussion.Confidential || recipient is not null)
                 await events.PublishAsync("discussion.changed", new JsonObject
                 {
                     ["discussionId"] = discussion.Id,
                     ["timestamp"] = timestamp,
-                    ["confidential"] = true,
+                    ["confidential"] = discussion.Confidential,
                 }, ct);
             else
                 await events.PublishAsync("discussion.event", new JsonObject

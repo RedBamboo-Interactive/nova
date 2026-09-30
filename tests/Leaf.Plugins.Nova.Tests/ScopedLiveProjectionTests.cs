@@ -63,12 +63,31 @@ public sealed class ScopedLiveProjectionTests
     [Fact] public async Task NonConfidentialSummaryRequiresExplicitDisclosureAndLegacyPresencePathIsUnchanged()
     {
         using var f=new Fixture();f.Target.Data["confidential"]=false;
+        await f.Live.PostProjectionAsync(f.Projection);Assert.Empty(f.Messages);Assert.Empty(f.Events);
         await f.Live.PostProjectionAsync(f.Projection with {Recipient=f.Projection.Recipient! with {Disclosure=PluginLiveDisclosure.OwnerApprovedSummary}});
         Assert.Equal(f.Target.Id,Assert.Single(f.Messages).DiscussionId);
+        var invalidation=Assert.Single(f.Events);Assert.Equal("discussion.changed",invalidation.type);
+        Assert.False(invalidation.data["confidential"]!.GetValue<bool>());
+        Assert.DoesNotContain("private-summary",invalidation.data.ToJsonString());Assert.DoesNotContain("evidence",invalidation.data.ToJsonString());
         f.Messages.Clear();f.Events.Clear();
         await f.Live.PostProjectionAsync(new("presence","legacy-presence",IdempotencyKey:"legacy"));
         Assert.Equal(f.Global.Id,Assert.Single(f.Messages).DiscussionId);
         Assert.Equal("discussion.event",Assert.Single(f.Events).type);
+    }
+    [Theory][InlineData("owner")][InlineData("agent")][InlineData("closed")][InlineData("ambiguous")][InlineData("unknown")]
+    public async Task ApprovedPublicSummaryRetainsExactScopeAndNoFallback(string reason)
+    {
+        using var f=new Fixture();f.Target.Data["confidential"]=false;
+        var p=f.Projection with {Recipient=f.Projection.Recipient! with {Disclosure=PluginLiveDisclosure.OwnerApprovedSummary}};
+        switch(reason)
+        {
+            case "owner":p=p with {Recipient=p.Recipient! with {OwnerUserId=Guid.NewGuid().ToString()}};break;
+            case "agent":p=p with {Recipient=p.Recipient! with {AgentId=Guid.NewGuid().ToString()}};break;
+            case "closed":f.Target.Data["status"]="archived";break;
+            case "ambiguous":f.Entities.Add(f.Discussion("duplicate-public",f.Owner,f.Agent,false));break;
+            case "unknown":f.Entities.Remove(f.Target);break;
+        }
+        await f.Live.PostProjectionAsync(p);Assert.Empty(f.Messages);Assert.Empty(f.Events);
     }
     private sealed class Fixture:IDisposable
     {
