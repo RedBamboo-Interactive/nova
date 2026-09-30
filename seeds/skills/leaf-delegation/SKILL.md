@@ -1,6 +1,6 @@
 ---
 name: leaf-delegation
-description: "Delegate implementation or research from Nova to persistent Leaf Code sessions, continue or review delegated work, and distinguish Leaf delegation from internal harness sub-agents. Use when the user asks Nova to delegate work, inspect a delegation, or continue an existing Code session."
+description: "Delegate bounded implementation or research to persistent Leaf Code sessions, verify the receiving workspace has the required Leaf Skills and knowledge, review results as Nova, and continue the same session. Use when handing work to Code or inspecting, reviewing, or continuing a delegation."
 ---
 
 # Leaf delegation
@@ -10,6 +10,30 @@ capability, not the harness feature for spawning internal sub-agents. A rule tha
 internal sub-agents does not disable this API. Delegation is still a mutation: preserve the user's
 scope and obtain any separate authority required for rebuilds, publication, destructive changes,
 remote creation, or external communication.
+
+## Nova owns the work
+
+Keep product judgment, architecture, established decisions, and acceptance review with Nova. Delegate a bounded implementation or research task when the receiving session has the context needed to do it well. A separate session does not inherit this discussion, Nova's memory, identity instructions, or selected Skills merely because the response names Nova as its Agent.
+
+For repository-backed delegation, the working directory is the repository checkout. The current delegate endpoint does not forward Agent instructions or selected Skill packages to that session. Supplying `agent` resolves attribution and workspace/provider defaults; it does not make the Agent workspace's Skills discoverable from a different repository. Do not invent a `skills`, `addDirs`, or `developerInstructions` request field: those are not in the delegate request contract.
+
+## Prepare the receiving session's Leaf knowledge
+
+Before delegating Leaf work, inspect the canonical checkout's applicable instructions and available Skill packages. Resolve the selected Agent and its Skills through their authoritative entities or generated workspace projection. Verify actual availability; a Skill name in this prompt or the existence of a Skill entity does not establish that the worker can discover or read it.
+
+Select only knowledge relevant to the task:
+
+- Leaf architecture, API discovery, entities, signed identity, plugins, scratch and rebuild conventions: `red-suite`, or the installation's `leaf-foundations` and `leaf-engineering` packages when those are available. Read the current packages before passing them on.
+- Chat, transcripts, streaming, conversation state or restart recovery: the installed chat-stability Skill, plus the relevant authoritative journal entry, protected invariant and regression risks. Resolve its referenced memory files from the owning Agent workspace; do not assume they exist in the source repository.
+- Leaf UI implementation and acceptance: the installed `playwright-testing` Skill, with the real shell route and required user-visible behavior.
+- RedCompute provider work: the installed `build-redcompute-provider` Skill and the current provider/session contracts.
+- Other optional extensions: their owning Skill and installed contract when the task calls for them, rather than Nova's entire personal Skill set.
+
+Include a short knowledge section in the delegated prompt. Give each required Skill's exact readable entrypoint and the relevant reference or journal paths, resolved for this installation. Explicitly tell the worker to read them before changing source. If a package cannot be read from the receiving environment, include its current authoritative instructions and necessary references in the prompt, within the task's authorized data scope. Never include raw credentials. If neither method provides the required knowledge, do the work directly or report the missing context; do not send an under-informed worker anyway.
+
+Ask the worker to establish the checkout, loaded Skills/references, relevant decisions and integration ownership before edits. Review that evidence in its session output. Missing required context is a reason to correct the handoff before implementation, not something to discover at completion. On continuation, recheck context when scope changes or a required contract has changed.
+
+Never repair discovery by editing generated `AGENTS.md`, `CLAUDE.md`, `.agents/skills`, or `.claude/skills` files, or by copying private Nova memory into a repository. Agent/Skill entities own those projections. Automatic attachment of Skills to repository sessions requires a separately scoped product change; a prompt handoff is not proof that attachment exists.
 
 ## Route and identity
 
@@ -94,7 +118,7 @@ after its prompt and cannot ask interactively.
 
 ## Prompt contract
 
-Give the delegated session the concrete outcome, repository scope, decisions already made,
+Give the delegated session the concrete outcome, repository scope, verified required Skills and references, decisions already made,
 acceptance behavior, required verification, dirty-worktree boundaries, and anything that must remain
 untouched. Keep work that may edit the same files in one sequential session; use parallel sessions
 only for independent scopes.
