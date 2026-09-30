@@ -16,13 +16,8 @@ public sealed class ExtensionContributions(IPluginExtensions extensions, LiveEve
 
     public void Start()
     {
-        _liveSubscription ??= extensions.SubscribeLiveEvents(LiveSlot, async (projection, ct) =>
-            await live.PostAsync(
-                projection.Source,
-                projection.Content,
-                projection.Metadata,
-                projection.IdempotencyKey,
-                ct));
+        _liveSubscription ??= extensions.SubscribeLiveEvents(LiveSlot,
+            (projection, ct) => live.PostProjectionAsync(projection, ct));
     }
 
     public Task<IReadOnlyList<PluginContextFragment>> CollectContextAsync(

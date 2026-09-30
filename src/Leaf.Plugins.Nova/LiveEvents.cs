@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Leaf.Sdk.Services;
+using Leaf.Sdk;
 
 namespace Leaf.Plugins.Nova;
 
@@ -24,15 +25,58 @@ public sealed class EventInjector(
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
+    internal async Task<LeafEntity?> FindScopedLiveAsync(PluginLiveEventRecipient recipient,CancellationToken ct)
+    {
+        LeafEntity? found=null;
+        // Query the exact durable scope, not a truncated global discussion list.
+        // Bound work to four pages and fail closed if uniqueness cannot be established.
+        for(var page=0;page<4;page++)
+        {
+            var rows=await entities.QueryAsync(new EntityQuery {TypeSlug="discussion",Limit=128,Offset=page*128,
+                DataEquals=new Dictionary<string,object?>{{"app","nova"},{"type","live"},
+                    {"owner_id",recipient.OwnerUserId},{"agent",recipient.AgentId}}},ct);
+            if(rows.Count>128)return null;
+            foreach(var row in rows)
+            {
+                var data=row.Data;
+                if(data["owner_id"]?.GetValue<string>()!=recipient.OwnerUserId || data["agent"]?.GetValue<string>()!=recipient.AgentId
+                    || data["app"]?.GetValue<string>()!="nova" || data["type"]?.GetValue<string>()!="live"
+                    || DiscussionStatus.IsClosed(data["status"]?.GetValue<string>()??"stopped"))continue;
+                if(found is not null)return null;
+                found=row;
+            }
+            if(rows.Count<128)return found;
+        }
+        return null;
+    }
+
     /// <summary>Returns true when the event was forwarded into a live session;
     /// false for system events, session-less discussions, or a failed send. The
     /// message itself is persisted to the discussion stream in every case.</summary>
-    public async Task<bool> InjectAsync(
+    public Task<bool> InjectAsync(
         DiscussionRead discussion, string content, string? type, string? source,
         string? senderAgentId = null, string? replyToDiscussionId = null,
         JsonElement? metadata = null, string? userId = null,
         string? idempotencyKey = null, bool redeliverOnReuse = false,
         CancellationToken ct = default, string? deliveryIdempotencyKey = null)
+        => InjectCoreAsync(discussion, content, type, source, senderAgentId, replyToDiscussionId,
+            metadata, userId, idempotencyKey, redeliverOnReuse, ct, deliveryIdempotencyKey, null);
+
+    // Additive scoped entry point. Legacy injection signature, event identity, persistence,
+    // delivery and reconciliation remain unchanged.
+    public Task<bool> InjectScopedLiveAsync(DiscussionRead discussion, PluginLiveEventProjection projection,
+        CancellationToken ct = default)
+        => InjectCoreAsync(discussion, projection.Content, "system", projection.Source, null, null,
+            projection.Metadata is null ? null : JsonSerializer.SerializeToElement(projection.Metadata),
+            projection.Recipient!.OwnerUserId,
+            $"scoped-live:{projection.Recipient.OwnerUserId}:{projection.Recipient.AgentId}:{projection.IdempotencyKey}",
+            false, ct, null, projection.Recipient);
+
+    private async Task<bool> InjectCoreAsync(
+        DiscussionRead discussion, string content, string? type, string? source,
+        string? senderAgentId, string? replyToDiscussionId, JsonElement? metadata, string? userId,
+        string? idempotencyKey, bool redeliverOnReuse, CancellationToken ct,
+        string? deliveryIdempotencyKey, PluginLiveEventRecipient? recipient)
     {
         var role = type is "assistant" or "system" ? type : "user";
         var sourceTag = $"event:{source ?? "automation"}";
@@ -51,8 +95,25 @@ public sealed class EventInjector(
         var uid = string.IsNullOrWhiteSpace(idempotencyKey)
             ? Guid.NewGuid().ToString("N")
             : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey)));
+        var admissionDenied = false;
         var persisted = await DiscussionEntityGate.RunAsync(discussion.EntityId, async () =>
         {
+            if (recipient is not null)
+            {
+                // Authoritative scope/lifecycle recheck under the existing write gate.
+                // Do not trust a earlier list snapshot across close/ownership changes.
+                var current = await entities.GetAsync(discussion.EntityId, ct);
+                var data = current?.Data;
+                var unique = await FindScopedLiveAsync(recipient,ct);
+                if (unique?.Id!=discussion.EntityId || current?.TypeSlug != "discussion" || data?["app"]?.GetValue<string>() != "nova"
+                    || data["type"]?.GetValue<string>() != "live"
+                    || data["owner_id"]?.GetValue<string>() != recipient.OwnerUserId
+                    || data["agent"]?.GetValue<string>() != recipient.AgentId
+                    || DiscussionStatus.IsClosed(data["status"]?.GetValue<string>() ?? "stopped")
+                    || !LiveEvents.AllowsDisclosure(recipient, data["confidential"]?.GetValue<bool>() == true))
+                { admissionDenied = true; return false; }
+                discussion = discussion with { Confidential = data["confidential"]?.GetValue<bool>() == true };
+            }
             if (!string.IsNullOrWhiteSpace(idempotencyKey))
             {
                 long afterId = 0;
@@ -79,6 +140,7 @@ public sealed class EventInjector(
             }, userId, ct);
             return true;
         }, ct);
+        if (admissionDenied) return false;
         // Most callers only need the durable discussion copy and can treat reuse as
         // success. Heartbeat opts into redelivery because a crash may have happened
         // after persistence but before the session accepted the tick; that path is
@@ -175,6 +237,36 @@ public sealed class LiveEvents(DiscussionStore store, EventInjector injector, Ag
     public string? DiscussionId => _cachedLiveId;
 
     public void InvalidateCache() => _cachedLiveId = null;
+
+    /// <summary>Generic extension routing. Scoped contributions never use legacy fallback.</summary>
+    public async Task PostProjectionAsync(PluginLiveEventProjection projection, CancellationToken ct = default)
+    {
+        if (projection.Recipient is null)
+        {
+            await PostAsync(projection.Source, projection.Content, projection.Metadata, projection.IdempotencyKey, ct);
+            return;
+        }
+        var recipient = projection.Recipient;
+        if (!Guid.TryParse(recipient.OwnerUserId, out var owner) || owner == Guid.Empty
+            || !Guid.TryParse(recipient.AgentId, out var agent) || agent == Guid.Empty
+            || !Enum.IsDefined(recipient.Disclosure)
+            || string.IsNullOrWhiteSpace(projection.IdempotencyKey) || projection.IdempotencyKey.Length > 200
+            || string.IsNullOrWhiteSpace(projection.Source) || projection.Source.Length > 80
+            || string.IsNullOrWhiteSpace(projection.Content) || projection.Content.Length > 2048
+            || projection.Metadata?.ToJsonString().Length > 4096) return;
+        // No cache: exact current ownership/lifecycle must be checked every time.
+        var entity=await injector.FindScopedLiveAsync(recipient,ct);
+        var id=entity?.Data["discussion_id"]?.GetValue<string>();
+        if(id is null)return;
+        var target=await store.GetAsync(id,ct);
+        if(target is null || target.EntityId!=entity!.Id || target.Type!="live" || DiscussionStatus.IsClosed(target.Status)
+            || target.OwnerId!=recipient.OwnerUserId || target.AgentId!=recipient.AgentId || !AllowsDisclosure(recipient,target.Confidential))return;
+        await injector.InjectScopedLiveAsync(target, projection, ct);
+    }
+
+    public static bool AllowsDisclosure(PluginLiveEventRecipient recipient, bool confidential)
+        => recipient.Disclosure == PluginLiveDisclosure.ConfidentialOnly ? confidential
+            : recipient.Disclosure == PluginLiveDisclosure.OwnerApprovedSummary;
 
     /// <summary>Posts a LIVE note when the user switches devices mid-conversation.</summary>
     public void NoteDevice(ResolvedDevice device)
