@@ -116,6 +116,38 @@ public sealed class DelegateEndpointSecurityTests
         Assert.Empty(matches);
     }
 
+    [Theory]
+    [InlineData(403, false, true)]
+    [InlineData(403, true, false)]
+    [InlineData(500, false, false)]
+    [InlineData(504, false, false)]
+    [InlineData(200, false, false)]
+    public void Lost_admission_outcome_never_licenses_orphan_cleanup(int code, bool unknown, bool expected)
+        => Assert.Equal(expected, DelegateEndpoints.IsAdmissionDefinitivelyRejected(new(code < 400, null, code), unknown));
+
+    [Fact]
+    public async Task Exact_prompt_opt_in_is_separate_from_legacy_operation_identity_and_cleanup_needs_receipt()
+    {
+        var requests = new List<JsonElement>(); var confirmed = false;
+        var gateway = CallbackDeliveryTests.Proxy.Create<IComputeGateway>((method, args) => {
+            Assert.Equal("SendAsync", method);
+            var request = (HttpRequestMessage)args![0]!;
+            if (request.Method == HttpMethod.Post)
+                requests.Add(JsonSerializer.Deserialize<JsonElement>(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult()));
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) {
+                Content = new StringContent(JsonSerializer.Serialize(new { removed = confirmed })) });
+        });
+        var client = new RedComputeClient(gateway);
+        Assert.True(await client.RegisterCallbackAsync("session", "http://localhost/callback", callbackId: "operation"));
+        Assert.False(requests[0].TryGetProperty("promptMessageUid", out _));
+        Assert.True(await client.RegisterCallbackAsync("session", "http://localhost/callback", force: true, callbackId: "operation", promptMessageUid: "accepted-prompt"));
+        Assert.Equal("operation", requests[1].GetProperty("callbackId").GetString());
+        Assert.Equal("accepted-prompt", requests[1].GetProperty("promptMessageUid").GetString());
+        Assert.False(await client.RemoveUnacceptedCallbackAsync("session", "operation", "accepted-prompt"));
+        confirmed = true;
+        Assert.True(await client.RemoveUnacceptedCallbackAsync("session", "operation", "accepted-prompt"));
+    }
+
     private static ClaimsPrincipal Principal(string subject, params Claim[] claims) => new(
         new ClaimsIdentity([new Claim("sub", subject), .. claims], "test"));
 

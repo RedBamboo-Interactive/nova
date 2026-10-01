@@ -16,13 +16,14 @@ public sealed class DelegationActivityTests
     [InlineData("Active", 0, "empty", null, "running")]
     [InlineData("Starting", 0, "empty", null, "starting")]
     [InlineData("Idle", 2, "ready", null, "queued")]
+    [InlineData("Idle", 1, "waiting_for_session", "user_stopped", "blocked")]
     [InlineData("Idle", 1, "delivering", null, "queued")]
     [InlineData("Idle", 0, "empty", "active_turn", "running")]
     [InlineData("Idle", 1, "waiting_for_session", "session_starting", "starting")]
     [InlineData("Idle", 0, "empty", null, "finished")]
-    [InlineData("Idle", 2, "failed", null, "finished")]
+    [InlineData("Idle", 2, "failed", null, "failed")]
     [InlineData("Stopped", 0, "empty", null, "finished")]
-    [InlineData("Error", 1, "ready", null, "finished")]
+    [InlineData("Error", 1, "ready", null, "failed")]
     [InlineData("Ended", 0, "empty", null, "finished")]
     public void UsesCanonicalRuntimeAndQueueWithoutChangingParentState(
         string status, int depth, string queue, string? blocked, string expected)
@@ -30,8 +31,8 @@ public sealed class DelegationActivityTests
             new(status, null, null, "owner", "agent", false, null, depth, queue, blocked)));
 
     [Theory]
-    [InlineData("maintenance_restart", "queued")]
-    [InlineData("orphaned_on_restart", "queued")]
+    [InlineData("maintenance_restart", "waiting_to_resume")]
+    [InlineData("orphaned_on_restart", "waiting_to_resume")]
     [InlineData("user_stopped", "finished")]
     public void AcceptedQueuedRecoveryDiffersFromExplicitStop(string reason, string expected)
         => Assert.Equal(expected, DelegationActivity.ProjectStatus(
@@ -279,6 +280,32 @@ public sealed class DelegationActivityTests
         f.Gateway.Set("worker", "Active");
         Assert.Equal(1, (await f.Activity.ReadAsync([f.Parent], Human(), fresh: true))[f.Parent.Id].OngoingCount);
         Assert.Equal(2, f.Gateway.Reads.Count);
+    }
+
+    [Theory]
+    [InlineData("waiting_for_session", "resume_authority_unavailable", "blocked")]
+    [InlineData("failed", "delivery_outcome_unknown", "failed")]
+    [InlineData("waiting_for_session", "deployment_target_failed", "failed")]
+    [InlineData("waiting_for_session", "deployment_target_pending", "queued")]
+    [InlineData("waiting_for_session", "deployment_target_unknown", "blocked")]
+    [InlineData("waiting_for_session", "recovery_revalidate", "waiting_to_resume")]
+    public void QueueBlockAndUncertainFailureRemainVisibleWithoutClaimingRunning(
+        string queue, string error, string expected)
+        => Assert.Equal(expected, DelegationActivity.ProjectStatus(new(
+            "Stopped", "maintenance_restart", null, "owner", "agent", false, null, 1, queue, "maintenance_restart", error)));
+
+    [Fact]
+    public async Task FailedAcceptedWorkKeepsDistinctCountAndCodeLinkMembership()
+    {
+        var f = new Fixture();
+        f.AddMarker("worker");
+        f.AddMarker("worker");
+        f.Gateway.Set("worker", "Idle", depth: 1, queue: "failed");
+        var activity = (await f.Read())[f.Parent.Id];
+        Assert.Equal(1, activity.OngoingCount);
+        Assert.Equal("failed", Assert.Single(activity.Sessions).Status);
+        Assert.Equal("worker", activity.Sessions[0].SessionId);
+        Assert.Equal("idle", f.Parent.Status);
     }
 
     private sealed class Fixture

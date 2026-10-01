@@ -1,4 +1,12 @@
-import type { DelegationActivitySnapshot, DiscussionDelegationActivity } from "./types"
+import type { DelegationActivitySnapshot, DelegationSessionActivity, DiscussionDelegationActivity } from "./types"
+
+export function delegationSessionLabel(status: DelegationSessionActivity["status"]): string {
+  return ({ running: "Running", queued: "Queued", starting: "Starting", waiting_to_resume: "Waiting to resume", blocked: "Blocked", failed: "Failed", unavailable: "Status unavailable" })[status]
+}
+
+export function delegationAnimationPaused(activity: DiscussionDelegationActivity): boolean {
+  return !activity.available || !activity.sessions.some(session => ["running", "queued", "starting"].includes(session.status))
+}
 
 export function delegationActivityLabel(activity: DiscussionDelegationActivity): string {
   const count = activity.ongoingCount
@@ -6,7 +14,8 @@ export function delegationActivityLabel(activity: DiscussionDelegationActivity):
   if (!activity.available) return count > 0 ? `${count} ${noun} · status unavailable` : "Delegation status unavailable"
   const states = new Set(activity.sessions.map(session => session.status))
   const state = states.size === 1 ? activity.sessions[0]?.status : "ongoing"
-  return `${count} ${noun} ${state ?? "ongoing"}…`
+  const label = state === "waiting_to_resume" ? "waiting to resume" : state ?? "ongoing"
+  return `${count} ${noun} ${label}…`
 }
 
 /** An unavailable read is not a terminal lifecycle observation. */

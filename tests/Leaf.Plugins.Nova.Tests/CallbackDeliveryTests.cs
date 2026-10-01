@@ -97,6 +97,82 @@ public sealed class CallbackDeliveryTests
         Assert.All(f.Gateway.Keys, key => Assert.Null(key));
     }
 
+    [Theory]
+    [InlineData("maintenance_restart")]
+    [InlineData("orphaned_on_restart")]
+    public async Task RestartPauseIsTruthfulAndDoesNotDeduplicateLaterCompletion(string reason)
+    {
+        using var f = new Fixture();
+        Assert.Equal(200, await f.Complete("prompt-one", "Stopped", reason));
+        Assert.Equal(200, await f.Complete("prompt-one", "Stopped", reason));
+        Assert.Single(f.TargetMessages);
+        Assert.Contains("paused for restart", f.TargetMessages.Single().Content);
+        Assert.Contains("waiting to resume", f.LiveMessages.Single().Content);
+        Assert.DoesNotContain("completed", f.LiveMessages.Single().Content);
+        Assert.Equal(200, await f.Complete("prompt-one"));
+        Assert.Equal(2, f.TargetMessages.Count());
+        Assert.Equal(2, f.Gateway.Admitted.Count);
+        Assert.Equal(2, f.LiveMessages.Count());
+        Assert.Contains(f.LiveMessages, message => message.Content.Contains("completed"));
+        // A delayed duplicate pause cannot replace either a newer callback or
+        // the old callback's actual completion; the projection uses live state.
+        Assert.Equal(200, await f.Complete("prompt-two"));
+        Assert.Equal(200, await f.Complete("prompt-one", "Stopped", reason));
+        Assert.Equal(3, f.TargetMessages.Count());
+    }
+
+    [Theory]
+    [InlineData("Error", null, "failed")]
+    [InlineData("Stopped", "user_stopped", "stopped")]
+    public async Task LiveSummaryDoesNotCallFailureOrExplicitStopCompleted(string status, string? reason, string outcome)
+    {
+        using var f = new Fixture();
+        Assert.Equal(200, await f.Complete("prompt-one", status, reason));
+        Assert.Contains($"Delegated session {outcome}", f.LiveMessages.Single().Content);
+        Assert.DoesNotContain("completed", f.LiveMessages.Single().Content);
+    }
+
+    [Theory]
+    [InlineData("completed", "prompt-one", null, "completed")]
+    [InlineData("completed", null, null, "ended")]
+    [InlineData("completed", "older-prompt", null, "ended")]
+    [InlineData("terminated", null, null, "ended")]
+    [InlineData(null, null, null, "ended")]
+    [InlineData("failed", null, null, "failed")]
+    [InlineData("completed", "prompt-one", "maintenance_restart", "paused")]
+    public async Task EndedOnlyMeansCompletedWithExactPromptDeliveryEvidence(
+        string? reason, string? deliveredUid, string? stopReason, string expected)
+    {
+        using var f = new Fixture();
+        Assert.Equal(200, await f.Complete("prompt-one", "Ended", stopReason, reason, deliveredUid, "prompt-one", deliveredUid == "prompt-one"));
+        Assert.Contains($"Delegated session {expected}", f.LiveMessages.Single().Content);
+        if (expected != "completed") Assert.DoesNotContain("Delegated session completed", f.LiveMessages.Single().Content);
+    }
+
+    [Theory]
+    [InlineData("cancelled")]
+    [InlineData("superseded")]
+    public async Task CancelledInputNeverReportsCompletion(string reason)
+    {
+        using var f = new Fixture();
+        Assert.Equal(200, await f.Complete("operation", "Cancelled", reason: reason, promptMessageUid: "prompt"));
+        Assert.Contains($"Delegated session {reason}", f.LiveMessages.Single().Content);
+        Assert.DoesNotContain("Delegated session completed", f.LiveMessages.Single().Content);
+    }
+
+    [Fact]
+    public async Task MergedPromptCompletionPreservesSeparateOperationPromptAndDeliveryIdentity()
+    {
+        using var f = new Fixture();
+        Assert.Equal(200, await f.Complete("operation", "Ended", reason: "completed", deliveredMessageUid: "batch-first", promptMessageUid: "batch-second", executionObserved: true));
+        Assert.Contains("Delegated session completed", f.LiveMessages.Single().Content);
+        var record = f.TargetMessages.Single();
+        using var parts = JsonDocument.Parse(record.Metadata["parts_json"]!.GetValue<string>());
+        var data = parts.RootElement.EnumerateArray().Single(p => p.GetProperty("type").GetString() == "event_data").GetProperty("data");
+        Assert.Equal("batch-second", data.GetProperty("promptMessageUid").GetString());
+        Assert.Equal("batch-first", data.GetProperty("deliveredMessageUid").GetString());
+    }
+
     private sealed class Fixture : IDisposable
     {
         public List<DiscussionMessage> Records { get; } = [];
@@ -159,13 +235,18 @@ public sealed class CallbackDeliveryTests
             liveEvents = new LiveEvents(Store, Injector, agents);
         }
 
-        public async Task<int> Complete(string? id)
+        public async Task<int> Complete(string? id, string status = "Idle", string? stopReason = null,
+            string? reason = null, string? deliveredMessageUid = null, string? promptMessageUid = null, bool executionObserved = false)
         {
             var ctx = new DefaultHttpContext();
             ctx.Connection.RemoteIpAddress = IPAddress.Loopback;
             ctx.Request.QueryString = new("?discussionId=target");
             ctx.Request.ContentType = "application/json";
-            var body = new JsonObject { ["sessionId"] = "delegated-session", ["status"] = "Idle", ["title"] = "same title" };
+            var body = new JsonObject { ["sessionId"] = "delegated-session", ["status"] = status, ["title"] = "same title", ["stopReason"] = stopReason };
+            body["reason"] = reason;
+            body["deliveredMessageUid"] = deliveredMessageUid;
+            body["promptMessageUid"] = promptMessageUid;
+            body["executionObserved"] = executionObserved;
             if (id is not null) body["callbackId"] = id;
             ctx.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body.ToJsonString()));
             var result = await CallbackEndpoints.HandleSessionCompleteAsync(ctx, Store, Injector, liveEvents);

@@ -357,14 +357,24 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     }
 
     public async Task<bool> RegisterCallbackAsync(string sessionId, string url, bool force = false,
-        CancellationToken ct = default, ComputeProvenance? provenance = null, string? callbackId = null)
+        CancellationToken ct = default, ComputeProvenance? provenance = null, string? callbackId = null, string? promptMessageUid = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/ai-session/sessions/{sessionId}/callback")
         {
-            Content = JsonContent.Create(callbackId is null ? (object)new { url, force } : new { url, force, callbackId }, options: JsonOptions),
+            Content = JsonContent.Create(promptMessageUid is not null ? (object)new { url, force, callbackId, promptMessageUid } : callbackId is null ? new { url, force } : new { url, force, callbackId }, options: JsonOptions),
         };
         using var resp = await gateway.SendAsync(request, provenance, ct);
         return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> RemoveUnacceptedCallbackAsync(string sessionId, string callbackId, string promptMessageUid, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete,
+            $"/ai-session/sessions/{sessionId}/callback/unaccepted?callbackId={Uri.EscapeDataString(callbackId)}&promptMessageUid={Uri.EscapeDataString(promptMessageUid)}&definitiveAdmissionFailure=true");
+        using var response = await gateway.SendAsync(request, provenance: null, ct);
+        if (!response.IsSuccessStatusCode) return false;
+        using var receipt = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        return receipt.RootElement.TryGetProperty("removed", out var removed) && removed.ValueKind == JsonValueKind.True;
     }
 
     public async Task<bool> StopAsync(string sessionId, CancellationToken ct = default)
@@ -512,7 +522,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     public sealed record DelegationSnapshot(
         string Status, string? StopReason, string? Title, string? OwnerId, string? AgentId,
         bool Confidential, string? RepositoryId, int? QueueDepth, string? QueueState,
-        string? QueueBlockedReason);
+        string? QueueBlockedReason, string? QueueErrorCode = null);
 
     public sealed record DelegationSnapshotResult(DelegationSnapshot? Value, bool Denied = false);
 
@@ -537,13 +547,14 @@ public sealed class RedComputeClient(IComputeGateway gateway)
                 || DelegationActivity.String(session, "id") != sessionId
                 || DelegationActivity.String(session, "status") is not { } status) return new(null);
             int? depth = null;
-            string? queueState = null, blocked = null;
+            string? queueState = null, blocked = null, queueError = null;
             if (root.TryGetProperty("inputQueue", out var queue) && queue.ValueKind == JsonValueKind.Object)
             {
                 if (queue.TryGetProperty("depth", out var count) && count.ValueKind == JsonValueKind.Number
                     && count.TryGetInt32(out var parsed) && parsed >= 0) depth = parsed;
                 queueState = DelegationActivity.String(queue, "state");
                 blocked = DelegationActivity.String(queue, "blockedReason");
+                queueError = DelegationActivity.String(queue, "errorCode");
             }
             if (!session.TryGetProperty("confidential", out var privateNode)
                 || privateNode.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return new(null);
@@ -551,7 +562,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
             return new(new(status, DelegationActivity.String(session, "stopReason"),
                 DelegationActivity.String(session, "title"), DelegationActivity.String(session, "userId"),
                 DelegationActivity.String(session, "ownerAgentId"), confidential,
-                DelegationActivity.String(session, "repositoryId"), depth, queueState, blocked));
+                DelegationActivity.String(session, "repositoryId"), depth, queueState, blocked, queueError));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { return new(null); }

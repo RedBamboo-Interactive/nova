@@ -26,7 +26,10 @@ public class DelegateRequest
     // Compatibility for callers using the old provider-specific terminology.
     public string? QualityMode { get; set; }
     public string? Provider { get; set; }
+    public DelegationDeploymentTarget? DeploymentVerificationTarget { get; set; }
 }
+
+public sealed record DelegationDeploymentTarget(string Service, string RunId);
 
 /// <summary>
 /// POST /delegate — delegate work to a CodeRed session: creates the session on
@@ -46,6 +49,10 @@ public static class DelegateEndpoints
             bool isContinuation = !string.IsNullOrWhiteSpace(request.SessionId);
             if (string.IsNullOrWhiteSpace(request.Prompt))
                 return Results.BadRequest(new { error = "prompt is required" });
+            if (request.DeploymentVerificationTarget is { } target
+                && (target.Service is not ("redleaf" or "redcompute") || string.IsNullOrWhiteSpace(target.RunId)
+                    || target.RunId.Length > 100 || target.RunId.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-')))
+                return Results.BadRequest(new { error = "invalid_deployment_target" });
 
             var callerId = TrustedCallerId(ctx.User);
             if (callerId == null)
@@ -265,9 +272,21 @@ public static class DelegateEndpoints
 
             // 2. Send prompt and verify delivery
             bool promptSent = false;
+            bool admissionUncertain = false;
             RedComputeClient.SendMessageResult? lastPromptResult = null;
             var promptMessageUid = Guid.NewGuid().ToString("N");
             var promptIdempotencyKey = $"nova-delegate:{sessionId}:{promptMessageUid}";
+            // Subscribe before dispatch so a fast prompt completion cannot outrun registration.
+            // Compute binds this exact UID to its durable accepted input; no queued input means no completion.
+            if (!string.IsNullOrWhiteSpace(request.DiscussionId))
+            {
+                try
+                {
+                    var completionUrl = $"http://127.0.0.1:18804/api/apps/nova/callbacks/session-complete?discussionId={request.DiscussionId}";
+                    await redCompute.RegisterCallbackAsync(sessionId, completionUrl, force: true, callbackId: promptMessageUid, promptMessageUid: promptMessageUid);
+                }
+                catch { /* The post-admission registration below retries the same identity. */ }
+            }
             for (int attempt = 0; attempt < 3 && !promptSent; attempt++)
             {
                 try
@@ -278,10 +297,13 @@ public static class DelegateEndpoints
                         [.. baseContext, new ComputeContextReference("session", sessionId)],
                         method: "POST", ct: ctx.RequestAborted);
                     var result = await redCompute.SendMessageDetailedAsync(sessionId,
-                        new { content = request.Prompt, messageUid = promptMessageUid },
+                        request.DeploymentVerificationTarget is null
+                            ? (object)new { content = request.Prompt, messageUid = promptMessageUid }
+                            : new { content = request.Prompt, messageUid = promptMessageUid, deploymentVerificationTarget = request.DeploymentVerificationTarget },
                         messageProvenance, ctx.RequestAborted,
                         idempotencyKey: promptIdempotencyKey);
                     lastPromptResult = result;
+                    if (result.StatusCode >= 500 || result.Success && !IsPromptAccepted(result.Payload)) admissionUncertain = true;
                     if (result.Success && IsPromptAccepted(result.Payload))
                     {
                         promptSent = true;
@@ -289,7 +311,7 @@ public static class DelegateEndpoints
                     }
                     if (result.ErrorCode == "execution_identity_rejected") break;
                 }
-                catch { }
+                catch { admissionUncertain = true; }
 
                 if (!promptSent)
                     await Task.Delay(500);
@@ -297,7 +319,15 @@ public static class DelegateEndpoints
 
             if (!promptSent)
             {
-                if (!isContinuation)
+                var definitivelyRejected = IsAdmissionDefinitivelyRejected(lastPromptResult, admissionUncertain);
+                var unacceptedConfirmed = false;
+                if (definitivelyRejected && request.DiscussionId is not null)
+                {
+                    try { unacceptedConfirmed = await redCompute.RemoveUnacceptedCallbackAsync(sessionId, promptMessageUid, promptMessageUid, ctx.RequestAborted); }
+                    catch { }
+                }
+                // A lost admission response must never cancel accepted work.
+                if (!isContinuation && unacceptedConfirmed)
                 {
                     try
                     {
@@ -326,7 +356,7 @@ public static class DelegateEndpoints
                     error = "prompt_send_failed",
                     message = isContinuation
                         ? $"Prompt could not be delivered to session '{sessionId}' after 3 attempts."
-                        : "Session created but prompt could not be delivered after 3 attempts. Session cleaned up.",
+                        : unacceptedConfirmed ? "Session created but prompt admission was rejected. Session cleaned up." : "Prompt acceptance could not be confirmed. Session retained for inspection.",
                     upstreamError = lastPromptResult?.ErrorCode,
                 }, statusCode: 502);
             }
@@ -377,7 +407,7 @@ public static class DelegateEndpoints
                 try
                 {
                     var callbackUrl = $"http://127.0.0.1:18804/api/apps/nova/callbacks/session-complete?discussionId={request.DiscussionId}";
-                    callbackRegistered = await redCompute.RegisterCallbackAsync(sessionId, callbackUrl, callbackId: promptMessageUid);
+                    callbackRegistered = await redCompute.RegisterCallbackAsync(sessionId, callbackUrl, callbackId: promptMessageUid, promptMessageUid: promptMessageUid);
                 }
                 catch { }
             }
@@ -447,6 +477,9 @@ public static class DelegateEndpoints
     internal static bool IsExecutionIdentityFailure(Exception exception)
         => exception.GetType().Name.Equals(
             "ExecutionIdentityValidationException", StringComparison.Ordinal);
+
+    internal static bool IsAdmissionDefinitivelyRejected(RedComputeClient.SendMessageResult? result, bool earlierOutcomeUnknown)
+        => !earlierOutcomeUnknown && result is { Success: false, StatusCode: >= 400 and < 500 };
 
     internal static bool IsPromptAccepted(JsonElement? payload)
     {

@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom"
 import { MorphSpinner } from "@redbamboo/chat"
 import type { DiscussionDelegationActivity } from "../lib/types"
-import { delegationActivityLabel } from "../lib/delegation-activity"
+import { delegationActivityLabel, delegationSessionLabel } from "../lib/delegation-activity"
 import { delegationSessionPath } from "../lib/delegation-session-link"
 import { BUILTIN_EVENTS } from "../lib/event-type-resolution"
 
@@ -38,14 +38,15 @@ export function DelegationsInfo({ activity }: { activity?: DiscussionDelegationA
         <ul className="mt-2 space-y-2">
           {activity.sessions.map(session => (
             <li key={session.sessionId} data-delegation-session-id={session.sessionId} className="flex min-w-0 items-start gap-2">
-              <span className="mt-0.5"><DelegationSpinner paused={session.status === "unavailable"} /></span>
+              <span className="mt-0.5"><DelegationSpinner paused={!["running", "queued", "starting"].includes(session.status)} /></span>
               <div className="min-w-0 flex-1">
                 <Link to={delegationSessionPath({ sessionId: session.sessionId })!} className="block break-words text-xs text-contrast hover:underline">
                   {session.title || `Code session ${session.sessionId}`}
                 </Link>
                 <div className="mt-0.5 break-words text-[11px] text-text-muted">{session.repository || session.repositoryId || "Agent workspace"}</div>
+                {session.errorCode && <div className="mt-0.5 break-words text-[11px] text-text-muted">{session.errorCode.replaceAll("_", " ")}</div>}
               </div>
-              <span className="shrink-0 text-[11px] text-text-muted">{session.status === "unavailable" ? "Status unavailable" : session.status === "running" ? "Running" : session.status === "queued" ? "Queued" : "Starting"}</span>
+              <span className="shrink-0 text-[11px] text-text-muted">{delegationSessionLabel(session.status)}</span>
             </li>
           ))}
         </ul>

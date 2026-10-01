@@ -5,6 +5,7 @@ import type { DelegationActivitySnapshot, DiscussionDelegationActivity, Discussi
 import { DelegationCount, DelegationSpinner } from "../delegation-activity"
 import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
+import { delegationAnimationPaused } from "../../lib/delegation-activity"
 
 const statusColor: Record<string, string> = {
   thinking: "var(--color-accent-gold)",
@@ -14,7 +15,7 @@ const statusColor: Record<string, string> = {
 }
 
 function DiscussionStatusIcon({ discussion, activity }: { discussion: DiscussionInfo; activity?: DiscussionDelegationActivity }) {
-  return discussion.status !== "thinking" && activity?.ongoingCount ? <DelegationSpinner paused={!activity.available} /> : (
+  return discussion.status !== "thinking" && activity?.ongoingCount ? <DelegationSpinner paused={delegationAnimationPaused(activity)} /> : (
     <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
   )
 }

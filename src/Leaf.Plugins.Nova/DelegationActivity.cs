@@ -10,7 +10,7 @@ namespace Leaf.Plugins.Nova;
 
 public sealed record DelegationSessionActivity(
     string SessionId, string? Title, string? RepositoryId, string? Repository,
-    string Status, bool Available, string? LastKnownStatus = null);
+    string Status, bool Available, string? LastKnownStatus = null, string? BlockedReason = null, string? ErrorCode = null);
 
 public sealed record DiscussionDelegationActivity(
     int OngoingCount, IReadOnlyList<DelegationSessionActivity> Sessions, bool Available,
@@ -126,20 +126,21 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
                     AddUnavailable();
                     continue;
                 }
-                var isOngoing = status is "running" or "queued" or "starting";
+                var isOngoing = IsOutstanding(status);
                 lastStatus[key] = status;
                 if (isOngoing)
                 {
                     ongoingCount++;
                     ongoing.Add(new(link.SessionId, state.Title,
-                        state.RepositoryId ?? link.RepositoryId, link.Repository, status, true));
+                        state.RepositoryId ?? link.RepositoryId, link.Repository, status, true,
+                        BlockedReason: state.QueueBlockedReason, ErrorCode: state.QueueErrorCode));
                 }
 
                 void AddUnavailable()
                 {
                     lastStatus.TryGetValue(key, out var prior);
                     if (prior == "finished") return;
-                    if (prior is "running" or "queued" or "starting") ongoingCount++;
+                    if (IsOutstanding(prior)) ongoingCount++;
                     else unknownCount++;
                     ongoing.Add(new(link.SessionId, null, link.RepositoryId, link.Repository, "unavailable", false, prior));
                 }
@@ -226,19 +227,33 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
             && !string.IsNullOrWhiteSpace(session.AgentId)
             && (!session.Confidential || discussion.Confidential);
 
+    private static bool IsOutstanding(string? status)
+        => status is "running" or "queued" or "starting" or "waiting_to_resume" or "blocked" or "failed";
+
     internal static string ProjectStatus(RedComputeClient.DelegationSnapshot session)
     {
         // Explicit stop/failure is terminal. Maintenance recovery with accepted
         // pending input remains work, even though the provider itself is stopped.
-        if (session.Status is "Error" or "Ended"
+        if (session.Status == "Ended"
             || session.Status == "Stopped" && session.StopReason is not ("maintenance_restart" or "orphaned_on_restart"))
             return "finished";
         if (session.Status == "Active" || session.QueueBlockedReason == "active_turn") return "running";
         if (session.Status == "Starting" || session.QueueBlockedReason == "session_starting") return "starting";
         if (session.QueueDepth is null || session.QueueState is not ("empty" or "ready" or "delivering" or "waiting_for_session" or "failed"))
             return "unavailable";
-        if (session.QueueState == "failed") return "finished";
-        if (session.QueueDepth > 0) return "queued";
+        // A durable failed head remains actionable work, not a running turn or
+        // an invented completion. Preserve its count and link for inspection.
+        if (session.QueueDepth > 0 && (session.QueueState == "failed" || session.Status == "Error"
+            || session.QueueErrorCode == "deployment_target_failed")) return "failed";
+        if (session.QueueDepth > 0)
+        {
+            if (session.QueueBlockedReason == "user_stopped") return "blocked";
+            if (session.QueueErrorCode is "deployment_target_pending" or "deployment_target_unavailable") return "queued";
+            if (session.QueueErrorCode is not null && session.QueueErrorCode != "recovery_revalidate") return "blocked";
+            if (session.Status == "Stopped") return "waiting_to_resume";
+            return "queued";
+        }
+        if (session.Status == "Error" || session.QueueState == "failed") return "finished";
         return session.Status is "Idle" or "Stopped" && session.QueueState == "empty" ? "finished" : "unavailable";
     }
 

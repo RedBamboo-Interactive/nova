@@ -3,7 +3,7 @@ import { ChatStatusLine, StreamingStatusLine, getSpinnerColor } from "@redbamboo
 import type { MessageBlock } from "@redbamboo/chat"
 import { getNovaStreamingStatus } from "../lib/nova-status"
 import type { DiscussionDelegationActivity } from "../lib/types"
-import { delegationActivityLabel } from "../lib/delegation-activity"
+import { delegationActivityLabel, delegationAnimationPaused } from "../lib/delegation-activity"
 import { DelegationSpinner } from "./delegation-activity"
 
 export function NovaStatusLine({ isStreaming, isReconnecting = false, messages, delegationActivity }: {
@@ -21,7 +21,7 @@ export function NovaStatusLine({ isStreaming, isReconnecting = false, messages, 
 
   if (!isStreaming) return delegationActivity && (delegationActivity.ongoingCount > 0 || delegationActivity.unknownCount > 0) ? (
     <div data-slot="delegation-status-line" className="flex items-center gap-2.5 text-text-muted text-sm py-1">
-      <DelegationSpinner paused={!delegationActivity.available} />
+      <DelegationSpinner paused={delegationAnimationPaused(delegationActivity)} />
       <span>{delegationActivityLabel(delegationActivity)}</span>
     </div>
   ) : null

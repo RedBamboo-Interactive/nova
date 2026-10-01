@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { delegationActivityLabel, invalidatesDelegationActivity, unavailableDelegationActivity } from "./delegation-activity.ts"
+import { delegationActivityLabel, delegationAnimationPaused, delegationSessionLabel, invalidatesDelegationActivity, unavailableDelegationActivity } from "./delegation-activity.ts"
 import type { DiscussionDelegationActivity } from "./types.ts"
 
-function activity(...statuses: ("running" | "queued" | "starting")[]): DiscussionDelegationActivity {
+function activity(...statuses: Exclude<DiscussionDelegationActivity["sessions"][number]["status"], "unavailable">[]): DiscussionDelegationActivity {
   return { ongoingCount: statuses.length, available: true, unknownCount: 0, linkedSessionIds: statuses.map((_, i) => `session-${i}`), sessions: statuses.map((status, index) => ({
     sessionId: `session-${index}`, title: null, repositoryId: null, repository: null, status, available: true,
   })) }
@@ -27,6 +27,19 @@ test("outage preserves the distinct authoritative sessions and count but stops c
   assert.equal(unavailable.finished!.ongoingCount, 0)
   assert.deepEqual(unavailable.finished!.sessions, [])
   assert.equal(original.parent.sessions[0]!.status, "running")
+})
+
+test("waiting recovery and blocked or failed accepted work are distinct from running", () => {
+  assert.equal(delegationActivityLabel(activity("waiting_to_resume")), "1 delegation waiting to resume…")
+  assert.equal(delegationSessionLabel("blocked"), "Blocked")
+  assert.equal(delegationSessionLabel("failed"), "Failed")
+  for (const status of ["waiting_to_resume", "blocked", "failed"] as const) {
+    const snapshot = activity(status)
+    assert.equal(snapshot.ongoingCount, 1)
+    assert.equal(delegationAnimationPaused(snapshot), true)
+    assert.equal(unavailableDelegationActivity({ parent: snapshot }).parent!.sessions[0]!.lastKnownStatus, status)
+  }
+  assert.equal(delegationAnimationPaused(activity("blocked", "running")), false)
 })
 
 test("only linked session lifecycles and originating discussion changes invalidate activity", () => {

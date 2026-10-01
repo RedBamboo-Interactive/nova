@@ -40,18 +40,37 @@ public static class CallbackEndpoints
 
         var title = body.TryGetProperty("title", out var t) ? t.GetString() : null;
         var stopReason = body.TryGetProperty("stopReason", out var sr) ? sr.GetString() : null;
+        var reason = body.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
+        var deliveredMessageUid = body.TryGetProperty("deliveredMessageUid", out var delivered)
+            && delivered.ValueKind == JsonValueKind.String ? delivered.GetString() : null;
+        var promptMessageUid = body.TryGetProperty("promptMessageUid", out var prompt) && prompt.ValueKind == JsonValueKind.String ? prompt.GetString() : null;
+        var executionObserved = body.TryGetProperty("executionObserved", out var observed) && observed.ValueKind == JsonValueKind.True;
+        var provenEndedCompletion = status == "Ended" && reason == "completed"
+            && promptMessageUid is not null && deliveredMessageUid is not null && executionObserved;
+
+        var restartPause = status is "Stopped" or "Ended"
+            && stopReason is "maintenance_restart" or "orphaned_on_restart";
+        var outcome = restartPause || stopReason == "usage_limit" ? "paused"
+            : status == "Idle" || provenEndedCompletion ? "completed"
+            : status == "Cancelled" ? reason == "superseded" ? "superseded" : "cancelled"
+            : status == "Error" || reason == "failed" ? "failed"
+            : status == "Ended" ? "ended"
+            : status == "Stopped" ? "stopped" : "status";
 
         var summary = (status, stopReason) switch
         {
+            _ when restartPause => $"Session {sessionId} paused for restart; awaiting recovery, completion has not been reported",
             (_, "usage_limit") => $"Session {sessionId} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
+            _ when provenEndedCompletion => $"Session {sessionId} completed{(title != null ? $": {title}" : "")}",
             ("Idle", _) => $"Session {sessionId} completed{(title != null ? $": {title}" : "")}",
+            ("Cancelled", _) => $"Session {sessionId} input was {(reason == "superseded" ? "superseded" : "cancelled")}; it did not complete",
             ("Stopped", _) => $"Session {sessionId} was stopped",
             ("Error" or "Ended", _) => $"Session {sessionId} ended with status: {status}",
             _ => $"Session {sessionId} status: {status}",
         };
 
         var eventContent = $"""
-            <nova-event source="callback:session-complete" type="session-complete" stopReason="{stopReason ?? "unknown"}">
+            <nova-event source="callback:session-{(outcome == "paused" ? "paused" : "complete")}" type="session-{(outcome == "paused" ? "paused" : "complete")}" stopReason="{stopReason ?? "unknown"}">
             {summary}
             </nova-event>
             """;
@@ -63,7 +82,14 @@ public static class CallbackEndpoints
         // Legacy senders remain compatible. A session ID alone cannot identify a
         // completion: later continuations of that same session must still arrive.
         var key = callbackId is null ? null : $"session-complete:{sessionId}:{discussionId}:{callbackId}";
+        // Pause and eventual terminal delivery share prompt correlation, but not
+        // deduplication identity. A pause must never swallow the later completion.
+        if (key is not null && outcome == "paused") key += $":paused:{stopReason}";
+        var metadata = JsonSerializer.SerializeToElement(new {
+            sessionId, callbackId, promptMessageUid, status, stopReason, reason, deliveredMessageUid, executionObserved, outcome,
+        });
         var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
+            metadata: metadata,
             idempotencyKey: key, redeliverOnReuse: key is not null,
             deliveryIdempotencyKey: key, ct: ctx.RequestAborted);
         // Do not introduce extra unkeyed retries from an older sender. Recovery
@@ -72,7 +98,7 @@ public static class CallbackEndpoints
             return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
 
         if (!discussion.Confidential)
-            await live.PostAsync("callback", $"Delegated session completed{(title != null ? $": {title}" : "")}",
+            await live.PostAsync("callback", $"Delegated session {outcome}{(title != null ? $": {title}" : "")}{(restartPause ? " — waiting to resume after restart" : "")}",
                 idempotencyKey: key is null ? null : $"{key}:live", ct: ctx.RequestAborted);
         return Results.Ok(new { handled = true, sessionId, discussionId, status });
     }

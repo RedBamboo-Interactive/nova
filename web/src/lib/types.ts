@@ -3,9 +3,11 @@ export interface DelegationSessionActivity {
   title: string | null
   repositoryId: string | null
   repository: string | null
-  status: "running" | "queued" | "starting" | "unavailable"
+  status: "running" | "queued" | "starting" | "waiting_to_resume" | "blocked" | "failed" | "unavailable"
   available: boolean
-  lastKnownStatus?: "running" | "queued" | "starting" | null
+  lastKnownStatus?: Exclude<DelegationSessionActivity["status"], "unavailable"> | null
+  blockedReason?: string | null
+  errorCode?: string | null
 }
 
 export interface DiscussionDelegationActivity {

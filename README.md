@@ -22,6 +22,32 @@ solution and web build pick it up. Through that junction the backend resolves
 `Leaf.Sdk` at `..\..\..\..\src\Leaf.Sdk\Leaf.Sdk.csproj`; to build standalone,
 pass `-p:LeafSdkProject=<path-to-Leaf.Sdk.csproj>`.
 
+## Delegation recovery and verification
+
+Authenticated next-message recovery preserves the current caller's app/user/Agent
+identity and exact owner/provenance scope. It cannot override a manual stop.
+Automatic Agent recovery uses fresh current authorization from RedLeaf.
+
+Nova opts into durable prompt callbacks with explicit `promptMessageUid`, separate
+from the logical HTTP `callbackId`. Legacy callbacks remain session-based.
+Cancelled/superseded input reports that outcome and never completion. Definitively
+rejected admission can remove its exact unaccepted preregistration through the
+owner-authorized `/callback/unaccepted` operation; uncertain acceptance is retained.
+Webhook delivery uses a bounded outbox with durable backoff and does not block input.
+
+Delegation callers can optionally send `deploymentVerificationTarget: { service:
+"redleaf" | "redcompute", runId: "<exact rebuild run>" }` to `POST
+/api/apps/nova/delegate`. Nova forwards the typed target with the accepted prompt;
+Compute waits for that exact canonical request and a consistent successful terminal
+receipt before delivery. Pending, unknown, and failed targets remain visible in
+delegation activity and Info. A newer deployment does not imply success or replacement
+of an earlier one. Untyped delegation calls retain their existing behavior.
+Explicit replacement uses the authenticated Compute endpoint `POST
+/ai-session/sessions/{sessionId}/input-queue/{itemId}/supersede-verification`, with
+`{ target: { service, runId }, replacement: { service, runId } }`. It cancels only
+the matching never-delivered pending verification, retaining its terminal audit.
+It neither admits a replacement prompt nor cancels ordinary queued work.
+
 ## Release candidate input
 
 `release/producer-input.v1.json` defines the compact, channel-neutral release
