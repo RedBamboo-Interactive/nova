@@ -17,8 +17,9 @@ export function DelegationCount({ activity }: { activity?: DiscussionDelegationA
   if (!activity?.ongoingCount) return null
   const label = delegationActivityLabel(activity)
   return (
-    <span data-slot="delegation-count" aria-label={label} title={label} className="inline-flex items-center gap-1 text-[10px] font-medium" style={{ color: delegationColor }}>
-      {activity.ongoingCount} {activity.ongoingCount === 1 ? "delegation" : "delegations"}
+    <span data-slot="delegation-count" aria-label={label} title={label} className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
+      <span aria-hidden="true" className="text-text-disabled">·</span>
+      <span className="opacity-80" style={{ color: delegationColor }}>{activity.ongoingCount} {activity.ongoingCount === 1 ? "delegation" : "delegations"}</span>
     </span>
   )
 }

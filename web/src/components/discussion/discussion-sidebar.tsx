@@ -86,7 +86,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             <span style={{ color: "var(--color-status-live)" }}>Live</span>
           </span>
         }
-        subtitle={<span className="inline-flex items-center gap-2">{formatRelative(discussion.lastActivity)}<DelegationCount activity={delegationActivity[discussion.id]} /></span>}
+        subtitle={<span className="inline-flex items-baseline gap-1.5"><span>{formatRelative(discussion.lastActivity)}</span><DelegationCount activity={delegationActivity[discussion.id]} /></span>}
         trailing={
           <div className="flex items-center gap-1.5">
             {unread && (
@@ -152,7 +152,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             {discussion.confidential && <i className="ph-bold ph-lock-simple text-[10px] text-text-muted ml-1.5 opacity-60" />}
           </>
         }
-        subtitle={<span className="inline-flex items-center gap-2">{formatRelative(discussion.lastActivity)}<DelegationCount activity={delegationActivity[discussion.id]} /></span>}
+        subtitle={<span className="inline-flex items-baseline gap-1.5"><span>{formatRelative(discussion.lastActivity)}</span><DelegationCount activity={delegationActivity[discussion.id]} /></span>}
         trailing={
           discussion.status !== "archived" ? (
             <div className="flex items-center gap-1.5">
