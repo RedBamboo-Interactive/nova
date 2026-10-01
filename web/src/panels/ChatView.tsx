@@ -9,6 +9,7 @@ import { EditableTitle } from "../components/discussion/editable-title"
 import { AgentPicker } from "../components/agent-picker"
 import { TransitioningAgentAvatar } from "../components/transitioning-agent-avatar"
 import { NovaStatusLine } from "../components/nova-status-line"
+import { DelegationsInfo } from "../components/delegation-activity"
 import { ReactionPills, AddReactionButton } from "../components/discussion/reactions"
 import { createNovaSpeechBackend } from "../lib/speech"
 import { useLocalSettings } from "../hooks/use-local-settings"
@@ -173,6 +174,8 @@ export function ChatView({
     hasEarlierMessages,
     isLoadingEarlier,
     upstreamConnected,
+    delegationActivity,
+    refreshDelegationActivity,
   } = disc
 
   const defaultDiscussionId = getSidebarDiscussionOrder(discussions, null)[0]?.id ?? null
@@ -692,27 +695,31 @@ export function ChatView({
   )
 
   const canManageDiscussion = activeDiscussion?.type === "chat"
+  const activeDelegations = activeDiscussion ? delegationActivity[activeDiscussion.id] : undefined
 
   const sessionInfoContent = activeDiscussion && (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-overlay-6 bg-overlay-3 px-3 py-2.5">
-      <div className="flex min-w-0 items-start gap-2.5">
-        <i className="ph-bold ph-lock-simple mt-0.5 text-sm text-text-muted" aria-hidden="true" />
-        <div className="min-w-0">
-          <div className="text-xs font-medium text-contrast">Confidential</div>
-          <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
-            Excludes this discussion from Live activity, heartbeat and other discussions&apos; context, and bulk exports. The share control is hidden. It remains stored and accessible here.
-          </p>
+    <div className="space-y-3">
+      <div className="flex items-start justify-between gap-3 rounded-lg border border-overlay-6 bg-overlay-3 px-3 py-2.5">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <i className="ph-bold ph-lock-simple mt-0.5 text-sm text-text-muted" aria-hidden="true" />
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-contrast">Confidential</div>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
+              Excludes this discussion from Live activity, heartbeat and other discussions&apos; context, and bulk exports. The share control is hidden. It remains stored and accessible here.
+            </p>
+          </div>
         </div>
+        <Switch
+          size="sm"
+          className="mt-0.5 shrink-0"
+          checked={activeDiscussion.confidential ?? false}
+          onCheckedChange={handleConfidentialToggle}
+          disabled={confidentialityPending}
+          aria-busy={confidentialityPending}
+          aria-label="Confidential discussion"
+        />
       </div>
-      <Switch
-        size="sm"
-        className="mt-0.5 shrink-0"
-        checked={activeDiscussion.confidential ?? false}
-        onCheckedChange={handleConfidentialToggle}
-        disabled={confidentialityPending}
-        aria-busy={confidentialityPending}
-        aria-label="Confidential discussion"
-      />
+      <DelegationsInfo activity={activeDelegations} />
     </div>
   )
 
@@ -802,7 +809,7 @@ export function ChatView({
                   Float
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem onClick={() => setSessionInfoOpen(true)}>
+              <DropdownMenuItem onClick={() => { void refreshDelegationActivity(true); setSessionInfoOpen(true) }}>
                 <i aria-hidden="true" className="ph-bold ph-info size-4" />
                 Info
               </DropdownMenuItem>
@@ -878,8 +885,8 @@ export function ChatView({
   )
 
   const renderStatusLine = useCallback(({ isStreaming, isReconnecting, messages }: { isStreaming: boolean; isReconnecting: boolean; messages: import("@redbamboo/chat").MessageBlock[] }) => (
-    <NovaStatusLine isStreaming={isStreaming} isReconnecting={isReconnecting} messages={messages} />
-  ), [])
+    <NovaStatusLine isStreaming={isStreaming} isReconnecting={isReconnecting} messages={messages} delegationActivity={activeDelegations} />
+  ), [activeDelegations])
 
   const resolveAgentInfo = useCallback((agentId: string) => {
     const agent = getAgent(agentId)
@@ -1174,6 +1181,7 @@ export function ChatView({
           <div className="flex-1 overflow-hidden">
             <DiscussionSidebar
               discussions={filteredDiscussions}
+              delegationActivity={delegationActivity}
               activeDiscussionId={synchronizedDiscussionId ?? activeDiscussionId}
               onSelect={handleSelectDiscussion}
               onArchive={archiveDiscussion}

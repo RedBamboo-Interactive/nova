@@ -1,3 +1,23 @@
+export interface DelegationSessionActivity {
+  sessionId: string
+  title: string | null
+  repositoryId: string | null
+  repository: string | null
+  status: "running" | "queued" | "starting" | "unavailable"
+  available: boolean
+  lastKnownStatus?: "running" | "queued" | "starting" | null
+}
+
+export interface DiscussionDelegationActivity {
+  ongoingCount: number
+  sessions: DelegationSessionActivity[]
+  available: boolean
+  unknownCount: number
+  linkedSessionIds: string[]
+}
+
+export type DelegationActivitySnapshot = Record<string, DiscussionDelegationActivity>
+
 export interface DiscussionInfo {
   id: string
   entityId: string

@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo, useSyncExternalStore, startTransition } from "react"
 import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
-import type { DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
+import type { DelegationActivitySnapshot, DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
 import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
 import { canonicalUserMessageUids, DeferredInvalidationCoordinator, DurableTranscriptPager, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
@@ -12,6 +12,7 @@ import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
 import { HistoryLifecycleTombstones, historyRevalidationDirection, invalidateHistoryGeneration, isCurrentHistoryGeneration, shouldAccumulatePushedHistoryOverlay, shouldCatchUpHistory } from "../lib/discussion-history-page"
 import { LatestTaskCoordinator } from "../lib/latest-task-coordinator"
+import { invalidatesDelegationActivity, unavailableDelegationActivity } from "../lib/delegation-activity"
 import {
   clearDiscussionArchivePending,
   getDiscussionList,
@@ -166,6 +167,30 @@ export function useDiscussions(eventResolver?: EventResolver) {
   // view state below (selection, loaded transcript, dialogs) remains local.
   const discussions = useSyncExternalStore(subscribeDiscussionList, getDiscussionList, getDiscussionList)
   const setDiscussions = setDiscussionList
+  const [delegationActivity, setDelegationActivity] = useState<DelegationActivitySnapshot>({})
+  const delegationActivityRef = useRef(delegationActivity)
+  delegationActivityRef.current = delegationActivity
+  const delegationReads = useRef(new LatestTaskCoordinator<string>())
+  const changedDelegationSessions = useRef(new Set<string>())
+  const freshDelegationRead = useRef(true)
+  const delegationInvalidations = useMemo(() => new DeferredInvalidationCoordinator<string>(environment.window, 500), [environment.window])
+  useEffect(() => () => delegationInvalidations.clear(), [delegationInvalidations])
+  const refreshDelegationActivity = useCallback((fresh = false) => {
+    if (fresh) freshDelegationRead.current = true
+    return delegationReads.current.run("activity", async () => {
+      const query = new URLSearchParams()
+      if (freshDelegationRead.current) query.set("fresh", "true")
+      freshDelegationRead.current = false
+      for (const id of changedDelegationSessions.current) query.append("sessionId", id)
+      changedDelegationSessions.current.clear()
+      try {
+        setDelegationActivity(await api.get<DelegationActivitySnapshot>(`/api/apps/nova/discussions/delegations?${query}`))
+      } catch (error) {
+        setDelegationActivity(previous => error instanceof ApiError && [401, 403, 404].includes(error.status)
+          ? {} : unavailableDelegationActivity(previous))
+      }
+    })
+  }, [])
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Record<string, MessageBlock[]>>({})
   const transcriptAccumulatorsRef = useRef(new Map<string, TranscriptAccumulator>())
@@ -339,9 +364,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [discussions])
 
   const refreshDiscussions = useCallback(async () => {
+    void refreshDelegationActivity(true)
     const list = await api.get<DiscussionInfo[]>("/api/apps/nova/discussions")
     setDiscussions(list)
-  }, [])
+  }, [refreshDelegationActivity])
 
   const syncAndRefresh = useCallback(async () => {
     await api.post("/api/apps/nova/discussions/sync").catch(() => {})
@@ -1091,6 +1117,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [discussions, toast])
 
   const handleWsEvent = useCallback((event: WsEvent) => {
+    const activityData = event.data as Record<string, unknown>
+    const linked = new Set(Object.values(delegationActivityRef.current).flatMap(activity => activity.linkedSessionIds))
+    if (invalidatesDelegationActivity(event.type, activityData, linked, new Set(discussionsRef.current.map(d => d.id)))) {
+      const sessionId = event.type === "session.updated" ? activityData.id : activityData.sessionId
+      if (typeof sessionId === "string" && linked.has(sessionId)) changedDelegationSessions.current.add(sessionId)
+      delegationInvalidations.schedule("activity", () => { void refreshDelegationActivity() })
+    }
     if (event.type === "ai-session.changed") {
       const { sessionId } = event.data as { sessionId?: string }
       if (!sessionId) return
@@ -1480,7 +1513,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discId]: reconciled.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, loadMessages, catchUpMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming, resetHistoryPaging, retireHistoryPaging])
+  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, refreshDelegationActivity, delegationInvalidations, loadMessages, catchUpMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming, resetHistoryPaging, retireHistoryPaging])
   handleWsEventRef.current = handleWsEvent
 
   const handleUpstreamDisconnect = useCallback(() => {
@@ -1495,6 +1528,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   const handleUpstreamReconnect = useCallback(() => {
     setUpstreamConnected(true)
+    freshDelegationRead.current = true
     // The socket cannot replay frames emitted while the client was suspended.
     // Refresh the active tail now and make every other cached discussion load
     // authoritatively the next time it is selected.
@@ -1616,6 +1650,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     resumeDiscussion,
     loadEarlierMessages,
     refreshDiscussions,
+    delegationActivity,
+    refreshDelegationActivity,
     syncAndRefresh,
     reloadActiveMessages,
     handleWsEvent,

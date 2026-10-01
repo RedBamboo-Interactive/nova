@@ -509,6 +509,54 @@ public sealed class RedComputeClient(IComputeGateway gateway)
 
     public sealed record SessionRuntimeState(string Status, string? StopReason);
 
+    public sealed record DelegationSnapshot(
+        string Status, string? StopReason, string? Title, string? OwnerId, string? AgentId,
+        bool Confidential, string? RepositoryId, int? QueueDepth, string? QueueState,
+        string? QueueBlockedReason);
+
+    public sealed record DelegationSnapshotResult(DelegationSnapshot? Value, bool Denied = false);
+
+    /// <summary>Authorized session metadata and canonical queue summary; no transcript projection.</summary>
+    public async Task<DelegationSnapshotResult> GetDelegationSnapshotAsync(string sessionId, CancellationToken ct = default)
+    {
+        if (!DelegationActivity.ValidSessionId(sessionId)) return new(null, true);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(8));
+        try
+        {
+            // The existing detail contract includes the queue summary. Its minimum
+            // tail keeps historical transcript size out of this activity read.
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}?tail=1");
+            using var response = await gateway.SendAsync(request, provenance: null, timeout.Token);
+            if ((int)response.StatusCode is 401 or 403 or 404) return new(null, true);
+            if (!response.IsSuccessStatusCode) return new(null);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("session", out var session)
+                || DelegationActivity.String(session, "id") != sessionId
+                || DelegationActivity.String(session, "status") is not { } status) return new(null);
+            int? depth = null;
+            string? queueState = null, blocked = null;
+            if (root.TryGetProperty("inputQueue", out var queue) && queue.ValueKind == JsonValueKind.Object)
+            {
+                if (queue.TryGetProperty("depth", out var count) && count.ValueKind == JsonValueKind.Number
+                    && count.TryGetInt32(out var parsed) && parsed >= 0) depth = parsed;
+                queueState = DelegationActivity.String(queue, "state");
+                blocked = DelegationActivity.String(queue, "blockedReason");
+            }
+            if (!session.TryGetProperty("confidential", out var privateNode)
+                || privateNode.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return new(null);
+            var confidential = privateNode.ValueKind == JsonValueKind.True;
+            return new(new(status, DelegationActivity.String(session, "stopReason"),
+                DelegationActivity.String(session, "title"), DelegationActivity.String(session, "userId"),
+                DelegationActivity.String(session, "ownerAgentId"), confidential,
+                DelegationActivity.String(session, "repositoryId"), depth, queueState, blocked));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { return new(null); }
+    }
+
     public async Task<SessionRuntimeState?> GetSessionStateAsync(
         string sessionId, CancellationToken ct = default)
     {

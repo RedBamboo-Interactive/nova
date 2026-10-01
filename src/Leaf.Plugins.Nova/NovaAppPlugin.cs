@@ -72,6 +72,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
         services.AddSingleton(sp =>
             new DiscussionStore(sp.GetRequiredKeyedService<IEntityStore>(PluginId), sp.GetRequiredService<IDiscussions>()));
         services.AddSingleton<ConversationUnread>();
+        services.AddSingleton(sp => new DelegationActivity(sp.GetRequiredService<IDiscussions>(),
+            sp.GetRequiredService<RedComputeClient>(), sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
         services.AddSingleton(sp => new DreamCycleProvisioner(
             sp.GetRequiredKeyedService<IEntityStore>(PluginId),
             sp.GetRequiredKeyedService<IWorkflowAutomations>(PluginId),

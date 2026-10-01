@@ -110,6 +110,19 @@ public static class DiscussionEndpoints
 
     public static void Map(RouteGroupBuilder group)
     {
+        group.MapGet("/discussions/delegations", async (HttpContext ctx, DiscussionStore store, DelegationActivity activity) =>
+        {
+            var changed = ctx.Request.Query["sessionId"].Select(id => id ?? "").ToHashSet(StringComparer.Ordinal);
+            if (changed.Count > 200 || changed.Any(id => !DelegationActivity.ValidSessionId(id)))
+                return Results.BadRequest(new { error = "invalid_session_id" });
+            return Results.Ok(await activity.ReadAsync(await store.ListAsync(ct: ctx.RequestAborted), ctx,
+                ctx.RequestAborted, changed, ctx.Request.Query["fresh"] == "true"));
+        })
+            .WithName("NovaDiscussionDelegations")
+            .WithSummary("Ongoing originating-discussion delegations")
+            .WithDescription("Authorized read-only activity for distinct durably linked delegated sessions, using canonical session and input-queue state. Unavailable observations preserve unresolved work without claiming completion; parent discussion status is unchanged.")
+            .Produces<IReadOnlyDictionary<string, DiscussionDelegationActivity>>();
+
         group.MapGet("/discussions", async (HttpContext ctx, DiscussionStore store) =>
         {
             var status = ctx.Request.Query["status"].FirstOrDefault();

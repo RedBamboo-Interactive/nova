@@ -346,6 +346,8 @@ public static class DelegateEndpoints
                         repository = resolvedRepository?.Name,
                         continued = isContinuation,
                         agent = resolvedAgent.Name,
+                        agentId = resolvedAgent.Id,
+                        promptMessageUid,
                         status = "started",
                     });
                     await injector.InjectAsync(
