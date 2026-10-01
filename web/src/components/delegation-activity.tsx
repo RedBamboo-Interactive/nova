@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom"
+import { MorphSpinner } from "@redbamboo/chat"
 import type { DiscussionDelegationActivity } from "../lib/types"
 import { delegationActivityLabel } from "../lib/delegation-activity"
 import { delegationSessionPath } from "../lib/delegation-session-link"
@@ -8,8 +9,8 @@ import { BUILTIN_EVENTS } from "../lib/event-type-resolution"
 // event color until the host supplies it, without expanding shared theme APIs.
 const delegationColor = `var(--color-accent-magenta, ${BUILTIN_EVENTS.delegation!.color})`
 
-export function DelegationSquare() {
-  return <span data-slot="delegation-square" aria-hidden="true" className="inline-block size-2 shrink-0" style={{ backgroundColor: delegationColor }} />
+export function DelegationSpinner({ paused = false }: { paused?: boolean }) {
+  return <span data-slot="delegation-spinner" aria-hidden="true" className="inline-flex shrink-0"><MorphSpinner color={delegationColor} paused={paused} /></span>
 }
 
 export function DelegationCount({ activity }: { activity?: DiscussionDelegationActivity }) {
@@ -17,8 +18,7 @@ export function DelegationCount({ activity }: { activity?: DiscussionDelegationA
   const label = delegationActivityLabel(activity)
   return (
     <span data-slot="delegation-count" aria-label={label} title={label} className="inline-flex items-center gap-1 text-[10px] font-medium" style={{ color: delegationColor }}>
-      <DelegationSquare />
-      {activity.ongoingCount}
+      {activity.ongoingCount} {activity.ongoingCount === 1 ? "delegation" : "delegations"}
     </span>
   )
 }
@@ -37,7 +37,7 @@ export function DelegationsInfo({ activity }: { activity?: DiscussionDelegationA
         <ul className="mt-2 space-y-2">
           {activity.sessions.map(session => (
             <li key={session.sessionId} data-delegation-session-id={session.sessionId} className="flex min-w-0 items-start gap-2">
-              <span className="mt-1.5"><DelegationSquare /></span>
+              <span className="mt-0.5"><DelegationSpinner paused={session.status === "unavailable"} /></span>
               <div className="min-w-0 flex-1">
                 <Link to={delegationSessionPath({ sessionId: session.sessionId })!} className="block break-words text-xs text-contrast hover:underline">
                   {session.title || `Code session ${session.sessionId}`}

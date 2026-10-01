@@ -2,7 +2,7 @@ import { memo, useCallback, useMemo } from "react"
 import { ItemList, ItemListRow } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
 import type { DelegationActivitySnapshot, DiscussionDelegationActivity, DiscussionInfo, AgentInfo } from "../../lib/types"
-import { DelegationCount } from "../delegation-activity"
+import { DelegationCount, DelegationSpinner } from "../delegation-activity"
 import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
 
@@ -14,7 +14,7 @@ const statusColor: Record<string, string> = {
 }
 
 function DiscussionStatusIcon({ discussion, activity }: { discussion: DiscussionInfo; activity?: DiscussionDelegationActivity }) {
-  return activity?.ongoingCount ? <DelegationCount activity={activity} /> : (
+  return discussion.status !== "thinking" && activity?.ongoingCount ? <DelegationSpinner paused={!activity.available} /> : (
     <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
   )
 }
@@ -67,7 +67,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                   className="absolute inset-0 w-full h-full rounded-lg object-cover"
                   onError={(e) => { e.currentTarget.style.display = "none" }}
                 />
-                <div className={`absolute -bottom-1 right-0 origin-bottom-right ${delegationActivity[discussion.id]?.ongoingCount ? "rounded-sm bg-background px-0.5" : "scale-75"}`}>
+                <div className="absolute -bottom-1 right-0 origin-bottom-right scale-75">
                   <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} />
                 </div>
               </>
@@ -86,7 +86,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             <span style={{ color: "var(--color-status-live)" }}>Live</span>
           </span>
         }
-        subtitle={formatRelative(discussion.lastActivity)}
+        subtitle={<span className="inline-flex items-center gap-2">{formatRelative(discussion.lastActivity)}<DelegationCount activity={delegationActivity[discussion.id]} /></span>}
         trailing={
           <div className="flex items-center gap-1.5">
             {unread && (
@@ -131,7 +131,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                   className="absolute inset-0 w-full h-full rounded-lg object-cover"
                   onError={(e) => { e.currentTarget.style.display = "none" }}
                 />
-                <div className={`absolute -bottom-1 right-0 origin-bottom-right ${delegationActivity[discussion.id]?.ongoingCount ? "rounded-sm bg-background px-0.5" : "scale-75"}`}>
+                <div className="absolute -bottom-1 right-0 origin-bottom-right scale-75">
                   <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} />
                 </div>
               </>
@@ -152,7 +152,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             {discussion.confidential && <i className="ph-bold ph-lock-simple text-[10px] text-text-muted ml-1.5 opacity-60" />}
           </>
         }
-        subtitle={formatRelative(discussion.lastActivity)}
+        subtitle={<span className="inline-flex items-center gap-2">{formatRelative(discussion.lastActivity)}<DelegationCount activity={delegationActivity[discussion.id]} /></span>}
         trailing={
           discussion.status !== "archived" ? (
             <div className="flex items-center gap-1.5">
