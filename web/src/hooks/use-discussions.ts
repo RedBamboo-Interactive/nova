@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo, useSyncExternalStore
 import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DelegationActivitySnapshot, DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
-import type { ChatInputPart, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
+import type { ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
 import { canonicalUserMessageUids, DeferredInvalidationCoordinator, DurableTranscriptPager, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
@@ -25,6 +25,13 @@ import {
 
 function isClosed(status: string | undefined): boolean {
   return status === "archived" || status === "archiving"
+}
+
+/** Read/title acknowledgements update metadata, never a newer linked-session lifecycle. */
+function upsertDiscussionMetadata(updated: DiscussionInfo): void {
+  const known = getDiscussionList().find(d => d.id === updated.id)
+  if (!known || isClosed(known.status) || isDiscussionArchivePending(updated.id)) return
+  upsertDiscussion({ ...updated, status: known.status, sessionId: known.sessionId })
 }
 
 function stripContextXml(content: string): string {
@@ -247,6 +254,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const loadGenerationRef = useRef<Record<string, number>>({})
   const activeObservedAfterSendRef = useRef<Record<string, boolean>>({})
   const sessionUpdateGenerationRef = useRef<Record<string, number>>({})
+  // Snapshot arbitration also observes stream/send events; keep it separate
+  // from the session-update generation that owns delayed settlement work.
+  const runtimeReadGenerationRef = useRef<Record<string, number>>({})
   const handleWsEventRef = useRef<((event: WsEvent) => void) | null>(null)
   const confidentialInvalidations = useMemo(() => new DeferredInvalidationCoordinator<string>({
     setTimeout: (callback, delayMs) => environment.window.setTimeout(callback, delayMs),
@@ -312,6 +322,37 @@ export function useDiscussions(eventResolver?: EventResolver) {
   // So a discussion that sent recently is left alone.
   const SEND_GRACE_MS = 10_000
   const lastSendAtRef = useRef<Record<string, number>>({})
+  const connectionGenerationRef = useRef(0)
+  const captureRuntimeRead = useCallback((id: string) => ({
+    generation: runtimeReadGenerationRef.current[id] ?? 0,
+    connection: connectionGenerationRef.current,
+    sessionId: getDiscussionList().find(d => d.id === id)?.sessionId ?? null,
+  }), [])
+  const runtimeReadIsCurrent = useCallback((id: string, read: ReturnType<typeof captureRuntimeRead>) => {
+    const known = getDiscussionList().find(d => d.id === id)
+    return !!known && !isClosed(known.status) && !isDiscussionArchivePending(id)
+      && historyLifecycleRef.current.canRun(id) && known.sessionId === read.sessionId
+      && (runtimeReadGenerationRef.current[id] ?? 0) === read.generation
+      && connectionGenerationRef.current === read.connection
+  }, [])
+  const hydrateRuntime = useCallback((id: string, session: { id: string; status?: string; stopReason?: string | null } | null | undefined, read: ReturnType<typeof captureRuntimeRead>) => {
+    if (!session?.status || session.id !== read.sessionId || !runtimeReadIsCurrent(id, read)) return
+    const status = session.status
+    if (status === "Active") {
+      activeObservedAfterSendRef.current[id] = true
+      setDiscussions(prev => applySessionStatus(prev, id, status))
+      setResumePending(prev => ({ ...prev, [id]: false }))
+      if (!pendingQuestionsRef.current[id]) latchStreaming(id)
+    } else if (status === "Starting") {
+      // Starting cannot accept queue input yet, even without an observed turn.
+      setResumePending(prev => ({ ...prev, [id]: true }))
+    } else if (["Idle", "Stopped", "Error"].includes(status)) {
+      if (preservesRecentStreamingLatch(status, !!streamingRef.current[id], lastSendAtRef.current[id] ?? 0, Date.now(), SEND_GRACE_MS, !!activeObservedAfterSendRef.current[id])) return
+      clearStreamingLatch(id)
+      delete activeObservedAfterSendRef.current[id]
+      setDiscussions(prev => applySessionStatus(prev, id, status, session.stopReason ?? undefined))
+    }
+  }, [clearStreamingLatch, latchStreaming, runtimeReadIsCurrent])
 
   /**
    * Re-derive `streaming` from the server for anything still latched true.
@@ -323,24 +364,20 @@ export function useDiscussions(eventResolver?: EventResolver) {
    * true with nothing able to clear it. The composer then shows "Responding…"
    * over an idle session and the message queue holds indefinitely.
    *
-   * Only ever clears. A turn this client did not start is announced by
-   * `session.updated`, which is the path that sets the flag.
+   * Missing entries in a bounded list are not evidence of an idle session.
    */
   const reconcileStreaming = useCallback(async () => {
-    if (!Object.values(streamingRef.current).some(Boolean)) return
-    let active: Set<string>
+    const reads = new Map(getDiscussionList().map(d => [d.id, captureRuntimeRead(d.id)]))
+    let list: { id: string; status: string; stopReason?: string }[]
     try {
-      const list = await api.get<{ id: string; status: string }[]>("/ai-session/sessions?limit=200")
-      active = new Set((list ?? []).filter((s) => s.status === "Active").map((s) => s.id))
+      list = await api.get<{ id: string; status: string; stopReason?: string }[]>("/ai-session/sessions?limit=200")
     } catch { return }
-    const now = Date.now()
-    for (const d of discussionsRef.current) {
-      if (!d.sessionId || !streamingRef.current[d.id]) continue
-      if (active.has(d.sessionId)) continue
-      if (now - (lastSendAtRef.current[d.id] ?? 0) < SEND_GRACE_MS) continue
-      clearStreamingLatch(d.id)
+    for (const d of getDiscussionList()) {
+      const read = reads.get(d.id)
+      const session = list?.find(s => s.id === read?.sessionId)
+      if (read && session) hydrateRuntime(d.id, session, read)
     }
-  }, [clearStreamingLatch])
+  }, [captureRuntimeRead, hydrateRuntime])
 
   // The two moments this client has reason to distrust its own event history:
   // coming back to a tab that may have been suspended, and a socket that just
@@ -365,9 +402,25 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   const refreshDiscussions = useCallback(async () => {
     void refreshDelegationActivity(true)
+    const reads = new Map(getDiscussionList().map(d => [d.id, captureRuntimeRead(d.id)]))
     const list = await api.get<DiscussionInfo[]>("/api/apps/nova/discussions")
-    setDiscussions(list)
-  }, [refreshDelegationActivity])
+    for (const d of list) {
+      const read = reads.get(d.id)
+      if (read && d.sessionId === read.sessionId && isClosed(d.status) && runtimeReadIsCurrent(d.id, read)) {
+        clearStreamingLatch(d.id)
+        clearQuestion(d.id, pendingQuestionsRef.current[d.id] ? "session_ended" : null)
+      }
+    }
+    setDiscussions(current => list.filter(d => historyLifecycleRef.current.canRun(d.id)).map(d => {
+      const known = current.find(k => k.id === d.id)
+      const read = reads.get(d.id)
+      if (read && d.sessionId === read.sessionId && isClosed(d.status) && runtimeReadIsCurrent(d.id, read)) return d
+      if (known && (isClosed(known.status) || read && !runtimeReadIsCurrent(d.id, read)
+          || streamingRef.current[d.id] || resumePendingRef.current[d.id] || pendingQuestionsRef.current[d.id]))
+        return { ...d, status: known.status, sessionId: known.sessionId }
+      return d
+    }))
+  }, [refreshDelegationActivity, captureRuntimeRead, runtimeReadIsCurrent, clearStreamingLatch, clearQuestion])
 
   const syncAndRefresh = useCallback(async () => {
     await api.post("/api/apps/nova/discussions/sync").catch(() => {})
@@ -379,7 +432,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/read`, {
         conversationRevision,
       })
-      upsertDiscussion(updated)
+      upsertDiscussionMetadata(updated)
     } catch { /* a later refresh preserves any still-unread revision */ }
   }, [])
 
@@ -421,12 +474,16 @@ export function useDiscussions(eventResolver?: EventResolver) {
     data: DiscussionHistoryPageResponse,
     direction: "newest" | "before" | "after",
     expectedCursor?: string | null,
+    runtimeRead?: ReturnType<typeof captureRuntimeRead>,
   ): boolean => {
     // Rotation/archive/clear leave a monotonic tombstone. Reject the old page
     // before it can mutate pager state, overlays, metadata, or visible blocks.
     if (!historyLifecycleRef.current.canRun(id)
       || !isCurrentHistoryGeneration(loadGenerationRef.current, id, generation))
       return false
+    const known = getDiscussionList().find(d => d.id === id)
+    if (!known || isClosed(known.status) || isDiscussionArchivePending(id)
+      || runtimeRead && runtimeRead.sessionId !== known.sessionId) return false
     if (data.session && data.discussion.sessionId && data.session.id !== data.discussion.sessionId)
       return false
     // An overlay-only older page can omit session metadata while its outer
@@ -479,7 +536,19 @@ export function useDiscussions(eventResolver?: EventResolver) {
     if (!historyLifecycleRef.current.canRun(id)
       || !isCurrentHistoryGeneration(loadGenerationRef.current, id, generation))
       return false
-    upsertDiscussion(data.discussion)
+    if (runtimeRead && runtimeReadIsCurrent(id, runtimeRead)) {
+      if (isClosed(data.discussion.status)) {
+        clearStreamingLatch(id)
+        clearQuestion(id, pendingQuestionsRef.current[id] ? "session_ended" : null)
+      }
+      if (responseSessionId !== runtimeRead.sessionId) {
+        clearStreamingLatch(id)
+        clearQuestion(id, null)
+        delete activeObservedAfterSendRef.current[id]
+      }
+      upsertDiscussion(data.discussion)
+      hydrateRuntime(id, data.session, { ...runtimeRead, sessionId: responseSessionId })
+    }
 
     const sessionRecords = data.discussion.setupBootstrapMessageUid
       ? result.records.filter(record =>
@@ -509,7 +578,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       return { ...prev, [id]: [...reconciled, ...transient].sort(byTimestamp) }
     })
     return true
-  }, [durableTranscriptPager, eventResolver, transcriptAccumulator])
+  }, [durableTranscriptPager, eventResolver, transcriptAccumulator, hydrateRuntime, runtimeReadIsCurrent, clearStreamingLatch, clearQuestion])
 
   const loadMessagesUncoalesced = useCallback(async (
     id: string,
@@ -533,6 +602,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     setLoadingDiscussionId(id)
     loadedRef.current.add(id)
     const generation = (loadGenerationRef.current[id] ?? 0) + 1
+    const runtimeRead = captureRuntimeRead(id)
     loadGenerationRef.current[id] = generation
     const accumulator = transcriptAccumulator(id)
     accumulator.startSnapshot(generation)
@@ -578,7 +648,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             historyModesRef.current.set(id, "legacy")
             historyOverlaysRef.current.delete(id)
           } else {
-            if (!commitHistoryPage(id, generation, data, "newest"))
+            if (!commitHistoryPage(id, generation, data, "newest", undefined, runtimeRead))
               loadedRef.current.delete(id)
             return
           }
@@ -602,7 +672,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
         let sessionHasEarlier = false
         let sessionCursor: TranscriptCursor | null = null
         try {
-          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+          const data = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+          if (isCurrentLoad()) hydrateRuntime(id, data.session, runtimeRead)
           if (data.messages?.length) {
             sessionMsgs = filterInternalBootstrapBlock(
               rebuildBlocks(data.messages),
@@ -645,7 +716,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
           let sessionCursor: TranscriptCursor | null = null
           if (disc.sessionId) {
             try {
-              const session = await api.get<{ session: { title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+              const session = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+              if (isCurrentLoad()) hydrateRuntime(id, session.session, runtimeRead)
               if (session.messages?.length) {
                 sessionMsgs = filterInternalBootstrapBlock(
                   rebuildBlocks(session.messages),
@@ -674,7 +746,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
       if (disc?.sessionId) {
         try {
-          const data = await api.get<{ session: { title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+          const data = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+          if (isCurrentLoad()) hydrateRuntime(id, data.session, runtimeRead)
           if (data.messages?.length) {
             const sessionMsgs = filterInternalBootstrapBlock(
               rebuildBlocks(data.messages),
@@ -750,6 +823,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       loadedRef.current.add(id)
       while (true) {
         const requestId = (loadGenerationRef.current[id] ?? 0) + 1
+        const runtimeRead = captureRuntimeRead(id)
         loadGenerationRef.current[id] = requestId
         const expectedCursor = activePager.startNewerPage(requestId)
         if (!expectedCursor) return
@@ -769,7 +843,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             void loadMessages(id, INITIAL_HISTORY_TAIL, true, sessionIdOverride)
             return
           }
-          if (!commitHistoryPage(id, requestId, data, "after", expectedCursor)) {
+          if (!commitHistoryPage(id, requestId, data, "after", expectedCursor, runtimeRead)) {
             loadedRef.current.delete(id)
             return
           }
@@ -799,6 +873,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           if (!historyLifecycleRef.current.canRun(id)) return
           const pager = durableTranscriptPager(id)
           const requestId = (loadGenerationRef.current[id] ?? 0) + 1
+          const runtimeRead = captureRuntimeRead(id)
           loadGenerationRef.current[id] = requestId
           const expectedCursor = pager.startOlderPage(requestId)
           if (!expectedCursor || !pager.current().hasEarlier) return
@@ -815,7 +890,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
               void loadMessages(id, INITIAL_HISTORY_TAIL, true)
               return
             }
-            commitHistoryPage(id, requestId, data, "before", expectedCursor)
+            commitHistoryPage(id, requestId, data, "before", expectedCursor, runtimeRead)
           } catch (error) {
             if (error instanceof ApiError && error.status === 409
               && (error.code === "history_cursor_stale" || error.code === "history_cursor_mismatch")) {
@@ -845,9 +920,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const reloadActiveMessages = useCallback((force?: boolean) => {
     const id = activeIdRef.current
     if (!id) return
-    if (force) {
-      setStreaming((prev) => ({ ...prev, [id]: false }))
-    } else if (streamingRef.current[id]) {
+    if (!force && streamingRef.current[id]) {
       return
     }
     loadedRef.current.delete(id)
@@ -934,6 +1007,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     // for HTTP admission and a later provider lifecycle event.
     const locallyStartedTurn = !!options?.idempotencyKey && !streamingRef.current[discussionId]
     if (locallyStartedTurn) {
+      runtimeReadGenerationRef.current[discussionId] = (runtimeReadGenerationRef.current[discussionId] ?? 0) + 1
       lastSendAtRef.current[discussionId] = Date.now()
       activeObservedAfterSendRef.current[discussionId] = false
       latchStreaming(discussionId)
@@ -941,6 +1015,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         prev.map((d) => d.id === discussionId ? { ...d, status: "thinking" as const } : d)
       )
     }
+    const admissionRead = captureRuntimeRead(discussionId)
 
     const displayContent = options?.displayContent ?? (
       content
@@ -959,7 +1034,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       api.put<DiscussionInfo>(
         `/api/apps/nova/discussions/${discussionId}/title/fallback`,
         { title },
-      ).then(upsertDiscussion).catch(() => {})
+      ).then(upsertDiscussionMetadata).catch(() => {})
     }
 
     type Admission = {
@@ -968,6 +1043,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       sessionId?: string
       disposition: "queued" | "delivered"
       queueItemId?: string | null
+      queue?: ChatQueueSummary
       metadata?: Record<string, unknown>
       messageUid?: string | null
     }
@@ -984,17 +1060,20 @@ export function useDiscussions(eventResolver?: EventResolver) {
           )
         : await api.post<Admission>(`/api/apps/nova/discussions/${discussionId}/message`, body)
     } catch (error) {
-      if (locallyStartedTurn) clearStreamingLatch(discussionId)
+      if (locallyStartedTurn && runtimeReadIsCurrent(discussionId, admissionRead)) clearStreamingLatch(discussionId)
       throw error
     }
 
-    if (res.sessionId && res.sessionId !== disc.sessionId) {
+    if (res.sessionId && res.sessionId !== disc.sessionId && runtimeReadIsCurrent(discussionId, admissionRead)) {
       setDiscussions((prev) =>
         prev.map((d) => d.id === discussionId ? { ...d, sessionId: res.sessionId! } : d)
       )
     }
 
     if (res.disposition === "delivered") {
+      // Actual delivery also supersedes an older admission's lifecycle read,
+      // including when the optimistic latch was already set by that send.
+      runtimeReadGenerationRef.current[discussionId] = (runtimeReadGenerationRef.current[discussionId] ?? 0) + 1
       // The shared remote queue owns the immediately visible outgoing bubble.
       // Direct callers without its idempotency identity retain the legacy append.
       if (!options?.idempotencyKey) {
@@ -1021,8 +1100,33 @@ export function useDiscussions(eventResolver?: EventResolver) {
         prev.map((d) => d.id === discussionId ? { ...d, status: "thinking" as const } : d)
       )
     }
+    // Waiting confirms that admission did not start this optimistic turn, but
+    // maintenance can also pause input to an already Active provider. Resolve
+    // that distinction from one authorized exact-session snapshot. Do not delay
+    // the shared queue acknowledgement or repeatedly poll a blocked input.
+    if (locallyStartedTurn && res.disposition === "queued"
+      && (res.queue?.state === "waiting_for_session" || !!res.queue?.blockedReason)
+      && admissionRead.sessionId && (!res.sessionId || res.sessionId === admissionRead.sessionId)
+      && runtimeReadIsCurrent(discussionId, admissionRead)) {
+      void api.get<{ session?: { id: string; status?: string; stopReason?: string | null } }>(
+        `/ai-session/sessions/${admissionRead.sessionId}`,
+      ).then(({ session }) => {
+        if (!runtimeReadIsCurrent(discussionId, admissionRead) || session?.id !== admissionRead.sessionId) return
+        if (session.status === "Idle") {
+          // Bypass only this send's pre-Active grace. Questions, restart/start
+          // state and any newer observed work retain their established owners.
+          if (activeObservedAfterSendRef.current[discussionId]
+            || pendingQuestionsRef.current[discussionId] || resumePendingRef.current[discussionId]) return
+          delete lastSendAtRef.current[discussionId]
+          clearStreamingLatch(discussionId)
+          setDiscussions(prev => applySessionStatus(prev, discussionId, "Idle"))
+        } else {
+          hydrateRuntime(discussionId, session, admissionRead)
+        }
+      }).catch(() => { /* Unavailable lifecycle evidence cannot establish Idle. */ })
+    }
     return res
-  }, [discussions, clearStreamingLatch, latchStreaming])
+  }, [discussions, clearStreamingLatch, latchStreaming, captureRuntimeRead, runtimeReadIsCurrent, hydrateRuntime])
 
   const sendMessage = useCallback((discussionId: string, content: string, images?: ImageAttachment[], options?: SendOptions) =>
     deliverMessage(discussionId, content, images, options), [deliverMessage])
@@ -1180,14 +1284,20 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const discId = sessionToDiscussion.get(session.id)
       if (!discId) return
       const known = discussionsRef.current.find((d) => d.id === discId)
+      if (!known || isClosed(known.status) || isDiscussionArchivePending(discId) || !historyLifecycleRef.current.canRun(discId)) return
       if (shouldRequestSessionTitleSync(known, session.title)) {
         void api.put<DiscussionInfo>(`/api/apps/nova/discussions/${discId}/title/session`)
-          .then(upsertDiscussion)
+          .then(upsertDiscussionMetadata)
           .catch(() => {})
       }
 
       const updateGeneration = (sessionUpdateGenerationRef.current[discId] ?? 0) + 1
+      runtimeReadGenerationRef.current[discId] = (runtimeReadGenerationRef.current[discId] ?? 0) + 1
       sessionUpdateGenerationRef.current[discId] = updateGeneration
+      if (session.status === "Starting") {
+        setResumePending(prev => ({ ...prev, [discId]: true }))
+        return
+      }
       if (session.status !== "Active") {
         const nowMs = Date.now()
         if (preservesRecentStreamingLatch(
@@ -1237,7 +1347,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
           }
           void api.put<DiscussionInfo>(`/api/apps/nova/discussions/${discId}/activity`)
             .then((updated) => {
-              upsertDiscussion(updated)
+              if (sessionUpdateGenerationRef.current[discId] !== updateGeneration) return
+              upsertDiscussionMetadata(updated)
               scheduleTranscriptReload(updated.conversationRevision)
             })
             .catch(() => scheduleTranscriptReload())
@@ -1247,6 +1358,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         // A turn can start in another window or through an automation, so the
         // local optimistic send is not an authoritative source of this state.
         activeObservedAfterSendRef.current[discId] = true
+        setResumePending(prev => ({ ...prev, [discId]: false }))
         setDiscussions((prev) => applySessionStatus(prev, discId, session.status))
         // Active means a turn is running even when this client didn't start
         // it — an automation, the heartbeat, or the same discussion open on
@@ -1262,6 +1374,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (!discId) return
       sessionUpdateGenerationRef.current[discId] =
         (sessionUpdateGenerationRef.current[discId] ?? 0) + 1
+      runtimeReadGenerationRef.current[discId] = (runtimeReadGenerationRef.current[discId] ?? 0) + 1
       delete activeObservedAfterSendRef.current[discId]
       setStreaming((prev) => ({ ...prev, [discId]: false }))
       // A card still up when the session died was never answered.
@@ -1457,6 +1570,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }
       const discId = sessionToDiscussion.get(sessionId)
       if (!discId) return
+      runtimeReadGenerationRef.current[discId] = (runtimeReadGenerationRef.current[discId] ?? 0) + 1
+      const known = getDiscussionList().find(d => d.id === discId)
+      if (!known || isClosed(known.status) || isDiscussionArchivePending(discId) || !historyLifecycleRef.current.canRun(discId)) return
       // Copied field by field rather than spread, so keep this in step with
       // ChatEvent: anything missed here is silently dropped, and `requestId` in
       // particular is the only handle on a parked question — without it the
@@ -1517,6 +1633,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
   handleWsEventRef.current = handleWsEvent
 
   const handleUpstreamDisconnect = useCallback(() => {
+    connectionGenerationRef.current++
+    streamingRef.current = {}
+    resumePendingRef.current = {}
     setUpstreamConnected(false)
     setStreaming({})
     questionStatesRef.current = {}
@@ -1607,7 +1726,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   const renameDiscussion = useCallback(async (id: string, title: string) => {
     const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/title`, { title })
-    upsertDiscussion(updated)
+    upsertDiscussionMetadata(updated)
   }, [])
 
   const updateDiscussionTitle = useCallback(async (id: string) => {
