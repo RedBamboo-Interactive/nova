@@ -1061,6 +1061,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
         : await api.post<Admission>(`/api/apps/nova/discussions/${discussionId}/message`, body)
     } catch (error) {
       if (locallyStartedTurn && runtimeReadIsCurrent(discussionId, admissionRead)) clearStreamingLatch(discussionId)
+      if (error instanceof ApiError && error.code === "maintenance_draining")
+        environment.window.dispatchEvent(new Event("nova:maintenance-refresh"))
       throw error
     }
 

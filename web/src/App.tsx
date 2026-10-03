@@ -4,7 +4,7 @@ import {
   useWsSubscribe,
   usePluginBreadcrumbs,
 } from "@redbamboo/utility"
-import { ToastProvider } from "@redbamboo/ui"
+import { ToastProvider, useUiEnvironment } from "@redbamboo/ui"
 import { AppShell } from "./components/layout/app-shell"
 import { useDiscussions } from "./hooks/use-discussions"
 import { useEventTypes } from "./hooks/use-event-types"
@@ -30,6 +30,7 @@ export function useNovaPendingContext(): PendingVisibleContextController {
 }
 
 function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<DiscussionsHook> }) {
+  const environment = useUiEnvironment()
   useWsSubscribe((event) => {
     if (event.type === "upstream.disconnected" || event.type === "websocket.disconnected") {
       discRef.current.handleUpstreamDisconnect()
@@ -37,6 +38,7 @@ function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<DiscussionsH
       discRef.current.handleUpstreamReconnect()
     } else {
       if (event.type === "agent.avatar-changed") window.dispatchEvent(new Event("nova:avatar-changed"))
+      if (event.type === "maintenance.updated") environment.window.dispatchEvent(new Event("nova:maintenance-refresh"))
       discRef.current.handleWsEvent(event as WsEvent)
     }
   })

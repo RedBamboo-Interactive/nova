@@ -70,6 +70,10 @@ public sealed class MessagePipeline(
                     await store.PatchAsync(current.EntityId, new JsonObject { ["session_id"] = sessionId });
                 return sessionId;
             }
+            catch (ComputeMaintenanceException)
+            {
+                return null;
+            }
             catch (Exception ex)
             {
                 logger.LogError(ex,
@@ -199,6 +203,10 @@ public sealed class MessagePipeline(
                 sessionId = await TryCreateSessionAsync(discussion.AgentId, computeOwnerId,
                     discussion.QualityTier, discussion.Provider, ct, discussion.Id,
                     confidential: discussion.Confidential);
+            }
+            catch (ComputeMaintenanceException ex)
+            {
+                return new(false, null, ComputeMaintenanceException.ErrorCode, ex.Message);
             }
             catch (Exception ex)
             {

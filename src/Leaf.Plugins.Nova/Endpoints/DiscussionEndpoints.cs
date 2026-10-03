@@ -110,6 +110,12 @@ public static class DiscussionEndpoints
 
     public static void Map(RouteGroupBuilder group)
     {
+        group.MapGet("/maintenance", async (RedComputeClient redCompute, HttpContext context) =>
+        {
+            var result = await redCompute.GetMaintenanceStatusAsync(context.RequestAborted);
+            return Results.Content(result.Content, result.ContentType, statusCode: result.StatusCode);
+        }).WithDescription("Authenticated update pause and aggregate active-turn progress; no private session details.");
+
         group.MapGet("/discussions/delegations", async (HttpContext ctx, DiscussionStore store, DelegationActivity activity) =>
         {
             var changed = ctx.Request.Query["sessionId"].Select(id => id ?? "").ToHashSet(StringComparer.Ordinal);
@@ -1453,6 +1459,7 @@ public static class DiscussionEndpoints
                     "invalid_images" or "invalid_image" or "unsupported_image_type" or "missing_content" => 400,
                     "image_attachments_not_supported" or "file_attachments_not_supported" => 422,
                     "attachment_not_found" or "attachment_expired" or "attachment_forbidden" or "invalid_attachment" or "attachment_limit_exceeded" => 422,
+                    ComputeMaintenanceException.ErrorCode => 503,
                     _ => 502,
                 };
                 return Results.Json(new

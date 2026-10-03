@@ -17,6 +17,7 @@ import { useAgents } from "../hooks/use-agents"
 import { useReactions } from "../hooks/use-reactions"
 import { useDisc, useNovaPendingContext } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
+import { useMaintenanceStatus } from "../hooks/use-maintenance-status"
 import { useShare } from "../hooks/use-share"
 import { setSettings } from "../lib/settings-store"
 import { api, novaExecution } from "../lib/api"
@@ -185,6 +186,7 @@ export function ChatView({
     defaultDiscussionId,
   )
 
+  const maintenance = useMaintenanceStatus()
   const payloadSessionId = activeDiscussion?.sessionId ?? null
   const loadTranscriptPayload = useCallback<TranscriptPayloadLoader>((ref, range, signal) => {
     if (!payloadSessionId) return Promise.reject(new Error("This discussion has no active session"))
@@ -499,7 +501,11 @@ export function ChatView({
         if (detail?.discussionId === activeDiscussionId) listener()
       }
       environment.window.addEventListener("nova:input-queue-updated", onUpdate)
-      return () => environment.window.removeEventListener("nova:input-queue-updated", onUpdate)
+      environment.window.addEventListener("nova:maintenance-refresh", listener)
+      return () => {
+        environment.window.removeEventListener("nova:input-queue-updated", onUpdate)
+        environment.window.removeEventListener("nova:maintenance-refresh", listener)
+      }
     },
   }) : undefined, [activeDiscussionId, environment.window])
 
@@ -1068,6 +1074,9 @@ export function ChatView({
         onSend={handleSend}
         onSendInput={handleSendInput}
         queueTransport={queueTransport}
+        maintenanceStatus={maintenance.status}
+        maintenanceStatusUnavailable={maintenance.unavailable}
+        hasServerSession={Boolean(payloadSessionId)}
         prepareOutgoingMessage={prepareOutgoingMessage}
         attachmentTransport={attachmentTransport}
         enableFileAttachments

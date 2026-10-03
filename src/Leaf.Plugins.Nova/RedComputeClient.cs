@@ -114,11 +114,33 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         {
             Content = JsonContent.Create(body, options: JsonOptions),
         };
-        var resp = await gateway.SendAsync(req, provenance, ct);
-        if (!resp.IsSuccessStatusCode) return null;
+        using var resp = await gateway.SendAsync(req, provenance, ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            if (resp.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable)
+            {
+                try
+                {
+                    var error = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions, ct);
+                    if (error.ValueKind == JsonValueKind.Object && error.TryGetProperty("error", out var code)
+                        && code.ValueKind == JsonValueKind.String && code.GetString() == ComputeMaintenanceException.ErrorCode)
+                        throw new ComputeMaintenanceException();
+                }
+                catch (JsonException) { /* Preserve generic failure for malformed responses. */ }
+            }
+            return null;
+        }
 
         var session = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions, ct);
         return session.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+    }
+
+    public async Task<ProxyResult> GetMaintenanceStatusAsync(CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/maintenance/status");
+        using var response = await gateway.SendAsync(request, provenance: null, ct);
+        return new((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct),
+            response.Content.Headers.ContentType?.ToString() ?? "application/json");
     }
 
     public async Task<bool> SetConfidentialAsync(string sessionId,
