@@ -9,6 +9,13 @@ export const DEFAULT_EVENT: EventType = {
 }
 
 export const BUILTIN_EVENTS: Record<string, EventType> = {
+  delegate: {
+    key: "delegate",
+    name: "Delegation update",
+    icon: "ph-bold ph-code",
+    color: "rgb(236 72 153)",
+    description: "Status updates from delegated Code sessions",
+  },
   delegation: {
     key: "delegation",
     name: "Delegation",
