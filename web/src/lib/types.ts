@@ -129,6 +129,7 @@ export interface DiscussionHistoryPageResponse {
 }
 
 export interface ClaudeStreamEvent {
+  isPartial?: boolean
   /**
    * Open-ended on purpose: the backend keeps adding event kinds (most recently
    * the "question" / "question_resolved" control pair) and a narrower union

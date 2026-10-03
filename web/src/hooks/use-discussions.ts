@@ -1589,6 +1589,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         toolResult: evt.toolResult ?? null,
         payloadRef: evt.payloadRef ?? null,
         messageId: evt.messageId ?? null,
+        isPartial: evt.isPartial,
         messageUid: evt.messageUid ?? null,
         phase: evt.phase ?? null,
         timestamp: serverTimestamp ?? new Date().toISOString(),
