@@ -17,9 +17,15 @@ export function DelegationCount({ activity }: { activity?: DiscussionDelegationA
   if (!activity?.ongoingCount) return null
   const label = delegationActivityLabel(activity)
   return (
-    <span data-slot="delegation-count" aria-label={label} title={label} className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
-      <span aria-hidden="true" className="text-text-disabled">·</span>
-      <span className="opacity-80" style={{ color: delegationColor }}>{activity.ongoingCount} {activity.ongoingCount === 1 ? "delegation" : "delegations"}</span>
+    <span data-slot="delegation-count" role="img" aria-label={label} title={label} className="inline-flex self-center items-center gap-1 whitespace-nowrap">
+      {Array.from({ length: activity.ongoingCount }, (_, index) => {
+        const session = activity.sessions[index]
+        return (
+          <span key={session?.sessionId ?? index} className="inline-flex h-3.5 w-3.5 items-center justify-center [&_[data-slot=delegation-spinner]]:scale-75">
+            <DelegationSpinner paused={!activity.available || !session || !["running", "queued", "starting"].includes(session.status)} />
+          </span>
+        )
+      })}
     </span>
   )
 }
