@@ -24,7 +24,9 @@ export function NovaSettingsPanel() {
           onValueChange={(value: unknown) => composerFocusSettingsStore.set({ autoFocusMode: value as ComposerAutoFocusMode })}
         >
           <SelectTrigger className="w-40">
-            <SelectValue />
+            <SelectValue>
+              {composerFocus.autoFocusMode === "desktop-only" ? "Desktop only" : composerFocus.autoFocusMode === "always" ? "Always" : "Never"}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="desktop-only">Desktop only</SelectItem>
