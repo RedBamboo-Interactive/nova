@@ -1,4 +1,4 @@
-import { getEffectiveToolName, isEventBlock } from "@redbamboo/chat"
+import { CONTEXT_COMPACTION_TOOL_NAME, getEffectiveToolName, isEventBlock } from "@redbamboo/chat"
 import type { MessageBlock } from "@redbamboo/chat"
 
 export interface NovaStreamingStatus {
@@ -38,6 +38,12 @@ export function getNovaStreamingStatus(messages: MessageBlock[]): NovaStreamingS
       }
 
       if (part.type === "tool_use" && part.toolName) {
+        // The status line handles an active compaction explicitly. Once its
+        // result has settled the square, do not leave Nova saying "Working".
+        if (part.toolName === CONTEXT_COMPACTION_TOOL_NAME) {
+          if (part.isPartial) return { icon: "ph-bold ph-arrows-in", label: "Compacting context..." }
+          continue
+        }
         const effectiveName = getEffectiveToolName(part.toolName, part.toolInput)
         const memoryPath = part.toolInput?.includes("memory/") || part.toolInput?.includes("memory\\")
         if (memoryPath && (effectiveName === "Read" || effectiveName === "Glob" || effectiveName === "Grep")) {
