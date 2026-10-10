@@ -299,7 +299,7 @@ public sealed class ExternalAgentConversationProvider(
                 message.MessageUid ?? $"sequence-{sequence}",
                 role,
                 kind,
-                message.Content,
+                VisibleContent(message),
                 new DateTimeOffset(DateTime.SpecifyKind(message.Timestamp, DateTimeKind.Utc)),
                 new JsonObject { ["phase"] = phase },
                 message.ToolName,
@@ -363,6 +363,41 @@ public sealed class ExternalAgentConversationProvider(
             selected.Add(candidates[index]);
         }
         return selected;
+    }
+
+    internal static string? VisibleContent(SessionMessage message)
+    {
+        if (!string.Equals(message.Role, "user", StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(message.Content)
+            || !message.Content.StartsWith(
+                "Application conversation envelope JSON",
+                StringComparison.Ordinal))
+            return message.Content;
+
+        const string startTag = "<external-input-json>";
+        const string endTag = "</external-input-json>";
+        var start = message.Content.IndexOf(startTag, StringComparison.Ordinal);
+        var end = message.Content.IndexOf(endTag, StringComparison.Ordinal);
+        if (start < 0 || end <= start + startTag.Length) return message.Content;
+        try
+        {
+            using var envelope = JsonDocument.Parse(
+                message.Content[(start + startTag.Length)..end]);
+            var root = envelope.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("requestId", out var requestId)
+                || requestId.ValueKind != JsonValueKind.String
+                || !root.TryGetProperty("applicationId", out var applicationId)
+                || applicationId.ValueKind != JsonValueKind.String
+                || !root.TryGetProperty("message", out var participantMessage)
+                || participantMessage.ValueKind != JsonValueKind.String)
+                return message.Content;
+            return participantMessage.GetString();
+        }
+        catch (JsonException)
+        {
+            return message.Content;
+        }
     }
 
     internal static bool IsQuiescent(JsonElement root)

@@ -26,5 +26,5 @@ export function useAgents() {
 
   const defaultAgentId = agents.find((a) => a.slug === "nova")?.id ?? agents[0]?.id ?? null
 
-  return { agents, getAgent, defaultAgentId }
+  return { agents, getAgent, defaultAgentId, refreshAgents }
 }

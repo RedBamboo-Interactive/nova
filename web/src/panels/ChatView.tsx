@@ -221,7 +221,7 @@ export function ChatView({
         : activeDiscussion?.title || "New Discussion",
   )
 
-  const { agents, getAgent } = useAgents()
+  const { agents, getAgent, refreshAgents } = useAgents()
   const multiAgent = agents.length > 1
   const settings = useLocalSettings()
   const pushToTalk = usePushToTalkSettings()
@@ -232,7 +232,19 @@ export function ChatView({
   const pendingContext = useNovaPendingContext()
   const { toast } = useToast()
   const activeAgent = activeDiscussion ? getAgent(activeDiscussion.agentId) : undefined
+  const unresolvedAgentRefresh = useRef<string | null>(null)
   const [fileRepositories, setFileRepositories] = useState<Array<{ path: string }>>([])
+
+  useEffect(() => {
+    const agentId = activeDiscussion?.agentId
+    if (!agentId || activeAgent) {
+      unresolvedAgentRefresh.current = null
+      return
+    }
+    if (agents.length === 0 || unresolvedAgentRefresh.current === agentId) return
+    unresolvedAgentRefresh.current = agentId
+    refreshAgents()
+  }, [activeAgent, activeDiscussion?.agentId, agents.length, refreshAgents])
 
   useEffect(() => {
     api.get<{ items: Array<{ path: string }> }>("/api/apps/codered/repositories")
