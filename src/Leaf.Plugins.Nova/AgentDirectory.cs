@@ -96,7 +96,7 @@ public sealed class AgentDirectory : IDisposable
         var items = await store.QueryAsync(new EntityQuery
         {
             TypeSlug = "agent",
-            Limit = 50,
+            Limit = 500,
         }, ct);
 
         var agents = new List<AgentInfo>();

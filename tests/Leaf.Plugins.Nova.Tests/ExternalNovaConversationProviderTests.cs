@@ -502,6 +502,53 @@ public sealed class ExternalAgentConversationProviderTests
             ParseTaggedJson(prompt, "discord-behavior-json").ValueKind);
     }
 
+    [Fact]
+    public void Storyboard_scope_uses_campaign_instructions_without_discord_authority_model()
+    {
+        var request = new ExternalConversationOpenRequest(
+            "storyboard:campaign", 1, Guid.NewGuid().ToString(), Guid.NewGuid().ToString(),
+            "storyboard-gm",
+            new ExternalConversationScope(
+                "storyboard", "storyboard", Guid.NewGuid().ToString(), "storyboard-campaign"),
+            "storyboard-open");
+
+        var instructions = ExternalAgentConversationProvider.DeveloperInstructions(
+            request, "Campaign Steward");
+
+        Assert.Contains("persistent AI collaborator inside one Storyboard campaign", instructions);
+        Assert.Contains("what the players have discovered", instructions);
+        Assert.Contains("Never inspect, search, mention, or act on unrelated Leaf", instructions);
+        Assert.DoesNotContain("Discord", instructions, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Storyboard_input_is_a_bounded_application_envelope()
+    {
+        var campaign = Guid.NewGuid();
+        var handle = new ExternalConversationHandle(
+            "leaf-agent-session", "storyboard:campaign", 1, "conversation", "session");
+        var input = new ExternalConversationInput(
+            "message", new ExternalRequestor("account", "Fixture GM"),
+            "Plan the next scene", [], new JsonObject
+            {
+                ["transport"] = "storyboard",
+                ["application_id"] = "storyboard",
+                ["campaign_id"] = campaign.ToString(),
+                ["discord_behavior"] = new JsonObject { ["instructions"] = "must not leak" },
+            });
+
+        var prompt = ExternalAgentConversationProvider.BuildSessionInput(
+            handle, input, new DiscordInjectionReview("not_applicable", [], "scoped", true),
+            "storyboard");
+        var envelope = ParseTaggedJson(prompt, "external-input-json");
+
+        Assert.Equal("storyboard", envelope.GetProperty("applicationId").GetString());
+        Assert.Equal(campaign.ToString(), envelope.GetProperty("campaignId").GetString());
+        Assert.Equal("Plan the next scene", envelope.GetProperty("message").GetString());
+        Assert.DoesNotContain("discord-behavior", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("must not leak", prompt, StringComparison.Ordinal);
+    }
+
     private static JsonElement ParseTaggedJson(string prompt, string tag)
     {
         var opening = $"<{tag}>";
