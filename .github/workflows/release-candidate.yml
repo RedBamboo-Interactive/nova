@@ -319,10 +319,9 @@ jobs:
             --signature-input 'artifacts/nova-signature-input.json'
           if ($LASTEXITCODE -ne 0) { throw 'RedLeaf candidate ingestion failed.' }
 
-      - name: Upload immutable unsigned handoff only
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Cache exact candidate inputs for the write-isolated bridge
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          name: nova-${{ steps.pins.outputs.version }}-${{ inputs.source_commit || github.workflow_sha }}-unsigned-release-inputs
           path: |
             nova/artifacts/nova-${{ steps.pins.outputs.version }}.leafpkg
             nova/artifacts/nova-${{ steps.pins.outputs.version }}.component-input.v1.json
@@ -330,8 +329,7 @@ jobs:
             nova/artifacts/nova-candidate.unsigned.json
             nova/artifacts/nova-signature-input.json
             nova/artifacts/nova-package-inventory.txt
-          if-no-files-found: error
-          retention-days: 1
+          key: nova-${{ steps.pins.outputs.version }}-${{ inputs.source_commit || github.workflow_sha }}-${{ github.run_id }}-${{ github.run_attempt }}-unsigned-release-inputs
 
   bridge:
     name: Append unsigned Nova bytes to rolling prerelease
@@ -348,16 +346,17 @@ jobs:
       GH_TOKEN: ${{ github.repository == 'RedBamboo-Interactive/nova' && github.token || secrets.CROSS_REPO_TOKEN }}
       NOVA_SOURCE: ${{ inputs.source_commit || github.workflow_sha }}
     steps:
-      - name: Download exact unsigned candidate inputs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - name: Restore exact unsigned candidate inputs
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          name: nova-${{ needs.candidate.outputs.version }}-${{ inputs.source_commit || github.workflow_sha }}-unsigned-release-inputs
-          path: bridge-input
+          path: nova/artifacts
+          key: nova-${{ needs.candidate.outputs.version }}-${{ inputs.source_commit || github.workflow_sha }}-${{ github.run_id }}-${{ github.run_attempt }}-unsigned-release-inputs
+          fail-on-cache-miss: true
 
       - name: Prepare exactly two immutable bridge assets
         shell: pwsh
         run: |
-          $descriptor = @(Get-ChildItem bridge-input -Recurse -File -Filter nova-candidate.unsigned.json)
+          $descriptor = @(Get-ChildItem nova/artifacts -Recurse -File -Filter nova-candidate.unsigned.json)
           if ($descriptor.Count -ne 1) { throw 'Expected exactly one unsigned Nova candidate descriptor.' }
           $candidate = Get-Content -LiteralPath $descriptor[0].FullName -Raw | ConvertFrom-Json
           if ($candidate.status -ne 'unsigned' -or $null -ne $candidate.artifact.signature) {
@@ -365,7 +364,7 @@ jobs:
           }
           $candidateId = [string]$candidate.candidateId
           if ($candidateId -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$') { throw 'Candidate ID is not a safe asset-name token.' }
-          $matchingArtifacts = @(Get-ChildItem bridge-input -Recurse -File | Where-Object {
+          $matchingArtifacts = @(Get-ChildItem nova/artifacts -Recurse -File | Where-Object {
             $_.Extension -ceq '.leafpkg' -and
             $_.Length -eq [long]$candidate.artifact.sizeBytes -and
             (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -eq $candidate.artifact.sha256
