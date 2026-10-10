@@ -5,7 +5,7 @@
   "component": {
     "id": "nova",
     "kind": "extension",
-    "version": "0.1.5"
+    "version": "0.1.6"
   },
   "redleafReleaseToolCommit": "9076a5791e79f368390ea4475c9c724a85ca6bea",
   "toolchain": {
