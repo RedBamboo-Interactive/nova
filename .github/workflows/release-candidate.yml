@@ -349,7 +349,13 @@ jobs:
       - name: Restore exact unsigned candidate inputs
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: nova/artifacts
+          path: |
+            nova/artifacts/nova-${{ needs.candidate.outputs.version }}.leafpkg
+            nova/artifacts/nova-${{ needs.candidate.outputs.version }}.component-input.v1.json
+            nova/artifacts/nova-release-metadata.v1.json
+            nova/artifacts/nova-candidate.unsigned.json
+            nova/artifacts/nova-signature-input.json
+            nova/artifacts/nova-package-inventory.txt
           key: nova-${{ needs.candidate.outputs.version }}-${{ inputs.source_commit || github.workflow_sha }}-${{ github.run_id }}-${{ github.run_attempt }}-unsigned-release-inputs
           fail-on-cache-miss: true
 
