@@ -277,6 +277,47 @@ public sealed class RedComputeClient(IComputeGateway gateway)
 
     public sealed record ProxyResult(int StatusCode, string Content, string ContentType);
 
+    public async Task<ProxyResult> CreateVoiceSessionAsync(object body,
+        ComputeProvenance provenance, CancellationToken ct = default)
+        => await SendProxyAsync(HttpMethod.Post, "/voice-session/sessions", body, provenance, ct);
+
+    public async Task<ProxyResult> GetVoiceSessionAsync(string voiceSessionId,
+        CancellationToken ct = default)
+        => await SendProxyAsync(HttpMethod.Get,
+            $"/voice-session/sessions/{Uri.EscapeDataString(voiceSessionId)}", null, null, ct);
+
+    public async Task<ProxyResult> UpdateVoiceDelegationAsync(string voiceSessionId,
+        string delegationId, object body, ComputeProvenance provenance,
+        CancellationToken ct = default)
+        => await SendProxyAsync(HttpMethod.Post,
+            $"/voice-session/sessions/{Uri.EscapeDataString(voiceSessionId)}/delegations/{Uri.EscapeDataString(delegationId)}/update",
+            body, provenance, ct);
+
+    public async Task<ProxyResult> CloseVoiceSessionAsync(string voiceSessionId,
+        ComputeProvenance provenance, CancellationToken ct = default)
+        => await SendProxyAsync(HttpMethod.Post,
+            $"/voice-session/sessions/{Uri.EscapeDataString(voiceSessionId)}/close",
+            new { }, provenance, ct);
+
+    private async Task<ProxyResult> SendProxyAsync(HttpMethod method, string path, object? body,
+        ComputeProvenance? provenance, CancellationToken ct)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(method, path);
+            if (body is not null) request.Content = JsonContent.Create(body, options: JsonOptions);
+            using var response = await gateway.SendAsync(request, provenance, ct);
+            return new((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct),
+                response.Content.Headers.ContentType?.ToString() ?? "application/json");
+        }
+        catch (Exception)
+        {
+            return new(502,
+                JsonSerializer.Serialize(new { error = "redcompute_unavailable", message = "RedCompute is unavailable" }, JsonOptions),
+                "application/json");
+        }
+    }
+
     /// <summary>Send a user message while preserving RedCompute's status and machine-readable error.</summary>
     public async Task<SendMessageResult> SendMessageDetailedAsync(
         string sessionId, object body, ComputeProvenance provenance,

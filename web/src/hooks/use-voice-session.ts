@@ -1,0 +1,179 @@
+import { useCallback, useEffect, useRef, useState } from "react"
+import { api } from "../lib/api"
+import { applyVoiceEvent, type VoiceCaptionState } from "./voice-session-events"
+
+export type VoiceSessionPhase = "idle" | "starting" | "connected" | "degraded" | "closing" | "closed" | "error"
+
+interface VoiceSessionAdmission {
+  id: string
+  provider: string
+  model: string
+  voice: string
+  state: string
+  answerSdp: string
+}
+
+function waitForIceGathering(pc: RTCPeerConnection): Promise<void> {
+  if (pc.iceGatheringState === "complete") return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup()
+      reject(new Error("Voice connection timed out while gathering network candidates"))
+    }, 10_000)
+    const onChange = () => {
+      if (pc.iceGatheringState !== "complete") return
+      cleanup()
+      resolve()
+    }
+    const cleanup = () => {
+      window.clearTimeout(timeout)
+      pc.removeEventListener("icegatheringstatechange", onChange)
+    }
+    pc.addEventListener("icegatheringstatechange", onChange)
+  })
+}
+
+export function useVoiceSession(discussionId: string | null) {
+  const [phase, setPhase] = useState<VoiceSessionPhase>("idle")
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [muted, setMuted] = useState(false)
+  const [startedAt, setStartedAt] = useState<number | null>(null)
+  const [delegating, setDelegating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [captions, setCaptions] = useState<VoiceCaptionState>({ speaker: null, user: "", assistant: "" })
+  const peerRef = useRef<RTCPeerConnection | null>(null)
+  const channelRef = useRef<RTCDataChannel | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const sessionRef = useRef<string | null>(null)
+  const discussionRef = useRef<string | null>(null)
+
+  const releaseMedia = useCallback(() => {
+    channelRef.current?.close()
+    channelRef.current = null
+    peerRef.current?.close()
+    peerRef.current = null
+    streamRef.current?.getTracks().forEach(track => track.stop())
+    streamRef.current = null
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.srcObject = null
+      audioRef.current = null
+    }
+  }, [])
+
+  const stop = useCallback(async () => {
+    const currentDiscussion = discussionRef.current
+    const currentSession = sessionRef.current
+    setPhase("closing")
+    releaseMedia()
+    if (currentDiscussion && currentSession) {
+      try {
+        await api.post(`/api/apps/nova/discussions/${encodeURIComponent(currentDiscussion)}/voice-sessions/${encodeURIComponent(currentSession)}/close`)
+      } catch { /* transport is already closed locally */ }
+    }
+    sessionRef.current = null
+    discussionRef.current = null
+    setSessionId(null)
+    setStartedAt(null)
+    setMuted(false)
+    setDelegating(false)
+    setCaptions({ speaker: null, user: "", assistant: "" })
+    setPhase("closed")
+  }, [releaseMedia])
+
+  const start = useCallback(async () => {
+    if (!discussionId || phase === "starting" || phase === "connected") return
+    setPhase("starting")
+    setError(null)
+    setCaptions({ speaker: null, user: "", assistant: "" })
+    try {
+      if (!navigator.mediaDevices?.getUserMedia)
+        throw new Error("This browser does not expose microphone access")
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      })
+      streamRef.current = stream
+      const pc = new RTCPeerConnection()
+      peerRef.current = pc
+      stream.getAudioTracks().forEach(track => pc.addTrack(track, stream))
+
+      const audio = new Audio()
+      audio.autoplay = true
+      audioRef.current = audio
+      pc.ontrack = event => {
+        audio.srcObject = event.streams[0] ?? new MediaStream([event.track])
+        void audio.play().catch(() => setError("Tap the screen once to allow voice playback"))
+      }
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "connected") {
+          setPhase("connected")
+          setStartedAt(value => value ?? Date.now())
+        } else if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          setPhase("degraded")
+        }
+      }
+
+      const channel = pc.createDataChannel("oai-events")
+      channelRef.current = channel
+      channel.onmessage = message => {
+        try {
+          const event = JSON.parse(String(message.data)) as Record<string, unknown>
+          setCaptions(previous => applyVoiceEvent(previous, event))
+          if (event.type === "session.delegation.created") setDelegating(true)
+          else if (event.type === "session.output_transcript.delta") setDelegating(false)
+          if (event.type === "session.started") {
+            setPhase("connected")
+            setStartedAt(value => value ?? Date.now())
+          } else if (event.type === "session.closed") {
+            setPhase("closed")
+            releaseMedia()
+          } else if (event.type === "error") {
+            setPhase("degraded")
+          }
+        } catch { /* ignore unknown provider events */ }
+      }
+
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+      await waitForIceGathering(pc)
+      const offerSdp = pc.localDescription?.sdp
+      if (!offerSdp) throw new Error("The browser did not produce a voice connection offer")
+      const admission = await api.post<VoiceSessionAdmission>(
+        `/api/apps/nova/discussions/${encodeURIComponent(discussionId)}/voice-sessions`,
+        { offerSdp, provider: "openai-live" },
+      )
+      sessionRef.current = admission.id
+      discussionRef.current = discussionId
+      setSessionId(admission.id)
+      await pc.setRemoteDescription({ type: "answer", sdp: admission.answerSdp })
+    } catch (caught) {
+      releaseMedia()
+      sessionRef.current = null
+      discussionRef.current = null
+      setSessionId(null)
+      setPhase("error")
+      setError(caught instanceof Error ? caught.message : "Voice session could not start")
+    }
+  }, [discussionId, phase, releaseMedia])
+
+  const toggleMute = useCallback(() => {
+    const next = !muted
+    streamRef.current?.getAudioTracks().forEach(track => { track.enabled = !next })
+    setMuted(next)
+  }, [muted])
+
+  useEffect(() => {
+    if (sessionRef.current && discussionRef.current !== discussionId) void stop()
+  }, [discussionId, stop])
+  useEffect(() => () => {
+    const currentDiscussion = discussionRef.current
+    const currentSession = sessionRef.current
+    releaseMedia()
+    if (currentDiscussion && currentSession) {
+      void api.post(`/api/apps/nova/discussions/${encodeURIComponent(currentDiscussion)}/voice-sessions/${encodeURIComponent(currentSession)}/close`)
+    }
+  }, [releaseMedia])
+
+  return { phase, sessionId, muted, startedAt, delegating, error, captions, start, stop, toggleMute }
+}

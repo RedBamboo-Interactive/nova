@@ -125,6 +125,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
             sp.GetRequiredKeyedService<IPluginExtensions>(PluginId),
             sp.GetRequiredService<LiveEvents>()));
         services.AddSingleton<DeviceResolver>();
+        services.AddSingleton<VoiceSessionService>();
         services.AddSingleton(sp =>
             new ConversationExporter(sp.GetRequiredService<RedComputeClient>(), sp.GetRequiredService<IDiscussions>()));
         services.AddSingleton<IShareEnricher>(sp =>
@@ -190,6 +191,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
             return await next(context);
         });
         DiscussionEndpoints.Map(group);
+        VoiceSessionEndpoints.Map(group);
         AskEndpoints.Map(group);
         DelegateEndpoints.Map(group);
         CallbackEndpoints.Map(group);

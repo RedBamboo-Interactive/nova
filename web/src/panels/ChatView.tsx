@@ -37,6 +37,8 @@ import { applyPendingVisibleContext } from "../lib/pending-visible-context-store
 import { isDiscussionSelectionCurrent, resolveRequestedDiscussionId } from "../lib/discussion-view-selection"
 import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToContext, type MonitorVisualSource } from "../lib/visual-capture"
 import { delegationSessionPath } from "../lib/delegation-session-link"
+import { useVoiceSession } from "../hooks/use-voice-session"
+import { VoiceSessionPanel } from "../components/voice-session-panel"
 
 const speechBackend = createNovaSpeechBackend()
 
@@ -187,6 +189,7 @@ export function ChatView({
   )
 
   const maintenance = useMaintenanceStatus()
+  const voiceSession = useVoiceSession(activeDiscussionId)
   const payloadSessionId = activeDiscussion?.sessionId ?? null
   const loadTranscriptPayload = useCallback<TranscriptPayloadLoader>((ref, range, signal) => {
     if (!payloadSessionId) return Promise.reject(new Error("This discussion has no active session"))
@@ -756,6 +759,14 @@ export function ChatView({
     >
       {!floating && (
         <>
+          <ChatHeaderAction
+            onClick={() => void voiceSession.start()}
+            icon="ph-bold ph-waveform"
+            label="Voice"
+            disabled={activeDiscussion.status === "archived" || activeDiscussion.status === "stopped"
+              || voiceSession.phase === "starting" || voiceSession.phase === "connected"}
+            aria-haspopup="dialog"
+          />
           {/* The controlled modal portals outside this hidden legacy trigger. */}
           <div className="hidden">
             <SessionInfoButton
@@ -1073,6 +1084,21 @@ export function ChatView({
 
   const chatArea = activeDiscussion && isDiscussionSelectionCurrent(synchronizedDiscussionId, activeDiscussionId) ? (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
+      {voiceSession.phase !== "idle" && voiceSession.phase !== "closed" && (
+        <VoiceSessionPanel
+          agentName={activeAgent?.name ?? "Nova"}
+          avatarUrl={avatarSrc}
+          phase={voiceSession.phase}
+          muted={voiceSession.muted}
+          startedAt={voiceSession.startedAt}
+          delegating={voiceSession.delegating}
+          error={voiceSession.error}
+          userCaption={voiceSession.captions.user}
+          assistantCaption={voiceSession.captions.assistant}
+          onMute={voiceSession.toggleMute}
+          onEnd={() => void voiceSession.stop()}
+        />
+      )}
       {isLoadingMessages && activeMessages.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center z-10">
           <i className="ph-bold ph-spinner animate-spin text-2xl opacity-40" />
