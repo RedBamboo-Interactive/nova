@@ -12,6 +12,9 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  Dialog,
+  DialogContent,
+  DialogTitle,
   Icon,
 } from "@redbamboo/ui"
 
@@ -35,11 +38,7 @@ interface Props {
   onSelect: (agentId: string, qualityTier: string, provider?: string) => void
 }
 
-const DISMISS_TRANSITION_MS = 180
-
 export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
-  const [shouldRender, setShouldRender] = useState(open)
-  const [visible, setVisible] = useState(false)
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [filter, setFilter] = useState("")
@@ -52,34 +51,6 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [selectedProvider, setSelectedProvider] = useState<string | undefined>()
   const listRef = useRef<HTMLDivElement>(null)
-  const filterInputRef = useRef<HTMLInputElement>(null)
-  const firstAgentRef = useRef<HTMLButtonElement>(null)
-
-  useEffect(() => {
-    let firstFrame: number | undefined
-    let secondFrame: number | undefined
-    let dismissTimer: number | undefined
-
-    if (open) {
-      setShouldRender(true)
-      firstFrame = window.requestAnimationFrame(() => {
-        secondFrame = window.requestAnimationFrame(() => {
-          setVisible(true)
-          filterInputRef.current?.focus()
-          if (!filterInputRef.current) firstAgentRef.current?.focus()
-        })
-      })
-    } else {
-      setVisible(false)
-      dismissTimer = window.setTimeout(() => setShouldRender(false), DISMISS_TRANSITION_MS)
-    }
-
-    return () => {
-      if (firstFrame !== undefined) window.cancelAnimationFrame(firstFrame)
-      if (secondFrame !== undefined) window.cancelAnimationFrame(secondFrame)
-      if (dismissTimer !== undefined) window.clearTimeout(dismissTimer)
-    }
-  }, [open])
 
   useEffect(() => {
     if (!open) {
@@ -157,8 +128,6 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
       setSelectedProvider(agent.provider)
   }
 
-  if (!shouldRender) return null
-
   const selectAgent = (agentId: string) => {
     setStarting(true)
     setHighlightedAgentId(agentId)
@@ -193,23 +162,16 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   const selectedProv = providers.find(p => p.slug === selectedProvider)
 
   return (
-    <div
-      className="nova-new-discussion-overlay fixed inset-0 z-50 flex items-center justify-center"
-      data-state={visible ? "open" : "closed"}
-      onClick={onClose}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="nova-new-discussion-title"
-        className="nova-new-discussion-panel bg-surface-deep border border-border-subtle rounded-xl w-full max-w-md mx-4 overflow-hidden shadow-xl"
-        onClick={e => e.stopPropagation()}
+    <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) onClose() }}>
+      <DialogContent
+        motion="composed"
+        showCloseButton={false}
+        className="bg-surface-deep border border-border-subtle max-w-md p-0 gap-0 shadow-xl"
       >
         <div className="p-4 border-b border-border-subtle">
-          <h2 id="nova-new-discussion-title" className="text-base font-semibold mb-2">New Discussion</h2>
+          <DialogTitle className="text-base font-semibold mb-2">New Discussion</DialogTitle>
           {agents.length > 1 && (
             <input
-              ref={filterInputRef}
               type="text"
               value={filter}
               onChange={e => {
@@ -233,7 +195,6 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
           )}
           {filtered.map((agent, i) => (
             <button
-              ref={i === 0 ? firstAgentRef : undefined}
               key={agent.id}
               disabled={starting}
               onClick={() => {
@@ -337,7 +298,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
             </button>
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
