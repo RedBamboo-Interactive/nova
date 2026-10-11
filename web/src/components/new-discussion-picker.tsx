@@ -14,6 +14,8 @@ import {
   DropdownMenuItem,
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogHeader,
   DialogTitle,
   Icon,
 } from "@redbamboo/ui"
@@ -166,29 +168,57 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
       <DialogContent
         motion="composed"
         showCloseButton={false}
-        className="bg-surface-deep border border-border-subtle max-w-md p-0 gap-0 shadow-xl"
+        className="max-w-lg overflow-hidden"
       >
-        <div className="p-4 border-b border-border-subtle">
-          <DialogTitle className="text-base font-semibold mb-2">New Discussion</DialogTitle>
-          {agents.length > 1 && (
-            <input
-              type="text"
-              value={filter}
-              onChange={e => {
-                const value = e.target.value
-                setFilter(value)
-                const firstMatch = agents.find(agent =>
-                  agent.name.toLowerCase().includes(value.toLowerCase()))
-                setHighlightedAgentId(firstMatch?.id ?? null)
-              }}
-              onKeyDown={onInputKeyDown}
-              placeholder="Filter agents..."
-              autoFocus
-              className="w-full bg-overlay-5 border border-border-subtle rounded-lg px-3 py-2 text-sm placeholder:text-text-muted focus:border-overlay-30"
-            />
-          )}
-        </div>
-        <div ref={listRef} className="max-h-80 overflow-y-auto">
+        <DialogHeader>
+          <div className="flex items-center gap-3">
+            <div className="flex size-10 items-center justify-center rounded-lg bg-primary-a10">
+              <i className="ph-bold ph-chat-circle-dots text-lg text-primary" />
+            </div>
+            <div>
+              <DialogTitle>New Discussion</DialogTitle>
+              <DialogDescription>
+                {loading
+                  ? "Loading agents…"
+                  : `${agents.length} ${agents.length === 1 ? "agent" : "agents"} available`}
+              </DialogDescription>
+            </div>
+          </div>
+        </DialogHeader>
+        {agents.length > 1 && (
+          <div data-slot="new-discussion-search">
+            <div className="flex h-10 items-center gap-2.5 rounded-lg border border-input px-3 transition-colors focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring-a50 dark:bg-input-a30">
+              <i className="ph ph-magnifying-glass shrink-0 text-base opacity-50" aria-hidden />
+              <input
+                type="text"
+                role="combobox"
+                aria-expanded
+                aria-controls="new-discussion-agent-listbox"
+                aria-autocomplete="list"
+                aria-activedescendant={highlightedAgent ? `new-discussion-agent-${highlightedAgent.id}` : undefined}
+                value={filter}
+                onChange={e => {
+                  const value = e.target.value
+                  setFilter(value)
+                  const firstMatch = agents.find(agent =>
+                    agent.name.toLowerCase().includes(value.toLowerCase()))
+                  setHighlightedAgentId(firstMatch?.id ?? null)
+                }}
+                onKeyDown={onInputKeyDown}
+                placeholder="Filter agents..."
+                autoFocus
+                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              />
+            </div>
+          </div>
+        )}
+        <div
+          ref={listRef}
+          id="new-discussion-agent-listbox"
+          role="listbox"
+          data-slot="new-discussion-agent-list"
+          className="-mx-5 min-h-0 max-h-80 overflow-y-auto border-t border-foreground-a10 p-2"
+        >
           {loading && <p className="p-4 text-sm text-text-muted">Loading...</p>}
           {!loading && filtered.length === 0 && (
             <p className="p-4 text-sm text-text-muted">No agents found</p>
@@ -196,6 +226,11 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
           {filtered.map((agent, i) => (
             <button
               key={agent.id}
+              id={`new-discussion-agent-${agent.id}`}
+              role="option"
+              aria-selected={i === highlighted}
+              data-slot="new-discussion-agent-item"
+              data-selected={i === highlighted || undefined}
               disabled={starting}
               onClick={() => {
                 if (highlightedAgent?.id === agent.id && !starting) selectAgent(agent.id)
@@ -203,8 +238,8 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
               }}
               onKeyDown={agents.length <= 1 ? onInputKeyDown : undefined}
               autoFocus={agents.length <= 1 && i === 0}
-              className={`w-full text-left px-4 py-3 transition-colors border-b border-border-subtle last:border-b-0 ${
-                i === highlighted ? "bg-overlay-10" : "hover:bg-overlay-5"
+              className={`w-full rounded-lg px-3 py-2.5 text-left outline-none transition-colors ${
+                i === highlighted ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
               }`}
             >
               <div className="flex items-center gap-3">
@@ -229,7 +264,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
             </button>
           ))}
         </div>
-        <div className="p-3 border-t border-border-subtle flex items-center justify-between">
+        <div className="-mx-5 -mb-5 flex items-center justify-between border-t bg-muted-a50 px-3 py-3">
           <div className="flex items-center gap-2">
             {providers.length > 0 && (
               <DropdownMenu>

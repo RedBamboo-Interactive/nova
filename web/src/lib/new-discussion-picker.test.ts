@@ -1,11 +1,14 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import {
   getInitialAgentIndex,
   orderAgentsByName,
   reconcileHighlightedAgentId,
 } from "./new-discussion-picker.ts"
 import type { AgentInfo } from "./types.ts"
+
+const pickerSource = readFileSync(new URL("../components/new-discussion-picker.tsx", import.meta.url), "utf8")
 
 function agent(id: string, name: string): AgentInfo {
   return {
@@ -48,4 +51,15 @@ test("a background refresh preserves a valid selection made while loading", () =
   assert.equal(reconcileHighlightedAgentId(agents, "gemma", "nova"), "gemma")
   assert.equal(reconcileHighlightedAgentId(agents, "missing", "nova"), "nova")
   assert.equal(reconcileHighlightedAgentId(agents, null, "missing"), "axl")
+})
+
+test("the picker follows the command palette interior language", () => {
+  assert.match(pickerSource, /<DialogHeader>/)
+  assert.match(pickerSource, /<DialogDescription>/)
+  assert.match(pickerSource, /data-slot="new-discussion-search"/)
+  assert.match(pickerSource, /focus-within:border-ring focus-within:ring-\[3px\] focus-within:ring-ring-a50/)
+  assert.match(pickerSource, /data-slot="new-discussion-agent-item"/)
+  assert.match(pickerSource, /w-full rounded-lg px-3 py-2\.5/)
+  assert.doesNotMatch(pickerSource, /border-b border-border-subtle last:border-b-0/)
+  assert.doesNotMatch(pickerSource, /bg-surface-deep border border-border-subtle/)
 })
