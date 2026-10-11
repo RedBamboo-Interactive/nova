@@ -16,6 +16,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogHeader,
+  DialogSearchField,
   DialogTitle,
   Icon,
 } from "@redbamboo/ui"
@@ -187,8 +188,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
         </DialogHeader>
         {agents.length > 1 && (
           <div data-slot="new-discussion-search">
-            <div className="flex h-10 items-center gap-2.5 rounded-lg border border-input px-3 transition-colors focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring-a50 dark:bg-input-a30">
-              <i className="ph ph-magnifying-glass shrink-0 text-base opacity-50" aria-hidden />
+            <DialogSearchField>
               <input
                 type="text"
                 role="combobox"
@@ -209,7 +209,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
                 autoFocus
                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
-            </div>
+            </DialogSearchField>
           </div>
         )}
         <div

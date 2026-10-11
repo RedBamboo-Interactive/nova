@@ -57,7 +57,7 @@ test("the picker follows the command palette interior language", () => {
   assert.match(pickerSource, /<DialogHeader>/)
   assert.match(pickerSource, /<DialogDescription>/)
   assert.match(pickerSource, /data-slot="new-discussion-search"/)
-  assert.match(pickerSource, /focus-within:border-ring focus-within:ring-\[3px\] focus-within:ring-ring-a50/)
+  assert.match(pickerSource, /<DialogSearchField>/)
   assert.match(pickerSource, /data-slot="new-discussion-agent-item"/)
   assert.match(pickerSource, /w-full rounded-lg px-3 py-2\.5/)
   assert.doesNotMatch(pickerSource, /border-b border-border-subtle last:border-b-0/)
