@@ -1100,6 +1100,13 @@ export function ChatView({
           error={voiceSession.error}
           userCaption={voiceSession.captions.user}
           assistantCaption={voiceSession.captions.assistant}
+          messages={activeMessages}
+          isStreaming={isStreaming}
+          resolveImageSrc={resolveImageSrc}
+          resolveFileLink={resolveFileLink}
+          resolveEventLink={resolveEventLink}
+          loadTranscriptPayload={loadTranscriptPayload}
+          getTranscriptPayloadDownloadUrl={getTranscriptPayloadDownloadUrl}
           returnFocusRef={voiceSessionTriggerRef}
           onMute={voiceSession.toggleMute}
           onEnd={() => void voiceSession.stop()}
