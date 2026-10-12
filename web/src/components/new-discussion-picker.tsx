@@ -6,6 +6,7 @@ import {
   getInitialAgentIndex,
   orderAgentsByName,
   reconcileHighlightedAgentId,
+  shouldAutoFocusNewDiscussionFilter,
 } from "../lib/new-discussion-picker"
 import {
   DropdownMenu,
@@ -19,6 +20,7 @@ import {
   DialogSearchField,
   DialogTitle,
   Icon,
+  useUiEnvironment,
 } from "@redbamboo/ui"
 
 interface QualityTierInfo { slug: string; label: string; color?: string; icon?: string; isDefault: boolean }
@@ -42,6 +44,7 @@ interface Props {
 }
 
 export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
+  const environment = useUiEnvironment()
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [filter, setFilter] = useState("")
@@ -53,7 +56,10 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   const [tiers, setTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [selectedProvider, setSelectedProvider] = useState<string | undefined>()
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const filterRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const autoFocusFilter = shouldAutoFocusNewDiscussionFilter(environment.window)
 
   useEffect(() => {
     if (!open) {
@@ -116,6 +122,10 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   const highlighted = highlightedIndex >= 0 ? highlightedIndex : 0
   const highlightedAgent = filtered[highlighted]
   useEffect(() => {
+    if (open && agents.length > 1 && autoFocusFilter) filterRef.current?.focus()
+  }, [open, agents.length, autoFocusFilter])
+
+  useEffect(() => {
     if (highlightedAgent) applyAgentDefaults(highlightedAgent)
   }, [highlightedAgent?.id])
 
@@ -167,6 +177,8 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   return (
     <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) onClose() }}>
       <DialogContent
+        ref={dialogRef}
+        initialFocus={autoFocusFilter ? undefined : dialogRef}
         motion="composed"
         showCloseButton={false}
         className="max-w-lg overflow-hidden"
@@ -190,6 +202,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
           <div data-slot="new-discussion-search">
             <DialogSearchField>
               <input
+                ref={filterRef}
                 type="text"
                 role="combobox"
                 aria-expanded
@@ -206,7 +219,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
                 }}
                 onKeyDown={onInputKeyDown}
                 placeholder="Filter agents..."
-                autoFocus
+                autoFocus={autoFocusFilter}
                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
             </DialogSearchField>

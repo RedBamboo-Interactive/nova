@@ -5,6 +5,7 @@ import {
   getInitialAgentIndex,
   orderAgentsByName,
   reconcileHighlightedAgentId,
+  shouldAutoFocusNewDiscussionFilter,
 } from "./new-discussion-picker.ts"
 import type { AgentInfo } from "./types.ts"
 
@@ -18,6 +19,14 @@ function agent(id: string, name: string): AgentInfo {
     description: null,
     avatarUrl: "",
   }
+}
+
+function ownerWindow(primaryPointerIsCoarse: boolean): Window {
+  return {
+    matchMedia: (query: string) => ({
+      matches: query === "(pointer: coarse)" && primaryPointerIsCoarse,
+    }),
+  } as Window
 }
 
 test("orders agents alphabetically without mutating the API response", () => {
@@ -53,11 +62,20 @@ test("a background refresh preserves a valid selection made while loading", () =
   assert.equal(reconcileHighlightedAgentId(agents, null, "missing"), "axl")
 })
 
+test("autofocuses the Agent filter only for fine primary pointers", () => {
+  assert.equal(shouldAutoFocusNewDiscussionFilter(ownerWindow(false)), true)
+  assert.equal(shouldAutoFocusNewDiscussionFilter(ownerWindow(true)), false)
+  assert.equal(shouldAutoFocusNewDiscussionFilter({} as Window), true)
+})
+
 test("the picker follows the command palette interior language", () => {
   assert.match(pickerSource, /<DialogHeader>/)
   assert.match(pickerSource, /<DialogDescription>/)
   assert.match(pickerSource, /data-slot="new-discussion-search"/)
   assert.match(pickerSource, /<DialogSearchField>/)
+  assert.match(pickerSource, /initialFocus=\{autoFocusFilter \? undefined : dialogRef\}/)
+  assert.match(pickerSource, /autoFocus=\{autoFocusFilter\}/)
+  assert.match(pickerSource, /if \(open && agents\.length > 1 && autoFocusFilter\) filterRef\.current\?\.focus\(\)/)
   assert.match(pickerSource, /data-slot="new-discussion-agent-item"/)
   assert.match(pickerSource, /w-full rounded-lg px-3 py-2\.5/)
   assert.doesNotMatch(pickerSource, /border-b border-border-subtle last:border-b-0/)

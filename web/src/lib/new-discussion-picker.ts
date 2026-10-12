@@ -1,5 +1,12 @@
 import type { AgentInfo } from "./types"
 
+const coarsePrimaryPointerQuery = "(pointer: coarse)"
+
+export function shouldAutoFocusNewDiscussionFilter(ownerWindow: Window): boolean {
+  if (typeof ownerWindow.matchMedia !== "function") return true
+  return !ownerWindow.matchMedia(coarsePrimaryPointerQuery).matches
+}
+
 export function orderAgentsByName(agents: readonly AgentInfo[]): AgentInfo[] {
   return [...agents].sort((left, right) =>
     left.name.localeCompare(right.name, undefined, { sensitivity: "base", numeric: true })
