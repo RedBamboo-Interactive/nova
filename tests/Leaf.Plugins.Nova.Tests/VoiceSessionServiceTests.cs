@@ -73,15 +73,18 @@ public sealed class VoiceSessionServiceTests
     }
 
     [Fact]
-    public void Voice_prompt_makes_the_backend_authoritative_for_every_semantic_turn()
+    public void Voice_prompt_preserves_low_latency_conversation_and_delegates_authoritative_work()
     {
         var prompt = VoiceSessionService.BuildVoiceInstructions("Nova");
 
-        Assert.Contains("one authoritative Nova conversation", prompt);
-        Assert.Contains("any semantic utterance at all", prompt);
-        Assert.Contains("Always delegate before answering", prompt);
-        Assert.Contains("Never answer", prompt);
-        Assert.DoesNotContain("handle lightweight social conversation directly", prompt);
+        Assert.Contains("immediate low-latency spoken flow", prompt);
+        Assert.Contains("Handle greetings, simple acknowledgements, social remarks", prompt);
+        Assert.Contains("authoritative Nova for identity, durable memory, active work", prompt);
+        Assert.Contains("A short reply, correction, refusal, or choice changes or continues backend work", prompt);
+        Assert.Contains("do not independently answer the delegated request", prompt);
+        Assert.Contains("Never claim an action succeeded", prompt);
+        Assert.DoesNotContain("any semantic utterance at all", prompt);
+        Assert.DoesNotContain("Always delegate before answering", prompt);
     }
 
     [Fact]

@@ -12,11 +12,14 @@ ending it releases browser media immediately, requests the existing authorized
 server-side close, lets the visual surface finish a short exit, and returns to
 the unchanged discussion.
 
-GPT-Live is the audio transport and spoken renderer, not a second conversational
-authority. Every completed semantic utterance delegates to the ongoing Nova AI
-session. Nova's canonical answer is returned for speech. If phone sleep or network
-loss requires a replacement transport, admission waits for the prior session to
-flush and close before it snapshots the current discussion history.
+GPT-Live owns the immediate low-latency spoken flow. It handles greetings,
+acknowledgements and lightweight social conversation directly, and delegates when
+the turn needs Nova's identity, durable memory, active work, reasoning, current
+facts, tools, files, actions, commitments or safety decisions. Every direct or
+delegated input and output is persisted into the ongoing canonical discussion with
+signed provenance. If phone sleep or network loss requires a replacement transport,
+admission waits for the prior session to flush and close before it snapshots that
+complete discussion history.
 
 Voice identity belongs to the active Agent. The Voice Session capability adds
 an optional provider-neutral Live Voice reference to Agent entities, and each
@@ -74,6 +77,9 @@ spoken result arrives.
   cannot read history until that drain and transcript flush have completed.
 - AI-session injection carries signed Agent/beneficiary/discussion provenance, and
   callback retries remain idempotent by stable message UID.
+- Lightweight direct turns remain low latency, while memory-, state-, fact-, tool-
+  and action-dependent turns delegate to canonical Nova. Non-delegated turns are
+  still durably restored after reconnect.
 - The admitted provider and voice match the current Agent's validated Live Voice
   profile; browser-supplied voice/provider values are ignored by contract.
 - Microphone tracks stop before the exit animation begins.
