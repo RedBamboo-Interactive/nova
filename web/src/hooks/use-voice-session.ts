@@ -50,6 +50,7 @@ export function useVoiceSession(discussionId: string | null) {
   const sessionRef = useRef<string | null>(null)
   const discussionRef = useRef<string | null>(null)
   const closeTimerRef = useRef<number | null>(null)
+  const startAttemptRef = useRef(0)
 
   const releaseMedia = useCallback(() => {
     channelRef.current?.close()
@@ -82,6 +83,7 @@ export function useVoiceSession(discussionId: string | null) {
 
   const stop = useCallback(async () => {
     if (phase === "idle" || phase === "closed" || phase === "closing") return
+    startAttemptRef.current++
     const currentDiscussion = discussionRef.current
     const currentSession = sessionRef.current
     setPhase("closing")
@@ -101,6 +103,7 @@ export function useVoiceSession(discussionId: string | null) {
       closeTimerRef.current = null
     }
     setPhase("starting")
+    const attempt = ++startAttemptRef.current
     setError(null)
     setCaptions({ speaker: null, user: "", assistant: "" })
     try {
@@ -160,6 +163,10 @@ export function useVoiceSession(discussionId: string | null) {
         `/api/apps/nova/discussions/${encodeURIComponent(discussionId)}/voice-sessions`,
         { offerSdp, provider: "openai-live" },
       )
+      if (attempt !== startAttemptRef.current) {
+        await api.post(`/api/apps/nova/discussions/${encodeURIComponent(discussionId)}/voice-sessions/${encodeURIComponent(admission.id)}/close`).catch(() => undefined)
+        return
+      }
       sessionRef.current = admission.id
       discussionRef.current = discussionId
       setSessionId(admission.id)
@@ -183,7 +190,20 @@ export function useVoiceSession(discussionId: string | null) {
   useEffect(() => {
     if (sessionRef.current && discussionRef.current !== discussionId) void stop()
   }, [discussionId, stop])
+  useEffect(() => {
+    const closeWhenBackgrounded = () => {
+      if (document.visibilityState === "hidden") void stop()
+    }
+    const closeWhenPageLeaves = () => { void stop() }
+    document.addEventListener("visibilitychange", closeWhenBackgrounded)
+    window.addEventListener("pagehide", closeWhenPageLeaves)
+    return () => {
+      document.removeEventListener("visibilitychange", closeWhenBackgrounded)
+      window.removeEventListener("pagehide", closeWhenPageLeaves)
+    }
+  }, [stop])
   useEffect(() => () => {
+    startAttemptRef.current++
     if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current)
     const currentDiscussion = discussionRef.current
     const currentSession = sessionRef.current
