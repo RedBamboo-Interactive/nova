@@ -4,6 +4,8 @@ import { applyVoiceEvent, type VoiceCaptionState } from "./voice-session-events"
 
 export type VoiceSessionPhase = "idle" | "starting" | "connected" | "degraded" | "closing" | "closed" | "error"
 
+const VOICE_MODE_EXIT_MS = 280
+
 interface VoiceSessionAdmission {
   id: string
   provider: string
@@ -47,6 +49,7 @@ export function useVoiceSession(discussionId: string | null) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const sessionRef = useRef<string | null>(null)
   const discussionRef = useRef<string | null>(null)
+  const closeTimerRef = useRef<number | null>(null)
 
   const releaseMedia = useCallback(() => {
     channelRef.current?.close()
@@ -62,28 +65,41 @@ export function useVoiceSession(discussionId: string | null) {
     }
   }, [])
 
+  const finishCloseAfterTransition = useCallback(() => {
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current)
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null
+      sessionRef.current = null
+      discussionRef.current = null
+      setSessionId(null)
+      setStartedAt(null)
+      setMuted(false)
+      setDelegating(false)
+      setCaptions({ speaker: null, user: "", assistant: "" })
+      setPhase("closed")
+    }, VOICE_MODE_EXIT_MS)
+  }, [])
+
   const stop = useCallback(async () => {
+    if (phase === "idle" || phase === "closed" || phase === "closing") return
     const currentDiscussion = discussionRef.current
     const currentSession = sessionRef.current
     setPhase("closing")
     releaseMedia()
+    finishCloseAfterTransition()
     if (currentDiscussion && currentSession) {
       try {
         await api.post(`/api/apps/nova/discussions/${encodeURIComponent(currentDiscussion)}/voice-sessions/${encodeURIComponent(currentSession)}/close`)
       } catch { /* transport is already closed locally */ }
     }
-    sessionRef.current = null
-    discussionRef.current = null
-    setSessionId(null)
-    setStartedAt(null)
-    setMuted(false)
-    setDelegating(false)
-    setCaptions({ speaker: null, user: "", assistant: "" })
-    setPhase("closed")
-  }, [releaseMedia])
+  }, [finishCloseAfterTransition, phase, releaseMedia])
 
   const start = useCallback(async () => {
-    if (!discussionId || phase === "starting" || phase === "connected") return
+    if (!discussionId || phase === "starting" || phase === "connected" || phase === "closing") return
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
     setPhase("starting")
     setError(null)
     setCaptions({ speaker: null, user: "", assistant: "" })
@@ -126,8 +142,9 @@ export function useVoiceSession(discussionId: string | null) {
             setPhase("connected")
             setStartedAt(value => value ?? Date.now())
           } else if (event.type === "session.closed") {
-            setPhase("closed")
+            setPhase("closing")
             releaseMedia()
+            finishCloseAfterTransition()
           } else if (event.type === "error") {
             setPhase("degraded")
           }
@@ -155,7 +172,7 @@ export function useVoiceSession(discussionId: string | null) {
       setPhase("error")
       setError(caught instanceof Error ? caught.message : "Voice session could not start")
     }
-  }, [discussionId, phase, releaseMedia])
+  }, [discussionId, finishCloseAfterTransition, phase, releaseMedia])
 
   const toggleMute = useCallback(() => {
     const next = !muted
@@ -167,6 +184,7 @@ export function useVoiceSession(discussionId: string | null) {
     if (sessionRef.current && discussionRef.current !== discussionId) void stop()
   }, [discussionId, stop])
   useEffect(() => () => {
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current)
     const currentDiscussion = discussionRef.current
     const currentSession = sessionRef.current
     releaseMedia()

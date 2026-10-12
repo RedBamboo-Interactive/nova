@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes } from "react"
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type Ref } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type ProviderUsageSnapshot, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
@@ -55,13 +55,16 @@ interface ProviderInfo {
 function ChatHeaderAction({
   icon,
   label,
+  buttonRef,
   ...props
 }: {
   icon: string
   label: string
+  buttonRef?: Ref<HTMLButtonElement>
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
+      ref={buttonRef}
       type="button"
       {...props}
       aria-label={props["aria-label"] ?? label}
@@ -190,6 +193,7 @@ export function ChatView({
 
   const maintenance = useMaintenanceStatus()
   const voiceSession = useVoiceSession(activeDiscussionId)
+  const voiceSessionTriggerRef = useRef<HTMLButtonElement>(null)
   const payloadSessionId = activeDiscussion?.sessionId ?? null
   const loadTranscriptPayload = useCallback<TranscriptPayloadLoader>((ref, range, signal) => {
     if (!payloadSessionId) return Promise.reject(new Error("This discussion has no active session"))
@@ -760,6 +764,7 @@ export function ChatView({
       {!floating && (
         <>
           <ChatHeaderAction
+            buttonRef={voiceSessionTriggerRef}
             onClick={() => void voiceSession.start()}
             icon="ph-bold ph-waveform"
             label="Voice"
@@ -1095,6 +1100,7 @@ export function ChatView({
           error={voiceSession.error}
           userCaption={voiceSession.captions.user}
           assistantCaption={voiceSession.captions.assistant}
+          returnFocusRef={voiceSessionTriggerRef}
           onMute={voiceSession.toggleMute}
           onEnd={() => void voiceSession.stop()}
         />
