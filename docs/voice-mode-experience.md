@@ -21,6 +21,14 @@ signed provenance. If phone sleep or network loss requires a replacement transpo
 admission waits for the prior session to flush and close before it snapshots that
 complete discussion history.
 
+At admission Nova derives a bounded voice persona from the selected Agent's trusted
+description and identity. GPT-Live receives that compact role and speaking-style
+projection plus recent canonical history. It does not receive the Agent's output
+protocol, capabilities, Skills, tools, memory instructions or memory files; those
+remain behind the canonical Agent session and are reached through delegation. This
+keeps direct speech recognizably in character without duplicating memory authority
+or adding a backend round trip to lightweight turns.
+
 Voice identity belongs to the active Agent. The Voice Session capability adds
 an optional provider-neutral Live Voice reference to Agent entities, and each
 provider contributes compatible Live Voice profiles. Nova resolves that current
@@ -80,6 +88,8 @@ spoken result arrives.
 - Lightweight direct turns remain low latency, while memory-, state-, fact-, tool-
   and action-dependent turns delegate to canonical Nova. Non-delegated turns are
   still durably restored after reconnect.
+- The compact Live prompt includes the selected Agent's bounded identity/persona,
+  but excludes backend instructions, tools and durable memory.
 - The admitted provider and voice match the current Agent's validated Live Voice
   profile; browser-supplied voice/provider values are ignored by contract.
 - Microphone tracks stop before the exit animation begins.

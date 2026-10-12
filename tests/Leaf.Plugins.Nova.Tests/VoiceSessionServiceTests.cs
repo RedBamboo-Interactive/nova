@@ -75,8 +75,23 @@ public sealed class VoiceSessionServiceTests
     [Fact]
     public void Voice_prompt_preserves_low_latency_conversation_and_delegates_authoritative_work()
     {
-        var prompt = VoiceSessionService.BuildVoiceInstructions("Nova");
+        var prompt = VoiceSessionService.BuildVoiceInstructions(Agent(
+            description: "A persistent technical collaborator.",
+            identity: """
+                # Nova
+                ## Who you are
+                You are Nova. You stick around and give a damn.
+                ## How you talk
+                Speak naturally, directly, and with warmth.
+                ## Repository topology
+                This backend-only section must not enter the voice shell.
+                """));
 
+        Assert.Contains("# Role & Objective", prompt);
+        Assert.Contains("# Personality & Tone", prompt);
+        Assert.Contains("You are Nova. You stick around and give a damn.", prompt);
+        Assert.Contains("Speak naturally, directly, and with warmth.", prompt);
+        Assert.DoesNotContain("backend-only section", prompt);
         Assert.Contains("immediate low-latency spoken flow", prompt);
         Assert.Contains("Handle greetings, simple acknowledgements, social remarks", prompt);
         Assert.Contains("authoritative Nova for identity, durable memory, active work", prompt);
@@ -85,6 +100,38 @@ public sealed class VoiceSessionServiceTests
         Assert.Contains("Never claim an action succeeded", prompt);
         Assert.DoesNotContain("any semantic utterance at all", prompt);
         Assert.DoesNotContain("Always delegate before answering", prompt);
+    }
+
+    [Fact]
+    public void Voice_persona_is_bounded_and_never_copies_backend_instruction_fields()
+    {
+        var agent = Agent(
+            description: "persona-description",
+            identity: "## Who you are\nidentity-marker " + new string('x', 10_000),
+            outputProtocol: "output-protocol-marker",
+            capabilities: "capabilities-marker",
+            memoryInstructions: "memory-instructions-marker");
+
+        var persona = VoiceSessionService.BuildVoicePersona(agent);
+        var prompt = VoiceSessionService.BuildVoiceInstructions(agent);
+
+        Assert.True(persona.Length <= VoiceSessionService.VoicePersonaMaxChars);
+        Assert.Contains("persona-description", persona);
+        Assert.Contains("identity-marker", persona);
+        Assert.DoesNotContain("output-protocol-marker", prompt);
+        Assert.DoesNotContain("capabilities-marker", prompt);
+        Assert.DoesNotContain("memory-instructions-marker", prompt);
+    }
+
+    [Fact]
+    public void Voice_persona_falls_back_to_a_bounded_unstructured_identity()
+    {
+        var persona = VoiceSessionService.BuildVoicePersona(Agent(
+            description: null,
+            identity: "unstructured-identity " + new string('y', 8_000)));
+
+        Assert.StartsWith("unstructured-identity", persona);
+        Assert.True(persona.Length <= VoiceSessionService.VoicePersonaMaxChars);
     }
 
     [Fact]
@@ -180,6 +227,11 @@ public sealed class VoiceSessionServiceTests
 
     private static AgentInfo Info(LeafEntity agent) => new(
         agent.Id.ToString(), agent.Slug, agent.Name, null, null, null, null, null, null, null, null, null);
+
+    private static AgentInfo Agent(string? description, string? identity,
+        string? outputProtocol = null, string? capabilities = null, string? memoryInstructions = null) => new(
+        Guid.NewGuid().ToString(), "nova", "Nova", description, null, null, identity,
+        outputProtocol, capabilities, memoryInstructions, null, null);
 
     private static LeafEntity Entity(string typeSlug, string slug, JsonObject data) => new(
         Guid.NewGuid(), typeSlug, slug, slug, data, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "system");
