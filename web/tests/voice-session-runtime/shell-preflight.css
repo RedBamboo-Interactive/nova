@@ -1,0 +1,5 @@
+/* The production RedLeaf shell owns Tailwind preflight. The Nova plugin omits
+   it deliberately, so this mounted acceptance fixture must supply the same
+   host boundary or native button chrome leaks into shared Chat tool squares. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/preflight.css" layer(base);

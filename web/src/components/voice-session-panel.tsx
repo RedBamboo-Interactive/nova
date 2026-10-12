@@ -12,6 +12,7 @@ import {
   resolveVoiceSessionVisualState,
   voiceSessionStatusLabel,
 } from "./voice-session-visual"
+import { projectVoiceCaption, type VoiceCaptionSpeaker } from "./voice-session-messages"
 
 interface Props {
   agentName: string
@@ -23,6 +24,7 @@ interface Props {
   error: string | null
   userCaption: string
   assistantCaption: string
+  captionSpeaker: VoiceCaptionSpeaker
   messages: MessageBlock[]
   isStreaming: boolean
   resolveImageSrc?: (src: string) => string | undefined
@@ -58,7 +60,7 @@ function useRecentActivity(value: string) {
 }
 
 export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedAt, error,
-  delegating, userCaption, assistantCaption, messages, isStreaming, resolveImageSrc,
+  delegating, userCaption, assistantCaption, captionSpeaker, messages, isStreaming, resolveImageSrc,
   resolveFileLink, resolveEventLink, loadTranscriptPayload, getTranscriptPayloadDownloadUrl,
   returnFocusRef, onMute, onEnd }: Props) {
   const [now, setNow] = useState(Date.now())
@@ -86,14 +88,14 @@ export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedA
   const connected = phase === "connected"
   const visualState = resolveVoiceSessionVisualState({ phase, muted, delegating, assistantActive, userActive })
   const status = voiceSessionStatusLabel(visualState)
-  const caption = useMemo(() => {
-    if (delegating) return { speaker: agentName, text: "I’m working on that…" }
-    if (assistantCaption) return { speaker: agentName, text: assistantCaption }
-    if (userCaption) return { speaker: "You", text: userCaption }
-    if (phase === "starting") return { speaker: "", text: "Opening the live audio channel…" }
-    if (connected) return { speaker: "", text: muted ? "Unmute when you’re ready." : "Go ahead. I’m listening." }
-    return null
-  }, [agentName, assistantCaption, connected, delegating, muted, phase, userCaption])
+  const captionTimestamp = useMemo(() => new Date().toISOString(), [captionSpeaker])
+  const displayMessages = useMemo(() => projectVoiceCaption(messages, {
+    speaker: captionSpeaker,
+    userCaption,
+    assistantCaption,
+    timestamp: captionTimestamp,
+  }), [assistantCaption, captionSpeaker, captionTimestamp, messages, userCaption])
+  const assistiveCaption = captionSpeaker === "assistant" ? assistantCaption : captionSpeaker === "user" ? userCaption : ""
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // Tool and event details are portaled dialogs. Their React events still
@@ -162,17 +164,10 @@ export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedA
 
           <h2 className="nova-voice-mode__name mt-5 shrink-0 text-2xl font-semibold tracking-tight sm:text-3xl">{agentName}</h2>
 
-          <div className="nova-voice-mode__caption mt-4 flex min-h-20 w-full max-w-xl shrink-0 flex-col justify-center px-5 py-3" aria-live="polite" aria-atomic="true">
-            {caption ? (
-              <>
-                {caption.speaker && <span className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground-a60">{caption.speaker}</span>}
-                <p className="text-balance text-[15px] leading-relaxed text-foreground-a90 sm:text-base">{caption.text}</p>
-              </>
-            ) : <span className="text-sm text-muted-foreground">The conversation is still here.</span>}
-          </div>
+          <p className="sr-only" aria-live="polite" aria-atomic="true">{assistiveCaption}</p>
 
           <section
-            className="nova-voice-mode__discussion mt-4 flex min-h-0 w-full flex-1 flex-col overflow-hidden text-left"
+            className="nova-voice-mode__discussion mt-5 flex min-h-0 w-full flex-1 flex-col overflow-hidden text-left"
             aria-label="Live discussion"
             data-slot="voice-session-discussion"
           >
@@ -191,10 +186,10 @@ export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedA
               </span>
             </header>
             <div className="nova-voice-mode__discussion-body min-h-0 flex-1">
-              {messages.length > 0 ? (
+              {displayMessages.length > 0 ? (
                 <ChatPanel
                   className="nova-voice-mode__chat-panel"
-                  messages={messages}
+                  messages={displayMessages}
                   isStreaming={isStreaming}
                   sessionId={null}
                   persistQueue={false}

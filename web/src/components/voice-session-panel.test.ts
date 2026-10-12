@@ -36,12 +36,19 @@ test("voice controls and surfaces use the Leaf design language", () => {
 test("voice mode projects the canonical discussion through the shared controlled chat", () => {
   assert.match(panelSource, /import \{[\s\S]*ChatPanel,[\s\S]*\} from "@redbamboo\/chat"/)
   assert.match(panelSource, /data-slot="voice-session-discussion"/)
-  assert.match(panelSource, /<ChatPanel[\s\S]*messages=\{messages\}[\s\S]*isStreaming=\{isStreaming\}/)
+  assert.match(panelSource, /<ChatPanel[\s\S]*messages=\{displayMessages\}[\s\S]*isStreaming=\{isStreaming\}/)
   assert.match(panelSource, /sessionId=\{null\}/)
   assert.match(panelSource, /persistQueue=\{false\}/)
   assert.match(panelSource, /hideComposer/)
   assert.doesNotMatch(panelSource, /fetch\(|useChatStream|WebSocket/)
   assert.match(chatViewSource, /<VoiceSessionPanel[\s\S]*messages=\{activeMessages\}[\s\S]*isStreaming=\{isStreaming\}/)
+})
+
+test("live captions are transient native chat bubbles rather than a parallel visual transcript", () => {
+  assert.match(panelSource, /projectVoiceCaption\(messages/)
+  assert.match(panelSource, /messages=\{displayMessages\}/)
+  assert.match(panelSource, /aria-live="polite"/)
+  assert.doesNotMatch(panelSource, /nova-voice-mode__caption/)
 })
 
 test("canonical discussion is a bounded Leaf glass surface", () => {

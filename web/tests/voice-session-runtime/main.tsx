@@ -2,6 +2,7 @@ import React, { useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
 import type { MessageBlock } from "@redbamboo/chat"
 import { VoiceSessionPanel } from "../../src/components/voice-session-panel"
+import "./shell-preflight.css"
 import "../../src/plugin.css"
 
 const messages: MessageBlock[] = [
@@ -59,6 +60,7 @@ function Fixture() {
         error={null}
         userCaption="Can you check what the real voice session is doing with my memory?"
         assistantCaption="Yes. I’m working through the real Nova session now."
+        captionSpeaker="assistant"
         messages={messages}
         isStreaming={false}
         returnFocusRef={returnFocusRef}

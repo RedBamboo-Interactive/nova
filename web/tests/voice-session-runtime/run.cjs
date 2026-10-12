@@ -63,6 +63,11 @@ async function main() {
       assert.equal(await discussion.getByText("Yes. This live voice is attached", { exact: false }).count(), 1)
       const toolSquare = discussion.getByRole("button", { name: "Read" })
       assert.equal(await toolSquare.count(), 1)
+      const toolSquareStyle = await toolSquare.evaluate(element => {
+        const style = getComputedStyle(element)
+        return { width: style.width, height: style.height, borderWidth: style.borderWidth, padding: style.padding }
+      })
+      assert.deepEqual(toolSquareStyle, { width: "10px", height: "10px", borderWidth: "0px", padding: "0px" })
       await toolSquare.click()
       const toolDialog = page.getByRole("dialog", { name: "Read", exact: true })
       await toolDialog.waitFor()
@@ -70,6 +75,7 @@ async function main() {
       await page.keyboard.press("Escape")
       await toolDialog.waitFor({ state: "hidden" })
       assert.equal(await page.getByTestId("end-count").textContent(), "0", "closing tool detail must not end voice mode")
+      await toolSquare.evaluate(element => element.blur())
       assert.equal(paidRequests.length, 0)
       assert.deepEqual(pageErrors, [])
       assert.deepEqual(consoleErrors, [])
@@ -77,9 +83,10 @@ async function main() {
       assert.ok(bounds && bounds.height >= 128, `${fixture.label}: discussion must remain usefully tall`)
       assert.ok(bounds && bounds.y + bounds.height <= fixture.viewport.height, `${fixture.label}: discussion must remain inside the viewport`)
       await page.screenshot({ path: path.join(output, `${fixture.label}.png`), fullPage: true })
+      await panel.getByRole("button", { name: "End voice session" }).focus()
       await page.keyboard.press("Escape")
       assert.equal(await page.getByTestId("end-count").textContent(), "1", "voice mode itself must retain Escape-to-end")
-      results.push({ label: fixture.label, bounds, paidRequests, pageErrors, consoleErrors })
+      results.push({ label: fixture.label, bounds, toolSquareStyle, paidRequests, pageErrors, consoleErrors })
       await page.close()
     }
   } finally {

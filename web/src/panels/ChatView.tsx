@@ -1100,6 +1100,7 @@ export function ChatView({
           error={voiceSession.error}
           userCaption={voiceSession.captions.user}
           assistantCaption={voiceSession.captions.assistant}
+          captionSpeaker={voiceSession.captions.speaker}
           messages={activeMessages}
           isStreaming={isStreaming}
           resolveImageSrc={resolveImageSrc}

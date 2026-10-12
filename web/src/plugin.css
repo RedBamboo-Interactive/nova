@@ -312,11 +312,6 @@
   text-shadow: 0 0.2rem 1.5rem rgb(from var(--background) r g b / 0.58);
 }
 
-.nova-voice-mode__caption {
-  border-radius: var(--radius-xl);
-  transition: min-height 220ms ease, background-color 220ms ease;
-}
-
 .nova-voice-mode__discussion {
   min-height: 10rem;
   border-radius: var(--radius-xl);
