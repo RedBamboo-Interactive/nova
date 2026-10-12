@@ -409,13 +409,14 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         }
     }
 
-    public async Task<bool> InjectAsync(string sessionId, object body, CancellationToken ct = default)
+    public async Task<bool> InjectAsync(string sessionId, object body,
+        ComputeProvenance provenance, CancellationToken ct = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/ai-session/sessions/{sessionId}/inject")
         {
             Content = JsonContent.Create(body, options: JsonOptions),
         };
-        using var resp = await gateway.SendAsync(request, provenance: null, ct);
+        using var resp = await gateway.SendAsync(request, provenance, ct);
         return resp.IsSuccessStatusCode;
     }
 

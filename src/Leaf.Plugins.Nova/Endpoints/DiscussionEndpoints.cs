@@ -1317,7 +1317,12 @@ public static class DiscussionEndpoints
             return Results.Ok(new { success = true });
         });
 
-        group.MapPost("/discussions/{id}/nova-message", async (string id, NovaMessageRequest request, HttpContext ctx, DiscussionStore store, ConversationUnread conversationUnread, RedComputeClient redCompute, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, DiscussionActivity activity) =>
+        group.MapPost("/discussions/{id}/nova-message", async (string id, NovaMessageRequest request,
+            HttpContext ctx, DiscussionStore store, ConversationUnread conversationUnread,
+            RedComputeClient redCompute, AgentDirectory agents,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events,
+            DiscussionActivity activity) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
@@ -1379,6 +1384,16 @@ public static class DiscussionEndpoints
             {
                 try
                 {
+                    var agent = discussion.AgentId is null
+                        ? null : await agents.GetAgentAsync(discussion.AgentId, ctx.RequestAborted);
+                    if (agent is null) throw new InvalidOperationException("The discussion has no linked Agent");
+                    var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(
+                        entities, discussion.OwnerId, ctx.RequestAborted);
+                    var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
+                        $"/api/apps/nova/discussions/{discussion.Id}/nova-message",
+                        [new ComputeContextReference("discussion", discussion.Id),
+                         new ComputeContextReference("session", discussion.SessionId)],
+                        method: "POST", ct: ctx.RequestAborted);
                     object? metadata = request.SenderAgentId is not null
                         ? new { senderAgentId = request.SenderAgentId }
                         : null;
@@ -1389,7 +1404,7 @@ public static class DiscussionEndpoints
                         audioUrl = string.IsNullOrEmpty(request.AudioUrl) ? null : request.AudioUrl,
                         metadata,
                         messageUid = uid,
-                    });
+                    }, provenance, ctx.RequestAborted);
                 }
                 catch { /* best-effort — message is already persisted */ }
             }

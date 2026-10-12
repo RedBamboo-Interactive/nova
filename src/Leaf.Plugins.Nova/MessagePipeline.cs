@@ -226,6 +226,19 @@ public sealed class MessagePipeline(
                 sessionPatch["owner_id"] = computeOwnerId;
             await store.PatchAsync(discussion.EntityId, sessionPatch, ct: ct);
 
+        }
+
+        var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
+        if (agent == null)
+            return new(false, sessionId, "missing_agent", "The discussion has no linked Agent entity.");
+        var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, computeOwnerId, ct);
+        var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
+            $"/api/apps/nova/discussions/{discussion.Id}/message",
+            [new ComputeContextReference("discussion", discussion.Id),
+             new ComputeContextReference("session", sessionId)], method: "POST", ct: ct);
+
+        if (sessionIsNew)
+        {
             // Replay pending assistant messages (from nova-message on pre-created
             // discussions) into the new session so they appear as visible chat bubbles.
             var existing = await discussions.GetMessagesAsync(discussion.EntityId, ct: ct);
@@ -239,7 +252,7 @@ public sealed class MessagePipeline(
                         role = "assistant",
                         content = msg.Content,
                         messageUid = msg.Metadata["uid"]?.GetValue<string>(),
-                    }, ct);
+                    }, provenance, ct);
                 }
                 catch { /* best-effort — don't block the user's message */ }
             }
@@ -385,14 +398,6 @@ public sealed class MessagePipeline(
             };
         }
 
-        var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
-        if (agent == null)
-            return new(false, sessionId, "missing_agent", "The discussion has no linked Agent entity.");
-        var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, computeOwnerId, ct);
-        var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
-            $"/api/apps/nova/discussions/{discussion.Id}/message",
-            [new ComputeContextReference("discussion", discussion.Id),
-             new ComputeContextReference("session", sessionId)], method: "POST", ct: ct);
         var sendResult = await redCompute.SendMessageDetailedAsync(
             sessionId, requestBody, provenance, ct,
             idempotencyKey: idempotencyKey);

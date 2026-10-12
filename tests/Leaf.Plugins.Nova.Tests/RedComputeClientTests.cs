@@ -75,15 +75,19 @@ public sealed class RedComputeClientTests
         var sessionId = await client.CreateSessionAsync(new(), provenance);
         var sent = await client.SendMessageDetailedAsync(
             sessionId!, new { content = "queued" }, provenance);
+        var injected = await client.InjectAsync(
+            sessionId!, new { role = "assistant", content = "persisted" }, provenance);
         var queue = await client.ProxyInputQueueAsync(
             sessionId!, HttpMethod.Get);
 
         Assert.True(sent.Success);
+        Assert.True(injected);
         Assert.Equal(200, queue.StatusCode);
-        Assert.Equal(3, gateway.Requests.Count);
+        Assert.Equal(4, gateway.Requests.Count);
         Assert.Equal(provenance, gateway.Requests[0].Provenance);
         Assert.Equal(provenance, gateway.Requests[1].Provenance);
-        Assert.Null(gateway.Requests[2].Provenance);
+        Assert.Equal(provenance, gateway.Requests[2].Provenance);
+        Assert.Null(gateway.Requests[3].Provenance);
     }
 
     [Fact]

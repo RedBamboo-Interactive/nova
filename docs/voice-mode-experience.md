@@ -12,6 +12,12 @@ ending it releases browser media immediately, requests the existing authorized
 server-side close, lets the visual surface finish a short exit, and returns to
 the unchanged discussion.
 
+GPT-Live is the audio transport and spoken renderer, not a second conversational
+authority. Every completed semantic utterance delegates to the ongoing Nova AI
+session. Nova's canonical answer is returned for speech. If phone sleep or network
+loss requires a replacement transport, admission waits for the prior session to
+flush and close before it snapshots the current discussion history.
+
 Voice identity belongs to the active Agent. The Voice Session capability adds
 an optional provider-neutral Live Voice reference to Agent entities, and each
 provider contributes compatible Live Voice profiles. Nova resolves that current
@@ -54,7 +60,7 @@ idle
   -> closed/idle   surface unmounts; existing discussion is still current
 ```
 
-Delegated Nova work is a connected sub-state, not a second session. It takes
+Nova work is a connected sub-state, not a second session. It takes
 visual precedence over listening/speaking and returns to the live path when a
 spoken result arrives.
 
@@ -64,6 +70,10 @@ spoken result arrives.
   changes.
 - One provider admission per start gesture and at most one close request for the
   accepted session.
+- Concurrent close requests collapse into one provider drain; replacement admission
+  cannot read history until that drain and transcript flush have completed.
+- AI-session injection carries signed Agent/beneficiary/discussion provenance, and
+  callback retries remain idempotent by stable message UID.
 - The admitted provider and voice match the current Agent's validated Live Voice
   profile; browser-supplied voice/provider values are ignored by contract.
 - Microphone tracks stop before the exit animation begins.

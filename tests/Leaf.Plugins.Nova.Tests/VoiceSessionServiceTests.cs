@@ -8,6 +8,37 @@ namespace Leaf.Plugins.Nova.Tests;
 public sealed class VoiceSessionServiceTests
 {
     [Fact]
+    public async Task Discussion_gate_blocks_replacement_until_prior_close_finishes()
+    {
+        var gate = new VoiceSessionDiscussionGate();
+        var closeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseClose = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var historyRead = false;
+
+        var close = gate.RunAsync("discussion-1", async () =>
+        {
+            closeStarted.TrySetResult();
+            await releaseClose.Task;
+            return true;
+        }, CancellationToken.None);
+        await closeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var replacement = gate.RunAsync("discussion-1", () =>
+        {
+            historyRead = true;
+            return Task.FromResult(true);
+        }, CancellationToken.None);
+
+        Assert.False(historyRead);
+        Assert.False(replacement.IsCompleted);
+        releaseClose.TrySetResult();
+
+        Assert.True(await close);
+        Assert.True(await replacement);
+        Assert.True(historyRead);
+    }
+
+    [Fact]
     public void Initial_history_prefers_canonical_assistant_final_and_preserves_turn_order()
     {
         var snapshot = new SessionSnapshot("Idle", null, null,
@@ -24,6 +55,33 @@ public sealed class VoiceSessionServiceTests
             item => { Assert.Equal("user", item.Role); Assert.Equal("question", item.Content); },
             item => { Assert.Equal("assistant", item.Role); Assert.Equal("answer", item.Content); },
             item => { Assert.Equal("user", item.Role); Assert.Equal("follow-up", item.Content); });
+    }
+
+    [Fact]
+    public void Initial_history_recognizes_provider_final_answer_phase()
+    {
+        var snapshot = new SessionSnapshot("Idle", null, null,
+        [
+            Message(1, "user", "question", "user-1"),
+            Message(2, "assistant", "checking", "assistant-1", "commentary"),
+            Message(3, "assistant", "verified answer", "assistant-1", "final_answer"),
+        ]);
+
+        var history = VoiceSessionService.BuildInitialHistory(snapshot);
+
+        Assert.Equal("verified answer", history[^1].Content);
+    }
+
+    [Fact]
+    public void Voice_prompt_makes_the_backend_authoritative_for_every_semantic_turn()
+    {
+        var prompt = VoiceSessionService.BuildVoiceInstructions("Nova");
+
+        Assert.Contains("one authoritative Nova conversation", prompt);
+        Assert.Contains("any semantic utterance at all", prompt);
+        Assert.Contains("Always delegate before answering", prompt);
+        Assert.Contains("Never answer", prompt);
+        Assert.DoesNotContain("handle lightweight social conversation directly", prompt);
     }
 
     [Fact]
