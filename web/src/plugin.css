@@ -190,9 +190,7 @@
 .nova-voice-mode footer { animation-delay: 40ms; }
 
 .nova-voice-mode__status-pill,
-.nova-voice-mode__timer,
-.nova-voice-mode__caption,
-.nova-voice-mode__discussion {
+.nova-voice-mode__timer {
   border: 1px solid rgb(from var(--border) r g b / 0.72);
   background: rgb(from var(--popover) r g b / 0.72);
   box-shadow: 0 14px 40px rgb(from var(--background) r g b / 0.24), inset 0 1px rgb(from var(--contrast) r g b / 0.06);
@@ -314,23 +312,14 @@
 
 .nova-voice-mode__discussion {
   min-height: 10rem;
-  border-radius: var(--radius-xl);
-  background:
-    linear-gradient(180deg, rgb(from var(--popover) r g b / 0.82), rgb(from var(--color-surface-deep) r g b / 0.74));
-  box-shadow:
-    0 1.2rem 3.4rem rgb(from var(--background) r g b / 0.3),
-    inset 0 1px rgb(from var(--contrast) r g b / 0.07);
-}
-
-.nova-voice-mode__discussion-header {
-  background: rgb(from var(--popover) r g b / 0.46);
+  position: relative;
 }
 
 .nova-voice-mode__discussion-body {
   position: relative;
   isolation: isolate;
-  background:
-    radial-gradient(circle at 50% 0%, rgb(from var(--primary) r g b / 0.06), transparent 48%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 3.5rem, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 3.5rem, #000 100%);
 }
 
 .nova-voice-mode__chat-panel {
@@ -405,12 +394,11 @@
 @media (max-height: 700px) {
   .nova-voice-mode__identity { width: clamp(7.5rem, 20vh, 9rem); }
   .nova-voice-mode__name { margin-top: 1rem; }
-  .nova-voice-mode__caption { min-height: 4.5rem; margin-top: 1rem; padding-top: 0.75rem; padding-bottom: 0.75rem; }
-  .nova-voice-mode__discussion { min-height: 8rem; margin-top: 0.75rem; }
-}
-
-@media (max-width: 520px) {
-  .nova-voice-mode__discussion-header { padding-right: 0.75rem; padding-left: 0.75rem; }
+  .nova-voice-mode__discussion { min-height: 8rem; }
+  .nova-voice-mode__discussion-body {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 2.5rem, #000 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 2.5rem, #000 100%);
+  }
 }
 
 /* Float retains the desktop eligibility of its former header action. */

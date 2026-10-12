@@ -29,7 +29,7 @@ test("voice controls and surfaces use the Leaf design language", () => {
   assert.doesNotMatch(panelSource, /ph-fill ph-phone-disconnect/)
   assert.match(cssSource, /--nova-voice-accent: var\(--primary\)/)
   assert.match(cssSource, /background: rgb\(from var\(--popover\)/)
-  assert.match(cssSource, /border-radius: var\(--radius-xl\)/)
+  assert.match(cssSource, /border-radius: 999px/)
   assert.match(cssSource, /nova-voice-mode-enter 220ms cubic-bezier\(0\.16, 1, 0\.3, 1\)/)
 })
 
@@ -51,11 +51,14 @@ test("live captions are transient native chat bubbles rather than a parallel vis
   assert.doesNotMatch(panelSource, /nova-voice-mode__caption/)
 })
 
-test("canonical discussion is a bounded Leaf glass surface", () => {
+test("canonical discussion floats directly on the backdrop and fades before the portrait", () => {
   assert.match(cssSource, /\.nova-voice-mode__discussion \{/)
   assert.match(cssSource, /\.nova-voice-mode__discussion[\s\S]*min-height: 10rem/)
+  assert.match(cssSource, /\.nova-voice-mode__discussion-body[\s\S]*mask-image: linear-gradient\(to bottom, transparent 0, #000 3\.5rem/)
   assert.match(cssSource, /\.nova-voice-mode__chat-panel \{[\s\S]*height: 100%/)
   assert.match(cssSource, /@media \(max-height: 700px\)[\s\S]*\.nova-voice-mode__discussion/)
+  assert.doesNotMatch(panelSource, /nova-voice-mode__discussion-header/)
+  assert.doesNotMatch(cssSource, /\.nova-voice-mode__discussion-header/)
 })
 
 test("voice mode keeps the closing phase mounted for its exit", () => {

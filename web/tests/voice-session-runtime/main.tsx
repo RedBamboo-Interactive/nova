@@ -7,6 +7,22 @@ import "../../src/plugin.css"
 
 const messages: MessageBlock[] = [
   {
+    id: "earlier-user-question",
+    role: "user",
+    timestamp: "2026-10-12T17:40:54Z",
+    parts: [{ type: "text", content: "Is this still the same discussion while we’re speaking?" }],
+  },
+  {
+    id: "earlier-assistant-turn",
+    role: "assistant",
+    timestamp: "2026-10-12T17:40:55Z",
+    parts: [{
+      type: "text",
+      phase: "final_answer",
+      content: "It is. Voice is another way into this discussion, so our written context stays visible while we talk.",
+    }],
+  },
+  {
     id: "user-question",
     role: "user",
     timestamp: "2026-10-12T17:41:00Z",

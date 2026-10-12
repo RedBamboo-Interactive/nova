@@ -58,6 +58,13 @@ async function main() {
       const discussion = page.getByRole("region", { name: "Live discussion" })
       await panel.waitFor()
       await discussion.waitFor()
+      const discussionBody = discussion.locator(".nova-voice-mode__discussion-body")
+      const discussionBodyStyle = await discussionBody.evaluate(element => {
+        const style = getComputedStyle(element)
+        return { maskImage: style.maskImage || style.webkitMaskImage }
+      })
+      assert.notEqual(discussionBodyStyle.maskImage, "none")
+      assert.match(discussionBodyStyle.maskImage, /56px/)
       assert.equal(await discussion.getByText("Can you check what the real voice session is doing with my memory?").count(), 1)
       assert.equal(await discussion.getByText("I’m checking the canonical Nova session now.", { exact: false }).count(), 1)
       assert.equal(await discussion.getByText("Yes. This live voice is attached", { exact: false }).count(), 1)
@@ -82,11 +89,37 @@ async function main() {
       const bounds = await discussion.boundingBox()
       assert.ok(bounds && bounds.height >= 128, `${fixture.label}: discussion must remain usefully tall`)
       assert.ok(bounds && bounds.y + bounds.height <= fixture.viewport.height, `${fixture.label}: discussion must remain inside the viewport`)
+      const layout = await page.evaluate(() => {
+        const rect = selector => {
+          const element = document.querySelector(selector)
+          if (!element) return null
+          const bounds = element.getBoundingClientRect()
+          return { top: bounds.top, bottom: bounds.bottom, height: bounds.height }
+        }
+        const scroller = Array.from(document.querySelectorAll("[data-slot='chat-panel'] *"))
+          .find(element => getComputedStyle(element).overflowY === "auto")
+        return {
+          main: rect(".nova-voice-mode main"),
+          identity: rect(".nova-voice-mode__identity"),
+          discussion: rect(".nova-voice-mode__discussion"),
+          footer: rect(".nova-voice-mode footer"),
+          scroller: scroller ? {
+            clientHeight: scroller.clientHeight,
+            scrollHeight: scroller.scrollHeight,
+            scrollTop: scroller.scrollTop,
+          } : null,
+        }
+      })
+      assert.ok(layout.identity && layout.identity.top >= 0, `${fixture.label}: portrait must remain inside the viewport`)
+      assert.ok(layout.scroller, `${fixture.label}: discussion must expose its own scroller`)
+      if (fixture.label === "mobile") {
+        assert.ok(layout.scroller.scrollHeight > layout.scroller.clientHeight, "mobile: long discussion must scroll in place")
+      }
       await page.screenshot({ path: path.join(output, `${fixture.label}.png`), fullPage: true })
       await panel.getByRole("button", { name: "End voice session" }).focus()
       await page.keyboard.press("Escape")
       assert.equal(await page.getByTestId("end-count").textContent(), "1", "voice mode itself must retain Escape-to-end")
-      results.push({ label: fixture.label, bounds, toolSquareStyle, paidRequests, pageErrors, consoleErrors })
+      results.push({ label: fixture.label, bounds, layout, discussionBodyStyle, toolSquareStyle, paidRequests, pageErrors, consoleErrors })
       await page.close()
     }
   } finally {

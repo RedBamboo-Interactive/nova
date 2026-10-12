@@ -167,24 +167,10 @@ export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedA
           <p className="sr-only" aria-live="polite" aria-atomic="true">{assistiveCaption}</p>
 
           <section
-            className="nova-voice-mode__discussion mt-5 flex min-h-0 w-full flex-1 flex-col overflow-hidden text-left"
+            className="nova-voice-mode__discussion mt-1 flex min-h-0 w-full flex-1 flex-col overflow-hidden text-left"
             aria-label="Live discussion"
             data-slot="voice-session-discussion"
           >
-            <header className="nova-voice-mode__discussion-header flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-2.5">
-              <span className="flex items-center gap-2 text-xs font-semibold text-foreground-a80">
-                <i className="ph-bold ph-chats-circle text-sm text-primary" aria-hidden="true" />
-                Live discussion
-              </span>
-              <span className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${isStreaming ? "animate-pulse bg-primary" : ""}`}
-                  style={isStreaming ? undefined : { backgroundColor: "var(--color-status-live)" }}
-                  aria-hidden="true"
-                />
-                {isStreaming ? "Nova is working" : "Caught up"}
-              </span>
-            </header>
             <div className="nova-voice-mode__discussion-body min-h-0 flex-1">
               {displayMessages.length > 0 ? (
                 <ChatPanel
