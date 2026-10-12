@@ -4,7 +4,7 @@ import { applyVoiceEvent, type VoiceCaptionState } from "./voice-session-events"
 
 export type VoiceSessionPhase = "idle" | "starting" | "connected" | "degraded" | "closing" | "closed" | "error"
 
-const VOICE_MODE_EXIT_MS = 280
+const VOICE_MODE_EXIT_MS = 160
 
 interface VoiceSessionAdmission {
   id: string

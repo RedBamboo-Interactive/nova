@@ -125,14 +125,14 @@
 }
 
 .nova-voice-mode {
-  --nova-voice-accent: 255 255 255;
-  animation: nova-voice-mode-enter 280ms cubic-bezier(0.2, 0, 0, 1) both;
+  --nova-voice-accent: var(--primary);
+  animation: nova-voice-mode-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
   transform-origin: center;
 }
 
 .nova-voice-mode[data-state="closing"] {
   pointer-events: none;
-  animation: nova-voice-mode-exit 280ms cubic-bezier(0.4, 0, 1, 1) both;
+  animation: nova-voice-mode-exit 160ms cubic-bezier(0.4, 0, 1, 1) both;
 }
 
 .nova-voice-mode__backdrop {
@@ -140,9 +140,9 @@
   inset: -2rem;
   overflow: hidden;
   background:
-    radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--color-accent) 28%, transparent), transparent 45%),
+    radial-gradient(circle at 50% 35%, rgb(from var(--primary) r g b / 0.28), transparent 45%),
     linear-gradient(145deg, var(--color-surface-deep), var(--color-background));
-  animation: nova-voice-backdrop-enter 700ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: nova-voice-backdrop-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .nova-voice-mode__backdrop-image {
@@ -161,14 +161,14 @@
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(180deg, rgb(4 7 12 / 0.38) 0%, rgb(4 7 12 / 0.2) 35%, rgb(4 7 12 / 0.72) 100%),
-    radial-gradient(circle at 50% 42%, transparent 0%, rgb(2 5 10 / 0.28) 70%);
+    linear-gradient(180deg, rgb(from var(--background) r g b / 0.42) 0%, rgb(from var(--background) r g b / 0.24) 35%, rgb(from var(--background) r g b / 0.82) 100%),
+    radial-gradient(circle at 50% 42%, transparent 0%, rgb(from var(--background) r g b / 0.34) 70%);
 }
 
 .nova-voice-mode__backdrop-vignette {
   position: absolute;
   inset: 0;
-  box-shadow: inset 0 0 16rem rgb(0 0 0 / 0.6);
+  box-shadow: inset 0 0 16rem rgb(from var(--background) r g b / 0.68);
 }
 
 .nova-voice-mode__backdrop-grain {
@@ -176,25 +176,25 @@
   inset: 0;
   opacity: 0.1;
   background-image:
-    repeating-radial-gradient(circle at 20% 30%, rgb(255 255 255 / 0.16) 0 0.4px, transparent 0.8px 3px);
+    repeating-radial-gradient(circle at 20% 30%, rgb(from var(--contrast) r g b / 0.16) 0 0.4px, transparent 0.8px 3px);
   mix-blend-mode: soft-light;
 }
 
 .nova-voice-mode__header,
 .nova-voice-mode main,
 .nova-voice-mode footer {
-  animation: nova-voice-content-enter 420ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: nova-voice-content-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.nova-voice-mode main { animation-delay: 50ms; }
-.nova-voice-mode footer { animation-delay: 90ms; }
+.nova-voice-mode main { animation-delay: 20ms; }
+.nova-voice-mode footer { animation-delay: 40ms; }
 
 .nova-voice-mode__status-pill,
 .nova-voice-mode__timer,
 .nova-voice-mode__caption {
-  border: 1px solid rgb(255 255 255 / 0.12);
-  background: rgb(7 11 18 / 0.34);
-  box-shadow: 0 14px 40px rgb(0 0 0 / 0.14), inset 0 1px rgb(255 255 255 / 0.06);
+  border: 1px solid rgb(from var(--border) r g b / 0.72);
+  background: rgb(from var(--popover) r g b / 0.72);
+  box-shadow: 0 14px 40px rgb(from var(--background) r g b / 0.24), inset 0 1px rgb(from var(--contrast) r g b / 0.06);
   -webkit-backdrop-filter: blur(18px) saturate(1.15);
   backdrop-filter: blur(18px) saturate(1.15);
 }
@@ -206,7 +206,7 @@
   min-height: 2rem;
   padding: 0.35rem 0.75rem;
   border-radius: 999px;
-  color: rgb(255 255 255 / 0.82);
+  color: rgb(from var(--foreground) r g b / 0.82);
   font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -216,15 +216,15 @@
   width: 0.42rem;
   height: 0.42rem;
   border-radius: 999px;
-  background: rgb(var(--nova-voice-accent) / 0.9);
-  box-shadow: 0 0 0.9rem rgb(var(--nova-voice-accent) / 0.65);
+  background: rgb(from var(--nova-voice-accent) r g b / 0.9);
+  box-shadow: 0 0 0.9rem rgb(from var(--nova-voice-accent) r g b / 0.65);
 }
 
 .nova-voice-mode__timer {
   min-width: 3.5rem;
   padding: 0.45rem 0.7rem;
   border-radius: 999px;
-  color: rgb(255 255 255 / 0.68);
+  color: rgb(from var(--foreground) r g b / 0.68);
   text-align: center;
 }
 
@@ -239,9 +239,9 @@
 .nova-voice-mode__ring {
   position: absolute;
   inset: -1rem;
-  border: 1px solid rgb(var(--nova-voice-accent) / 0.34);
+  border: 1px solid rgb(from var(--nova-voice-accent) r g b / 0.34);
   border-radius: 999px;
-  box-shadow: 0 0 2.2rem rgb(var(--nova-voice-accent) / 0.12);
+  box-shadow: 0 0 2.2rem rgb(from var(--nova-voice-accent) r g b / 0.12);
   transition: border-color 240ms ease, box-shadow 240ms ease, opacity 240ms ease;
 }
 
@@ -253,13 +253,13 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  border: 1px solid rgb(255 255 255 / 0.25);
+  border: 1px solid rgb(from var(--border) r g b / 0.8);
   border-radius: 999px;
-  background: rgb(8 12 19 / 0.4);
+  background: rgb(from var(--popover) r g b / 0.52);
   box-shadow:
-    0 1.5rem 4rem rgb(0 0 0 / 0.38),
-    0 0 0 0.4rem rgb(255 255 255 / 0.045),
-    inset 0 1px rgb(255 255 255 / 0.16);
+    0 1.5rem 4rem rgb(from var(--background) r g b / 0.48),
+    0 0 0 0.4rem rgb(from var(--contrast) r g b / 0.045),
+    inset 0 1px rgb(from var(--contrast) r g b / 0.16);
   transition: transform 360ms cubic-bezier(0.2, 0, 0, 1), box-shadow 360ms ease;
 }
 
@@ -275,8 +275,8 @@
 }
 
 .nova-voice-mode__portrait--fallback {
-  color: var(--color-accent);
-  background: radial-gradient(circle at 50% 35%, var(--color-overlay-12), var(--color-surface-deep));
+  color: var(--primary);
+  background: radial-gradient(circle at 50% 35%, var(--accent), var(--color-surface-deep));
 }
 
 .nova-voice-mode__meter {
@@ -288,10 +288,10 @@
   align-items: center;
   gap: 0.19rem;
   padding: 0.4rem 0.62rem;
-  border: 1px solid rgb(255 255 255 / 0.15);
+  border: 1px solid rgb(from var(--border) r g b / 0.72);
   border-radius: 999px;
-  background: rgb(4 7 12 / 0.48);
-  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 0.22);
+  background: rgb(from var(--popover) r g b / 0.76);
+  box-shadow: 0 0.5rem 1.5rem rgb(from var(--background) r g b / 0.32);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
   transform: translateX(-50%);
@@ -299,22 +299,22 @@
 
 .nova-voice-mode__meter span {
   width: 0.16rem;
-  height: calc(0.38rem + (var(--voice-bar) * 0.08rem));
+  height: calc(0.38rem + var(--voice-bar) * 0.08rem);
   border-radius: 999px;
-  background: rgb(var(--nova-voice-accent) / 0.92);
+  background: rgb(from var(--nova-voice-accent) r g b / 0.92);
   transform-origin: center;
   transition: opacity 200ms ease, transform 200ms ease;
 }
 
 .nova-voice-mode__name {
-  color: white;
-  text-shadow: 0 0.2rem 1.5rem rgb(0 0 0 / 0.48);
+  color: var(--foreground);
+  text-shadow: 0 0.2rem 1.5rem rgb(from var(--background) r g b / 0.58);
 }
 
-.nova-voice-mode__provenance { color: rgb(255 255 255 / 0.58); }
+.nova-voice-mode__provenance { color: rgb(from var(--foreground) r g b / 0.68); }
 
 .nova-voice-mode__caption {
-  border-radius: 1.2rem;
+  border-radius: var(--radius-xl);
   transition: min-height 220ms ease, background-color 220ms ease;
 }
 
@@ -329,30 +329,28 @@
   height: 3.65rem;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgb(255 255 255 / 0.16);
+  border-color: rgb(from var(--border) r g b / 0.84);
   border-radius: 999px;
-  color: white;
-  background: rgb(8 12 19 / 0.44);
-  box-shadow: 0 0.9rem 2rem rgb(0 0 0 / 0.2), inset 0 1px rgb(255 255 255 / 0.08);
+  color: var(--foreground);
+  background: rgb(from var(--popover) r g b / 0.68);
+  box-shadow: 0 0.9rem 2rem rgb(from var(--background) r g b / 0.3), inset 0 1px rgb(from var(--contrast) r g b / 0.08);
   -webkit-backdrop-filter: blur(18px);
   backdrop-filter: blur(18px);
-  transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+  transition: all 160ms ease;
 }
 
-.nova-voice-mode__control:hover { transform: translateY(-2px); background: rgb(255 255 255 / 0.13); }
-.nova-voice-mode__control:active { transform: scale(0.94); }
-.nova-voice-mode__control:focus-visible { outline: 2px solid rgb(255 255 255 / 0.9); outline-offset: 3px; }
-.nova-voice-mode__control:disabled { cursor: default; opacity: 0.36; transform: none; }
-.nova-voice-mode__control--mute[data-active] { border-color: rgb(251 191 36 / 0.38); color: rgb(253 230 138); background: rgb(120 53 15 / 0.32); }
-.nova-voice-mode__control--end { width: 4.25rem; height: 4.25rem; border-color: rgb(255 255 255 / 0.15); background: rgb(225 48 65 / 0.94); box-shadow: 0 1rem 2.4rem rgb(190 24 45 / 0.34), inset 0 1px rgb(255 255 255 / 0.22); }
-.nova-voice-mode__control--end:hover { background: rgb(240 58 75); box-shadow: 0 1rem 2.8rem rgb(190 24 45 / 0.46); }
+.nova-voice-mode__control:hover { background: rgb(from var(--accent) r g b / 0.82); }
+.nova-voice-mode__control:disabled { cursor: default; opacity: 0.36; }
+.nova-voice-mode__control--mute[data-active] { border-color: rgb(from var(--color-accent-gold) r g b / 0.4); color: var(--color-accent-gold); background: rgb(from var(--color-accent-gold) r g b / 0.14); }
+.nova-voice-mode__control--end { width: 4.25rem; height: 4.25rem; border-color: rgb(from var(--destructive) r g b / 0.5); color: var(--primary-foreground); background: var(--destructive); box-shadow: 0 1rem 2.4rem rgb(from var(--destructive) r g b / 0.34), inset 0 1px rgb(from var(--contrast) r g b / 0.18); }
+.nova-voice-mode__control--end:hover { background: color-mix(in srgb, var(--destructive) 88%, var(--foreground)); box-shadow: 0 1rem 2.8rem rgb(from var(--destructive) r g b / 0.46); }
 
-.nova-voice-mode[data-visual-state="listening"] { --nova-voice-accent: 126 231 205; }
-.nova-voice-mode[data-visual-state="speaking"] { --nova-voice-accent: 255 184 108; }
-.nova-voice-mode[data-visual-state="working"] { --nova-voice-accent: 147 197 253; }
-.nova-voice-mode[data-visual-state="muted"] { --nova-voice-accent: 251 191 36; }
+.nova-voice-mode[data-visual-state="listening"] { --nova-voice-accent: var(--color-status-live); }
+.nova-voice-mode[data-visual-state="speaking"] { --nova-voice-accent: var(--color-accent-gold); }
+.nova-voice-mode[data-visual-state="working"] { --nova-voice-accent: var(--primary); }
+.nova-voice-mode[data-visual-state="muted"] { --nova-voice-accent: var(--color-accent-gold); }
 .nova-voice-mode[data-visual-state="interrupted"],
-.nova-voice-mode[data-visual-state="error"] { --nova-voice-accent: 252 165 165; }
+.nova-voice-mode[data-visual-state="error"] { --nova-voice-accent: var(--destructive); }
 
 .nova-voice-mode[data-visual-state="connecting"] .nova-voice-mode__ring,
 .nova-voice-mode[data-visual-state="listening"] .nova-voice-mode__ring--middle {
@@ -361,7 +359,7 @@
 
 .nova-voice-mode[data-visual-state="speaking"] .nova-voice-mode__portrait-shell {
   transform: scale(1.025);
-  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 0.38), 0 0 2.6rem rgb(var(--nova-voice-accent) / 0.22), 0 0 0 0.4rem rgb(255 255 255 / 0.055);
+  box-shadow: 0 1.5rem 4rem rgb(from var(--background) r g b / 0.48), 0 0 2.6rem rgb(from var(--nova-voice-accent) r g b / 0.22), 0 0 0 0.4rem rgb(from var(--contrast) r g b / 0.055);
 }
 
 .nova-voice-mode[data-visual-state="speaking"] .nova-voice-mode__ring--outer {
@@ -378,7 +376,7 @@
 
 .nova-voice-mode[data-visual-state="working"] .nova-voice-mode__ring--outer {
   border-color: transparent;
-  background: conic-gradient(from 0deg, transparent 0 30%, rgb(var(--nova-voice-accent) / 0.8), transparent 58% 100%);
+  background: conic-gradient(from 0deg, transparent 0 30%, rgb(from var(--nova-voice-accent) r g b / 0.8), transparent 58% 100%);
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1px), #000 0);
   mask: radial-gradient(farthest-side, transparent calc(100% - 1px), #000 0);
   animation: nova-voice-ring-work 1.8s linear infinite;

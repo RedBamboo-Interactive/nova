@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type RefObject } from "react"
+import { Button } from "@redbamboo/ui"
 import type { VoiceSessionPhase } from "../hooks/use-voice-session"
 import {
   resolveVoiceSessionVisualState,
@@ -98,7 +99,7 @@ export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedA
 
   return (
     <div
-      className="nova-voice-mode fixed inset-0 z-[80] isolate flex min-h-[100dvh] flex-col overflow-hidden bg-background text-contrast"
+      className="nova-voice-mode fixed inset-0 z-[80] isolate flex min-h-[100dvh] flex-col overflow-hidden bg-background text-foreground"
       data-slot="voice-session-panel"
       data-state={phase}
       data-visual-state={visualState}
@@ -142,14 +143,14 @@ export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedA
         <div className="nova-voice-mode__caption mt-7 flex min-h-24 w-full max-w-xl flex-col justify-center px-5 py-4" aria-live="polite" aria-atomic="true">
           {caption ? (
             <>
-              {caption.speaker && <span className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/55">{caption.speaker}</span>}
-              <p className="text-balance text-[15px] leading-relaxed text-white/90 sm:text-base">{caption.text}</p>
+              {caption.speaker && <span className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground-a60">{caption.speaker}</span>}
+              <p className="text-balance text-[15px] leading-relaxed text-foreground-a90 sm:text-base">{caption.text}</p>
             </>
-          ) : <span className="text-sm text-white/55">The conversation is still here.</span>}
+          ) : <span className="text-sm text-muted-foreground">The conversation is still here.</span>}
         </div>
 
         {error && (
-          <p className="nova-voice-mode__error mt-3 max-w-xl rounded-xl border border-red-300/20 bg-red-950/35 px-4 py-2.5 text-sm text-red-100" role="alert">
+          <p className="nova-voice-mode__error mt-3 max-w-xl rounded-xl border border-destructive-a30 bg-destructive-a10 px-4 py-2.5 text-sm text-destructive" role="alert">
             {error}
           </p>
         )}
@@ -157,32 +158,36 @@ export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedA
 
       <footer className="relative z-10 flex items-end justify-center gap-8 px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-2 sm:pb-7">
         <div className="flex flex-col items-center gap-2">
-          <button
+          <Button
             ref={muteRef}
             type="button"
+            variant="outline"
+            size="icon-lg"
             onClick={onMute}
             disabled={!connected}
-            className="nova-voice-mode__control nova-voice-mode__control--mute"
+            className="nova-voice-mode__control nova-voice-mode__control--mute rounded-full"
             data-active={muted || undefined}
             aria-label={muted ? "Unmute microphone" : "Mute microphone"}
             title={muted ? "Unmute" : "Mute"}
           >
             <i className={`ph-bold ${muted ? "ph-microphone-slash" : "ph-microphone"} text-xl`} aria-hidden="true" />
-          </button>
-          <span className="text-[11px] font-medium text-white/65">{muted ? "Unmute" : "Mute"}</span>
+          </Button>
+          <span className="text-[11px] font-medium text-muted-foreground">{muted ? "Unmute" : "Mute"}</span>
         </div>
         <div className="flex flex-col items-center gap-2">
-          <button
+          <Button
             ref={endRef}
             type="button"
+            variant="destructive"
+            size="icon-lg"
             onClick={onEnd}
-            className="nova-voice-mode__control nova-voice-mode__control--end"
+            className="nova-voice-mode__control nova-voice-mode__control--end rounded-full"
             aria-label="End voice session"
             title="End voice session"
           >
-            <i className="ph-fill ph-phone-disconnect text-2xl" aria-hidden="true" />
-          </button>
-          <span className="text-[11px] font-medium text-white/65">End</span>
+            <i className="ph-bold ph-phone-disconnect text-2xl" aria-hidden="true" />
+          </Button>
+          <span className="text-[11px] font-medium text-muted-foreground">End</span>
         </div>
       </footer>
     </div>

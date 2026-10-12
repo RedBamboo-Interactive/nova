@@ -22,9 +22,12 @@ panel:
 - a crisp central portrait and audio orb carry connecting, listening,
   speaking, working, muted, error, and ending states;
 - live captions remain readable in a restrained glass surface;
-- mute and end are the only controls, with safe-area spacing on phones;
+- mute and end are the only controls, built from Leaf's shared Button primitive
+  with Phosphor icons and safe-area spacing on phones;
 - Escape ends the call, focus stays within the modal controls, and focus returns
   to the initiating control after the mode closes;
+- surfaces, borders, text, state colours, radii, focus and composed motion come
+  from the Leaf design system while the portrait treatment remains Nova-owned;
 - reduced-motion users receive the same state changes without decorative
   scaling, drifting, or pulsing.
 
