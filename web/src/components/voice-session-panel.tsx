@@ -138,7 +138,6 @@ export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedA
         </div>
 
         <h2 className="nova-voice-mode__name mt-7 text-2xl font-semibold tracking-tight sm:text-3xl">{agentName}</h2>
-        <p className="nova-voice-mode__provenance mt-1.5 text-xs">GPT-Live · Nova memory and tools</p>
 
         <div className="nova-voice-mode__caption mt-7 flex min-h-24 w-full max-w-xl flex-col justify-center px-5 py-4" aria-live="polite" aria-atomic="true">
           {caption ? (

@@ -16,6 +16,7 @@ test("voice mode is an immersive modal backed by the active Agent portrait", () 
   assert.match(panelSource, /if \(event\.key === "Escape"\)/)
   assert.match(panelSource, /returnFocusRef\.current/)
   assert.match(panelSource, /returnTarget\?\.focus/)
+  assert.doesNotMatch(panelSource, /GPT-Live · Nova memory and tools/)
 })
 
 test("voice controls and surfaces use the Leaf design language", () => {
