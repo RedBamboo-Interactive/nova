@@ -29,12 +29,21 @@ public sealed class VoiceSessionService(
     private readonly ConcurrentDictionary<string, Binding> _bindings = new(StringComparer.Ordinal);
 
     public async Task<RedComputeClient.ProxyResult> StartAsync(DiscussionRead discussion,
-        string offerSdp, string? provider, string? model, string? voice,
-        CancellationToken ct)
+        string offerSdp, CancellationToken ct)
     {
         var agent = discussion.AgentId is null ? null : await agents.GetAgentAsync(discussion.AgentId, ct);
         if (agent is null)
             return Json(422, new { error = "missing_agent", message = "The discussion has no linked Agent" });
+
+        VoiceSessionVoiceBinding? voiceBinding;
+        try
+        {
+            voiceBinding = await VoiceSessionVoiceResolver.ResolveAsync(entities, agent, ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Json(422, new { error = "invalid_voice_configuration", message = ex.Message });
+        }
 
         var sessionId = discussion.SessionId;
         if (sessionId is null)
@@ -58,9 +67,8 @@ public sealed class VoiceSessionService(
         var result = await redCompute.CreateVoiceSessionAsync(new
         {
             offerSdp,
-            provider = string.IsNullOrWhiteSpace(provider) ? null : provider,
-            model = string.IsNullOrWhiteSpace(model) ? null : model,
-            voice = string.IsNullOrWhiteSpace(voice) ? null : voice,
+            provider = voiceBinding?.ProviderSlug,
+            voice = voiceBinding?.ProviderVoiceId,
             instructions,
             discussionId = discussion.Id,
             aiSessionId = sessionId,

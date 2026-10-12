@@ -12,6 +12,13 @@ ending it releases browser media immediately, requests the existing authorized
 server-side close, lets the visual surface finish a short exit, and returns to
 the unchanged discussion.
 
+Voice identity belongs to the active Agent. The Voice Session capability adds
+an optional provider-neutral Live Voice reference to Agent entities, and each
+provider contributes compatible Live Voice profiles. Nova resolves that current
+Agent value server-side when the call starts. The browser cannot override it.
+Agents without a selection use the provider's fixed compatibility fallback;
+configured but invalid references fail visibly rather than choosing another voice.
+
 ## Experience
 
 The transition should feel like entering a call rather than opening a utility
@@ -57,6 +64,8 @@ spoken result arrives.
   changes.
 - One provider admission per start gesture and at most one close request for the
   accepted session.
+- The admitted provider and voice match the current Agent's validated Live Voice
+  profile; browser-supplied voice/provider values are ignored by contract.
 - Microphone tracks stop before the exit animation begins.
 - Phone and desktop have no horizontal overflow and preserve safe-area controls.
 - Opening and closing are smooth; reduced motion collapses decorative movement.

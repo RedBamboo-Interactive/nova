@@ -22,8 +22,7 @@ public static class VoiceSessionEndpoints
             var offerSdp = String(body, "offerSdp");
             if (string.IsNullOrWhiteSpace(offerSdp) || offerSdp.Length > 256_000)
                 return Results.BadRequest(new { error = "invalid_sdp", message = "A valid SDP offer is required" });
-            var result = await voice.StartAsync(discussion, offerSdp, String(body, "provider"),
-                String(body, "model"), String(body, "voice"), ctx.RequestAborted);
+            var result = await voice.StartAsync(discussion, offerSdp, ctx.RequestAborted);
             return Results.Content(result.Content, result.ContentType, statusCode: result.StatusCode);
         });
 
