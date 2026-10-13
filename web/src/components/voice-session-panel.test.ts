@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs"
 
 const panelSource = readFileSync(new URL("./voice-session-panel.tsx", import.meta.url), "utf8")
 const hookSource = readFileSync(new URL("../hooks/use-voice-session.ts", import.meta.url), "utf8")
+const wakeLockSource = readFileSync(new URL("../hooks/use-screen-wake-lock.ts", import.meta.url), "utf8")
 const cssSource = readFileSync(new URL("../plugin.css", import.meta.url), "utf8")
 const chatViewSource = readFileSync(new URL("../panels/ChatView.tsx", import.meta.url), "utf8")
 
@@ -67,6 +68,16 @@ test("voice mode keeps the closing phase mounted for its exit", () => {
   assert.match(hookSource, /finishCloseAfterTransition\(\)/)
   assert.match(cssSource, /\.nova-voice-mode\[data-state="closing"\]/)
   assert.match(cssSource, /nova-voice-mode-exit 160ms/)
+})
+
+test("voice mode keeps the visible screen awake without weakening background close", () => {
+  assert.match(hookSource, /useScreenWakeLock\(keepScreenAwake\)/)
+  assert.match(hookSource, /phase === "starting" \|\| phase === "connected" \|\| phase === "degraded"/)
+  assert.match(wakeLockSource, /navigator\.wakeLock/)
+  assert.match(wakeLockSource, /request\("screen"\)/)
+  assert.match(wakeLockSource, /generation !== this\.generation/)
+  assert.match(hookSource, /document\.visibilityState === "hidden"\) void stop\(\)/)
+  assert.match(hookSource, /window\.addEventListener\("pagehide", closeWhenPageLeaves\)/)
 })
 
 test("voice motion has a reduced-motion path", () => {

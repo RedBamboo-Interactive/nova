@@ -2,6 +2,7 @@ import React, { useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
 import type { MessageBlock } from "@redbamboo/chat"
 import { VoiceSessionPanel } from "../../src/components/voice-session-panel"
+import { useScreenWakeLock } from "../../src/hooks/use-screen-wake-lock"
 import "./shell-preflight.css"
 import "../../src/plugin.css"
 
@@ -98,6 +99,8 @@ function Fixture() {
   const returnFocusRef = useRef<HTMLButtonElement>(null)
   const [muted, setMuted] = useState(false)
   const [endCount, setEndCount] = useState(0)
+  const [awake, setAwake] = useState(true)
+  useScreenWakeLock(awake)
   return (
     <>
       <button ref={returnFocusRef} className="sr-only">Voice trigger</button>
@@ -117,7 +120,10 @@ function Fixture() {
         isStreaming={false}
         returnFocusRef={returnFocusRef}
         onMute={() => setMuted(value => !value)}
-        onEnd={() => setEndCount(value => value + 1)}
+        onEnd={() => {
+          setAwake(false)
+          setEndCount(value => value + 1)
+        }}
       />
     </>
   )

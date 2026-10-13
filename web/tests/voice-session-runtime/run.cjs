@@ -53,11 +53,36 @@ async function main() {
         const url = request.url()
         if (url.includes("/voice-session/sessions") || url.includes("api.openai.com")) paidRequests.push(url)
       })
+      await page.addInitScript(() => {
+        globalThis.__voiceWakeLock = { requests: 0, releases: 0 }
+        Object.defineProperty(navigator, "wakeLock", {
+          configurable: true,
+          value: {
+            request: async type => {
+              if (type !== "screen") throw new Error(`unexpected wake lock ${type}`)
+              globalThis.__voiceWakeLock.requests++
+              let released = false
+              let onRelease
+              return {
+                get released() { return released },
+                async release() {
+                  if (released) return
+                  released = true
+                  globalThis.__voiceWakeLock.releases++
+                  onRelease?.()
+                },
+                addEventListener(_type, listener) { onRelease = listener },
+              }
+            },
+          },
+        })
+      })
       await page.goto(server.resolvedUrls.local[0], { waitUntil: "networkidle" })
       const panel = page.getByRole("dialog", { name: "Voice conversation with Nova" })
       const discussion = page.getByRole("region", { name: "Live discussion" })
       await panel.waitFor()
       await discussion.waitFor()
+      assert.deepEqual(await page.evaluate(() => globalThis.__voiceWakeLock), { requests: 1, releases: 0 })
       const discussionBody = discussion.locator(".nova-voice-mode__discussion-body")
       const discussionBodyStyle = await discussionBody.evaluate(element => {
         const style = getComputedStyle(element)
@@ -107,6 +132,7 @@ async function main() {
       await startDialog.waitFor()
       assert.equal(await startDialog.getByText("Natural Voice started", { exact: true }).count(), 1)
       assert.equal(await startDialog.getByText('\"state\": \"started\"', { exact: false }).count(), 1)
+      await startDialog.focus()
       await page.keyboard.press("Escape")
       await startDialog.waitFor({ state: "hidden" })
       await voiceSquares.last().click()
@@ -114,6 +140,7 @@ async function main() {
       await endDialog.waitFor()
       assert.equal(await endDialog.getByText("Natural Voice ended", { exact: true }).count(), 1)
       assert.equal(await endDialog.getByText('\"reason\": \"ended_by_user\"', { exact: false }).count(), 1)
+      await endDialog.focus()
       await page.keyboard.press("Escape")
       await endDialog.waitFor({ state: "hidden" })
       assert.equal(await page.getByTestId("end-count").textContent(), "0", "event detail must not end voice mode")
@@ -154,7 +181,9 @@ async function main() {
       await panel.getByRole("button", { name: "End voice session" }).focus()
       await page.keyboard.press("Escape")
       assert.equal(await page.getByTestId("end-count").textContent(), "1", "voice mode itself must retain Escape-to-end")
-      results.push({ label: fixture.label, bounds, layout, discussionBodyStyle, toolSquareStyle, paidRequests, pageErrors, consoleErrors })
+      await page.waitForFunction(() => globalThis.__voiceWakeLock.releases === 1)
+      const wakeLock = await page.evaluate(() => globalThis.__voiceWakeLock)
+      results.push({ label: fixture.label, bounds, layout, discussionBodyStyle, toolSquareStyle, wakeLock, paidRequests, pageErrors, consoleErrors })
       await page.close()
     }
   } finally {

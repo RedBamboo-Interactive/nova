@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { api } from "../lib/api"
 import { applyVoiceEvent, type VoiceCaptionState } from "./voice-session-events"
+import { useScreenWakeLock } from "./use-screen-wake-lock"
 
 export type VoiceSessionPhase = "idle" | "starting" | "connected" | "degraded" | "closing" | "closed" | "error"
 
@@ -51,6 +52,8 @@ export function useVoiceSession(discussionId: string | null) {
   const discussionRef = useRef<string | null>(null)
   const closeTimerRef = useRef<number | null>(null)
   const startAttemptRef = useRef(0)
+  const keepScreenAwake = phase === "starting" || phase === "connected" || phase === "degraded"
+  useScreenWakeLock(keepScreenAwake)
 
   const releaseMedia = useCallback(() => {
     channelRef.current?.close()
