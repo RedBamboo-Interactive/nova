@@ -23,6 +23,24 @@ const messages: MessageBlock[] = [
     }],
   },
   {
+    id: "voice-session-started",
+    role: "assistant",
+    timestamp: "2026-10-12T17:40:59Z",
+    metadata: { source: "event:voice-session" },
+    parts: [{
+      type: "tool_use",
+      toolName: "event:voice-session",
+      content: "Natural Voice started",
+      toolInput: JSON.stringify({
+        event: "Natural Voice started",
+        icon: "ph-bold ph-waveform",
+        color: "teal",
+        data: { state: "started", voiceSessionId: "vs_fixture" },
+        timestamp: "2026-10-12T17:40:59Z",
+      }),
+    }],
+  },
+  {
     id: "user-question",
     role: "user",
     timestamp: "2026-10-12T17:41:00Z",
@@ -55,6 +73,24 @@ const messages: MessageBlock[] = [
         content: "Yes. This live voice is attached to the same ongoing discussion, so I can use our context and hand real tool work to the canonical Nova session.",
       },
     ],
+  },
+  {
+    id: "voice-session-ended",
+    role: "assistant",
+    timestamp: "2026-10-12T17:41:02Z",
+    metadata: { source: "event:voice-session" },
+    parts: [{
+      type: "tool_use",
+      toolName: "event:voice-session",
+      content: "Natural Voice ended",
+      toolInput: JSON.stringify({
+        event: "Natural Voice ended",
+        icon: "ph-bold ph-waveform",
+        color: "teal",
+        data: { state: "ended", voiceSessionId: "vs_fixture", reason: "ended_by_user" },
+        timestamp: "2026-10-12T17:41:02Z",
+      }),
+    }],
   },
 ]
 

@@ -97,7 +97,10 @@ public sealed class VoiceSessionServiceTests
         Assert.Contains("authoritative Nova for identity, durable memory, active work", prompt);
         Assert.Contains("A short reply, correction, refusal, or choice changes or continues backend work", prompt);
         Assert.Contains("do not independently answer the delegated request", prompt);
+        Assert.Contains("Do not say that you are checking", prompt);
+        Assert.Contains("before the client confirms a real delegation", prompt);
         Assert.Contains("Never claim an action succeeded", prompt);
+        Assert.DoesNotContain("You may briefly say that you are checking", prompt);
         Assert.DoesNotContain("any semantic utterance at all", prompt);
         Assert.DoesNotContain("Always delegate before answering", prompt);
     }

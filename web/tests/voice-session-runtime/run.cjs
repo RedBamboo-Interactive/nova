@@ -83,6 +83,41 @@ async function main() {
       await toolDialog.waitFor({ state: "hidden" })
       assert.equal(await page.getByTestId("end-count").textContent(), "0", "closing tool detail must not end voice mode")
       await toolSquare.evaluate(element => element.blur())
+      const voiceSquares = discussion.getByRole("button", { name: "voice-session" })
+      assert.equal(await voiceSquares.count(), 2, `${fixture.label}: start and end markers must both render`)
+      for (let index = 0; index < 2; index++) {
+        const markerStyle = await voiceSquares.nth(index).evaluate(element => {
+          const style = getComputedStyle(element)
+          return {
+            width: style.width,
+            height: style.height,
+            borderRadius: style.borderRadius,
+            borderWidth: style.borderWidth,
+            backgroundColor: style.backgroundColor,
+          }
+        })
+        assert.equal(markerStyle.width, "10px")
+        assert.equal(markerStyle.height, "10px")
+        assert.equal(markerStyle.borderRadius, "2px")
+        assert.equal(markerStyle.borderWidth, "0px")
+        assert.notEqual(markerStyle.backgroundColor, "rgba(0, 0, 0, 0)")
+      }
+      await voiceSquares.first().click()
+      const startDialog = page.getByRole("dialog", { name: "voice-session", exact: true })
+      await startDialog.waitFor()
+      assert.equal(await startDialog.getByText("Natural Voice started", { exact: true }).count(), 1)
+      assert.equal(await startDialog.getByText('\"state\": \"started\"', { exact: false }).count(), 1)
+      await page.keyboard.press("Escape")
+      await startDialog.waitFor({ state: "hidden" })
+      await voiceSquares.last().click()
+      const endDialog = page.getByRole("dialog", { name: "voice-session", exact: true })
+      await endDialog.waitFor()
+      assert.equal(await endDialog.getByText("Natural Voice ended", { exact: true }).count(), 1)
+      assert.equal(await endDialog.getByText('\"reason\": \"ended_by_user\"', { exact: false }).count(), 1)
+      await page.keyboard.press("Escape")
+      await endDialog.waitFor({ state: "hidden" })
+      assert.equal(await page.getByTestId("end-count").textContent(), "0", "event detail must not end voice mode")
+      await voiceSquares.last().evaluate(element => element.blur())
       assert.equal(paidRequests.length, 0)
       assert.deepEqual(pageErrors, [])
       assert.deepEqual(consoleErrors, [])

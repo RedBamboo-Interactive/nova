@@ -173,6 +173,54 @@ public sealed class CallbackDeliveryTests
         Assert.Equal("batch-first", data.GetProperty("deliveredMessageUid").GetString());
     }
 
+    [Fact]
+    public async Task Natural_voice_lifecycle_events_are_durable_bounded_and_idempotent()
+    {
+        using var f = new Fixture();
+        var discussion = (await f.Store.GetAsync("target"))!;
+        var started = JsonSerializer.SerializeToElement(new
+        {
+            state = "started",
+            voiceSessionId = "vs_one",
+            provider = "openai-live",
+            model = "gpt-live-1",
+            voice = "marin",
+            startedAt = "2026-10-13T18:00:00Z",
+        });
+        var ended = JsonSerializer.SerializeToElement(new
+        {
+            state = "ended",
+            voiceSessionId = "vs_one",
+            reason = "reconnected",
+            startedAt = "2026-10-13T18:00:00Z",
+            endedAt = "2026-10-13T18:01:00Z",
+        });
+
+        await f.Injector.InjectAsync(discussion, "Natural Voice started", "system", "voice-session",
+            metadata: started, idempotencyKey: "voice-session:vs_one:started");
+        await f.Injector.InjectAsync(discussion, "Natural Voice started", "system", "voice-session",
+            metadata: started, idempotencyKey: "voice-session:vs_one:started");
+        await f.Injector.InjectAsync(discussion, "Natural Voice ended", "system", "voice-session",
+            metadata: ended, idempotencyKey: "voice-session:vs_one:ended");
+        await f.Injector.InjectAsync(discussion, "Natural Voice ended", "system", "voice-session",
+            metadata: ended, idempotencyKey: "voice-session:vs_one:ended");
+
+        var lifecycle = f.TargetMessages.Where(message =>
+            message.Metadata["source"]?.GetValue<string>() == "event:voice-session").ToArray();
+        Assert.Equal(2, lifecycle.Length);
+        Assert.Equal(["Natural Voice started", "Natural Voice ended"], lifecycle.Select(message => message.Content));
+        Assert.All(lifecycle, message => Assert.Equal("system", message.Role));
+        Assert.Equal(2, lifecycle.Select(message => message.Metadata["uid"]!.GetValue<string>()).Distinct().Count());
+        Assert.Empty(f.Gateway.Admitted);
+
+        using var startParts = JsonDocument.Parse(lifecycle[0].Metadata["parts_json"]!.GetValue<string>());
+        var data = startParts.RootElement.EnumerateArray()
+            .Single(part => part.GetProperty("type").GetString() == "event_data")
+            .GetProperty("data");
+        Assert.Equal("started", data.GetProperty("state").GetString());
+        Assert.Equal("vs_one", data.GetProperty("voiceSessionId").GetString());
+    }
+
     private sealed class Fixture : IDisposable
     {
         public List<DiscussionMessage> Records { get; } = [];
