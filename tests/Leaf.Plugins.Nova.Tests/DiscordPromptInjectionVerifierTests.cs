@@ -39,4 +39,13 @@ public sealed class DiscordPromptInjectionVerifierTests
         Assert.True(review.Available);
         Assert.Equal(["safe-signal"], review.Signals);
     }
+
+    [Fact]
+    public void Sentinel_prompt_is_installation_local()
+    {
+        var prompt = DiscordPromptInjectionVerifier.BuildPrompt("Nova", "untrusted sample");
+
+        Assert.DoesNotContain("Laurent", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("local owner", prompt, StringComparison.OrdinalIgnoreCase);
+    }
 }

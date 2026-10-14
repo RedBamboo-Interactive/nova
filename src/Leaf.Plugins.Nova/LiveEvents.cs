@@ -192,8 +192,8 @@ public sealed class EventInjector(
         try
         {
             // Events reach the session as role "user" (see above), which makes a heartbeat note
-            // indistinguishable from Laurent typing. Nova then answers it in the discussion he
-            // reads. Tag the session copy so she can tell an internal note from him talking.
+            // indistinguishable from the local owner typing. Tag the session copy so Nova can
+            // tell an internal note from a person talking.
             // The discussion-stream copy posted above stays untagged, so the UI is unaffected.
             var taggedContent = content.TrimStart().StartsWith("<nova-event", StringComparison.Ordinal)
                 ? content
@@ -325,13 +325,19 @@ public sealed class DiscussionActivity(LiveEvents live)
     private readonly ConcurrentDictionary<string, DateTime> _lastNovaEvent = new();
     private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(2);
 
-    public async Task OnUserMessage(string discussionId, string? title, string contentPreview, bool confidential = false)
+    public async Task OnUserMessage(
+        string discussionId,
+        string? title,
+        string contentPreview,
+        string? actorName,
+        bool confidential = false)
     {
         if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title) || confidential) return;
         var preview = Truncate(contentPreview, 80);
         if (preview == "…") return;
-        await live.PostAsync("discussion", $"Laurent in \"{title}\": {preview}",
-            new { discussionId, title, kind = "user-message", preview });
+        var actor = NormalizeActorName(actorName);
+        await live.PostAsync("discussion", FormatUserActivity(actor, title, preview),
+            new { discussionId, title, kind = "user-message", actorName = actor, preview });
     }
 
     public async Task OnNovaMessage(string discussionId, string? title, string contentPreview, bool confidential = false)
@@ -367,4 +373,14 @@ public sealed class DiscussionActivity(LiveEvents live)
         if (string.IsNullOrEmpty(s)) return "…";
         return s.Length > max ? s[..max] + "…" : s;
     }
+
+    internal static string NormalizeActorName(string? actorName)
+    {
+        if (string.IsNullOrWhiteSpace(actorName)) return "User";
+        var normalized = Truncate(actorName, 80);
+        return normalized == "…" ? "User" : normalized;
+    }
+
+    internal static string FormatUserActivity(string actorName, string title, string preview)
+        => $"{actorName} in \"{title}\": {preview}";
 }

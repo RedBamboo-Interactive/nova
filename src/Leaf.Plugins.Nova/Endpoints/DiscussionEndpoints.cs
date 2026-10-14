@@ -1489,7 +1489,8 @@ public static class DiscussionEndpoints
                 _ = activity.OnUserMessage(id, discussion.Title,
                     string.IsNullOrWhiteSpace(request.Content)
                         ? request.Input is { Length: > 0 } ? "[attachment]" : "[image]"
-                        : request.Content, discussion.Confidential);
+                        : request.Content,
+                    ctx.User.FindFirstValue("name"), discussion.Confidential);
 
                 // Only a provider-accepted turn is a transcript message. Durable
                 // admission while another turn runs is represented by the shared

@@ -51,6 +51,19 @@ public sealed class HeartbeatTurnContractTests
         Assert.Contains("Do not use", HeartbeatPrompts.SpokenCompletionRequired);
     }
 
+    [Fact]
+    public void Default_heartbeat_prompts_are_installation_local()
+    {
+        var config = new HeartbeatConfig(null, null, "deep", 15, 15);
+        var morning = HeartbeatPrompts.Morning("digest", config);
+        var tick = HeartbeatPrompts.Tick("digest", null, config);
+
+        Assert.DoesNotContain("Laurent", morning, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Laurent", tick, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("local owner", morning, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("local owner", tick, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static SessionMessage Message(string role, string eventType, string content) => new()
     {
         Role = role,
