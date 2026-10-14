@@ -138,6 +138,50 @@ public sealed class VoiceSessionServiceTests
     }
 
     [Fact]
+    public void Voice_persona_excludes_motivation_examples_from_the_live_shell()
+    {
+        var persona = VoiceSessionService.BuildVoicePersona(Agent(
+            description: null,
+            identity: """
+                ## Who you are
+                You are Nova.
+                ## The motivation voice
+                Open the passport and do it together in ten minutes.
+                ## How you talk
+                Speak naturally and clearly.
+                """));
+
+        Assert.Contains("You are Nova.", persona);
+        Assert.Contains("Speak naturally and clearly.", persona);
+        Assert.DoesNotContain("passport", persona);
+        Assert.DoesNotContain("motivation voice", persona, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Delegated_voice_content_carries_recent_direct_turns_without_changing_the_visible_utterance()
+    {
+        var turns = new[]
+        {
+            new VoiceSessionService.VoiceCausalTurn(1, "user", "Surprise me", "u1"),
+            new VoiceSessionService.VoiceCausalTurn(2, "assistant", "Let's pick one small thing.", "a1"),
+        };
+
+        var content = VoiceSessionService.BuildDelegatedVoiceContent("What did you just suggest?", turns);
+
+        Assert.Contains("voice-causal-context", content);
+        Assert.Contains("Surprise me", content);
+        Assert.Contains("pick one small thing.", content);
+        Assert.Contains("<voice-current-utterance>\nWhat did you just suggest?", content.Replace("\r", ""));
+    }
+
+    [Fact]
+    public void Delegated_voice_content_is_unchanged_when_no_direct_turns_need_bridging()
+    {
+        Assert.Equal("What is next?", VoiceSessionService.BuildDelegatedVoiceContent(
+            "What is next?", Array.Empty<VoiceSessionService.VoiceCausalTurn>()));
+    }
+
+    [Fact]
     public void Initial_history_is_bounded_from_the_newest_turns()
     {
         var snapshot = new SessionSnapshot("Idle", null, null,
