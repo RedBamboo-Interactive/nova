@@ -16,10 +16,6 @@ public sealed class NovaShareEnricher(
     private static readonly Regex PriorTag = new(
         @"<nova-prior-message[s]?[^>]*>[\s\S]*?</nova-prior-message[s]?>\s*", RegexOptions.Compiled);
 
-    private static readonly Regex MarkdownImage = new(
-        """!\[(?<alt>[^\]]*)\]\(\s*(?:<(?<angled>[^>]+)>|(?<plain>[^)\s]+))\s*\)""",
-        RegexOptions.Compiled);
-
     public async Task<ShareCustomization?> EnrichAsync(Guid discussionEntityId, CancellationToken ct = default)
     {
         var allDiscussions = await store.ListAsync(ct: ct);
@@ -269,27 +265,11 @@ public sealed class NovaShareEnricher(
     internal async Task<AssistantShareContent> ResolveAssistantShareContentAsync(
         string content, CancellationToken ct)
     {
-        if (string.IsNullOrEmpty(content)) return new AssistantShareContent(content, []);
-
+        var projection = AssistantImageMarkdownProjection.Project(content);
         var images = new List<ShareableImage>();
-        var rewritten = new System.Text.StringBuilder(content.Length);
-        var copiedThrough = 0;
-
-        foreach (Match match in MarkdownImage.Matches(content))
+        foreach (var image in projection.Images)
         {
-            var url = match.Groups["angled"].Success
-                ? match.Groups["angled"].Value
-                : match.Groups["plain"].Value;
-            var assetId = AssetIdFromAssistantImageUrl(url);
-            var removeFromPublicText = assetId is not null || IsPrivateImageReference(url);
-            if (!removeFromPublicText) continue;
-
-            rewritten.Append(content, copiedThrough, match.Index - copiedThrough);
-            copiedThrough = match.Index + match.Length;
-
-            if (assetId is null) continue;
-
-            var file = await assets.ReadAsync(assetId, ct)
+            var file = await assets.ReadAsync(image.AssetId, ct)
                 ?? throw new ShareSnapshotException("share_image_unavailable",
                     "An image authored in the discussion is no longer available in RedLeaf");
             if (!IsShareableImageType(file.ContentType))
@@ -300,16 +280,10 @@ public sealed class NovaShareEnricher(
             {
                 Base64 = Convert.ToBase64String(file.Bytes),
                 MediaType = file.ContentType,
-                AltText = string.IsNullOrWhiteSpace(match.Groups["alt"].Value)
-                    ? "Shared image"
-                    : match.Groups["alt"].Value,
+                AltText = image.Description,
             });
         }
-
-        if (copiedThrough == 0) return new AssistantShareContent(content, images);
-
-        rewritten.Append(content, copiedThrough, content.Length - copiedThrough);
-        return new AssistantShareContent(rewritten.ToString().Trim(), images);
+        return new AssistantShareContent(projection.Content, images);
     }
 
     internal static List<ShareImageSource> ExtractShareImageSources(string? json)
@@ -397,34 +371,6 @@ public sealed class NovaShareEnricher(
         if (string.IsNullOrWhiteSpace(url) || !url.StartsWith(prefix, StringComparison.Ordinal)) return null;
         var id = url[prefix.Length..];
         return id.Length > 0 && !id.Contains('/') && !id.Contains('?') && !id.Contains('#') ? id : null;
-    }
-
-    private static string? AssetIdFromAssistantImageUrl(string? url)
-    {
-        if (string.IsNullOrWhiteSpace(url)) return null;
-        var direct = AssetIdFromUrl(url.Trim());
-        if (direct is not null) return direct;
-
-        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri)
-            || uri.Scheme is not ("http" or "https")
-            || !uri.IsLoopback
-            || uri.Port != 18804)
-            return null;
-
-        return AssetIdFromUrl(uri.AbsolutePath);
-    }
-
-    private static bool IsPrivateImageReference(string? url)
-    {
-        if (string.IsNullOrWhiteSpace(url)) return false;
-        var value = url.Trim();
-        if (value.StartsWith("/", StringComparison.Ordinal)
-            || value.StartsWith(@"\\", StringComparison.Ordinal)
-            || Regex.IsMatch(value, @"^/?[a-zA-Z]:[\\/]", RegexOptions.CultureInvariant))
-            return true;
-
-        return Uri.TryCreate(value, UriKind.Absolute, out var uri)
-            && (uri.IsFile || (uri.Scheme is "http" or "https" && uri.IsLoopback));
     }
 
     private static bool IsShareableImageType(string mediaType) => mediaType.ToLowerInvariant() is

@@ -294,12 +294,16 @@ public sealed class ExternalAgentConversationProvider(
             var phase = message.Phase;
             var kind = role == "assistant" && eventType == "text" && phase == "commentary"
                 ? "commentary" : eventType;
+            var visibleContent = VisibleContent(message);
+            var delivery = role == "assistant" && kind == "text"
+                ? AssistantImageMarkdownProjection.Project(visibleContent ?? "")
+                : null;
             projected.Add(new ExternalConversationMessage(
                 new ExternalConversationCursor(epoch, sequence),
                 message.MessageUid ?? $"sequence-{sequence}",
                 role,
                 kind,
-                VisibleContent(message),
+                visibleContent,
                 new DateTimeOffset(DateTime.SpecifyKind(message.Timestamp, DateTimeKind.Utc)),
                 new JsonObject { ["phase"] = phase },
                 message.ToolName,
@@ -308,7 +312,14 @@ public sealed class ExternalAgentConversationProvider(
                 message.PayloadRef is { ValueKind: JsonValueKind.Object } payloadRef
                     ? JsonNode.Parse(payloadRef.GetRawText()) as JsonObject
                     : null,
-                message.AttachmentsJson));
+                message.AttachmentsJson)
+            {
+                DeliveryContent = delivery?.Content,
+                OutputAssets = delivery?.Images
+                    .Select(image => new ExternalConversationOutputAsset(
+                        image.AssetId, image.Description))
+                    .ToArray() ?? [],
+            });
         }
         var next = projected.LastOrDefault()?.Cursor ?? after;
         var hasMore = after is not null && (

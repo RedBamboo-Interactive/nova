@@ -11,6 +11,37 @@ namespace Leaf.Plugins.Nova.Tests;
 public sealed class ExternalAgentConversationProviderTests
 {
     [Fact]
+    public void Assistant_asset_markdown_has_a_delivery_projection_without_changing_canonical_content()
+    {
+        const string content = """
+            Voilà, capturée sur la vraie interface avec Playwright :
+
+            ![Page Settings → Updates de RedLeaf](/api/assets/1b29abbc-0410-4d7d-a493-b75bcb9419cd.png)
+            """;
+
+        var projection = AssistantImageMarkdownProjection.Project(content);
+
+        Assert.Equal("Voilà, capturée sur la vraie interface avec Playwright :", projection.Content);
+        var image = Assert.Single(projection.Images);
+        Assert.Equal("1b29abbc-0410-4d7d-a493-b75bcb9419cd.png", image.AssetId);
+        Assert.Equal("Page Settings → Updates de RedLeaf", image.Description);
+    }
+
+    [Fact]
+    public void Assistant_image_projection_preserves_public_images_and_supports_image_only_replies()
+    {
+        var publicProjection = AssistantImageMarkdownProjection.Project(
+            "![Public](https://example.com/image.png)");
+        var localProjection = AssistantImageMarkdownProjection.Project(
+            "![Generated](/api/assets/image-1.webp)");
+
+        Assert.Equal("![Public](https://example.com/image.png)", publicProjection.Content);
+        Assert.Empty(publicProjection.Images);
+        Assert.Equal("", localProjection.Content);
+        Assert.Equal("image-1.webp", Assert.Single(localProjection.Images).AssetId);
+    }
+
+    [Fact]
     public void NullSettledCursorSelectsNewestWindowInsteadOfStalePrefix()
     {
         var messages = Enumerable.Range(1, 1_200)
