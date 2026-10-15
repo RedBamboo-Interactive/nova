@@ -15,12 +15,13 @@ and contribute UI through the slot without becoming part of Nova itself.
 
 ## Building
 
-This repo is consumed through the Leaf workspace: `leaf.workspace.json` in the
-kernel repo (`redleaf`) lists this checkout's absolute path, and
-`scripts/sync-workspace.ps1` junctions it to `plugins/nova` so the kernel
-solution and web build pick it up. Through that junction the backend resolves
-`Leaf.Sdk` at `..\..\..\..\src\Leaf.Sdk\Leaf.Sdk.csproj`; to build standalone,
-pass `-p:LeafSdkProject=<path-to-Leaf.Sdk.csproj>`.
+This repo is consumed directly through the machine-local Leaf workspace manifest.
+`leaf.workspace.local.json` in the RedLeaf checkout, or the registered
+`%LOCALAPPDATA%\RedLeaf\leaf.workspace.json`, maps the `nova` plugin to this
+checkout's absolute path. RedLeaf loads the checkout in place; no junction or copied
+plugin tree is involved. `rebuild.ps1` builds registered plugin backends and frontend
+packages before staging the suite. To build Nova standalone, pass
+`-p:LeafSdkProject=<path-to-Leaf.Sdk.csproj>`.
 
 ## Delegation recovery and verification
 
