@@ -93,6 +93,20 @@ async function main() {
       assert.equal(await discussion.getByText("Can you check what the real voice session is doing with my memory?").count(), 1)
       assert.equal(await discussion.getByText("I’m checking the canonical Nova session now.", { exact: false }).count(), 1)
       assert.equal(await discussion.getByText("Yes. This live voice is attached", { exact: false }).count(), 1)
+      assert.equal(await discussion.getByText("voice-causal-context", { exact: false }).count(), 0,
+        `${fixture.label}: private voice context must never render`)
+      const acceptedUser = discussion.locator("[data-chat-user-bubble]")
+        .filter({ hasText: "Can you check what the real voice session" })
+      const assistantReply = discussion.locator(".markdown-body")
+        .filter({ hasText: "I’m checking the canonical Nova session" })
+      const assistantReplyHandle = await assistantReply.elementHandle()
+      assert.ok(assistantReplyHandle)
+      const userPrecedesReply = await acceptedUser.evaluate((user, reply) =>
+        Boolean(user.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING), assistantReplyHandle)
+      assert.ok(
+        userPrecedesReply,
+        `${fixture.label}: accepted voice user turn must precede its assistant response`,
+      )
       const toolSquare = discussion.getByRole("button", { name: "Read" })
       assert.equal(await toolSquare.count(), 1)
       const toolSquareStyle = await toolSquare.evaluate(element => {

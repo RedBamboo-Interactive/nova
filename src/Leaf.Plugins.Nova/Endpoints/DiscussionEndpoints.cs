@@ -725,7 +725,8 @@ public static class DiscussionEndpoints
                                 messageUid = m.MessageUid,
                                 role = m.Role,
                                 parts = saved is not null
-                                    ? MapUserMessageParts(saved.Metadata["parts_json"]?.GetValue<string>(), content)
+                                    ? MapUserMessageParts(saved.Metadata["parts_json"]?.GetValue<string>(),
+                                        ConversationExporter.StripInjectedTags(saved.Content))
                                     : MapSessionMessageParts(m, content),
                                 timestamp = m.Timestamp.ToString("o"),
                                 senderAgentId = (string?)null,

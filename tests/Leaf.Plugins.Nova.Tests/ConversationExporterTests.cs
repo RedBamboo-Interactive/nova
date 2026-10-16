@@ -36,6 +36,24 @@ public sealed class ConversationExporterTests
     }
 
     [Fact]
+    public void StripInjectedTagsKeepsOnlyVisibleVoiceUtterance()
+    {
+        const string content = """
+            <voice-causal-context>
+            [{"role":"assistant","content":"private recent context"}]
+            </voice-causal-context>
+
+            <voice-current-utterance>
+            Can you whisper
+            </voice-current-utterance>
+            """;
+
+        var stripped = ConversationExporter.StripInjectedTags(content);
+
+        Assert.Equal("Can you whisper", stripped);
+    }
+
+    [Fact]
     public void CollapseMessagesOrdersAsyncToolRecordsAndKeepsTheirDetails()
     {
         var turnUid = "turn-1";

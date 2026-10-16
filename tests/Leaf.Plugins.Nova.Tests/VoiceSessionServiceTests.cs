@@ -182,6 +182,13 @@ public sealed class VoiceSessionServiceTests
     }
 
     [Fact]
+    public void Delegated_voice_user_bridge_reuses_pipeline_idempotency_identity()
+    {
+        Assert.Equal("message:voice-delegation:vs_123:delegation-7",
+            VoiceSessionService.DelegationUserMessageKey("vs_123", "delegation-7"));
+    }
+
+    [Fact]
     public void Initial_history_is_bounded_from_the_newest_turns()
     {
         var snapshot = new SessionSnapshot("Idle", null, null,

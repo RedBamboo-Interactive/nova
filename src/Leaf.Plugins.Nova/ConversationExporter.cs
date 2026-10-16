@@ -20,6 +20,13 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
     internal static readonly Regex ScratchSpaceTag = new(
         @"<scratch-space[^>]*>[\s\S]*?</scratch-space>\s*", RegexOptions.Compiled);
 
+    internal static readonly Regex VoiceCausalContextTag = new(
+        @"<voice-causal-context>[\s\S]*?</voice-causal-context>\s*", RegexOptions.Compiled);
+
+    internal static readonly Regex VoiceCurrentUtteranceTag = new(
+        @"<voice-current-utterance>\s*(?<content>[\s\S]*?)\s*</voice-current-utterance>\s*",
+        RegexOptions.Compiled);
+
     public async Task<string> ExportAsync(IReadOnlyList<DiscussionRead> discussionsToExport, DateTime since, CancellationToken ct = default)
     {
         if (discussionsToExport.Count == 0)
@@ -133,7 +140,11 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
             {
                 var role = msg.Role == "user" ? "user" : "nova";
                 sb.AppendLine($"**{role}** ({msg.Timestamp:HH:mm}):");
-                sb.AppendLine(msg.Content);
+                var visibleContent = msg.Content;
+                if (msg.Role == "user" && msg.MessageUid is not null
+                    && userAttachmentsByUid.TryGetValue(msg.MessageUid, out var savedUser))
+                    visibleContent = StripInjectedTags(savedUser.Content);
+                sb.AppendLine(visibleContent);
                 if (msg.Role == "user" && msg.MessageUid is not null
                     && userAttachmentsByUid.TryGetValue(msg.MessageUid, out var saved))
                     AppendImageParts(sb, saved.Metadata["parts_json"]?.GetValue<string>());
@@ -225,6 +236,8 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         content = NovaContextTag.Replace(content, "");
         content = NovaPriorTag.Replace(content, "");
         content = ScratchSpaceTag.Replace(content, "");
+        content = VoiceCausalContextTag.Replace(content, "");
+        content = VoiceCurrentUtteranceTag.Replace(content, match => match.Groups["content"].Value);
         return content.TrimStart();
     }
 

@@ -445,6 +445,7 @@ public sealed class MessagePipeline(
         var hasImages = images is { Length: > 0 };
         var hasAttachments = claimedAttachments.Length > 0;
         var acceptedMessageUid = messageUid ?? Guid.NewGuid().ToString("N");
+        var visibleContent = displayContent ?? content;
         var patch = new JsonObject
         {
             ["last_activity"] = new DateTimeOffset(now).ToString("O"),
@@ -470,7 +471,7 @@ public sealed class MessagePipeline(
                 downloadUrl = attachment.GetProperty("downloadUrl").GetString(),
             }).ToArray();
 
-            await PersistUserMessageAsync(discussion.EntityId, content, new JsonObject
+            await PersistUserMessageAsync(discussion.EntityId, visibleContent, new JsonObject
             {
                 ["parts_json"] = JsonSerializer.Serialize(parts, JsonOptions),
                 ["source"] = disposition == "delivered" ? "user-message" : "queued-user-message",
@@ -488,7 +489,7 @@ public sealed class MessagePipeline(
                 parts.Add(new { type = "image", assetId = asset.AssetId, url = asset.Url, mediaType = img.MediaType });
             }
 
-            await PersistUserMessageAsync(discussion.EntityId, content, new JsonObject
+            await PersistUserMessageAsync(discussion.EntityId, visibleContent, new JsonObject
             {
                 ["parts_json"] = JsonSerializer.Serialize(parts, JsonOptions),
                 ["source"] = disposition == "delivered" ? "user-message" : "queued-user-message",
@@ -500,7 +501,7 @@ public sealed class MessagePipeline(
             // Persist every durably accepted user message. Queued records stay hidden
             // until their stable uid appears in RedCompute's transcript; they retain
             // Nova's clean display text and attachment metadata for that later merge.
-            await PersistUserMessageAsync(discussion.EntityId, content, new JsonObject
+            await PersistUserMessageAsync(discussion.EntityId, visibleContent, new JsonObject
             {
                 ["source"] = disposition == "delivered" ? "user-message" : "queued-user-message",
                 ["uid"] = acceptedMessageUid,

@@ -251,12 +251,53 @@ public sealed class VoiceSessionService(
                 binding.StartedDelegations.TryRemove(delegationId, out _);
                 return false;
             }
+            if (!await PersistDelegatedUserTurnAsync(binding, delegationId, utterance, ct))
+            {
+                binding.StartedDelegations.TryRemove(delegationId, out _);
+                return false;
+            }
             _ = RunDelegationAsync(binding, delegationId, utterance);
             return true;
         }
 
         return true;
     }
+
+    private async Task<bool> PersistDelegatedUserTurnAsync(Binding binding, string delegationId,
+        PendingUtterance utterance, CancellationToken ct)
+    {
+        var discussion = await store.GetAsync(binding.DiscussionId, ct);
+        if (discussion is null || discussion.SessionId != binding.AiSessionId) return false;
+        await store.PostMessageIdempotentAsync(discussion.EntityId, "user", utterance.Content,
+            new JsonObject
+            {
+                ["source"] = "user-message",
+                ["uid"] = utterance.MessageUid,
+                ["input_method"] = "voice",
+                ["voice_session_id"] = binding.VoiceSessionId,
+                ["voice_delegation_id"] = delegationId,
+            }, DelegationUserMessageKey(binding.VoiceSessionId, delegationId), discussion.OwnerId, ct);
+        // Publish even after an idempotent callback retry: the first attempt may have
+        // committed the bridge and failed before its invalidation reached mounted clients.
+        await events.PublishAsync(discussion.Confidential ? "discussion.changed" : "discussion.user-message",
+            discussion.Confidential
+                ? new JsonObject
+                {
+                    ["discussionId"] = discussion.Id,
+                    ["confidential"] = true,
+                    ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
+                }
+                : new JsonObject
+                {
+                    ["discussionId"] = discussion.Id,
+                    ["sessionId"] = binding.AiSessionId,
+                    ["messageUid"] = utterance.MessageUid,
+                });
+        return true;
+    }
+
+    internal static string DelegationUserMessageKey(string voiceSessionId, string delegationId)
+        => $"message:voice-delegation:{voiceSessionId}:{delegationId}";
 
     private async Task<bool> PersistCasualTurnAsync(Binding binding, string role,
         string content, string messageUid, string eventId, CancellationToken ct)
