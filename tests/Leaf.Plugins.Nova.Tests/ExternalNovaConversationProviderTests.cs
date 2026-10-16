@@ -271,6 +271,35 @@ public sealed class ExternalAgentConversationProviderTests
             instructions, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Discord_instructions_require_verified_public_claims()
+    {
+        var instructions =
+            ExternalAgentConversationProvider.DiscordDeveloperInstructions("Nova");
+
+        Assert.Contains("verify it during this turn or label it plainly as a guess",
+            instructions, StringComparison.Ordinal);
+        Assert.Contains("An error from a route you guessed is evidence about your guess",
+            instructions, StringComparison.Ordinal);
+        Assert.Contains("Never promise context from another session or surface",
+            instructions, StringComparison.Ordinal);
+        Assert.Contains("Do not open with agreement you have not checked",
+            instructions, StringComparison.Ordinal);
+        Assert.Contains("Reply in the language the participants are using",
+            instructions, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Discord_instructions_explain_server_map_references()
+    {
+        var instructions =
+            ExternalAgentConversationProvider.DiscordDeveloperInstructions("Nova");
+
+        Assert.Contains("leaf-discord-guild-map-ref/v1", instructions, StringComparison.Ordinal);
+        Assert.Contains("the last full map you received is still current",
+            instructions, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("Stopped", null, "thread-1", true)]
     [InlineData("Error", "orphaned_on_restart", "thread-1", true)]
