@@ -287,6 +287,8 @@ public sealed class ExternalAgentConversationProviderTests
             instructions, StringComparison.Ordinal);
         Assert.Contains("Reply in the language the participants are using",
             instructions, StringComparison.Ordinal);
+        Assert.Contains("Never use interactive question tools such as AskUserQuestion",
+            instructions, StringComparison.Ordinal);
     }
 
     [Fact]
