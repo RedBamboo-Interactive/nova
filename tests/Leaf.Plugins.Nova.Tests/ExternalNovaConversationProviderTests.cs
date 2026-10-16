@@ -257,6 +257,20 @@ public sealed class ExternalAgentConversationProviderTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Discord_instructions_do_not_narrate_reaction_only_silence()
+    {
+        var instructions =
+            ExternalAgentConversationProvider.DiscordDeveloperInstructions("Nova");
+
+        Assert.Contains("do not emit commentary announcing that you will react, stay silent",
+            instructions, StringComparison.Ordinal);
+        Assert.Contains("reserve commentary for substantive user-facing progress",
+            instructions, StringComparison.Ordinal);
+        Assert.Contains("settle the turn with <discord-no-reply/>",
+            instructions, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("Stopped", null, "thread-1", true)]
     [InlineData("Error", "orphaned_on_restart", "thread-1", true)]
