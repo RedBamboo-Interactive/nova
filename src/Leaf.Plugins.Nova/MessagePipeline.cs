@@ -127,7 +127,11 @@ public sealed class MessagePipeline(
         if (additionalContext != null) context.AddRange(additionalContext);
         var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
             entrypointRoute, context, correlationId: correlationId, parentJobId: parentJobId, ct: ct);
-        return await redCompute.CreateSessionAsync(body, provenance, ct);
+        var (sessionId, failure) = await redCompute.CreateSessionWithReasonAsync(body, provenance, ct);
+        if (sessionId is null)
+            logger.LogWarning("RedCompute refused session creation for agent {AgentId} via {Provider}: {Reason}",
+                agent.Id, effectiveProvider ?? "default", failure);
+        return sessionId;
     }
 
     public Task<SendMessageOutcome> SendAsync(

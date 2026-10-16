@@ -109,6 +109,14 @@ public sealed class RedComputeClient(IComputeGateway gateway)
 
     public async Task<string?> CreateSessionAsync(Dictionary<string, object?> body,
         ComputeProvenance provenance, CancellationToken ct = default)
+        => (await CreateSessionWithReasonAsync(body, provenance, ct)).SessionId;
+
+    /// <summary>
+    /// Creates a session and, on refusal, returns RedCompute's status and error body so the
+    /// caller can log why instead of reporting an anonymous failure.
+    /// </summary>
+    public async Task<(string? SessionId, string? FailureReason)> CreateSessionWithReasonAsync(
+        Dictionary<string, object?> body, ComputeProvenance provenance, CancellationToken ct = default)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
         {
@@ -128,11 +136,15 @@ public sealed class RedComputeClient(IComputeGateway gateway)
                 }
                 catch (JsonException) { /* Preserve generic failure for malformed responses. */ }
             }
-            return null;
+            var detail = await resp.Content.ReadAsStringAsync(ct);
+            if (detail.Length > 500) detail = detail[..500];
+            return (null, $"HTTP {(int)resp.StatusCode}: {detail}");
         }
 
         var session = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions, ct);
-        return session.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+        return session.TryGetProperty("id", out var idProp)
+            ? (idProp.GetString(), null)
+            : (null, "RedCompute returned no session id");
     }
 
     public async Task<ProxyResult> GetMaintenanceStatusAsync(CancellationToken ct = default)

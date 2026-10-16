@@ -148,6 +148,25 @@ public sealed class DelegateEndpointSecurityTests
         Assert.True(await client.RemoveUnacceptedCallbackAsync("session", "operation", "accepted-prompt"));
     }
 
+    [Fact]
+    public async Task Refused_session_creation_reports_RedCompute_reason()
+    {
+        var gateway = CallbackDeliveryTests.Proxy.Create<IComputeGateway>((_, _) =>
+            Task.FromResult(new HttpResponseMessage((System.Net.HttpStatusCode)422)
+            {
+                Content = new StringContent(
+                    """{"error":"developer_instructions_not_supported","message":"Provider 'claude-code' does not support session developer instructions"}"""),
+            }));
+        var client = new RedComputeClient(gateway);
+
+        var (sessionId, reason) = await client.CreateSessionWithReasonAsync(
+            new Dictionary<string, object?> { ["provider"] = "anthropic-direct" }, Provenance());
+
+        Assert.Null(sessionId);
+        Assert.StartsWith("HTTP 422: ", reason, StringComparison.Ordinal);
+        Assert.Contains("developer_instructions_not_supported", reason, StringComparison.Ordinal);
+    }
+
     private static ClaimsPrincipal Principal(string subject, params Claim[] claims) => new(
         new ClaimsIdentity([new Claim("sub", subject), .. claims], "test"));
 
