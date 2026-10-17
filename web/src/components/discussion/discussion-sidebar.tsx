@@ -10,7 +10,7 @@ import { delegationAnimationPaused } from "../../lib/delegation-activity"
 import { DiscussionActionItems } from "./discussion-actions-menu"
 
 /** Row actions that act through the open discussion's header, so they open it first. */
-export type DiscussionRowAction = "info" | "rename" | "share"
+export type DiscussionRowAction = "voice" | "info" | "rename" | "share"
 
 const statusColor: Record<string, string> = {
   thinking: "var(--color-accent-gold)",
@@ -126,22 +126,21 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             )}
             <RowActionsMenu label="Live actions">
               <DiscussionActionItems
+                showShortcuts={discussion.id === activeDiscussionId}
+                onVoice={() => onRowAction(discussion.id, "voice")}
+                voiceDisabled={discussion.status === "stopped"}
                 onInfo={() => onRowAction(discussion.id, "info")}
                 onShare={!discussion.confidential ? () => onRowAction(discussion.id, "share") : undefined}
                 onFloat={onFloat ? () => onFloat(discussion.id) : undefined}
-              >
-                <DropdownMenuItem onClick={() => onRotate(discussion.id)}>
-                  <i aria-hidden="true" className="ph-bold ph-arrows-clockwise size-4" />
-                  Rotate timeline
-                </DropdownMenuItem>
-              </DiscussionActionItems>
+                onReset={() => onRotate(discussion.id)}
+              />
             </RowActionsMenu>
           </div>
         }
       />
       </div>
     )
-  }, [sidebarSelectionId, onSelect, onRotate, onRowAction, onFloat, getAgent, multiAgent, delegationActivity])
+  }, [sidebarSelectionId, activeDiscussionId, onSelect, onRotate, onRowAction, onFloat, getAgent, multiAgent, delegationActivity])
 
   const renderChatItem = useCallback((discussion: DiscussionInfo) => {
     const alive = discussion.status !== "archived" && discussion.status !== "stopped"
@@ -198,6 +197,9 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
               )}
               <RowActionsMenu label="Conversation actions">
                 <DiscussionActionItems
+                  showShortcuts={discussion.id === activeDiscussionId}
+                  onVoice={() => onRowAction(discussion.id, "voice")}
+                  voiceDisabled={discussion.status === "stopped"}
                   onInfo={() => onRowAction(discussion.id, "info")}
                   onRename={() => onRowAction(discussion.id, "rename")}
                   onUpdateTitle={() => onUpdateTitle(discussion.id)}

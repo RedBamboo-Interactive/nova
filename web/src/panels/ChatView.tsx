@@ -2,11 +2,11 @@ import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, typ
 import { useParams, useNavigate } from "react-router-dom"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type ProviderUsageSnapshot, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
-import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
+import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
 import { isMobileClient } from "../components/floating-nova-support"
 import { EditableTitle } from "../components/discussion/editable-title"
-import { DiscussionActionItems } from "../components/discussion/discussion-actions-menu"
+import { DISCUSSION_SHORTCUTS, DiscussionActionItems } from "../components/discussion/discussion-actions-menu"
 import { AgentPicker } from "../components/agent-picker"
 import { TransitioningAgentAvatar } from "../components/transitioning-agent-avatar"
 import { NovaStatusLine } from "../components/nova-status-line"
@@ -691,6 +691,14 @@ export function ChatView({
 
   // Sidebar row actions that drive the open discussion's header (rename, Info,
   // share) open that discussion first and run once it is the active one.
+  const voiceAvailable = !!activeDiscussion && activeDiscussion.status !== "archived" && activeDiscussion.status !== "stopped"
+    && voiceSession.phase !== "starting" && voiceSession.phase !== "connected"
+  const startVoice = useCallback(() => { void voiceSession.start() }, [voiceSession])
+  const openSessionInfo = useCallback(() => {
+    void refreshDelegationActivity(true)
+    setSessionInfoOpen(true)
+  }, [refreshDelegationActivity])
+
   const [pendingRowAction, setPendingRowAction] = useState<{ id: string; action: DiscussionRowAction } | null>(null)
   const handleRowAction = useCallback((id: string, action: DiscussionRowAction) => {
     setPendingRowAction({ id, action })
@@ -700,15 +708,69 @@ export function ChatView({
     if (!pendingRowAction || activeDiscussion?.id !== pendingRowAction.id) return
     setPendingRowAction(null)
     setMobileTab(1)
-    if (pendingRowAction.action === "info") {
-      void refreshDelegationActivity(true)
-      setSessionInfoOpen(true)
-    } else if (pendingRowAction.action === "rename") {
-      setTitleEditing(true)
-    } else {
-      handleShare()
-    }
-  }, [activeDiscussion?.id, handleShare, pendingRowAction, refreshDelegationActivity])
+    if (pendingRowAction.action === "info") openSessionInfo()
+    else if (pendingRowAction.action === "rename") setTitleEditing(true)
+    else if (pendingRowAction.action === "voice") startVoice()
+    else handleShare()
+  }, [activeDiscussion?.id, handleShare, openSessionInfo, pendingRowAction, startVoice])
+
+  // Desktop shortcuts for the open discussion; the menus show the same keys.
+  const canManageDiscussion = activeDiscussion?.type === "chat"
+  const docked = !floating && !!activeDiscussion
+  useCommand("nova-discussion-voice", {
+    label: "Start Voice",
+    description: "Start a voice session in the open discussion",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.voice,
+    enabled: docked && voiceAvailable,
+    action: startVoice,
+  })
+
+  useCommand("nova-discussion-info", {
+    label: "Discussion Info",
+    description: "Show the session, model and delegations of the open discussion",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.info,
+    enabled: docked,
+    action: openSessionInfo,
+  })
+
+  useCommand("nova-discussion-rename", {
+    label: "Rename Discussion",
+    description: "Edit the title of the open discussion",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.rename,
+    enabled: docked && canManageDiscussion,
+    action: () => setTitleEditing(true),
+  })
+
+  useCommand("nova-discussion-update-title", {
+    label: "Update Discussion Title",
+    description: "Regenerate the title of the open discussion from its conversation",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.updateTitle,
+    enabled: docked && canManageDiscussion,
+    action: () => { if (activeDiscussionId) void handleUpdateTitle(activeDiscussionId) },
+  })
+
+  useCommand("nova-discussion-share", {
+    label: "Share Discussion",
+    description: "Create a share link for the open discussion",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.share,
+    enabled: docked && !activeDiscussion?.confidential,
+    action: handleShare,
+  })
+
+  useCommand("nova-reset-live-timeline", {
+    label: "Reset Live Timeline",
+    description: "Rotate Live onto a fresh timeline",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.reset,
+    keywords: ["rotate", "reset", "live"],
+    enabled: docked && activeDiscussion?.type === "live",
+    action: () => { if (activeDiscussionId) void handleRotateDiscussion(activeDiscussionId) },
+  })
 
   const liveHeartbeatPair = findLiveHeartbeatPair(discussions, activeDiscussion)
 
@@ -755,7 +817,6 @@ export function ChatView({
     </Tabs>
   )
 
-  const canManageDiscussion = activeDiscussion?.type === "chat"
   const activeDelegations = activeDiscussion ? delegationActivity[activeDiscussion.id] : undefined
 
   const sessionInfoContent = activeDiscussion && (
@@ -799,15 +860,6 @@ export function ChatView({
     >
       {!floating && (
         <>
-          <ChatHeaderAction
-            buttonRef={voiceSessionTriggerRef}
-            onClick={() => void voiceSession.start()}
-            icon="ph-bold ph-waveform"
-            label="Voice"
-            disabled={activeDiscussion.status === "archived" || activeDiscussion.status === "stopped"
-              || voiceSession.phase === "starting" || voiceSession.phase === "connected"}
-            aria-haspopup="dialog"
-          />
           {/* The controlled modal portals outside this hidden legacy trigger. */}
           <div className="hidden">
             <SessionInfoButton
@@ -837,6 +889,7 @@ export function ChatView({
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger
+              ref={voiceSessionTriggerRef}
               className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
               aria-label="Conversation actions"
               title="Conversation actions"
@@ -845,12 +898,16 @@ export function ChatView({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" sideOffset={4}>
               <DiscussionActionItems
-                onInfo={() => { void refreshDelegationActivity(true); setSessionInfoOpen(true) }}
+                showShortcuts
+                onVoice={startVoice}
+                voiceDisabled={!voiceAvailable}
+                onInfo={openSessionInfo}
                 onRename={canManageDiscussion ? () => setTitleEditing(true) : undefined}
                 onUpdateTitle={canManageDiscussion ? () => void handleUpdateTitle(activeDiscussion.id) : undefined}
                 updateTitlePending={titleUpdatePending}
                 onShare={!activeDiscussion.confidential ? handleShare : undefined}
                 onFloat={floatingSurface?.supported ? () => handleFloatDiscussion(activeDiscussion.id) : undefined}
+                onReset={activeDiscussion.type === "live" ? () => void handleRotateDiscussion(activeDiscussion.id) : undefined}
                 onClose={canManageDiscussion ? () => handleCloseDiscussion(activeDiscussion.id) : undefined}
               />
             </DropdownMenuContent>

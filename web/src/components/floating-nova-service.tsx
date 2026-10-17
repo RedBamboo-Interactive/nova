@@ -19,7 +19,7 @@ import {
   getFloatingNovaSupport,
   type FloatingNovaWindow,
 } from "./floating-nova-support"
-import { FLOATING_NOVA_NAVIGATION_EVENT, type FloatingNovaNavigationAction } from "../lib/floating-navigation"
+import { FLOATING_NOVA_NAVIGATION_EVENT, FLOATING_NOVA_SHORTCUT, type FloatingNovaNavigationAction } from "../lib/floating-navigation"
 import {
   GLOBAL_INPUT_EVENT_TYPE,
   GLOBAL_INPUT_LEASE_ENDPOINT,
@@ -37,7 +37,7 @@ import {
 
 export const FLOATING_NOVA_SURFACE_ID = "nova:floating-chat"
 export const FLOATING_NOVA_COMMAND_ID = "nova:float-chat"
-export const FLOATING_NOVA_SHORTCUT = "Ctrl+Alt+N"
+export { FLOATING_NOVA_SHORTCUT }
 
 const SELECTED_DISCUSSION_KEY = "nova-floating:selected-discussion"
 const TRIGGER_SELECTOR = '[data-ui-surface="nova:floating-chat"][data-ui-action="open"]'

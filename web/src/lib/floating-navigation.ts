@@ -7,6 +7,9 @@ export type FloatingNovaNavigationAction =
   | "previous-discussion"
   | "new-discussion"
 
+/** Opens (or focuses) Float Nova from anywhere in RedLeaf. */
+export const FLOATING_NOVA_SHORTCUT = "Ctrl+Alt+N"
+
 export const FLOATING_NOVA_SHORTCUTS = {
   showDiscussions: "Alt+ArrowLeft",
   showChat: "Alt+ArrowRight",
