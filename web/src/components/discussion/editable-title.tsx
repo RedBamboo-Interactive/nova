@@ -40,6 +40,10 @@ export function EditableTitle({ title, onRename, editing: controlledEditing, onE
     return (
       <input
         ref={inputRef}
+        type="text"
+        name="discussion-title"
+        autoComplete="off"
+        enterKeyHint="done"
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onBlur={commit}
