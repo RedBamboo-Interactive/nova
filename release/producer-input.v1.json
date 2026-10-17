@@ -7,7 +7,7 @@
     "kind": "extension",
     "version": "0.1.6"
   },
-  "redleafReleaseToolCommit": "9076a5791e79f368390ea4475c9c724a85ca6bea",
+  "redleafReleaseToolCommit": "4604a11ea2cb299a45fb0da8aa86dd0726164d50",
   "toolchain": {
     "node": "22.23.1",
     "pnpm": "11.0.9",
@@ -16,12 +16,12 @@
   },
   "leafSdk": {
     "repository": "RedBamboo-Interactive/redleaf",
-    "commit": "d21de3605717fc25955b8f2773ef6305e462b65c",
+    "commit": "4604a11ea2cb299a45fb0da8aa86dd0726164d50",
     "sourcePath": "src/Leaf.Sdk"
   },
   "redbamboo": {
     "repository": "RedBamboo-Interactive/redbamboo-packages",
-    "commit": "fcddc824caa6e7caa772dcfe66308d3d6c02ea3a",
+    "commit": "0ddcd7fea92913411fe58454c4968558ad596611",
     "lockPath": "pnpm-lock.yaml",
     "inputs": [
       {
