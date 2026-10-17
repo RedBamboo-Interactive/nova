@@ -850,6 +850,51 @@ public static class DiscussionEndpoints
             });
         });
 
+        group.MapGet("/discussions/{id}/messages/{recordId:long}/output", async (
+            string id,
+            long recordId,
+            HttpContext ctx,
+            DiscussionStore store,
+            RedComputeClient redCompute) =>
+        {
+            var discussion = await store.GetAsync(id);
+            if (discussion is null) return NotFound();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+            if (string.IsNullOrWhiteSpace(discussion.SessionId))
+                return Results.NotFound(new { error = "session_not_found" });
+            if (recordId <= 0)
+                return Results.BadRequest(new { error = "invalid_record_id" });
+
+            using var upstream = await redCompute.OpenTranscriptOutputAsync(
+                discussion.SessionId,
+                recordId,
+                ctx.Request.Headers.Range.ToString(),
+                ctx.Request.Query["download"] == "true",
+                ctx.RequestAborted);
+
+            ctx.Response.StatusCode = (int)upstream.StatusCode;
+            if (upstream.Content.Headers.ContentType is { } contentType)
+                ctx.Response.ContentType = contentType.ToString();
+            if (upstream.Content.Headers.ContentLength is { } contentLength)
+                ctx.Response.ContentLength = contentLength;
+            if (upstream.Content.Headers.ContentRange is { } contentRange)
+                ctx.Response.Headers.ContentRange = contentRange.ToString();
+            if (upstream.Headers.AcceptRanges.Count > 0)
+                ctx.Response.Headers.AcceptRanges = string.Join(", ", upstream.Headers.AcceptRanges);
+            if (upstream.Headers.ETag is { } etag)
+                ctx.Response.Headers.ETag = etag.ToString();
+            if (upstream.Content.Headers.LastModified is { } lastModified)
+                ctx.Response.Headers.LastModified = lastModified.ToString("R");
+            if (upstream.Content.Headers.ContentDisposition is { } disposition)
+                ctx.Response.Headers.ContentDisposition = disposition.ToString();
+
+            await upstream.Content.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
+            return Results.Empty;
+        })
+            .WithName("NovaDiscussionTranscriptOutput")
+            .WithSummary("Authorized transcript media output")
+            .WithDescription("Streams one payload-backed RedCompute transcript output after enforcing access to its owning Nova discussion. Supports HTTP byte ranges.");
+
         group.MapGet("/discussions/{id}/images", async (string id, HttpContext ctx, DiscussionStore store, IDiscussions discussions) =>
         {
             var discussion = await store.GetAsync(id);

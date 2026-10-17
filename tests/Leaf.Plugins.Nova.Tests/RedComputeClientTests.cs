@@ -130,6 +130,25 @@ public sealed class RedComputeClientTests
     }
 
     [Fact]
+    public async Task TranscriptOutputUsesAuthorizedGatewayAndForwardsRange()
+    {
+        var gateway = new BinaryComputeGateway();
+        var client = new RedComputeClient(gateway);
+
+        using var response = await client.OpenTranscriptOutputAsync(
+            "session one/2", 42, "bytes=100-199", download: true);
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+
+        Assert.Equal(new byte[] { 1, 2, 3 }, bytes);
+        Assert.Equal("image/png", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(
+            "/ai-session/sessions/session%20one%2F2/messages/42/output?download=true",
+            gateway.Path);
+        Assert.Equal("bytes=100-199", gateway.Range);
+        Assert.Null(gateway.Provenance);
+    }
+
+    [Fact]
     public async Task SessionProbeCarriesRecoveryStateAndProviderThread()
     {
         var gateway = new StaticComputeGateway(
@@ -241,12 +260,17 @@ public sealed class RedComputeClientTests
     private sealed class BinaryComputeGateway : IComputeGateway
     {
         public string? Path { get; private set; }
+        public string? Range { get; private set; }
         public ComputeProvenance? Provenance { get; private set; }
 
         public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
             Path = request.RequestUri?.OriginalString;
+            Range = request.Headers.Range?.ToString()
+                ?? (request.Headers.TryGetValues("Range", out var values)
+                    ? values.SingleOrDefault()
+                    : null);
             Provenance = provenance;
             var content = new ByteArrayContent([1, 2, 3]);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");

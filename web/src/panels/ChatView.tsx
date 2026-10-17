@@ -197,20 +197,20 @@ export function ChatView({
   const voiceSessionTriggerRef = useRef<HTMLButtonElement>(null)
   const payloadSessionId = activeDiscussion?.sessionId ?? null
   const loadTranscriptPayload = useCallback<TranscriptPayloadLoader>((ref, range, signal) => {
-    if (!payloadSessionId) return Promise.reject(new Error("This discussion has no active session"))
-    const url = `/ai-session/sessions/${encodeURIComponent(payloadSessionId)}/messages/${ref.recordId}/output`
+    if (!activeDiscussionId) return Promise.reject(new Error("This discussion is not active"))
+    const url = `/api/apps/nova/discussions/${encodeURIComponent(activeDiscussionId)}/messages/${ref.recordId}/output`
     return fetchTranscriptPayload(url, ref, range, signal)
-  }, [payloadSessionId])
+  }, [activeDiscussionId])
   const getTranscriptPayloadDownloadUrl = useCallback((ref: TranscriptPayloadRef) =>
-    payloadSessionId
-      ? `/ai-session/sessions/${encodeURIComponent(payloadSessionId)}/messages/${ref.recordId}/output?download=true`
+    activeDiscussionId
+      ? `/api/apps/nova/discussions/${encodeURIComponent(activeDiscussionId)}/messages/${ref.recordId}/output?download=true`
       : "#",
-  [payloadSessionId])
+  [activeDiscussionId])
   const getTranscriptPayloadMediaUrl = useCallback((ref: TranscriptPayloadRef) =>
-    payloadSessionId
-      ? `/ai-session/sessions/${encodeURIComponent(payloadSessionId)}/messages/${ref.recordId}/output`
+    activeDiscussionId
+      ? `/api/apps/nova/discussions/${encodeURIComponent(activeDiscussionId)}/messages/${ref.recordId}/output`
       : "#",
-  [payloadSessionId])
+  [activeDiscussionId])
 
   useLayoutEffect(() => {
     if (pendingDiscussionId && requestedDiscussionId === pendingDiscussionId) {

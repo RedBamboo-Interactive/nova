@@ -700,6 +700,31 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         return new InputAttachmentContent(bytes, mediaType);
     }
 
+    /// <summary>
+    /// Opens one payload-backed transcript output through the kernel-authenticated
+    /// Compute gateway. The caller owns the returned response and must dispose it
+    /// after streaming the body.
+    /// </summary>
+    public async Task<HttpResponseMessage> OpenTranscriptOutputAsync(
+        string sessionId,
+        long recordId,
+        string? range = null,
+        bool download = false,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            throw new ArgumentException("Session id is required", nameof(sessionId));
+        if (recordId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(recordId));
+
+        var path = $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}/messages/{recordId}/output"
+            + (download ? "?download=true" : "");
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        if (!string.IsNullOrWhiteSpace(range))
+            request.Headers.TryAddWithoutValidation("Range", range);
+        return await gateway.SendAsync(request, provenance: null, ct);
+    }
+
     public async Task<SessionTranscriptPageResult> GetTranscriptPageAsync(
         string sessionId,
         int limit,
