@@ -88,7 +88,7 @@ test("release input records only Leaf.Sdk and Nova's four actual shared package 
     sourcePath: "src/Leaf.Sdk",
   })
   assert.equal(producer.redleafReleaseToolCommit, "4604a11ea2cb299a45fb0da8aa86dd0726164d50")
-  assert.equal(producer.redbamboo.commit, "0ddcd7fea92913411fe58454c4968558ad596611")
+  assert.equal(producer.redbamboo.commit, "5c238b3dff413a5448285ba4aa65e66a4dce634a")
   assert.deepEqual(producer.redbamboo.inputs.map(({ id, name, sourcePath }) => ({ id, name, sourcePath })), [
     { id: "redbamboo-chat", name: "@redbamboo/chat", sourcePath: "packages/chat" },
     { id: "redbamboo-ui", name: "@redbamboo/ui", sourcePath: "packages/ui" },
