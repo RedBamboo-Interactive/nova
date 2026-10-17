@@ -88,6 +88,7 @@ test("release input records only Leaf.Sdk and Nova's four actual shared package 
     sourcePath: "src/Leaf.Sdk",
   })
   assert.equal(producer.redleafReleaseToolCommit, "9076a5791e79f368390ea4475c9c724a85ca6bea")
+  assert.equal(producer.redbamboo.commit, "fcddc824caa6e7caa772dcfe66308d3d6c02ea3a")
   assert.deepEqual(producer.redbamboo.inputs.map(({ id, name, sourcePath }) => ({ id, name, sourcePath })), [
     { id: "redbamboo-chat", name: "@redbamboo/chat", sourcePath: "packages/chat" },
     { id: "redbamboo-ui", name: "@redbamboo/ui", sourcePath: "packages/ui" },
@@ -218,6 +219,10 @@ test("the unsigned prerelease bridge is serialized, append-only, and isolated fr
   assert.match(bridge, /cancel-in-progress: false/)
   assert.match(bridge, /actions: read/)
   assert.match(bridge, /contents: write/)
+  assert.match(candidate, /actions\/cache\/save@[a-f0-9]{40}/)
+  assert.match(bridge, /actions\/cache\/restore@[a-f0-9]{40}/)
+  assert.match(bridge, /fail-on-cache-miss: true/)
+  assert.doesNotMatch(workflow, /actions\/(?:upload|download)-artifact@/)
   assert.doesNotMatch(bridge, /id-token:|signing key|private key|REDLEAF_RELEASE_SIGNING_KEY/i)
   assert.match(bridge, /\$tag = 'nova-unsigned-candidates'/)
   assert.doesNotMatch(bridge, /visibility|already be public|public prerelease/i)
@@ -225,6 +230,8 @@ test("the unsigned prerelease bridge is serialized, append-only, and isolated fr
   assert.match(bridge, /bridge-assets\/\$artifactName/)
   assert.match(bridge, /status -ne 'unsigned'/)
   assert.match(bridge, /Extension -ceq '\.leafpkg'/)
+  assert.match(bridge, /\.Length -eq \[long\]\$candidate\.artifact\.sizeBytes/)
+  assert.match(bridge, /Get-FileHash -LiteralPath \$_\.FullName -Algorithm SHA256/)
   assert.match(bridge, /existingNames -notcontains \$file\.Name/)
   assert.doesNotMatch(bridge, /--clobber|release delete|release edit|release delete-asset/i)
   assert.match(bridge, /gh release download \$tag --repo \$env:GH_REPO --pattern \$file\.Name/)
