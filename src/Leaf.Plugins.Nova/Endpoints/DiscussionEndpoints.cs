@@ -121,7 +121,7 @@ public static class DiscussionEndpoints
             var changed = ctx.Request.Query["sessionId"].Select(id => id ?? "").ToHashSet(StringComparer.Ordinal);
             if (changed.Count > 200 || changed.Any(id => !DelegationActivity.ValidSessionId(id)))
                 return Results.BadRequest(new { error = "invalid_session_id" });
-            return Results.Ok(await activity.ReadAsync(await store.ListAsync(ct: ctx.RequestAborted), ctx,
+            return Results.Ok(await activity.ReadAsync(await store.ListOpenAsync(ct: ctx.RequestAborted), ctx,
                 ctx.RequestAborted, changed, ctx.Request.Query["fresh"] == "true"));
         })
             .WithName("NovaDiscussionDelegations")
@@ -135,12 +135,9 @@ public static class DiscussionEndpoints
             var search = ctx.Request.Query["search"].FirstOrDefault();
             var agentFilter = ctx.Request.Query["agent"].FirstOrDefault();
 
-            var discussions = await store.ListAsync(agentFilter);
-
-            IEnumerable<DiscussionRead> filtered = discussions;
-            filtered = !string.IsNullOrEmpty(status)
-                ? filtered.Where(d => d.Status == status)
-                : filtered.Where(d => !DiscussionStatus.IsClosed(d.Status));
+            IEnumerable<DiscussionRead> filtered = !string.IsNullOrEmpty(status)
+                ? await store.ListByStatusAsync(status, agentFilter, ctx.RequestAborted)
+                : await store.ListOpenAsync(agentFilter, ctx.RequestAborted);
 
             if (!string.IsNullOrEmpty(search))
                 filtered = filtered.Where(d => d.Title != null && d.Title.Contains(search, StringComparison.OrdinalIgnoreCase));
@@ -152,8 +149,7 @@ public static class DiscussionEndpoints
 
         group.MapGet("/discussions/pending", async (HttpContext ctx, DiscussionStore store) =>
         {
-            var discussions = (await store.ListAsync())
-                .Where(d => !DiscussionStatus.IsClosed(d.Status))
+            var discussions = (await store.ListOpenAsync())
                 // Heartbeat discussions never count as pending: no unread pill, no
                 // badge — the heartbeat is a place you visit, not one that calls you.
                 .Where(d => d.Type != HeartbeatService.DiscussionType)
@@ -170,8 +166,8 @@ public static class DiscussionEndpoints
         group.MapPost("/discussions/sync", async (HttpContext ctx, DiscussionStore store,
             RedComputeClient redCompute, ConversationUnread conversationUnread) =>
         {
-            var discussions = (await store.ListAsync())
-                .Where(d => !DiscussionStatus.IsClosed(d.Status) && d.SessionId != null)
+            var discussions = (await store.ListOpenAsync())
+                .Where(d => d.SessionId != null)
                 .Where(d => DiscussionAccessPolicy.CanRead(d, ctx))
                 .ToList();
 
@@ -234,7 +230,7 @@ public static class DiscussionEndpoints
 
             if (type is "live" or HeartbeatService.DiscussionType)
             {
-                var existing = (await store.ListAsync()).Any(d => d.Type == type && d.AgentId == agentId && !DiscussionStatus.IsClosed(d.Status));
+                var existing = (await store.ListOpenAsync()).Any(d => d.Type == type && d.AgentId == agentId);
                 if (existing)
                     return Results.Json(new { error = $"A {type.ToUpperInvariant()} discussion already exists for this agent" }, statusCode: 409);
             }
@@ -279,8 +275,8 @@ public static class DiscussionEndpoints
         group.MapGet("/discussions/live", async (HttpContext ctx, DiscussionStore store) =>
         {
             var agentFilter = ctx.Request.Query["agent"].FirstOrDefault();
-            var live = (await store.ListAsync(agentFilter))
-                .Where(d => d.Type == "live" && !DiscussionStatus.IsClosed(d.Status)
+            var live = (await store.ListOpenAsync(agentFilter))
+                .Where(d => d.Type == "live"
                     && DiscussionAccessPolicy.CanRead(d, ctx))
                 .Select(DiscussionStore.ToInfo);
             return Results.Ok(live);
@@ -1347,8 +1343,8 @@ public static class DiscussionEndpoints
             // "live" resolves to the current LIVE discussion — the heartbeat posts
             // its note-events through this form since the LIVE id rotates daily.
             var discussion = id == "live"
-                ? (await store.ListAsync()).FirstOrDefault(d =>
-                    d.Type == "live" && !DiscussionStatus.IsClosed(d.Status)
+                ? (await store.ListOpenAsync()).FirstOrDefault(d =>
+                    d.Type == "live"
                     && (agents.NovaAgentId == null || d.AgentId == null || d.AgentId == agents.NovaAgentId))
                 : await store.GetAsync(id);
             if (discussion is null) return NotFound();

@@ -123,7 +123,7 @@ public sealed class HeartbeatService(
             foreach (var agent in agentEntities)
             {
                 var agentId = agent.Id.ToString();
-                var open = await store.ListAsync(agentId, ct);
+                var open = await store.ListOpenAsync(agentId, ct);
                 var openLive = OpenDiscussions(open, "live");
                 var openHeartbeat = OpenDiscussions(open, DiscussionType);
                 var legacy = HeartbeatConfig.Parse(agent.Data);
@@ -522,8 +522,8 @@ public sealed class HeartbeatService(
         string agentId, HeartbeatConfig config, Guid? parentJobId = null,
         string? correlationId = null, CancellationToken ct = default)
     {
-        var live = (await store.ListAsync(agentId, ct)).FirstOrDefault(d =>
-            d.Type == "live" && !DiscussionStatus.IsClosed(d.Status));
+        var live = (await store.ListOpenAsync(agentId, ct)).FirstOrDefault(d =>
+            d.Type == "live");
         return live != null && await TryAutoResumePresenceSessionAsync(
             live, "heartbeat-tick", config.AutomationId, parentJobId,
             correlationId, ct);
@@ -648,9 +648,9 @@ public sealed class HeartbeatService(
 
     public async Task<DiscussionRead?> GetDiscussionAsync(string agentId, CancellationToken ct = default)
     {
-        var all = await store.ListAsync(agentId, ct);
+        var all = await store.ListOpenAsync(agentId, ct);
         return all.FirstOrDefault(d =>
-            d.Type == DiscussionType && d.AgentId == agentId && !DiscussionStatus.IsClosed(d.Status));
+            d.Type == DiscussionType && d.AgentId == agentId);
     }
 
     // ── Day boundary ────────────────────────────────────────────────

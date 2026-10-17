@@ -310,8 +310,8 @@ public sealed class LiveEvents(DiscussionStore store, EventInjector injector, Ag
             _cachedLiveId = null;
         }
 
-        var all = await store.ListAsync(agents.NovaAgentId);
-        var live = all.FirstOrDefault(d => d.Type == "live" && !DiscussionStatus.IsClosed(d.Status)
+        var all = await store.ListOpenAsync(agents.NovaAgentId);
+        var live = all.FirstOrDefault(d => d.Type == "live"
             && (agents.NovaAgentId == null || d.AgentId == agents.NovaAgentId));
         _cachedLiveId = live?.Id;
         return live;

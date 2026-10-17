@@ -142,6 +142,41 @@ public sealed class HeartbeatLifecycleTests
     }
 
     [Fact]
+    public async Task Reconcile_does_not_duplicate_presence_when_newer_archives_outrank_it()
+    {
+        var fixture = new Fixture(live: true);
+        await fixture.Heartbeat.ReconcileAsync();
+        var liveId = Assert.Single(fixture.OpenDiscussions("live")).Id;
+        var heartbeatId = Assert.Single(fixture.OpenDiscussions(HeartbeatService.DiscussionType)).Id;
+        await fixture.AddArchivedDiscussionsAsync(513);
+
+        await fixture.Heartbeat.ReconcileAsync();
+
+        Assert.Equal(liveId, Assert.Single(fixture.OpenDiscussions("live")).Id);
+        Assert.Equal(heartbeatId,
+            Assert.Single(fixture.OpenDiscussions(HeartbeatService.DiscussionType)).Id);
+    }
+
+    [Fact]
+    public async Task Archive_finalizer_finds_archiving_discussion_beyond_the_first_page()
+    {
+        var fixture = new Fixture(live: false);
+        var pending = await fixture.Discussions.CreateAsync(null, fixture.Agent.Id.ToString(),
+            new JsonObject
+            {
+                ["discussion_id"] = "pending-archive",
+                ["app"] = "nova",
+                ["status"] = DiscussionStatus.Archiving,
+            });
+        await fixture.AddArchivedDiscussionsAsync(513);
+
+        await fixture.Lifecycle.ReconcilePendingAsync();
+
+        Assert.Equal(DiscussionStatus.Archived,
+            (await fixture.Entities.GetAsync(pending.Id))!.Data["status"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Live_disable_is_a_reversible_pause_that_restores_the_same_paired_presence()
     {
         var fixture = new Fixture(live: true);
@@ -369,10 +404,10 @@ public sealed class HeartbeatLifecycleTests
             DiscussionStore = new DiscussionStore(Entities, Discussions);
             Automations = new InMemoryAutomations(Entities);
             var compute = new RedComputeClient(computeGateway ?? new UnusedComputeGateway());
-            var lifecycle = new DiscussionLifecycle(DiscussionStore, compute);
+            Lifecycle = new DiscussionLifecycle(DiscussionStore, compute);
             var directory = new AgentDirectory(Entities, new InMemoryPluginEvents());
             Heartbeat = new HeartbeatService(Entities, Automations, Discussions, DiscussionStore,
-                lifecycle, null!, compute, null!, directory, null!, NullLogger<HeartbeatService>.Instance);
+                Lifecycle, null!, compute, null!, directory, null!, NullLogger<HeartbeatService>.Instance);
         }
 
         public LeafEntity Agent => Entities.All.Single(entity => entity.TypeSlug == "agent");
@@ -381,6 +416,7 @@ public sealed class HeartbeatLifecycleTests
         public DiscussionStore DiscussionStore { get; }
         public InMemoryAutomations Automations { get; }
         public HeartbeatService Heartbeat { get; }
+        public DiscussionLifecycle Lifecycle { get; }
 
         public Guid QualityTierId(string slug) => Entities.All.Single(entity => entity.TypeSlug == "quality-tier" && entity.Slug == slug).Id;
 
@@ -392,6 +428,19 @@ public sealed class HeartbeatLifecycleTests
         public IReadOnlyList<LeafEntity> DiscussionsOf(string type) => Entities.All
             .Where(e => e.TypeSlug == "discussion" && e.Data["type"]?.GetValue<string>() == type)
             .ToList();
+
+        public async Task AddArchivedDiscussionsAsync(int count)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                await Discussions.CreateAsync(null, Agent.Id.ToString(), new JsonObject
+                {
+                    ["discussion_id"] = $"archived-{i}",
+                    ["app"] = "nova",
+                    ["status"] = DiscussionStatus.Archived,
+                });
+            }
+        }
 
         public async Task BindStoppedSessionAsync(
             LeafEntity discussion, string sessionId, string? stopReason,
@@ -493,9 +542,16 @@ public sealed class HeartbeatLifecycleTests
 
         public Task<IReadOnlyList<LeafEntity>> QueryAsync(EntityQuery query, CancellationToken ct = default)
         {
-            var matches = entities.Where(e => e.TypeSlug == query.TypeSlug)
-                .Where(e => Matches(e.Data, query.DataEquals))
-                .Skip(query.Offset).Take(query.Limit).ToList();
+            IEnumerable<LeafEntity> queryable = entities
+                .Where(e => e.TypeSlug == query.TypeSlug)
+                .Where(e => Matches(e.Data, query.DataEquals));
+            if (query.AfterId is { } afterId)
+                queryable = queryable.Where(e => e.Id.CompareTo(afterId) > 0);
+            queryable = query.OrderById
+                ? queryable.OrderBy(e => e.Id)
+                : queryable.OrderByDescending(e => e.UpdatedAt).ThenBy(e => e.Id);
+            var matches = queryable.Skip(query.Offset)
+                .Take(Math.Clamp(query.Limit, 1, 500)).ToList();
             return Task.FromResult<IReadOnlyList<LeafEntity>>(matches);
         }
 

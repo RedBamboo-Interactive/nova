@@ -108,6 +108,9 @@ public static class OwnerScope
 /// </summary>
 public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussions)
 {
+    internal const int QueryPageSize = 500;
+    internal const int MaxListedDiscussions = 10_000;
+
     public static string Slug(string discussionId)
     {
         var sanitized = new string(discussionId.ToLowerInvariant()
@@ -116,13 +119,66 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
     }
 
     public async Task<List<DiscussionRead>> ListAsync(string? filterAgentId = null, CancellationToken ct = default)
+        => await ListCoreAsync(null, filterAgentId, ct);
+
+    /// <summary>
+    /// Lists every non-closed discussion. The SDK cannot express a not-equals or
+    /// data-in filter, so this deliberately uses the same complete bounded scan as
+    /// <see cref="ListAsync"/> and applies the established status vocabulary after
+    /// mapping. Closed rows therefore cannot crowd open rows out of a single page.
+    /// </summary>
+    public async Task<List<DiscussionRead>> ListOpenAsync(
+        string? filterAgentId = null, CancellationToken ct = default)
+        => (await ListCoreAsync(null, filterAgentId, ct))
+            .Where(d => !DiscussionStatus.IsClosed(d.Status))
+            .ToList();
+
+    /// <summary>Lists every discussion with one exact durable status.</summary>
+    public Task<List<DiscussionRead>> ListByStatusAsync(
+        string status, string? filterAgentId = null, CancellationToken ct = default)
+        => ListCoreAsync(status, filterAgentId, ct);
+
+    private async Task<List<DiscussionRead>> ListCoreAsync(
+        string? status, string? filterAgentId, CancellationToken ct)
     {
-        var items = await entities.QueryAsync(new EntityQuery
+        var filters = new Dictionary<string, object?> { ["app"] = "nova" };
+        if (status is not null) filters["status"] = status;
+
+        var items = new List<LeafEntity>();
+        Guid? afterId = null;
+        while (true)
         {
-            TypeSlug = "discussion",
-            DataEquals = new Dictionary<string, object?> { ["app"] = "nova" },
-            Limit = 500,
-        }, ct);
+            var page = await entities.QueryAsync(new EntityQuery
+            {
+                TypeSlug = "discussion",
+                DataEquals = filters,
+                OrderById = true,
+                AfterId = afterId,
+                Limit = QueryPageSize,
+            }, ct);
+
+            if (page.Count == 0) break;
+            if (items.Count + page.Count > MaxListedDiscussions)
+                throw ListingBoundExceeded(status);
+
+            items.AddRange(page);
+            afterId = page[^1].Id;
+
+            if (page.Count < QueryPageSize) break;
+            if (items.Count == MaxListedDiscussions)
+            {
+                var overflow = await entities.QueryAsync(new EntityQuery
+                {
+                    TypeSlug = "discussion",
+                    DataEquals = filters,
+                    OrderById = true,
+                    AfterId = afterId,
+                    Limit = 1,
+                }, ct);
+                if (overflow.Count != 0) throw ListingBoundExceeded(status);
+                break;
+            }
+        }
 
         var result = new List<DiscussionRead>();
         foreach (var item in items)
@@ -135,6 +191,10 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         result.Sort((a, b) => b.LastActivity.CompareTo(a.LastActivity));
         return result;
     }
+
+    private static InvalidOperationException ListingBoundExceeded(string? status)
+        => new($"Nova discussion listing exceeded the {MaxListedDiscussions}-entity safety bound"
+            + (status is null ? "." : $" for status '{status}'."));
 
     public async Task<DiscussionRead?> GetAsync(string discussionId, CancellationToken ct = default)
     {

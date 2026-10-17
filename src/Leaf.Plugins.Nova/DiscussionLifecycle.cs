@@ -68,13 +68,16 @@ public sealed class DiscussionLifecycle(DiscussionStore store, RedComputeClient 
 
             try
             {
-                var pending = (await store.ListAsync(ct: ct))
-                    .Where(d => d.Status == DiscussionStatus.Archiving)
-                    .ToList();
-                foreach (var d in pending)
-                    await FinalizeAsync(d.EntityId, d.SessionId, ct);
+                await ReconcilePendingAsync(ct);
             }
             catch { /* next sweep retries */ }
         }
+    }
+
+    internal async Task ReconcilePendingAsync(CancellationToken ct = default)
+    {
+        var pending = await store.ListByStatusAsync(DiscussionStatus.Archiving, ct: ct);
+        foreach (var discussion in pending)
+            await FinalizeAsync(discussion.EntityId, discussion.SessionId, ct);
     }
 }
