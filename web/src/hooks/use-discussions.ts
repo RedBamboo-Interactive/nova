@@ -52,6 +52,7 @@ const MAX_HISTORY_TAIL = 10_000
 // Revalidate after that durability window instead of treating the first Idle
 // snapshot as fully flushed.
 const SETTLED_TRANSCRIPT_RELOAD_DELAY_MS = 750
+const ARCHIVE_UNDO_WINDOW_MS = 5_000
 
 type HistoryMode = "v2" | "legacy"
 
@@ -167,7 +168,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
 }
 
 export function useDiscussions(eventResolver?: EventResolver) {
-  const { toast } = useToast()
+  const { toast, dismiss: dismissToast } = useToast()
   const environment = useUiEnvironment()
   // Float Nova and the ordinary Nova route are separate React trees. The list
   // is server state, so both trees observe one module-level snapshot while all
@@ -1667,16 +1668,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     reconcileStreaming()
   }, [refreshDiscussions, reloadActiveMessages, reconcileStreaming])
 
-  const archiveDiscussion = useCallback(async (id: string) => {
-    const disc = discussionsRef.current.find((d) => d.id === id)
-    if (disc?.type === "live") {
-      toast({ variant: "error", title: "Can't archive", description: "Live discussions cannot be archived" })
-      return
-    }
-    // Optimistic close: record the intent first so list refreshes and session
-    // events during the DELETE cannot resurrect the row, then hide it.
-    markDiscussionArchivePending(id)
-    if (activeIdRef.current === id) setActiveDiscussionId(null)
+  const commitArchive = useCallback(async (id: string, disc: DiscussionInfo | undefined) => {
     try {
       await api.delete(`/api/apps/nova/discussions/${id}`)
       setMessages((prev) => { const next = { ...prev }; delete next[id]; return next })
@@ -1689,6 +1681,63 @@ export function useDiscussions(eventResolver?: EventResolver) {
       toast({ variant: "error", title: "Failed to archive", description: err instanceof Error ? err.message : "Unknown error" })
     }
   }, [retireHistoryPaging, toast])
+
+  // Close is one tap away from Info on a phone and archived discussions cannot
+  // be reopened, so the DELETE waits out an Undo window instead of firing now.
+  const pendingArchiveCommitsRef = useRef(new Map<string, () => void>())
+  useEffect(() => {
+    const pending = pendingArchiveCommitsRef.current
+    // Leaving Nova (or the page) inside the window commits the close the user
+    // asked for rather than silently dropping it.
+    const flush = () => { for (const commit of [...pending.values()]) commit() }
+    environment.window.addEventListener("pagehide", flush)
+    return () => {
+      environment.window.removeEventListener("pagehide", flush)
+      flush()
+    }
+  }, [environment.window])
+
+  const archiveDiscussion = useCallback((id: string, options?: { onUndo?: () => void }) => {
+    const disc = discussionsRef.current.find((d) => d.id === id)
+    if (disc?.type === "live") {
+      toast({ variant: "error", title: "Can't archive", description: "Live discussions cannot be archived" })
+      return
+    }
+    const pending = pendingArchiveCommitsRef.current
+    if (pending.has(id)) return
+    // Optimistic close: record the intent first so list refreshes and session
+    // events during the window and the DELETE cannot resurrect the row.
+    markDiscussionArchivePending(id)
+    const wasActive = activeIdRef.current === id
+    if (wasActive) setActiveDiscussionId(null)
+
+    let toastId = ""
+    const commit = () => {
+      if (!pending.delete(id)) return
+      environment.window.clearTimeout(timer)
+      void commitArchive(id, disc)
+    }
+    const timer = environment.window.setTimeout(commit, ARCHIVE_UNDO_WINDOW_MS)
+    pending.set(id, commit)
+    toastId = toast({
+      title: "Discussion closed",
+      description: disc?.title || undefined,
+      variant: "default",
+      duration: ARCHIVE_UNDO_WINDOW_MS,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          if (!pending.delete(id)) return
+          environment.window.clearTimeout(timer)
+          dismissToast(toastId)
+          clearDiscussionArchivePending(id)
+          if (disc) setDiscussions((ds) => ds.map((d) => d.id === id ? { ...d, status: disc.status } : d))
+          if (wasActive) setActiveDiscussionId(id)
+          options?.onUndo?.()
+        },
+      },
+    })
+  }, [commitArchive, dismissToast, environment.window, toast])
 
   const dismissDiscussion = useCallback((id: string) => {
     setDismissedIds((prev) => new Set(prev).add(id))

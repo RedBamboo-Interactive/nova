@@ -65,7 +65,8 @@ function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: st
     keywords: ["close", "archive", "remove"],
     action: () => {
       if (!activeDiscussionId) return
-      archiveDiscussion(activeDiscussionId)
+      const id = activeDiscussionId
+      archiveDiscussion(id, { onUndo: () => navigate(`/apps/nova/chat/${id}`) })
       navigate("/apps/nova/chat")
     },
   })

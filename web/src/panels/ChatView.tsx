@@ -675,7 +675,8 @@ export function ChatView({
 
   const handleCloseDiscussion = useCallback(() => {
     if (!activeDiscussion || activeDiscussion.type !== "chat") return
-    void archiveDiscussion(activeDiscussion.id)
+    const id = activeDiscussion.id
+    archiveDiscussion(id, { onUndo: () => navigate(`/apps/nova/chat/${id}`) })
     navigate("/apps/nova/chat")
   }, [activeDiscussion, archiveDiscussion, navigate])
 
@@ -813,6 +814,10 @@ export function ChatView({
               <i aria-hidden="true" className="ph-bold ph-dots-three-vertical text-base" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" sideOffset={4}>
+              <DropdownMenuItem onClick={() => { void refreshDelegationActivity(true); setSessionInfoOpen(true) }}>
+                <i aria-hidden="true" className="ph-bold ph-info size-4" />
+                Info
+              </DropdownMenuItem>
               {canManageDiscussion && (
                 <>
                   <DropdownMenuItem onClick={() => setTitleEditing(true)}>
@@ -848,10 +853,6 @@ export function ChatView({
                   Float
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem onClick={() => { void refreshDelegationActivity(true); setSessionInfoOpen(true) }}>
-                <i aria-hidden="true" className="ph-bold ph-info size-4" />
-                Info
-              </DropdownMenuItem>
               {canManageDiscussion && (
                 <>
                   <DropdownMenuSeparator />
