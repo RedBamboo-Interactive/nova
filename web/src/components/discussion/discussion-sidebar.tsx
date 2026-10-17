@@ -1,11 +1,16 @@
 import { memo, useCallback, useMemo } from "react"
-import { ItemList, ItemListRow } from "@redbamboo/ui"
+import type { ReactNode } from "react"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, ItemList, ItemListRow } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
 import type { DelegationActivitySnapshot, DiscussionDelegationActivity, DiscussionInfo, AgentInfo } from "../../lib/types"
 import { DelegationCount, DelegationSpinner } from "../delegation-activity"
 import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
 import { delegationAnimationPaused } from "../../lib/delegation-activity"
+import { DiscussionActionItems } from "./discussion-actions-menu"
+
+/** Row actions that act through the open discussion's header, so they open it first. */
+export type DiscussionRowAction = "info" | "rename" | "share"
 
 const statusColor: Record<string, string> = {
   thinking: "var(--color-accent-gold)",
@@ -20,6 +25,29 @@ function DiscussionStatusIcon({ discussion, activity }: { discussion: Discussion
   )
 }
 
+/** Row actions trigger: always visible on touch screens, which have no hover.
+ *  Only a hover-capable fine pointer hides it until row hover, focus or open;
+ *  touch never matches a hiding rule, so stylesheet order cannot hide it there. */
+function RowActionsMenu({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        onClick={(e) => e.stopPropagation()}
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-all hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50 [@media(hover:hover)_and_(pointer:fine)]:opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 data-popup-open:opacity-100"
+        aria-label={label}
+        title={label}
+      >
+        <i aria-hidden="true" className="ph-bold ph-dots-three-vertical text-base" />
+      </DropdownMenuTrigger>
+      {/* The menu portals out of the DOM row, but React still bubbles its clicks
+          to the row button; stop them so an action never also selects the row. */}
+      <DropdownMenuContent align="end" sideOffset={4} onClick={(e) => e.stopPropagation()}>
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 interface Props {
   discussions: DiscussionInfo[]
   delegationActivity: DelegationActivitySnapshot
@@ -28,11 +56,14 @@ interface Props {
   onArchive: (id: string) => void
   onRotate: (id: string) => void
   onDismiss: (id: string) => void
+  onRowAction: (id: string, action: DiscussionRowAction) => void
+  onUpdateTitle: (id: string) => void
+  onFloat?: (id: string) => void
   getAgent?: (id: string | null) => AgentInfo | undefined
   multiAgent?: boolean
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, delegationActivity, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, getAgent, multiAgent }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, delegationActivity, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -93,19 +124,24 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             {unread && (
               <span aria-label="Unread" className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
             )}
-            <button
-              onClick={(e) => { e.stopPropagation(); onRotate(discussion.id) }}
-              className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-accent-teal transition-all"
-              title="Rotate timeline"
-            >
-              <i className="ph-bold ph-arrows-clockwise text-xs" />
-            </button>
+            <RowActionsMenu label="Live actions">
+              <DiscussionActionItems
+                onInfo={() => onRowAction(discussion.id, "info")}
+                onShare={!discussion.confidential ? () => onRowAction(discussion.id, "share") : undefined}
+                onFloat={onFloat ? () => onFloat(discussion.id) : undefined}
+              >
+                <DropdownMenuItem onClick={() => onRotate(discussion.id)}>
+                  <i aria-hidden="true" className="ph-bold ph-arrows-clockwise size-4" />
+                  Rotate timeline
+                </DropdownMenuItem>
+              </DiscussionActionItems>
+            </RowActionsMenu>
           </div>
         }
       />
       </div>
     )
-  }, [sidebarSelectionId, onSelect, onRotate, getAgent, multiAgent, delegationActivity])
+  }, [sidebarSelectionId, onSelect, onRotate, onRowAction, onFloat, getAgent, multiAgent, delegationActivity])
 
   const renderChatItem = useCallback((discussion: DiscussionInfo) => {
     const alive = discussion.status !== "archived" && discussion.status !== "stopped"
@@ -160,28 +196,30 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
               {unread && (
                 <span aria-label="Unread" className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
               )}
-              <button
-                onClick={(e) => { e.stopPropagation(); onArchive(discussion.id) }}
-                className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-contrast transition-all"
-                title="Close discussion"
-              >
-                <i className="ph-bold ph-x text-xs" />
-              </button>
+              <RowActionsMenu label="Conversation actions">
+                <DiscussionActionItems
+                  onInfo={() => onRowAction(discussion.id, "info")}
+                  onRename={() => onRowAction(discussion.id, "rename")}
+                  onUpdateTitle={() => onUpdateTitle(discussion.id)}
+                  onShare={!discussion.confidential ? () => onRowAction(discussion.id, "share") : undefined}
+                  onFloat={onFloat ? () => onFloat(discussion.id) : undefined}
+                  onClose={() => onArchive(discussion.id)}
+                />
+              </RowActionsMenu>
             </div>
           ) : (
-            <button
-              onClick={(e) => { e.stopPropagation(); onDismiss(discussion.id) }}
-              className="opacity-0 group-hover/row:opacity-100 text-text-muted hover:text-contrast transition-all"
-              title="Remove from list"
-            >
-              <i className="ph-bold ph-x text-xs" />
-            </button>
+            <RowActionsMenu label="Conversation actions">
+              <DropdownMenuItem onClick={() => onDismiss(discussion.id)}>
+                <i aria-hidden="true" className="ph-bold ph-x size-4" />
+                Remove from list
+              </DropdownMenuItem>
+            </RowActionsMenu>
           )
         }
       />
       </div>
     )
-  }, [activeDiscussionId, onSelect, onArchive, onDismiss, getAgent, multiAgent, delegationActivity])
+  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent, delegationActivity])
 
   return (
     <div className="flex flex-col h-full overflow-hidden">

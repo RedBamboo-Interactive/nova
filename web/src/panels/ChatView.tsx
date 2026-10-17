@@ -1,11 +1,12 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type Ref } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type ProviderUsageSnapshot, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
-import { DiscussionSidebar } from "../components/discussion/discussion-sidebar"
+import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
 import { isMobileClient } from "../components/floating-nova-support"
 import { EditableTitle } from "../components/discussion/editable-title"
+import { DiscussionActionItems } from "../components/discussion/discussion-actions-menu"
 import { AgentPicker } from "../components/agent-picker"
 import { TransitioningAgentAvatar } from "../components/transitioning-agent-avatar"
 import { NovaStatusLine } from "../components/nova-status-line"
@@ -656,11 +657,11 @@ export function ChatView({
     setShareDialogOpen(true)
   }, [share])
 
-  const handleUpdateTitle = useCallback(async () => {
-    if (!activeDiscussionId || titleUpdatePending) return
+  const handleUpdateTitle = useCallback(async (id: string) => {
+    if (titleUpdatePending) return
     setTitleUpdatePending(true)
     try {
-      const updated = await updateDiscussionTitle(activeDiscussionId)
+      const updated = await updateDiscussionTitle(id)
       toast({ variant: "success", title: "Title updated", description: updated.title || "New discussion" })
     } catch (error) {
       toast({
@@ -671,14 +672,43 @@ export function ChatView({
     } finally {
       setTitleUpdatePending(false)
     }
-  }, [activeDiscussionId, titleUpdatePending, toast, updateDiscussionTitle])
+  }, [titleUpdatePending, toast, updateDiscussionTitle])
 
-  const handleCloseDiscussion = useCallback(() => {
-    if (!activeDiscussion || activeDiscussion.type !== "chat") return
-    const id = activeDiscussion.id
+  const handleCloseDiscussion = useCallback((id: string) => {
+    if (id !== activeDiscussionId) {
+      archiveDiscussion(id)
+      return
+    }
+    // Closing the open discussion leaves it, wherever the close came from;
+    // Undo brings the user back to it.
     archiveDiscussion(id, { onUndo: () => navigate(`/apps/nova/chat/${id}`) })
     navigate("/apps/nova/chat")
-  }, [activeDiscussion, archiveDiscussion, navigate])
+  }, [activeDiscussionId, archiveDiscussion, navigate])
+
+  const handleFloatDiscussion = useCallback((id: string) => {
+    void runUiSurfaceAction("nova:floating-chat", "open", { discussionId: id })
+  }, [])
+
+  // Sidebar row actions that drive the open discussion's header (rename, Info,
+  // share) open that discussion first and run once it is the active one.
+  const [pendingRowAction, setPendingRowAction] = useState<{ id: string; action: DiscussionRowAction } | null>(null)
+  const handleRowAction = useCallback((id: string, action: DiscussionRowAction) => {
+    setPendingRowAction({ id, action })
+    if (id !== activeDiscussionId) handleSelectDiscussion(id)
+  }, [activeDiscussionId, handleSelectDiscussion])
+  useEffect(() => {
+    if (!pendingRowAction || activeDiscussion?.id !== pendingRowAction.id) return
+    setPendingRowAction(null)
+    setMobileTab(1)
+    if (pendingRowAction.action === "info") {
+      void refreshDelegationActivity(true)
+      setSessionInfoOpen(true)
+    } else if (pendingRowAction.action === "rename") {
+      setTitleEditing(true)
+    } else {
+      handleShare()
+    }
+  }, [activeDiscussion?.id, handleShare, pendingRowAction, refreshDelegationActivity])
 
   const liveHeartbeatPair = findLiveHeartbeatPair(discussions, activeDiscussion)
 
@@ -814,54 +844,15 @@ export function ChatView({
               <i aria-hidden="true" className="ph-bold ph-dots-three-vertical text-base" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" sideOffset={4}>
-              <DropdownMenuItem onClick={() => { void refreshDelegationActivity(true); setSessionInfoOpen(true) }}>
-                <i aria-hidden="true" className="ph-bold ph-info size-4" />
-                Info
-              </DropdownMenuItem>
-              {canManageDiscussion && (
-                <>
-                  <DropdownMenuItem onClick={() => setTitleEditing(true)}>
-                    <i aria-hidden="true" className="ph-bold ph-pen size-4" />
-                    Rename
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => void handleUpdateTitle()}
-                    disabled={titleUpdatePending}
-                    aria-busy={titleUpdatePending}
-                  >
-                    <i aria-hidden="true" className={`${titleUpdatePending ? "ph-bold ph-spinner-gap animate-spin" : "ph-bold ph-sparkle"} size-4`} />
-                    Update title
-                  </DropdownMenuItem>
-                </>
-              )}
-              {!activeDiscussion.confidential && (
-                <DropdownMenuItem onClick={handleShare}>
-                  <i aria-hidden="true" className="ph-bold ph-share-network size-4" />
-                  Share
-                </DropdownMenuItem>
-              )}
-              {floatingSurface?.supported && (
-                <DropdownMenuItem
-                  className="nova-chat-menu-float"
-                  onClick={() => void runUiSurfaceAction("nova:floating-chat", "open", { discussionId: activeDiscussion.id })}
-                  data-slot="floating-surface-trigger"
-                  data-ui-surface="nova:floating-chat"
-                  data-ui-action="open"
-                  title="Float Nova (Ctrl+Alt+N)"
-                >
-                  <i aria-hidden="true" className="ph-bold ph-picture-in-picture size-4" />
-                  Float
-                </DropdownMenuItem>
-              )}
-              {canManageDiscussion && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" onClick={handleCloseDiscussion}>
-                    <i aria-hidden="true" className="ph-bold ph-x size-4" />
-                    Close
-                  </DropdownMenuItem>
-                </>
-              )}
+              <DiscussionActionItems
+                onInfo={() => { void refreshDelegationActivity(true); setSessionInfoOpen(true) }}
+                onRename={canManageDiscussion ? () => setTitleEditing(true) : undefined}
+                onUpdateTitle={canManageDiscussion ? () => void handleUpdateTitle(activeDiscussion.id) : undefined}
+                updateTitlePending={titleUpdatePending}
+                onShare={!activeDiscussion.confidential ? handleShare : undefined}
+                onFloat={floatingSurface?.supported ? () => handleFloatDiscussion(activeDiscussion.id) : undefined}
+                onClose={canManageDiscussion ? () => handleCloseDiscussion(activeDiscussion.id) : undefined}
+              />
             </DropdownMenuContent>
           </DropdownMenu>
         </>
@@ -1255,9 +1246,12 @@ export function ChatView({
               delegationActivity={delegationActivity}
               activeDiscussionId={synchronizedDiscussionId ?? activeDiscussionId}
               onSelect={handleSelectDiscussion}
-              onArchive={archiveDiscussion}
+              onArchive={handleCloseDiscussion}
               onRotate={handleRotateDiscussion}
               onDismiss={dismissDiscussion}
+              onRowAction={handleRowAction}
+              onUpdateTitle={handleUpdateTitle}
+              onFloat={floatingSurface?.supported && !floating ? handleFloatDiscussion : undefined}
               getAgent={getAgent}
               multiAgent={multiAgent}
             />
