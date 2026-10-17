@@ -230,7 +230,8 @@ public static class DiscussionEndpoints
 
             if (type is "live" or HeartbeatService.DiscussionType)
             {
-                var existing = (await store.ListOpenAsync()).Any(d => d.Type == type && d.AgentId == agentId);
+                var existing = (await store.ListByTypeAsync(type, agentId, ctx.RequestAborted))
+                    .Any(d => !DiscussionStatus.IsClosed(d.Status));
                 if (existing)
                     return Results.Json(new { error = $"A {type.ToUpperInvariant()} discussion already exists for this agent" }, statusCode: 409);
             }
@@ -275,8 +276,8 @@ public static class DiscussionEndpoints
         group.MapGet("/discussions/live", async (HttpContext ctx, DiscussionStore store) =>
         {
             var agentFilter = ctx.Request.Query["agent"].FirstOrDefault();
-            var live = (await store.ListOpenAsync(agentFilter))
-                .Where(d => d.Type == "live"
+            var live = (await store.ListByTypeAsync("live", agentFilter, ctx.RequestAborted))
+                .Where(d => !DiscussionStatus.IsClosed(d.Status)
                     && DiscussionAccessPolicy.CanRead(d, ctx))
                 .Select(DiscussionStore.ToInfo);
             return Results.Ok(live);
@@ -311,14 +312,8 @@ public static class DiscussionEndpoints
                 AccessScope = accessScope,
             }, ctx.RequestAborted);
 
-            var accessible = (await store.ListAsync())
-                .Where(d => DiscussionAccessPolicy.CanRead(d, ctx))
-                .ToList();
-            var byEntityId = accessible.ToDictionary(d => d.EntityId);
-            var bySessionId = new Dictionary<string, DiscussionRead>();
-            foreach (var d in accessible)
-                if (d.SessionId != null && !bySessionId.ContainsKey(d.SessionId))
-                    bySessionId[d.SessionId] = d;
+            var byEntityId = new Dictionary<Guid, DiscussionRead?>();
+            var bySessionId = new Dictionary<string, DiscussionRead?>();
 
             // Kernel groups arrive best-ranked first; a discussion hit in both streams
             // merges into one result. Non-Nova conversations (other apps' sessions or
@@ -327,13 +322,24 @@ public static class DiscussionEndpoints
             foreach (var g in result.Groups)
             {
                 DiscussionRead? disc = null;
-                if (g.EntityId is { } eid && byEntityId.TryGetValue(eid, out var direct))
-                    disc = direct;
-                else if (g.Entity is { TypeSlug: "ai-session" }
-                    && g.Entity.Data["session_id"]?.GetValue<string>() is { } sid
-                    && bySessionId.TryGetValue(sid, out var viaSession))
-                    disc = viaSession;
-                if (disc == null) continue;
+                if (g.EntityId is { } eid)
+                {
+                    if (!byEntityId.TryGetValue(eid, out disc))
+                    {
+                        disc = await store.GetAsync(eid, ctx.RequestAborted);
+                        byEntityId[eid] = disc;
+                    }
+                }
+                if (disc is null && g.Entity is { TypeSlug: "ai-session" }
+                    && g.Entity.Data["session_id"]?.GetValue<string>() is { } sid)
+                {
+                    if (!bySessionId.TryGetValue(sid, out disc))
+                    {
+                        disc = await store.GetBySessionIdAsync(sid, ctx.RequestAborted);
+                        bySessionId[sid] = disc;
+                    }
+                }
+                if (disc == null || !DiscussionAccessPolicy.CanRead(disc, ctx)) continue;
 
                 if (merged.TryGetValue(disc.Id, out var existing))
                     merged[disc.Id] = (disc, existing.MatchCount + g.HitCount, [.. existing.Hits, .. g.Hits]);
@@ -373,7 +379,7 @@ public static class DiscussionEndpoints
             if (ctx.Request.Query.TryGetValue("limit", out var lv) && int.TryParse(lv, out var parsed))
                 limit = Math.Clamp(parsed, 1, 200);
 
-            var discussions = (await store.ListAsync())
+            var discussions = (await store.ListOpenAndRecentlyClosedAsync(since, ct: ctx.RequestAborted))
                 .Where(d => d.LastActivity >= since && DiscussionAccessPolicy.CanRead(d, ctx))
                 .Where(d => !d.Confidential)
                 .Take(limit)
@@ -919,9 +925,9 @@ public static class DiscussionEndpoints
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
 
             var cutoff = DateTime.UtcNow.AddDays(-2);
-            var all = (await store.ListAsync())
+            var all = (await store.ListOpenAndRecentlyClosedAsync(
+                    cutoff, ct: ctx.RequestAborted))
                 .Where(d => DiscussionAccessPolicy.CanRead(d, ctx))
-                .Where(d => !DiscussionStatus.IsClosed(d.Status) || d.LastActivity >= cutoff)
                 .Where(d => !d.Confidential || d.Id == id)
                 .ToList();
 
@@ -1264,7 +1270,9 @@ public static class DiscussionEndpoints
             var idempotencyKey = ctx.Request.Headers["Idempotency-Key"].FirstOrDefault();
             // "live" resolves to Nova's current LIVE discussion — the system:live-rotation
             // http-action automation calls this form because it cannot resolve the id itself.
-            var candidates = id == "live" ? await store.ListAsync() : null;
+            var candidates = id == "live"
+                ? await store.ListByTypeAsync("live", ct: ctx.RequestAborted)
+                : null;
             var discussion = id == "live"
                 ? candidates!.FirstOrDefault(d =>
                     d.Type == "live" && !DiscussionStatus.IsClosed(d.Status)
@@ -1343,8 +1351,8 @@ public static class DiscussionEndpoints
             // "live" resolves to the current LIVE discussion — the heartbeat posts
             // its note-events through this form since the LIVE id rotates daily.
             var discussion = id == "live"
-                ? (await store.ListOpenAsync()).FirstOrDefault(d =>
-                    d.Type == "live"
+                ? (await store.ListByTypeAsync("live", ct: ctx.RequestAborted)).FirstOrDefault(d =>
+                    !DiscussionStatus.IsClosed(d.Status)
                     && (agents.NovaAgentId == null || d.AgentId == null || d.AgentId == agents.NovaAgentId))
                 : await store.GetAsync(id);
             if (discussion is null) return NotFound();

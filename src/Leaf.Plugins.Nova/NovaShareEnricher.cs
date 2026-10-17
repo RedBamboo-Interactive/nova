@@ -18,8 +18,7 @@ public sealed class NovaShareEnricher(
 
     public async Task<ShareCustomization?> EnrichAsync(Guid discussionEntityId, CancellationToken ct = default)
     {
-        var allDiscussions = await store.ListAsync(ct: ct);
-        var disc = allDiscussions.FirstOrDefault(d => d.EntityId == discussionEntityId);
+        var disc = await store.GetAsync(discussionEntityId, ct);
         if (disc is null) return null;
 
         string? agentName = null;

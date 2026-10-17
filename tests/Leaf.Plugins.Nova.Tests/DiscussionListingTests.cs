@@ -53,8 +53,57 @@ public sealed class DiscussionListingTests
         Assert.True(entityStore.QueryCount > 1);
     }
 
+    [Fact]
+    public async Task Open_listing_never_requests_closed_statuses()
+    {
+        var entityStore = new ContractEntityStore(
+            Discussion("open", DiscussionStatus.Idle, DateTimeOffset.UtcNow, "agent-a"),
+            Discussion("archived", DiscussionStatus.Archived, DateTimeOffset.UtcNow, "agent-a"));
+        var store = new DiscussionStore(entityStore, new NoIoDiscussions());
+
+        var result = await store.ListOpenAsync();
+
+        Assert.Equal("open", Assert.Single(result).Id);
+        Assert.Equal(
+            [DiscussionStatus.Idle, DiscussionStatus.Thinking, DiscussionStatus.Stopped],
+            entityStore.Queries.Select(query =>
+                Assert.IsType<string>(query.DataEquals!["status"])).ToArray());
+        Assert.All(entityStore.Queries, query =>
+        {
+            Assert.Equal("nova", query.DataEquals!["app"]);
+            Assert.False(query.DataEquals.ContainsKey("type"));
+        });
+    }
+
+    [Fact]
+    public async Task Type_scoped_lookup_cannot_miss_a_discussion_that_races_between_open_statuses()
+    {
+        var row = Discussion("live", DiscussionStatus.Idle, DateTimeOffset.UtcNow,
+            "agent-a", type: "live");
+        var entityStore = new ContractEntityStore(row);
+        var store = new DiscussionStore(entityStore, new NoIoDiscussions());
+        entityStore.BeforeQuery = query =>
+        {
+            if (query.DataEquals?.TryGetValue("status", out var status) != true) return;
+            row.Data["status"] = Equals(status, DiscussionStatus.Idle)
+                ? DiscussionStatus.Thinking
+                : DiscussionStatus.Idle;
+        };
+
+        Assert.Empty(await store.ListOpenAsync());
+
+        row.Data["status"] = DiscussionStatus.Idle;
+        var result = await store.ListByTypeAsync("live", "agent-a");
+
+        Assert.Equal("live", Assert.Single(result).Id);
+        var typeQuery = entityStore.Queries[^1];
+        Assert.Equal("live", typeQuery.DataEquals!["type"]);
+        Assert.False(typeQuery.DataEquals.ContainsKey("status"));
+    }
+
     private static LeafEntity Discussion(
-        string id, string status, DateTimeOffset lastActivity, string? agentId)
+        string id, string status, DateTimeOffset lastActivity, string? agentId,
+        string type = "chat")
         => new(
             Guid.NewGuid(),
             "discussion",
@@ -66,6 +115,7 @@ public sealed class DiscussionListingTests
                 ["app"] = "nova",
                 ["status"] = status,
                 ["agent"] = agentId,
+                ["type"] = type,
                 ["last_activity"] = lastActivity.ToString("O"),
             },
             lastActivity,
@@ -77,6 +127,8 @@ public sealed class DiscussionListingTests
         private readonly List<LeafEntity> entities = [.. initial];
 
         public int QueryCount { get; private set; }
+        public List<EntityQuery> Queries { get; } = [];
+        public Action<EntityQuery>? BeforeQuery { get; set; }
 
         public Task<LeafEntity?> GetAsync(Guid id, CancellationToken ct = default)
             => Task.FromResult(entities.SingleOrDefault(entity => entity.Id == id));
@@ -93,6 +145,8 @@ public sealed class DiscussionListingTests
             EntityQuery query, CancellationToken ct = default)
         {
             QueryCount++;
+            Queries.Add(query);
+            BeforeQuery?.Invoke(query);
             IEnumerable<LeafEntity> matches = entities
                 .Where(entity => entity.TypeSlug == query.TypeSlug)
                 .Where(entity => Matches(entity.Data, query.DataEquals));

@@ -266,9 +266,8 @@ public sealed class MessagePipeline(
         var now = DateTime.UtcNow;
         var cutoff = now.AddDays(-2);
 
-        var all = (await store.ListAsync(ct: ct))
+        var all = (await store.ListOpenAndRecentlyClosedAsync(cutoff, ct: ct))
             .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
-            .Where(d => !DiscussionStatus.IsClosed(d.Status) || d.LastActivity >= cutoff)
             // A confidential discussion is isolated even from the owning Agent's
             // ambient context in other discussions. The Agent may read it only
             // while acting inside that discussion.

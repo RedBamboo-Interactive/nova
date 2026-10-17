@@ -110,6 +110,10 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
 {
     internal const int QueryPageSize = 500;
     internal const int MaxListedDiscussions = 10_000;
+    private static readonly string[] OpenStatuses =
+        [DiscussionStatus.Idle, DiscussionStatus.Thinking, DiscussionStatus.Stopped];
+    private static readonly string[] ClosedStatuses =
+        [DiscussionStatus.Archived, DiscussionStatus.Archiving];
 
     public static string Slug(string discussionId)
     {
@@ -118,31 +122,66 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         return $"discussion-nova-{sanitized}";
     }
 
-    public async Task<List<DiscussionRead>> ListAsync(string? filterAgentId = null, CancellationToken ct = default)
-        => await ListCoreAsync(null, filterAgentId, ct);
+    public Task<List<DiscussionRead>> ListAsync(
+        string? filterAgentId = null, CancellationToken ct = default)
+        => ListCoreAsync(null, null, filterAgentId, ct);
 
     /// <summary>
-    /// Lists every non-closed discussion. The SDK cannot express a not-equals or
-    /// data-in filter, so this deliberately uses the same complete bounded scan as
-    /// <see cref="ListAsync"/> and applies the established status vocabulary after
-    /// mapping. Closed rows therefore cannot crowd open rows out of a single page.
+    /// Lists every discussion in the open status vocabulary without loading closed
+    /// rows. Separate exact-status queries can race with a status transition, so
+    /// lifecycle-critical lookups must use <see cref="ListByTypeAsync"/> instead.
     /// </summary>
     public async Task<List<DiscussionRead>> ListOpenAsync(
         string? filterAgentId = null, CancellationToken ct = default)
-        => (await ListCoreAsync(null, filterAgentId, ct))
-            .Where(d => !DiscussionStatus.IsClosed(d.Status))
-            .ToList();
+    {
+        var result = new Dictionary<Guid, DiscussionRead>();
+        foreach (var status in OpenStatuses)
+        {
+            foreach (var discussion in await ListCoreAsync(status, null, filterAgentId, ct))
+                result[discussion.EntityId] = discussion;
+        }
+        return Sort(result.Values);
+    }
 
     /// <summary>Lists every discussion with one exact durable status.</summary>
     public Task<List<DiscussionRead>> ListByStatusAsync(
         string status, string? filterAgentId = null, CancellationToken ct = default)
-        => ListCoreAsync(status, filterAgentId, ct);
+        => ListCoreAsync(status, null, filterAgentId, ct);
+
+    /// <summary>
+    /// Lists every discussion of one durable type in one stable query sequence.
+    /// Callers filter status in memory so a concurrent status transition cannot make
+    /// a lifecycle-critical LIVE or Heartbeat discussion disappear between queries.
+    /// </summary>
+    public Task<List<DiscussionRead>> ListByTypeAsync(
+        string type, string? filterAgentId = null, CancellationToken ct = default)
+        => ListCoreAsync(null, type, filterAgentId, ct);
+
+    /// <summary>
+    /// Lists all open discussions plus closed discussions active since a cutoff.
+    /// The SDK has no JSON range filter, so closed statuses are read newest entity
+    /// update first and stop once entity updates predate the activity cutoff.
+    /// </summary>
+    public async Task<List<DiscussionRead>> ListOpenAndRecentlyClosedAsync(
+        DateTime cutoff, string? filterAgentId = null, CancellationToken ct = default)
+    {
+        var result = (await ListOpenAsync(filterAgentId, ct))
+            .ToDictionary(discussion => discussion.EntityId);
+        foreach (var status in ClosedStatuses)
+        {
+            foreach (var discussion in await ListRecentStatusAsync(
+                status, cutoff, filterAgentId, ct))
+                result[discussion.EntityId] = discussion;
+        }
+        return Sort(result.Values);
+    }
 
     private async Task<List<DiscussionRead>> ListCoreAsync(
-        string? status, string? filterAgentId, CancellationToken ct)
+        string? status, string? type, string? filterAgentId, CancellationToken ct)
     {
         var filters = new Dictionary<string, object?> { ["app"] = "nova" };
         if (status is not null) filters["status"] = status;
+        if (type is not null) filters["type"] = type;
 
         var items = new List<LeafEntity>();
         Guid? afterId = null;
@@ -188,6 +227,64 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             if (filterAgentId != null && d.AgentId != null && d.AgentId != filterAgentId) continue;
             result.Add(d);
         }
+        return Sort(result);
+    }
+
+    private async Task<List<DiscussionRead>> ListRecentStatusAsync(
+        string status, DateTime cutoff, string? filterAgentId, CancellationToken ct)
+    {
+        var filters = new Dictionary<string, object?>
+        {
+            ["app"] = "nova",
+            ["status"] = status,
+        };
+        var result = new List<DiscussionRead>();
+        var offset = 0;
+        while (true)
+        {
+            var page = await entities.QueryAsync(new EntityQuery
+            {
+                TypeSlug = "discussion",
+                DataEquals = filters,
+                Limit = QueryPageSize,
+                Offset = offset,
+            }, ct);
+
+            if (page.Count == 0) break;
+            if (offset + page.Count > MaxListedDiscussions)
+                throw ListingBoundExceeded(status);
+
+            foreach (var item in page)
+            {
+                var discussion = Map(item);
+                if (discussion is null || discussion.LastActivity < cutoff) continue;
+                if (filterAgentId is not null && discussion.AgentId is not null
+                    && discussion.AgentId != filterAgentId) continue;
+                result.Add(discussion);
+            }
+
+            offset += page.Count;
+            if (page.Count < QueryPageSize || page[^1].UpdatedAt.UtcDateTime < cutoff)
+                break;
+            if (offset == MaxListedDiscussions)
+            {
+                var overflow = await entities.QueryAsync(new EntityQuery
+                {
+                    TypeSlug = "discussion",
+                    DataEquals = filters,
+                    Limit = 1,
+                    Offset = offset,
+                }, ct);
+                if (overflow.Count != 0) throw ListingBoundExceeded(status);
+                break;
+            }
+        }
+        return Sort(result);
+    }
+
+    private static List<DiscussionRead> Sort(IEnumerable<DiscussionRead> discussions)
+    {
+        var result = discussions.ToList();
         result.Sort((a, b) => b.LastActivity.CompareTo(a.LastActivity));
         return result;
     }
@@ -200,6 +297,29 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
     {
         var entity = await entities.GetBySlugAsync(Slug(discussionId), ct);
         return entity == null ? null : Map(entity);
+    }
+
+    public async Task<DiscussionRead?> GetAsync(Guid entityId, CancellationToken ct = default)
+    {
+        var entity = await entities.GetAsync(entityId, ct);
+        return IsNovaDiscussion(entity) ? Map(entity!) : null;
+    }
+
+    public async Task<DiscussionRead?> GetBySessionIdAsync(
+        string sessionId, CancellationToken ct = default)
+    {
+        var matches = await entities.QueryAsync(new EntityQuery
+        {
+            TypeSlug = "discussion",
+            DataEquals = new Dictionary<string, object?>
+            {
+                ["app"] = "nova",
+                ["session_id"] = sessionId,
+            },
+            Limit = 2,
+        }, ct);
+        return Sort(matches.Where(IsNovaDiscussion).Select(Map)
+            .OfType<DiscussionRead>()).FirstOrDefault();
     }
 
     public async Task<DiscussionRead> CreateAsync(string? title, string? agentId, string? ownerId, string type = "chat",
@@ -658,6 +778,10 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             await entities.PatchAsync(entityId, new JsonObject { ["status"] = to }, null, ct);
             return to;
         }, ct);
+
+    private static bool IsNovaDiscussion(LeafEntity? entity)
+        => entity is { TypeSlug: "discussion" }
+            && Str(entity.Data, "app") == "nova";
 
     private static DiscussionRead? Map(LeafEntity entity)
     {

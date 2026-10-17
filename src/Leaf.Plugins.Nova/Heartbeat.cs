@@ -119,13 +119,16 @@ public sealed class HeartbeatService(
             var agentEntities = await entities.QueryAsync(new EntityQuery { TypeSlug = "agent", Limit = 50 }, ct);
             var users = await entities.QueryAsync(new EntityQuery { TypeSlug = "user", Limit = 2 }, ct);
             var soleOwnerId = users.Count == 1 ? users[0].Id.ToString() : null;
+            var liveDiscussions = await store.ListByTypeAsync("live", ct: ct);
+            var heartbeatDiscussions = await store.ListByTypeAsync(DiscussionType, ct: ct);
 
             foreach (var agent in agentEntities)
             {
                 var agentId = agent.Id.ToString();
-                var open = await store.ListOpenAsync(agentId, ct);
-                var openLive = OpenDiscussions(open, "live");
-                var openHeartbeat = OpenDiscussions(open, DiscussionType);
+                var openLive = OpenDiscussions(liveDiscussions.Where(d =>
+                    d.AgentId is null || d.AgentId == agentId), "live");
+                var openHeartbeat = OpenDiscussions(heartbeatDiscussions.Where(d =>
+                    d.AgentId is null || d.AgentId == agentId), DiscussionType);
                 var legacy = HeartbeatConfig.Parse(agent.Data);
                 var binding = await NormalizeHeartbeatAsync(agent, legacy, soleOwnerId, ct);
                 var config = binding?.Config;
@@ -522,8 +525,8 @@ public sealed class HeartbeatService(
         string agentId, HeartbeatConfig config, Guid? parentJobId = null,
         string? correlationId = null, CancellationToken ct = default)
     {
-        var live = (await store.ListOpenAsync(agentId, ct)).FirstOrDefault(d =>
-            d.Type == "live");
+        var live = (await store.ListByTypeAsync("live", agentId, ct)).FirstOrDefault(d =>
+            !DiscussionStatus.IsClosed(d.Status));
         return live != null && await TryAutoResumePresenceSessionAsync(
             live, "heartbeat-tick", config.AutomationId, parentJobId,
             correlationId, ct);
@@ -648,9 +651,9 @@ public sealed class HeartbeatService(
 
     public async Task<DiscussionRead?> GetDiscussionAsync(string agentId, CancellationToken ct = default)
     {
-        var all = await store.ListOpenAsync(agentId, ct);
+        var all = await store.ListByTypeAsync(DiscussionType, agentId, ct);
         return all.FirstOrDefault(d =>
-            d.Type == DiscussionType && d.AgentId == agentId);
+            !DiscussionStatus.IsClosed(d.Status));
     }
 
     // ── Day boundary ────────────────────────────────────────────────
@@ -802,9 +805,10 @@ public sealed class HeartbeatService(
         DiscussionRead heartbeat, DateTimeOffset? lastTick, CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow;
-        var all = (await store.ListAsync(heartbeat.AgentId, ct))
+        var cutoff = now.AddHours(-24).UtcDateTime;
+        var all = (await store.ListOpenAndRecentlyClosedAsync(
+                cutoff, heartbeat.AgentId, ct))
             .Where(d => d.Id != heartbeat.Id)
-            .Where(d => !DiscussionStatus.IsClosed(d.Status) || d.LastActivity >= now.AddHours(-24).UtcDateTime)
             .Where(d => !d.Confidential)
             .OrderByDescending(d => d.LastActivity)
             .Take(15)
