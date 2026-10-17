@@ -205,6 +205,11 @@ export function ChatView({
       ? `/ai-session/sessions/${encodeURIComponent(payloadSessionId)}/messages/${ref.recordId}/output?download=true`
       : "#",
   [payloadSessionId])
+  const getTranscriptPayloadMediaUrl = useCallback((ref: TranscriptPayloadRef) =>
+    payloadSessionId
+      ? `/ai-session/sessions/${encodeURIComponent(payloadSessionId)}/messages/${ref.recordId}/output`
+      : "#",
+  [payloadSessionId])
 
   useLayoutEffect(() => {
     if (pendingDiscussionId && requestedDiscussionId === pendingDiscussionId) {
@@ -1107,6 +1112,7 @@ export function ChatView({
           resolveFileLink={resolveFileLink}
           resolveEventLink={resolveEventLink}
           loadTranscriptPayload={loadTranscriptPayload}
+          getTranscriptPayloadMediaUrl={getTranscriptPayloadMediaUrl}
           getTranscriptPayloadDownloadUrl={getTranscriptPayloadDownloadUrl}
           returnFocusRef={voiceSessionTriggerRef}
           onMute={voiceSession.toggleMute}
@@ -1155,6 +1161,7 @@ export function ChatView({
         resolveFileLink={resolveFileLink}
         resolveEventLink={resolveEventLink}
         loadTranscriptPayload={loadTranscriptPayload}
+        getTranscriptPayloadMediaUrl={getTranscriptPayloadMediaUrl}
         getTranscriptPayloadDownloadUrl={getTranscriptPayloadDownloadUrl}
         assistantAvatar={avatarSrc}
         resolveAgentInfo={resolveAgentInfo}

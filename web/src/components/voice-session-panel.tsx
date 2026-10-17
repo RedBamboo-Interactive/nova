@@ -31,6 +31,7 @@ interface Props {
   resolveFileLink?: (filePath: string, opts?: { line?: number }) => (() => void) | undefined
   resolveEventLink?: (event: ParsedEvent) => (() => void) | undefined
   loadTranscriptPayload?: TranscriptPayloadLoader
+  getTranscriptPayloadMediaUrl?: (ref: TranscriptPayloadRef) => string
   getTranscriptPayloadDownloadUrl?: (ref: TranscriptPayloadRef) => string
   returnFocusRef: RefObject<HTMLButtonElement | null>
   onMute: () => void
@@ -61,7 +62,7 @@ function useRecentActivity(value: string) {
 
 export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedAt, error,
   delegating, userCaption, assistantCaption, captionSpeaker, messages, isStreaming, resolveImageSrc,
-  resolveFileLink, resolveEventLink, loadTranscriptPayload, getTranscriptPayloadDownloadUrl,
+  resolveFileLink, resolveEventLink, loadTranscriptPayload, getTranscriptPayloadMediaUrl, getTranscriptPayloadDownloadUrl,
   returnFocusRef, onMute, onEnd }: Props) {
   const [now, setNow] = useState(Date.now())
   const panelRef = useRef<HTMLDivElement>(null)
@@ -185,6 +186,7 @@ export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedA
                   resolveFileLink={resolveFileLink}
                   resolveEventLink={resolveEventLink}
                   loadTranscriptPayload={loadTranscriptPayload}
+                  getTranscriptPayloadMediaUrl={getTranscriptPayloadMediaUrl}
                   getTranscriptPayloadDownloadUrl={getTranscriptPayloadDownloadUrl}
                   assistantAvatar={avatarUrl ?? undefined}
                 />
