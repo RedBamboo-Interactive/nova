@@ -330,6 +330,7 @@ jobs:
             nova/artifacts/nova-signature-input.json
             nova/artifacts/nova-package-inventory.txt
           key: nova-${{ steps.pins.outputs.version }}-${{ inputs.source_commit || github.workflow_sha }}-${{ github.run_id }}-${{ github.run_attempt }}-unsigned-release-inputs
+          enableCrossOsArchive: true
 
   bridge:
     name: Append unsigned Nova bytes to rolling prerelease
@@ -337,7 +338,7 @@ jobs:
     concurrency:
       group: nova-unsigned-candidate-bridge
       cancel-in-progress: false
-    runs-on: windows-2025
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       actions: read
@@ -358,6 +359,7 @@ jobs:
             nova/artifacts/nova-package-inventory.txt
           key: nova-${{ needs.candidate.outputs.version }}-${{ inputs.source_commit || github.workflow_sha }}-${{ github.run_id }}-${{ github.run_attempt }}-unsigned-release-inputs
           fail-on-cache-miss: true
+          enableCrossOsArchive: true
 
       - name: Prepare exactly two immutable bridge assets
         shell: pwsh
