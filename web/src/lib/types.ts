@@ -45,6 +45,9 @@ export interface DiscussionInfo {
   /** Internal first-turn identity. Raw RedCompute history includes this turn;
    * clients hide it while retaining the real session and its tool trace. */
   setupBootstrapMessageUid?: string | null
+  /** Set when another app owns the discussion. Nova shows it read-only: the owner
+   * admits into its session and owns its lifecycle. */
+  ownedBy?: { app: string | null } | null
 }
 
 export interface AgentInfo {

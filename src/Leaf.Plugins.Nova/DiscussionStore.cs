@@ -91,7 +91,9 @@ public sealed record DiscussionRead(
     long ReadConversationRevision = 0,
     string? LastProcessedSessionAssistantUid = null,
     string? SetupBootstrapMessageUid = null,
-    string? TitleSource = null);
+    string? TitleSource = null,
+    string? OwnerPlugin = null,
+    string? OwnerApp = null);
 
 public sealed record ArchivedDiscussionPage(
     IReadOnlyList<DiscussionRead> Items,
@@ -513,17 +515,27 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
     }
 
     public Task PatchAsync(Guid entityId, JsonObject patch, string? name = null, CancellationToken ct = default)
-        => DiscussionEntityGate.RunAsync(entityId, () => entities.PatchAsync(entityId, patch, name, ct), ct);
+        => DiscussionEntityGate.RunAsync(entityId, async () =>
+        {
+            await RequireNovaOwnedAsync(entityId, ct);
+            await entities.PatchAsync(entityId, patch, name, ct);
+        }, ct);
 
     public Task TouchAsync(Guid entityId, CancellationToken ct = default)
-        => PatchAsync(entityId, new JsonObject { ["last_activity"] = DateTimeOffset.UtcNow.ToString("O") }, ct: ct);
+        => DiscussionEntityGate.RunAsync(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity is null || IsForeign(entity)) return;
+            await entities.PatchAsync(entityId,
+                new JsonObject { ["last_activity"] = DateTimeOffset.UtcNow.ToString("O") }, null, ct);
+        }, ct);
 
     /// <summary>Applies an explicit user rename and returns the canonical entity view.</summary>
     public Task<DiscussionRead?> SetManualTitleAsync(
         Guid entityId, string? title, CancellationToken ct = default)
         => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
         {
-            var entity = await entities.GetAsync(entityId, ct);
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
             if (entity is null || Map(entity) is null) return null;
             await entities.PatchAsync(entityId, new JsonObject
             {
@@ -542,7 +554,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         Guid entityId, string title, CancellationToken ct = default)
         => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
         {
-            var entity = await entities.GetAsync(entityId, ct);
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
             var current = entity is null ? null : Map(entity);
             if (entity is null || current is null || string.IsNullOrWhiteSpace(title)) return current;
             if (!string.Equals(current.Type, "chat", StringComparison.Ordinal)) return current;
@@ -571,6 +583,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             var entity = await entities.GetAsync(entityId, ct);
             var current = entity is null ? null : Map(entity);
             if (entity is null || current is null) return null;
+            if (DiscussionApplicationOwner.IsForeign(current)) return current;
             if (!string.IsNullOrWhiteSpace(current.Title)
                 || current.TitleSource is not (null or DiscussionTitleSource.Fallback))
                 return current;
@@ -600,6 +613,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             var current = entity is null ? null : Map(entity);
             if (entity is null || current is null || string.IsNullOrWhiteSpace(title)) return current;
             if (!string.Equals(current.Type, "chat", StringComparison.Ordinal)) return current;
+            if (DiscussionApplicationOwner.IsForeign(current)) return current;
 
             var source = current.TitleSource;
             var eligible = source is DiscussionTitleSource.Fallback or DiscussionTitleSource.Session;
@@ -654,13 +668,18 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
     /// <summary>Message post routed through the per-entity gate (the kernel post also
     /// rewrites the discussion entity's data blob for message_count/last_activity).</summary>
     public Task PostMessageAsync(Guid entityId, string role, string content, JsonObject metadata, string? userId = null, CancellationToken ct = default)
-        => DiscussionEntityGate.RunAsync(entityId, () => discussions.PostAsync(entityId, role, content, metadata, userId, ct), ct);
+        => DiscussionEntityGate.RunAsync(entityId, async () =>
+        {
+            await RequireNovaOwnedAsync(entityId, ct);
+            await discussions.PostAsync(entityId, role, content, metadata, userId, ct);
+        }, ct);
 
     public Task<bool> PostMessageIdempotentAsync(Guid entityId, string role, string content,
         JsonObject metadata, string idempotencyKey, string? userId = null,
         CancellationToken ct = default)
         => DiscussionEntityGate.RunAsync(entityId, async () =>
         {
+            await RequireNovaOwnedAsync(entityId, ct);
             var existing = await discussions.GetMessagesAsync(entityId, ct: ct);
             if (existing.Any(message => message.Metadata["idempotency_key"] is JsonValue value
                 && value.TryGetValue<string>(out var key)
@@ -681,6 +700,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         string? userId = null, CancellationToken ct = default)
         => DiscussionEntityGate.RunAsync(entityId, async () =>
         {
+            await RequireNovaOwnedAsync(entityId, ct);
             if (!string.IsNullOrWhiteSpace(idempotencyKey))
             {
                 var existing = await discussions.GetMessagesAsync(entityId, ct: ct);
@@ -729,6 +749,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             if (entity is null) return null;
             var current = Map(entity);
             if (current is null) return null;
+            if (DiscussionApplicationOwner.IsForeign(current)) return current;
 
             var normalizedUid = latestAssistantUid ?? "";
             if (current.LastProcessedSessionAssistantUid is null)
@@ -776,6 +797,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             if (entity is null) return null;
             var current = Map(entity);
             if (current is null) return null;
+            if (DiscussionApplicationOwner.IsForeign(current)) return current;
 
             var acknowledged = ConversationRevision.Acknowledge(
                 current.ConversationRevision, current.ReadConversationRevision, throughRevision);
@@ -796,7 +818,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         Guid entityId, CancellationToken ct = default)
         => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
         {
-            var entity = await entities.GetAsync(entityId, ct);
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
             if (entity is null) return null;
             var current = Map(entity);
             if (current is null) return null;
@@ -830,6 +852,14 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
 
             var current = Str(entity.Data, "status") ?? DiscussionStatus.Stopped;
             if (current == to) return current;
+            if (IsForeign(entity))
+            {
+                // Session-derived status belongs to the owner. Closing would also
+                // stop the owner's session, so it is a refused lifecycle change.
+                if (DiscussionStatus.IsClosed(to))
+                    throw new DiscussionOwnedByApplicationException(Map(entity)!);
+                return current;
+            }
 
             var allowed = current switch
             {
@@ -853,7 +883,7 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         Guid entityId, CancellationToken ct = default)
         => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
         {
-            var entity = await entities.GetAsync(entityId, ct);
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
             if (entity is null) return null;
             var current = Map(entity);
             if (current is null || current.Status == DiscussionStatus.Archiving) return null;
@@ -892,6 +922,21 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
 
     private sealed record ArchiveCursor(DateTime LastActivity, string Id);
 
+    private static bool IsForeign(LeafEntity entity)
+        => DiscussionApplicationOwner.IsForeign(Str(entity.Data, "owner_plugin"));
+
+    /// <summary>
+    /// Reads the entity for a lifecycle write and refuses one owned by another plugin.
+    /// Session-derived housekeeping skips such discussions instead of calling this.
+    /// </summary>
+    private async Task<LeafEntity?> RequireNovaOwnedAsync(Guid entityId, CancellationToken ct)
+    {
+        var entity = await entities.GetAsync(entityId, ct);
+        if (entity is not null && IsForeign(entity) && Map(entity) is { } current)
+            throw new DiscussionOwnedByApplicationException(current);
+        return entity;
+    }
+
     private static bool IsNovaDiscussion(LeafEntity? entity)
         => entity is { TypeSlug: "discussion" }
             && Str(entity.Data, "app") == "nova";
@@ -927,7 +972,9 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
                 ? Str(d, "last_processed_session_assistant_uid") ?? ""
                 : null,
             Str(d, "setup_bootstrap_message_uid"),
-            Str(d, "title_source"));
+            Str(d, "title_source"),
+            Str(d, "owner_plugin"),
+            Str(d, "source_app"));
     }
 
     public static object ToInfo(DiscussionRead d) => new
@@ -950,6 +997,9 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
         provider = d.Provider,
         confidential = d.Confidential,
         setupBootstrapMessageUid = d.SetupBootstrapMessageUid,
+        ownedBy = DiscussionApplicationOwner.IsForeign(d)
+            ? new { app = d.OwnerApp }
+            : null,
     };
 
     private static string? Str(JsonObject data, string key)

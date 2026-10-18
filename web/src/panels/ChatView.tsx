@@ -38,6 +38,7 @@ import { applyPendingVisibleContext } from "../lib/pending-visible-context-store
 import { isDiscussionSelectionCurrent, resolveRequestedDiscussionId } from "../lib/discussion-view-selection"
 import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToContext, type MonitorVisualSource } from "../lib/visual-capture"
 import { delegationSessionPath } from "../lib/delegation-session-link"
+import { formatOwningApp } from "../lib/discussion-owner"
 import { useVoiceSession } from "../hooks/use-voice-session"
 import { VoiceSessionPanel } from "../components/voice-session-panel"
 
@@ -427,7 +428,7 @@ export function ChatView({
     if (!discussionId || !activeDiscussion) {
       return { ok: false, state: "open", error: { code: "discussion_required", message: "Select a discussion before attaching foreground context." } }
     }
-    if (activeDiscussion.type === "heartbeat" || activeDiscussion.status === "archived" || activeDiscussion.status === "archiving" || activeDiscussion.status === "stopped") {
+    if (activeDiscussion.type === "heartbeat" || activeDiscussion.ownedBy || activeDiscussion.status === "archived" || activeDiscussion.status === "archiving" || activeDiscussion.status === "stopped") {
       return { ok: false, state: "open", error: { code: "discussion_read_only", message: "This discussion cannot accept a context attachment." } }
     }
     if (capturingContextRef.current) {
@@ -461,7 +462,7 @@ export function ChatView({
   const captureMonitor = useCallback(async (sourceId: string): Promise<void> => {
     const discussionId = activeDiscussionId
     if (!discussionId || !activeDiscussion || capturingContextRef.current) return
-    if (activeDiscussion.type === "heartbeat" || activeDiscussion.status === "archived" || activeDiscussion.status === "archiving" || activeDiscussion.status === "stopped") return
+    if (activeDiscussion.type === "heartbeat" || activeDiscussion.ownedBy || activeDiscussion.status === "archived" || activeDiscussion.status === "archiving" || activeDiscussion.status === "stopped") return
 
     capturingContextRef.current = true
     setCapturingContext(true)
@@ -749,7 +750,10 @@ export function ChatView({
   // Sidebar row actions that drive the open discussion's header (rename, Info,
   // share) open that discussion first and run once it is the active one.
   const discussionClosed = activeDiscussion?.status === "archived" || activeDiscussion?.status === "archiving"
-  const voiceAvailable = !!activeDiscussion && !discussionClosed && activeDiscussion.status !== "stopped"
+  // Another app owns this discussion (a Storyboard campaign Agent thread): Nova shows
+  // its transcript but never writes to it or sends into its session.
+  const owningApp = activeDiscussion?.ownedBy ? formatOwningApp(activeDiscussion.ownedBy.app) : null
+  const voiceAvailable = !!activeDiscussion && !discussionClosed && !owningApp && activeDiscussion.status !== "stopped"
     && voiceSession.phase !== "starting" && voiceSession.phase !== "connected"
   const startVoice = useCallback(() => { void voiceSession.start() }, [voiceSession])
   const openSessionInfo = useCallback(() => {
@@ -773,7 +777,7 @@ export function ChatView({
   }, [activeDiscussion?.id, handleShare, openSessionInfo, pendingRowAction, startVoice])
 
   // Desktop shortcuts for the open discussion; the menus show the same keys.
-  const canManageDiscussion = activeDiscussion?.type === "chat" && !discussionClosed
+  const canManageDiscussion = activeDiscussion?.type === "chat" && !discussionClosed && !owningApp
   const docked = !floating && !!activeDiscussion
   useCommand("nova-discussion-voice", {
     label: "Start Voice",
@@ -816,7 +820,7 @@ export function ChatView({
     description: "Create a share link for the open discussion",
     group: "Discussions",
     shortcut: DISCUSSION_SHORTCUTS.share,
-    enabled: docked && !discussionClosed && !activeDiscussion?.confidential,
+    enabled: docked && !discussionClosed && !owningApp && !activeDiscussion?.confidential,
     action: handleShare,
   })
 
@@ -907,7 +911,7 @@ export function ChatView({
     <>
     <PanelHeader
       leading={
-        liveHeartbeatTabs ? <div className="flex flex-1 min-w-0 self-stretch">{liveHeartbeatTabs}</div> : discussionClosed ? (
+        liveHeartbeatTabs ? <div className="flex flex-1 min-w-0 self-stretch">{liveHeartbeatTabs}</div> : discussionClosed || owningApp ? (
           <span className="truncate text-sm font-medium text-contrast">{activeDiscussion.title || "Untitled discussion"}</span>
         ) : (
           <EditableTitle
@@ -960,13 +964,13 @@ export function ChatView({
             <DropdownMenuContent align="end" sideOffset={4}>
               <DiscussionActionItems
                 showShortcuts
-                onVoice={startVoice}
+                onVoice={owningApp ? undefined : startVoice}
                 voiceDisabled={!voiceAvailable}
                 onInfo={openSessionInfo}
                 onRename={canManageDiscussion ? () => setTitleEditing(true) : undefined}
                 onUpdateTitle={canManageDiscussion ? () => void handleUpdateTitle(activeDiscussion.id) : undefined}
                 updateTitlePending={titleUpdatePending}
-                onShare={!discussionClosed && !activeDiscussion.confidential ? handleShare : undefined}
+                onShare={!discussionClosed && !owningApp && !activeDiscussion.confidential ? handleShare : undefined}
                 onFloat={floatingSurface?.supported ? () => handleFloatDiscussion(activeDiscussion.id) : undefined}
                 onReset={activeDiscussion.type === "live" ? () => void handleRotateDiscussion(activeDiscussion.id) : undefined}
                 onClose={canManageDiscussion ? () => handleCloseDiscussion(activeDiscussion.id) : undefined}
@@ -1348,8 +1352,8 @@ export function ChatView({
         sessionId={activeDiscussionId}
         autoFocusMode={autoFocusMode}
         draftStorageKey="nova-drafts"
-        disabled={discussionClosed || activeDiscussion.status === "stopped"}
-        hideComposer={activeDiscussion.type === "heartbeat" || discussionClosed}
+        disabled={discussionClosed || !!owningApp || activeDiscussion.status === "stopped"}
+        hideComposer={activeDiscussion.type === "heartbeat" || discussionClosed || !!owningApp}
         pendingQuestion={pendingQuestion}
         questionOutcome={questionOutcome}
         onAnswerQuestion={handleAnswerQuestion}
@@ -1375,7 +1379,18 @@ export function ChatView({
         renderAttachmentActions={renderWhatISeeAction}
         renderSideActions={renderSideActions}
       />
-      {discussionClosed && (
+      {owningApp && (
+        <div
+          data-slot="owned-discussion-bar"
+          className="shrink-0 border-t border-overlay-8 bg-card px-4 py-3"
+        >
+          <div className="mx-auto flex max-w-3xl items-center gap-2 text-sm text-text-muted">
+            <i aria-hidden="true" className="ph-bold ph-plugs-connected shrink-0" />
+            <span>This discussion belongs to {owningApp}. Continue it there.</span>
+          </div>
+        </div>
+      )}
+      {discussionClosed && !owningApp && (
         <div
           data-slot="archived-discussion-bar"
           className="shrink-0 border-t border-overlay-8 bg-card px-4 py-3"

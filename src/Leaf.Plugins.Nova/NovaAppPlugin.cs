@@ -188,7 +188,15 @@ public sealed class NovaAppPlugin : ILeafPlugin
         group.AddEndpointFilter(async (context, next) =>
         {
             context.HttpContext.Response.Headers.CacheControl = "private, no-store";
-            return await next(context);
+            try
+            {
+                return await next(context);
+            }
+            catch (DiscussionOwnedByApplicationException ex)
+                when (!context.HttpContext.Response.HasStarted)
+            {
+                return DiscussionApplicationOwner.Refusal(ex.Discussion);
+            }
         });
         DiscussionEndpoints.Map(group);
         VoiceSessionEndpoints.Map(group);
@@ -218,6 +226,11 @@ public sealed class NovaAppPlugin : ILeafPlugin
             if (changed)
                 await store.ReplaceDataAsync(legacyConfig.Id, data, ct: ct);
         }
+
+        // Discussions another plugin stamped as its own are read-only here; Nova's own
+        // stamp must never count as foreign.
+        var self = await store.GetBySlugAsync("plugin", PluginId, ct);
+        DiscussionApplicationOwner.NovaPluginEntityId = self?.Id;
 
         // Resolve Nova's agent entity (kernel-seeded). The agent system is kernel-level;
         // the app only needs the id for defaults (new discussions and LIVE timeline).

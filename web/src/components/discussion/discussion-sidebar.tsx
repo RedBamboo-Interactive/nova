@@ -10,6 +10,7 @@ import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
 import { delegationAnimationPaused } from "../../lib/delegation-activity"
 import { DiscussionActionItems } from "./discussion-actions-menu"
+import { formatOwningApp } from "../../lib/discussion-owner"
 
 /** Row actions that act through the open discussion's header, so they open it first. */
 export type DiscussionRowAction = "voice" | "info" | "rename" | "share"
@@ -198,7 +199,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             {discussion.confidential && <i className="ph-bold ph-lock-simple text-[10px] text-text-muted ml-1.5 opacity-60" />}
           </>
         }
-        subtitle={<span className="inline-flex items-baseline gap-1.5"><span>{formatRelative(discussion.lastActivity)}</span><DelegationCount activity={delegationActivity[discussion.id]} /></span>}
+        subtitle={<span className="inline-flex items-baseline gap-1.5"><span>{formatRelative(discussion.lastActivity)}</span>{discussion.ownedBy && <span>· {formatOwningApp(discussion.ownedBy.app)}</span>}<DelegationCount activity={delegationActivity[discussion.id]} /></span>}
         trailing={
           discussion.status !== "archived" ? (
             <div className="flex items-center gap-1.5">
@@ -206,6 +207,13 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                 <span aria-label="Unread" className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
               )}
               <RowActionsMenu label="Conversation actions">
+                {discussion.ownedBy ? (
+                  <DiscussionActionItems
+                    showShortcuts={discussion.id === activeDiscussionId}
+                    onInfo={() => onRowAction(discussion.id, "info")}
+                    onFloat={onFloat ? () => onFloat(discussion.id) : undefined}
+                  />
+                ) : (
                 <DiscussionActionItems
                   showShortcuts={discussion.id === activeDiscussionId}
                   onVoice={() => onRowAction(discussion.id, "voice")}
@@ -217,6 +225,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                   onFloat={onFloat ? () => onFloat(discussion.id) : undefined}
                   onClose={() => onArchive(discussion.id)}
                 />
+                )}
               </RowActionsMenu>
             </div>
           ) : (

@@ -197,6 +197,10 @@ public sealed class MessagePipeline(
             return new(false, discussion.SessionId, "discussion_not_found", "The discussion no longer exists.");
         if (DiscussionMutationPolicy.RejectSend(current))
             return new(false, current.SessionId, "closed", "Archived discussions are read-only.");
+        // The owner admits into its own session; Nova context must never reach it.
+        if (DiscussionApplicationOwner.IsForeign(current))
+            return new(false, current.SessionId, DiscussionApplicationOwner.ErrorCode,
+                DiscussionApplicationOwner.Message(current));
         discussion = current;
 
         discussion = await conversationUnread.EnsureBaselineAsync(discussion, ct);

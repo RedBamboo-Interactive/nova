@@ -1459,6 +1459,7 @@ public static class DiscussionEndpoints
                 : await store.GetAsync(id);
             if (discussion is null) return NotFound();
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+            if (DiscussionApplicationOwner.IsForeign(discussion)) return DiscussionApplicationOwner.Refusal(discussion);
             if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
 
             if (string.IsNullOrWhiteSpace(request.Content))
@@ -1480,6 +1481,7 @@ public static class DiscussionEndpoints
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+            if (DiscussionApplicationOwner.IsForeign(discussion)) return DiscussionApplicationOwner.Refusal(discussion);
             if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
 
             if (string.IsNullOrWhiteSpace(request.Content))
@@ -1595,6 +1597,7 @@ public static class DiscussionEndpoints
             if (discussion is null) return NotFound();
             var userId = UserId(ctx);
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+            if (DiscussionApplicationOwner.IsForeign(discussion)) return DiscussionApplicationOwner.Refusal(discussion);
             if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
 
             if (string.IsNullOrWhiteSpace(request.Content)
@@ -1626,7 +1629,7 @@ public static class DiscussionEndpoints
             {
                 var statusCode = outcome.ErrorCode switch
                 {
-                    "closed" => 409,
+                    "closed" or DiscussionApplicationOwner.ErrorCode => 409,
                     "invalid_images" or "invalid_image" or "unsupported_image_type" or "missing_content" => 400,
                     "image_attachments_not_supported" or "file_attachments_not_supported" => 422,
                     "attachment_not_found" or "attachment_expired" or "attachment_forbidden" or "invalid_attachment" or "attachment_limit_exceeded" => 422,
