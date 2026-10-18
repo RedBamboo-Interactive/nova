@@ -379,23 +379,33 @@ public sealed class ExternalAgentConversationProvider(
     }
 
     internal static string? VisibleContent(SessionMessage message)
+        => string.Equals(message.Role, "user", StringComparison.Ordinal)
+            ? UnwrapApplicationEnvelope(message.Content)
+            : message.Content;
+
+    /// <summary>
+    /// Returns the participant's message from an application conversation envelope
+    /// (<see cref="BuildSessionInput"/>), or <paramref name="content"/> unchanged when it
+    /// is not exactly such an envelope. The provider transcript stores the envelope the
+    /// model received; every user-facing projection shows only what the participant wrote.
+    /// </summary>
+    internal static string? UnwrapApplicationEnvelope(string? content)
     {
-        if (!string.Equals(message.Role, "user", StringComparison.Ordinal)
-            || string.IsNullOrWhiteSpace(message.Content)
-            || !message.Content.StartsWith(
+        if (string.IsNullOrWhiteSpace(content)
+            || !content.StartsWith(
                 "Application conversation envelope JSON",
                 StringComparison.Ordinal))
-            return message.Content;
+            return content;
 
         const string startTag = "<external-input-json>";
         const string endTag = "</external-input-json>";
-        var start = message.Content.IndexOf(startTag, StringComparison.Ordinal);
-        var end = message.Content.IndexOf(endTag, StringComparison.Ordinal);
-        if (start < 0 || end <= start + startTag.Length) return message.Content;
+        var start = content.IndexOf(startTag, StringComparison.Ordinal);
+        var end = content.IndexOf(endTag, StringComparison.Ordinal);
+        if (start < 0 || end <= start + startTag.Length) return content;
         try
         {
             using var envelope = JsonDocument.Parse(
-                message.Content[(start + startTag.Length)..end]);
+                content[(start + startTag.Length)..end]);
             var root = envelope.RootElement;
             if (root.ValueKind != JsonValueKind.Object
                 || !root.TryGetProperty("requestId", out var requestId)
@@ -404,12 +414,12 @@ public sealed class ExternalAgentConversationProvider(
                 || applicationId.ValueKind != JsonValueKind.String
                 || !root.TryGetProperty("message", out var participantMessage)
                 || participantMessage.ValueKind != JsonValueKind.String)
-                return message.Content;
+                return content;
             return participantMessage.GetString();
         }
         catch (JsonException)
         {
-            return message.Content;
+            return content;
         }
     }
 

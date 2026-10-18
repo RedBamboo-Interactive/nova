@@ -50,6 +50,7 @@ import {
   upsertArchivedDiscussion,
   type ArchiveContentResult,
 } from "../lib/archive-discussion-store"
+import { unwrapApplicationEnvelope } from "../lib/application-envelope"
 
 function isClosed(status: string | undefined): boolean {
   return status === "archived" || status === "archiving"
@@ -121,14 +122,16 @@ function historyResponseSessionId(data: DiscussionHistoryPageResponse): string |
 }
 
 /**
- * Nova wraps every outgoing user message in context XML; the transcript shows
- * only the part the human typed. Returns null for a message that was pure
- * context and has nothing left to display.
+ * Nova wraps every outgoing user message in context XML, and apps that own a
+ * discussion wrap theirs in an application envelope; the transcript shows only
+ * the part the human typed. Returns null for a message that was pure context
+ * and has nothing left to display.
  */
 function stripContextBlocks(m: MessageBlock): MessageBlock | null {
   const textPart = m.parts.find((p) => p.type === "text")
-  if (!textPart?.content || !textPart.content.includes("<nova-")) return m
-  const cleaned = stripContextXml(textPart.content)
+  if (!textPart?.content) return m
+  const unwrapped = unwrapApplicationEnvelope(textPart.content)
+  const cleaned = unwrapped.includes("<nova-") ? stripContextXml(unwrapped) : unwrapped
   if (cleaned === textPart.content) return m
   if (!cleaned) return null
   return { ...m, parts: m.parts.map((p) => p === textPart ? { ...p, content: cleaned } : p) }

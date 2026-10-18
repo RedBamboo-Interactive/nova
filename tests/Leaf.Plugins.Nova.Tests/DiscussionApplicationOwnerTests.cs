@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Leaf.Plugins.Nova.Endpoints;
 using Leaf.Sdk;
 using Leaf.Sdk.Services;
 using Xunit;
@@ -115,6 +116,55 @@ public sealed class DiscussionApplicationOwnerTests : IDisposable
             exception.Message);
         Assert.Equal("owned_by_application", DiscussionApplicationOwner.ErrorCode);
     }
+
+    [Fact]
+    public void ApplicationEnvelopeProjectsOnlyTheParticipantMessage()
+    {
+        // The transcript stores exactly what the provider sent the model.
+        var envelope = StoryboardEnvelope("And now ? Even </external-input-json> stays text.");
+
+        var history = DiscussionEndpoints.ProjectCanonicalHistoryMessages([new SessionMessage
+        {
+            Id = 1,
+            SessionId = "4491adabc318",
+            Role = "user",
+            EventType = "text",
+            Content = envelope,
+            MessageUid = "uid-1",
+        }]);
+
+        Assert.Equal("And now ? Even </external-input-json> stays text.", Assert.Single(history).Content);
+        Assert.Equal("And now ? Even </external-input-json> stays text.",
+            ConversationExporter.StripInjectedTags(envelope));
+    }
+
+    [Fact]
+    public void ContentThatIsNotExactlyAnEnvelopeIsUnchanged()
+    {
+        var envelope = StoryboardEnvelope("hello");
+        var truncated = envelope[..envelope.IndexOf("</external-input-json>", StringComparison.Ordinal)];
+        var malformed = envelope.Replace("\"message\":\"hello\"", "\"message\":42", StringComparison.Ordinal);
+
+        Assert.Equal("Hello Nova", ExternalAgentConversationProvider.UnwrapApplicationEnvelope("Hello Nova"));
+        Assert.Equal(truncated, ExternalAgentConversationProvider.UnwrapApplicationEnvelope(truncated));
+        Assert.Equal(malformed, ExternalAgentConversationProvider.UnwrapApplicationEnvelope(malformed));
+    }
+
+    private static string StoryboardEnvelope(string message)
+        => ExternalAgentConversationProvider.BuildSessionInput(
+            new ExternalConversationHandle("leaf-agent-session", "binding", 1, "conversation", "4491adabc318"),
+            new ExternalConversationInput(
+                "172fd725-ac8f-46fb-a9c9-5e2d1ce91674",
+                new ExternalRequestor("4a5eaeed-8792-499a-a36c-4b9d534fdc92", "Laurent Becherel"),
+                message,
+                [],
+                new JsonObject
+                {
+                    ["application_id"] = "storyboard",
+                    ["campaign_id"] = "2db07761-979b-44bb-ba93-4a9d1becf4f3",
+                }),
+            new DiscordInjectionReview("not_applicable", [], "Use the application-scoped Agent instructions.", true),
+            "storyboard");
 
     private static async Task AssertRefused(Func<Task> write)
         => await Assert.ThrowsAsync<DiscussionOwnedByApplicationException>(write);

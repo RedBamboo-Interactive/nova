@@ -233,6 +233,7 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
 
     internal static string StripInjectedTags(string content)
     {
+        content = ExternalAgentConversationProvider.UnwrapApplicationEnvelope(content) ?? "";
         content = NovaContextTag.Replace(content, "");
         content = NovaPriorTag.Replace(content, "");
         content = ScratchSpaceTag.Replace(content, "");
