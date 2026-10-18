@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { api } from "../lib/api"
+import { getSettings } from "../lib/settings-store"
+import { acquireVoiceInput, applyVoiceOutputDevice } from "../lib/voice-audio-devices"
 import { applyVoiceEvent, type VoiceCaptionState } from "./voice-session-events"
 import { useScreenWakeLock } from "./use-screen-wake-lock"
 
@@ -112,9 +114,13 @@ export function useVoiceSession(discussionId: string | null) {
     try {
       if (!navigator.mediaDevices?.getUserMedia)
         throw new Error("This browser does not expose microphone access")
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      })
+      const voiceSettings = getSettings()
+      const input = await acquireVoiceInput(
+        voiceSettings,
+        audio => navigator.mediaDevices.getUserMedia({ audio }),
+      )
+      const stream = input.stream
+      if (input.notice) setError(input.notice)
       streamRef.current = stream
       const pc = new RTCPeerConnection()
       peerRef.current = pc
@@ -124,8 +130,12 @@ export function useVoiceSession(discussionId: string | null) {
       audio.autoplay = true
       audioRef.current = audio
       pc.ontrack = event => {
-        audio.srcObject = event.streams[0] ?? new MediaStream([event.track])
-        void audio.play().catch(() => setError("Tap the screen once to allow voice playback"))
+        void (async () => {
+          const outputNotice = await applyVoiceOutputDevice(audio, voiceSettings)
+          if (outputNotice) setError(current => current ? `${current} ${outputNotice}` : outputNotice)
+          audio.srcObject = event.streams[0] ?? new MediaStream([event.track])
+          await audio.play().catch(() => setError("Tap the screen once to allow voice playback"))
+        })()
       }
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === "connected") {

@@ -2,6 +2,7 @@ import { KeyCaptureInput, Select, SelectContent, SelectItem, SelectTrigger, Sele
 import { composerFocusSettingsStore, normalizePushToTalkKey, pushToTalkSettingsStore, useComposerFocusSettings, usePushToTalkSettings, type ComposerAutoFocusMode } from "@redbamboo/chat"
 import { useLocalSettings } from "../hooks/use-local-settings"
 import { setSettings as setLocalSettings } from "../lib/settings-store"
+import { VoiceDeviceSettings } from "./VoiceDeviceSettings"
 
 export function NovaSettingsPanel() {
   const localSettings = useLocalSettings()
@@ -36,6 +37,7 @@ export function NovaSettingsPanel() {
         </Select>
       </SettingRow>
       <SectionHeader>Voice</SectionHeader>
+      <VoiceDeviceSettings />
       <SettingRow label="Push-to-talk key" hint="Hold this key to record a voice reply. Float Nova leases the same key globally while open.">
         <KeyCaptureInput
           value={pushToTalk.key}
