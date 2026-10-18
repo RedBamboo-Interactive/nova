@@ -38,6 +38,7 @@ import {
   beginArchiveLoad,
   canCommitDiscussionHistory,
   completeArchiveLoad,
+  createArchiveContentSearchParams,
   failArchiveLoad,
   getArchiveDiscussionState,
   mergeArchivedSearchResults,
@@ -517,12 +518,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }>(`/api/apps/nova/discussions?${listing}`)
       const contentPromise = normalizedQuery
         ? (() => {
-            const search = new URLSearchParams({
-              q: normalizedQuery,
-              limit: "100",
-              status: "archived",
-            })
-            if (agentId) search.set("agent", agentId)
+            const search = createArchiveContentSearchParams(normalizedQuery, agentId)
             return api.get<{ results: ArchiveContentResult[] }>(
               `/api/apps/nova/discussions/search?${search}`,
             )

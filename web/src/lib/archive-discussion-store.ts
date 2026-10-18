@@ -157,6 +157,21 @@ export function mergeArchivedSearchResults(
   return deduplicateArchiveItems([...titles, ...content])
 }
 
+export function createArchiveContentSearchParams(
+  query: string,
+  agentId: string | null,
+): URLSearchParams {
+  const search = new URLSearchParams({
+    q: query,
+    limit: "100",
+    status: "archived",
+    includeLive: "true",
+    includeHeartbeats: "false",
+  })
+  if (agentId) search.set("agent", agentId)
+  return search
+}
+
 export function resolveKnownDiscussion(
   open: DiscussionInfo[],
   archived: DiscussionInfo[],

@@ -330,6 +330,12 @@ public static class DiscussionEndpoints
             var q = ctx.Request.Query["q"].FirstOrDefault();
             var requestedStatus = ctx.Request.Query["status"].FirstOrDefault();
             var agentFilter = ctx.Request.Query["agent"].FirstOrDefault();
+            var includeLive = ctx.Request.Query.TryGetValue("includeLive", out var includeLiveValue)
+                ? includeLiveValue.FirstOrDefault() != "false"
+                : (bool?)null;
+            var includeHeartbeats = ctx.Request.Query.TryGetValue("includeHeartbeats", out var includeHeartbeatsValue)
+                ? includeHeartbeatsValue.FirstOrDefault() == "true"
+                : (bool?)null;
             if (string.IsNullOrWhiteSpace(q))
                 return Results.BadRequest(new { error = "Query parameter 'q' is required" });
 
@@ -384,6 +390,7 @@ public static class DiscussionEndpoints
                     && !DiscussionStatus.IsClosed(disc.Status)) continue;
                 if (agentFilter is not null && disc.AgentId is not null
                     && disc.AgentId != agentFilter) continue;
+                if (!MatchesSearchTypeScope(disc, includeLive, includeHeartbeats)) continue;
 
                 if (merged.TryGetValue(disc.Id, out var existing))
                     merged[disc.Id] = (disc, existing.MatchCount + g.HitCount, [.. existing.Hits, .. g.Hits]);
@@ -1781,6 +1788,24 @@ public static class DiscussionEndpoints
                 });
             return Results.Ok(types);
         });
+    }
+
+    internal static bool MatchesSearchTypeScope(
+        DiscussionRead discussion,
+        bool? includeLive,
+        bool? includeHeartbeats)
+    {
+        // Search historically covered every discussion type. Preserve that contract
+        // for callers such as Ctrl+Shift+F unless a type scope is explicitly supplied.
+        if (includeLive is null && includeHeartbeats is null)
+            return true;
+
+        return discussion.Type switch
+        {
+            "live" => includeLive is not false,
+            HeartbeatService.DiscussionType => includeHeartbeats is true,
+            _ => true,
+        };
     }
 
     private static async Task<IResult> ProxyInputQueueAsync(

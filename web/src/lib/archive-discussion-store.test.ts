@@ -4,6 +4,7 @@ import {
   beginArchiveLoad,
   canCommitDiscussionHistory,
   completeArchiveLoad,
+  createArchiveContentSearchParams,
   failArchiveLoad,
   getArchiveDiscussionState,
   mergeArchivedSearchResults,
@@ -67,6 +68,16 @@ test("title matches rank before de-duplicated content matches with snippets", ()
   assert.equal(merged[0].searchMatch, "title")
   assert.equal(merged[2].searchMatch, "content")
   assert.equal(merged[2].searchSnippet, "needle in transcript")
+})
+
+test("archive content search requests the chat and LIVE type scope", () => {
+  const params = createArchiveContentSearchParams("needle", "agent-a")
+
+  assert.equal(params.get("q"), "needle")
+  assert.equal(params.get("status"), "archived")
+  assert.equal(params.get("includeLive"), "true")
+  assert.equal(params.get("includeHeartbeats"), "false")
+  assert.equal(params.get("agent"), "agent-a")
 })
 
 test("a closed direct-url record outside the open list can commit read-only history", () => {
