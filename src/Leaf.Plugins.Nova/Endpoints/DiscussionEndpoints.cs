@@ -620,7 +620,7 @@ public static class DiscussionEndpoints
                 sessionBacked: discussion.SessionId is not null,
                 allowUserBridges: direction != "before");
 
-            var canonicalMessages = transcript?.Messages ?? [];
+            var canonicalMessages = ProjectCanonicalHistoryMessages(transcript?.Messages ?? []);
             var oldestBoundary = BoundaryAt(canonicalMessages, first: true)
                 ?? BoundaryAt(overlayPage.Messages, first: true)
                 ?? cursor?.Boundary;
@@ -2072,6 +2072,36 @@ public static class DiscussionEndpoints
 
     private static DiscussionMessagePageBoundary ToSdkBoundary(SessionMessage message)
         => new(message.RecordCreatedAt!.Value, message.Id);
+
+    internal static List<SessionMessage> ProjectCanonicalHistoryMessages(
+        IReadOnlyList<SessionMessage> messages)
+        => messages.Select(message =>
+        {
+            if (!string.Equals(message.Role, "user", StringComparison.Ordinal)
+                || !string.Equals(message.EventType, "text", StringComparison.Ordinal))
+                return message;
+
+            return new SessionMessage
+            {
+                Id = message.Id,
+                SessionId = message.SessionId,
+                Role = message.Role,
+                EventType = message.EventType,
+                Content = ConversationExporter.StripInjectedTags(message.Content ?? ""),
+                ToolName = message.ToolName,
+                ToolInput = message.ToolInput,
+                ToolResult = message.ToolResult,
+                PayloadRef = message.PayloadRef,
+                Phase = message.Phase,
+                MessageId = message.MessageId,
+                Epoch = message.Epoch,
+                Sequence = message.Sequence,
+                Timestamp = message.Timestamp,
+                RecordCreatedAt = message.RecordCreatedAt,
+                AttachmentsJson = message.AttachmentsJson,
+                MessageUid = message.MessageUid,
+            };
+        }).ToList();
 
     private static HistoryPageBoundary? BoundaryAt(IReadOnlyList<SessionMessage> messages, bool first)
     {

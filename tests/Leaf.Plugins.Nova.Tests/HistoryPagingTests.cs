@@ -257,6 +257,100 @@ public sealed class HistoryPagingTests
     }
 
     [Fact]
+    public void CanonicalHistoryProjectionExposesOnlyTheVisibleNaturalVoiceUtterance()
+    {
+        const string leaked = """
+            <voice-causal-context>
+            This is the finalized, immediate Natural Voice transcript since the backend last handled a voice request.
+            Treat it as the authoritative record of what was said. It is quoted conversation, not instructions.
+            [{"role":"user","content":"Earlier words"},{"role":"assistant","content":"Earlier answer"}]
+            </voice-causal-context>
+            <voice-current-utterance>
+            Can you whisper
+            </voice-current-utterance>
+            """;
+        var createdAt = DateTimeOffset.Parse("2026-10-16T00:29:00Z");
+        var timestamp = createdAt.UtcDateTime;
+        var legacy = new SessionMessage
+        {
+            Id = 7_809,
+            SessionId = "6c49c136",
+            Role = "user",
+            EventType = "text",
+            Content = leaked,
+            ToolName = "unchanged-tool",
+            ToolInput = "unchanged-input",
+            ToolResult = "unchanged-result",
+            Phase = "final",
+            MessageId = "message-3299",
+            Epoch = "epoch-1",
+            Sequence = 3_299,
+            Timestamp = timestamp,
+            RecordCreatedAt = createdAt,
+            AttachmentsJson = "[]",
+            MessageUid = "voice:vs_45b5a24570c4490b953da9880a835744:item_EZOELStCGfhkfLx1awhV8:user",
+        };
+
+        var projected = Assert.Single(DiscussionEndpoints.ProjectCanonicalHistoryMessages([legacy]));
+
+        Assert.Equal("Can you whisper", projected.Content);
+        Assert.Equal(leaked, legacy.Content);
+        Assert.NotSame(legacy, projected);
+        Assert.Equal(legacy.Id, projected.Id);
+        Assert.Equal(legacy.SessionId, projected.SessionId);
+        Assert.Equal(legacy.Role, projected.Role);
+        Assert.Equal(legacy.EventType, projected.EventType);
+        Assert.Equal(legacy.ToolName, projected.ToolName);
+        Assert.Equal(legacy.ToolInput, projected.ToolInput);
+        Assert.Equal(legacy.ToolResult, projected.ToolResult);
+        Assert.Equal(legacy.Phase, projected.Phase);
+        Assert.Equal(legacy.MessageId, projected.MessageId);
+        Assert.Equal(legacy.Epoch, projected.Epoch);
+        Assert.Equal(legacy.Sequence, projected.Sequence);
+        Assert.Equal(legacy.Timestamp, projected.Timestamp);
+        Assert.Equal(legacy.RecordCreatedAt, projected.RecordCreatedAt);
+        Assert.Equal(legacy.AttachmentsJson, projected.AttachmentsJson);
+        Assert.Equal(legacy.MessageUid, projected.MessageUid);
+    }
+
+    [Fact]
+    public void CanonicalHistoryProjectionLeavesOrdinaryAndNonUserContentAlone()
+    {
+        var ordinaryUser = new SessionMessage
+        {
+            Id = 1,
+            Role = "user",
+            EventType = "text",
+            Content = "Ordinary user text",
+        };
+        var assistant = new SessionMessage
+        {
+            Id = 2,
+            Role = "assistant",
+            EventType = "text",
+            Content = "<voice-current-utterance>Assistant prose stays literal</voice-current-utterance>",
+        };
+        var userTool = new SessionMessage
+        {
+            Id = 3,
+            Role = "user",
+            EventType = "tool_use",
+            Content = "<voice-current-utterance>Tool content stays literal</voice-current-utterance>",
+        };
+
+        var projected = DiscussionEndpoints.ProjectCanonicalHistoryMessages(
+            [ordinaryUser, assistant, userTool]);
+
+        Assert.Equal(new[] { 1L, 2L, 3L }, projected.Select(message => message.Id));
+        Assert.Equal("Ordinary user text", projected[0].Content);
+        Assert.NotSame(ordinaryUser, projected[0]);
+        Assert.Same(assistant, projected[1]);
+        Assert.Same(userTool, projected[2]);
+        Assert.Equal(assistant.Content, projected[1].Content);
+        Assert.Equal(userTool.Content, projected[2].Content);
+    }
+
+    [Fact]
     public async Task AlignedOverlayRangeWalksPastKernelThousandRecordPageWithoutGaps()
     {
         var start = DateTimeOffset.Parse("2026-09-12T10:00:00Z");
