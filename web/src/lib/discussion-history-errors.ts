@@ -10,6 +10,20 @@ export interface DiscussionHistoryFailures {
 
 export type DiscussionHistoryFailureState = Record<string, DiscussionHistoryFailures>
 export type HistoryLoadFailureScope = "initial" | "earlier"
+export type HistoryPageCommit = "committed" | "stale" | "invalid"
+
+export const INVALID_HISTORY_PAGE_FAILURE: HistoryLoadFailure = {
+  message: "Nova received history it couldn't verify. Try again.",
+  code: "history_page_invalid",
+}
+
+/**
+ * Pager rejections caused by the page itself rather than by a newer request.
+ * A superseded request is safe to drop; an unverifiable page never is.
+ */
+export function isInvalidHistoryPage(rejection: string | undefined): boolean {
+  return rejection === "invalid-page" || rejection === "incomplete-boundary"
+}
 
 function readableServerMessage(error: unknown): string | null {
   if (!(error instanceof Error)) return null
@@ -40,10 +54,12 @@ export function recordHistoryLoadFailure(
   discussionId: string,
   scope: HistoryLoadFailureScope,
   failure: HistoryLoadFailure,
-  hasVisibleMessages = false,
+  durableWindowLoaded = false,
 ): DiscussionHistoryFailureState {
-  // A failed newest read must never cover or replace a transcript already on screen.
-  if (scope === "initial" && hasVisibleMessages) return state
+  // A failed refresh over an already loaded durable window stays quiet. Blocks
+  // that only arrived over the live stream are not a transcript and still need
+  // a visible retry, or the discussion silently starts mid-turn.
+  if (scope === "initial" && durableWindowLoaded) return state
   return {
     ...state,
     [discussionId]: { ...state[discussionId], [scope]: failure },

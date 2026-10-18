@@ -11,7 +11,16 @@ import { applySessionStatus, applySettledSessionStatus, preservesRecentStreaming
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
 import { HistoryLifecycleTombstones, historyRevalidationDirection, invalidateHistoryGeneration, isCurrentHistoryGeneration, shouldAccumulatePushedHistoryOverlay, shouldCatchUpHistory } from "../lib/discussion-history-page"
-import { clearHistoryLoadFailure, describeHistoryLoadFailure, recordHistoryLoadFailure, type DiscussionHistoryFailureState } from "../lib/discussion-history-errors"
+import {
+  clearHistoryLoadFailure,
+  describeHistoryLoadFailure,
+  INVALID_HISTORY_PAGE_FAILURE,
+  isInvalidHistoryPage,
+  recordHistoryLoadFailure,
+  type DiscussionHistoryFailureState,
+  type HistoryLoadFailure,
+  type HistoryPageCommit,
+} from "../lib/discussion-history-errors"
 import { LatestTaskCoordinator } from "../lib/latest-task-coordinator"
 import { invalidatesDelegationActivity, unavailableDelegationActivity } from "../lib/delegation-activity"
 import {
@@ -495,17 +504,17 @@ export function useDiscussions(eventResolver?: EventResolver) {
     direction: "newest" | "before" | "after",
     expectedCursor?: string | null,
     runtimeRead?: ReturnType<typeof captureRuntimeRead>,
-  ): boolean => {
+  ): HistoryPageCommit => {
     // Rotation/archive/clear leave a monotonic tombstone. Reject the old page
     // before it can mutate pager state, overlays, metadata, or visible blocks.
     if (!historyLifecycleRef.current.canRun(id)
       || !isCurrentHistoryGeneration(loadGenerationRef.current, id, generation))
-      return false
+      return "stale"
     const known = getDiscussionList().find(d => d.id === id)
     if (!known || isClosed(known.status) || isDiscussionArchivePending(id)
-      || runtimeRead && runtimeRead.sessionId !== known.sessionId) return false
+      || runtimeRead && runtimeRead.sessionId !== known.sessionId) return "stale"
     if (data.session && data.discussion.sessionId && data.session.id !== data.discussion.sessionId)
-      return false
+      return "stale"
     // An overlay-only older page can omit session metadata while its outer
     // cursor still belongs to the discussion's linked session.
     const responseSessionId = historyResponseSessionId(data)
@@ -520,7 +529,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     // discussion rotated to another session in flight, discard it and let the
     // caller recover from the newest page.
     if (sessionChanged) {
-      if (direction !== "newest") return false
+      if (direction !== "newest") return "stale"
       pager.reset()
       accumulator.reset()
       historyOverlaysRef.current.delete(id)
@@ -535,7 +544,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
       : direction === "before"
         ? pager.prependOlderPage(generation, expectedCursor ?? null, page)
         : pager.appendNewerPage(generation, expectedCursor ?? null, page)
-    if (!result.accepted) return false
+    // A page the pager cannot validate is a server contract failure, not a
+    // superseded request. Callers must surface or recover it, never drop it.
+    if (!result.accepted) return isInvalidHistoryPage(result.rejection) ? "invalid" : "stale"
 
     setHistoryLoadFailures((prev) => clearHistoryLoadFailure(
       prev,
@@ -561,7 +572,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         : prev)
     if (!historyLifecycleRef.current.canRun(id)
       || !isCurrentHistoryGeneration(loadGenerationRef.current, id, generation))
-      return false
+      return "stale"
     if (runtimeRead && runtimeReadIsCurrent(id, runtimeRead)) {
       if (isClosed(data.discussion.status)) {
         clearStreamingLatch(id)
@@ -603,7 +614,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             && (message.role === "user" || message.id.startsWith("error-")))
       return { ...prev, [id]: [...reconciled, ...transient].sort(byTimestamp) }
     })
-    return true
+    return "committed"
   }, [durableTranscriptPager, eventResolver, transcriptAccumulator, hydrateRuntime, runtimeReadIsCurrent, clearStreamingLatch, clearQuestion])
 
   const loadMessagesUncoalesced = useCallback(async (
@@ -661,6 +672,19 @@ export function useDiscussions(eventResolver?: EventResolver) {
       legacyHistoryTailRef.current[id] = tail
       setHasEarlierMessages((prev) => ({ ...prev, [id]: hasEarlier }))
     }
+    const recordNewestFailure = (failure: HistoryLoadFailure) => {
+      if (!isCurrentLoad() || !historyLifecycleRef.current.canRun(id)) return
+      // Blocks projected from live stream events alone are not a loaded
+      // transcript. Only a committed durable window may stay quiet on failure.
+      const durableWindowLoaded = durableTranscriptPagersRef.current.get(id)?.current().newestCursor != null
+      setHistoryLoadFailures((prev) => recordHistoryLoadFailure(
+        prev,
+        id,
+        "initial",
+        failure,
+        durableWindowLoaded,
+      ))
+    }
     try {
       if (historyModesRef.current.get(id) !== "legacy") {
         const pager = durableTranscriptPager(id)
@@ -675,8 +699,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
             historyModesRef.current.set(id, "legacy")
             historyOverlaysRef.current.delete(id)
           } else {
-            if (!commitHistoryPage(id, generation, data, "newest", undefined, runtimeRead))
-              loadedRef.current.delete(id)
+            const commit = commitHistoryPage(id, generation, data, "newest", undefined, runtimeRead)
+            if (commit !== "committed") loadedRef.current.delete(id)
+            if (commit === "invalid") recordNewestFailure(INVALID_HISTORY_PAGE_FAILURE)
             return
           }
         } catch (error) {
@@ -687,15 +712,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             // V2 server errors preserve the loaded window. Never reinterpret a
             // failed cursor/page response as an old rolling-tail snapshot.
             loadedRef.current.delete(id)
-            if (isCurrentLoad() && historyLifecycleRef.current.canRun(id)) {
-              setHistoryLoadFailures((prev) => recordHistoryLoadFailure(
-                prev,
-                id,
-                "initial",
-                describeHistoryLoadFailure(error),
-                (messagesRef.current[id]?.length ?? 0) > 0,
-              ))
-            }
+            recordNewestFailure(describeHistoryLoadFailure(error))
             return
           }
         }
@@ -879,8 +896,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
             void loadMessages(id, INITIAL_HISTORY_TAIL, true, sessionIdOverride)
             return
           }
-          if (!commitHistoryPage(id, requestId, data, "after", expectedCursor, runtimeRead)) {
+          const commit = commitHistoryPage(id, requestId, data, "after", expectedCursor, runtimeRead)
+          if (commit !== "committed") {
             loadedRef.current.delete(id)
+            if (commit === "invalid") {
+              // An unverifiable catch-up page leaves an unknown hole after the
+              // loaded window. Recover like a stale cursor: one fresh newest page.
+              resetHistoryPaging(id)
+              void loadMessages(id, INITIAL_HISTORY_TAIL, true, sessionIdOverride)
+            }
             return
           }
           if (!activePager.current().hasLater) return
@@ -926,7 +950,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
               void loadMessages(id, INITIAL_HISTORY_TAIL, true)
               return
             }
-            commitHistoryPage(id, requestId, data, "before", expectedCursor, runtimeRead)
+            if (commitHistoryPage(id, requestId, data, "before", expectedCursor, runtimeRead) === "invalid")
+              setHistoryLoadFailures((prev) => recordHistoryLoadFailure(
+                prev,
+                id,
+                "earlier",
+                INVALID_HISTORY_PAGE_FAILURE,
+              ))
           } catch (error) {
             if (error instanceof ApiError && error.status === 409
               && (error.code === "history_cursor_stale" || error.code === "history_cursor_mismatch")) {

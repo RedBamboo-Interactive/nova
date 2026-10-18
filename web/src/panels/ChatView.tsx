@@ -984,6 +984,26 @@ export function ChatView({
           </div>
         </div>
       )}
+      {historyLoadFailure && activeMessages.length > 0 && (
+        <div
+          role="alert"
+          data-slot="history-partial-error"
+          className="shrink-0 border-b border-destructive-a20 bg-destructive-a10 px-4 py-2 text-destructive"
+        >
+          <div className="mx-auto flex max-w-3xl items-center justify-center gap-2 text-xs">
+            <i aria-hidden="true" className="ph-bold ph-warning-circle shrink-0 text-sm" />
+            <span className="min-w-0">Couldn&apos;t load this discussion&apos;s history. {historyLoadFailure.message}</span>
+            <button
+              type="button"
+              onClick={handleRetryHistory}
+              disabled={isLoadingMessages}
+              className="shrink-0 rounded-md px-2 py-1 font-semibold text-destructive transition-colors hover:bg-destructive-a10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive-a40 disabled:opacity-50"
+            >
+              {isLoadingMessages ? "Retrying…" : "Retry"}
+            </button>
+          </div>
+        </div>
+      )}
     </>
   )
 
