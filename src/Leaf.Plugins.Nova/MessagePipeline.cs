@@ -190,6 +190,15 @@ public sealed class MessagePipeline(
         string? displayContent, bool persistUserMessage, string? requestedMessageUid,
         CancellationToken ct = default)
     {
+        // Endpoint checks provide the immediate 409, while this authoritative
+        // re-read protects every internal caller that sends by explicit record.
+        var current = await store.GetAsync(discussion.EntityId, ct);
+        if (current is null)
+            return new(false, discussion.SessionId, "discussion_not_found", "The discussion no longer exists.");
+        if (DiscussionMutationPolicy.RejectSend(current))
+            return new(false, current.SessionId, "closed", "Archived discussions are read-only.");
+        discussion = current;
+
         discussion = await conversationUnread.EnsureBaselineAsync(discussion, ct);
         var sessionId = discussion.SessionId;
         var sessionIsNew = false;

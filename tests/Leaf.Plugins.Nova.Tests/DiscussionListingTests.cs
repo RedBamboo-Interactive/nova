@@ -101,9 +101,70 @@ public sealed class DiscussionListingTests
         Assert.False(typeQuery.DataEquals.ContainsKey("status"));
     }
 
+    [Fact]
+    public async Task Archived_listing_uses_stable_last_activity_cursor_and_title_search()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var entityStore = new ContractEntityStore(
+            Discussion("chat-z", DiscussionStatus.Archived, now, "agent-a", title: "Zebra Notes"),
+            Discussion("chat-a", DiscussionStatus.Archived, now, "agent-a", title: "Alpha Notes"),
+            Discussion("live", DiscussionStatus.Archived, now.AddMinutes(-1), "agent-a", type: "live", title: "Live Notes"),
+            Discussion("heartbeat", DiscussionStatus.Archived, now.AddMinutes(-2), "agent-a", type: "heartbeat", title: "Pulse Notes"),
+            Discussion("other-agent", DiscussionStatus.Archived, now.AddMinutes(1), "agent-b", title: "Other Notes"));
+        var store = new DiscussionStore(entityStore, new NoIoDiscussions());
+
+        var first = await store.ListArchivedPageAsync(2, filterAgentId: "agent-a");
+        var second = await store.ListArchivedPageAsync(2, first.NextCursor, filterAgentId: "agent-a");
+        var searched = await store.ListArchivedPageAsync(50, titleSearch: "alpha", filterAgentId: "agent-a");
+
+        Assert.Equal(["chat-a", "chat-z"], first.Items.Select(item => item.Id));
+        Assert.True(first.HasMore);
+        Assert.NotNull(first.NextCursor);
+        Assert.Equal("live", Assert.Single(second.Items).Id);
+        Assert.False(second.HasMore);
+        Assert.Equal("chat-a", Assert.Single(searched.Items).Id);
+        Assert.DoesNotContain(second.Items, item => item.Type == "heartbeat");
+    }
+
+    [Fact]
+    public async Task Dedicated_reopen_transition_does_not_loosen_closed_status_writer()
+    {
+        var archived = Discussion("archived", DiscussionStatus.Archived, DateTimeOffset.UtcNow,
+            "agent-a", sessionId: "session-a");
+        var archiving = Discussion("archiving", DiscussionStatus.Archiving, DateTimeOffset.UtcNow,
+            "agent-a", sessionId: "session-b");
+        var open = Discussion("open", DiscussionStatus.Stopped, DateTimeOffset.UtcNow,
+            "agent-a", sessionId: "session-c");
+        var store = new DiscussionStore(new ContractEntityStore(archived, archiving, open), new NoIoDiscussions());
+
+        Assert.Null(await store.TrySetStatusAsync(archived.Id, DiscussionStatus.Stopped));
+        Assert.Equal(DiscussionStatus.Stopped,
+            (await store.TryReopenArchivedAsync(archived.Id))?.Status);
+        Assert.Null(await store.TryReopenArchivedAsync(archiving.Id));
+        Assert.Equal(DiscussionStatus.Stopped,
+            (await store.TryReopenArchivedAsync(open.Id))?.Status);
+    }
+
+    [Fact]
+    public async Task Archived_page_authorizes_before_applying_its_limit()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var store = new DiscussionStore(new ContractEntityStore(
+            Discussion("hidden", DiscussionStatus.Archived, now, "agent-a"),
+            Discussion("visible", DiscussionStatus.Archived, now.AddMinutes(-1), "agent-a")),
+            new NoIoDiscussions());
+
+        var page = await store.ListArchivedPageAsync(
+            1,
+            canRead: discussion => discussion.Id == "visible");
+
+        Assert.Equal("visible", Assert.Single(page.Items).Id);
+        Assert.False(page.HasMore);
+    }
+
     private static LeafEntity Discussion(
         string id, string status, DateTimeOffset lastActivity, string? agentId,
-        string type = "chat")
+        string type = "chat", string? title = null, string? sessionId = null)
         => new(
             Guid.NewGuid(),
             "discussion",
@@ -116,6 +177,8 @@ public sealed class DiscussionListingTests
                 ["status"] = status,
                 ["agent"] = agentId,
                 ["type"] = type,
+                ["title"] = title,
+                ["session_id"] = sessionId,
                 ["last_activity"] = lastActivity.ToString("O"),
             },
             lastActivity,
@@ -172,7 +235,12 @@ public sealed class DiscussionListingTests
 
         public Task<LeafEntity> PatchAsync(
             Guid id, JsonObject dataPatch, string? name = null, CancellationToken ct = default)
-            => throw new InvalidOperationException("This test store is read-only.");
+        {
+            var entity = entities.Single(entity => entity.Id == id);
+            foreach (var (key, value) in dataPatch)
+                entity.Data[key] = value?.DeepClone();
+            return Task.FromResult(entity);
+        }
 
         public Task<LeafEntity> ReplaceDataAsync(
             Guid id, JsonObject data, string? name = null, CancellationToken ct = default)

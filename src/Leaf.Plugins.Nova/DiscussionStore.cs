@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Leaf.Sdk;
 using Leaf.Sdk.Services;
@@ -91,6 +93,11 @@ public sealed record DiscussionRead(
     string? SetupBootstrapMessageUid = null,
     string? TitleSource = null);
 
+public sealed record ArchivedDiscussionPage(
+    IReadOnlyList<DiscussionRead> Items,
+    string? NextCursor,
+    bool HasMore);
+
 /// <summary>
 /// Centralized owner-scoping rules for user-owned resources. A resource is accessible
 /// when it has no owner, is owned by the local user, or the caller is the owner.
@@ -147,6 +154,63 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
     public Task<List<DiscussionRead>> ListByStatusAsync(
         string status, string? filterAgentId = null, CancellationToken ct = default)
         => ListCoreAsync(status, null, filterAgentId, ct);
+
+    /// <summary>
+    /// Returns one stable, bounded archive page. The SDK can keyset only by entity
+    /// ID, so the exact closed-status sets are scanned in bounded 500-row chunks,
+    /// then the public cursor is applied to the product ordering
+    /// (last_activity descending, discussion id ascending). This keeps the open
+    /// listing isolated from archive volume and never exposes an unbounded wire
+    /// response.
+    /// </summary>
+    public async Task<ArchivedDiscussionPage> ListArchivedPageAsync(
+        int limit,
+        string? cursor = null,
+        string? titleSearch = null,
+        string? filterAgentId = null,
+        bool includeLive = true,
+        bool includeHeartbeats = false,
+        bool includeArchiving = true,
+        Func<DiscussionRead, bool>? canRead = null,
+        CancellationToken ct = default)
+    {
+        limit = Math.Clamp(limit, 1, 100);
+        var rows = await ListByStatusAsync(DiscussionStatus.Archived, filterAgentId, ct);
+        if (includeArchiving)
+            rows.AddRange(await ListByStatusAsync(DiscussionStatus.Archiving, filterAgentId, ct));
+
+        IEnumerable<DiscussionRead> filtered = rows
+            .Where(discussion => canRead?.Invoke(discussion) ?? true)
+            .Where(discussion =>
+                discussion.Type == "chat"
+                || includeLive && discussion.Type == "live"
+                || includeHeartbeats && discussion.Type == HeartbeatService.DiscussionType);
+        if (!string.IsNullOrWhiteSpace(titleSearch))
+            filtered = filtered.Where(discussion => discussion.Title?.Contains(
+                titleSearch.Trim(), StringComparison.OrdinalIgnoreCase) == true);
+
+        var ordered = filtered
+            .OrderByDescending(discussion => discussion.LastActivity)
+            .ThenBy(discussion => discussion.Id, StringComparer.Ordinal)
+            .ToList();
+        if (!string.IsNullOrWhiteSpace(cursor))
+        {
+            var boundary = DecodeArchiveCursor(cursor);
+            ordered = ordered.Where(discussion =>
+                discussion.LastActivity < boundary.LastActivity
+                || discussion.LastActivity == boundary.LastActivity
+                    && string.CompareOrdinal(discussion.Id, boundary.Id) > 0)
+                .ToList();
+        }
+
+        var page = ordered.Take(limit + 1).ToList();
+        var hasMore = page.Count > limit;
+        if (hasMore) page.RemoveAt(page.Count - 1);
+        var nextCursor = hasMore && page.Count > 0
+            ? EncodeArchiveCursor(page[^1].LastActivity, page[^1].Id)
+            : null;
+        return new ArchivedDiscussionPage(page, nextCursor, hasMore);
+    }
 
     /// <summary>
     /// Lists every discussion of one durable type in one stable query sequence.
@@ -778,6 +842,55 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             await entities.PatchAsync(entityId, new JsonObject { ["status"] = to }, null, ct);
             return to;
         }, ct);
+
+    /// <summary>
+    /// The sole exception to closed-state terminality: an explicit user reopen may
+    /// move archived to stopped. Archiving remains terminal until its finalizer has
+    /// confirmed the provider stopped. Ordinary status writers never call this.
+    /// Already-open discussions are returned unchanged for endpoint idempotency.
+    /// </summary>
+    public Task<DiscussionRead?> TryReopenArchivedAsync(
+        Guid entityId, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity is null) return null;
+            var current = Map(entity);
+            if (current is null || current.Status == DiscussionStatus.Archiving) return null;
+            if (current.Status != DiscussionStatus.Archived) return current;
+            if (current.Type != "chat" || string.IsNullOrWhiteSpace(current.SessionId)) return null;
+
+            await entities.PatchAsync(entityId,
+                new JsonObject { ["status"] = DiscussionStatus.Stopped }, null, ct);
+            return current with { Status = DiscussionStatus.Stopped };
+        }, ct);
+
+    internal static string EncodeArchiveCursor(DateTime lastActivity, string id)
+    {
+        var json = JsonSerializer.Serialize(new ArchiveCursor(lastActivity, id));
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(json))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    internal static (DateTime LastActivity, string Id) DecodeArchiveCursor(string cursor)
+    {
+        try
+        {
+            var base64 = cursor.Replace('-', '+').Replace('_', '/');
+            base64 += new string('=', (4 - base64.Length % 4) % 4);
+            var decoded = JsonSerializer.Deserialize<ArchiveCursor>(
+                Encoding.UTF8.GetString(Convert.FromBase64String(base64)));
+            if (decoded is null || string.IsNullOrWhiteSpace(decoded.Id))
+                throw new FormatException();
+            return (decoded.LastActivity, decoded.Id);
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException)
+        {
+            throw new ArgumentException("The archive cursor is invalid.", nameof(cursor), ex);
+        }
+    }
+
+    private sealed record ArchiveCursor(DateTime LastActivity, string Id);
 
     private static bool IsNovaDiscussion(LeafEntity? entity)
         => entity is { TypeSlug: "discussion" }

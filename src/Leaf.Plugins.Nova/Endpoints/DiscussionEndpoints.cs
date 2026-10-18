@@ -107,6 +107,8 @@ public static class DiscussionEndpoints
     private static IResult NotFound() => Results.NotFound(new { error = "Discussion not found" });
     private static IResult AccessDenied(DiscussionRead discussion)
         => discussion.Confidential ? NotFound() : Forbidden();
+    private static IResult Closed()
+        => Results.Json(new { error = "closed", message = "Archived discussions are read-only" }, statusCode: 409);
 
     public static void Map(RouteGroupBuilder group)
     {
@@ -134,6 +136,42 @@ public static class DiscussionEndpoints
             var status = ctx.Request.Query["status"].FirstOrDefault();
             var search = ctx.Request.Query["search"].FirstOrDefault();
             var agentFilter = ctx.Request.Query["agent"].FirstOrDefault();
+
+            // Opt-in page envelope for archive mode. Callers that omit limit keep
+            // the historical array response, while the UI never downloads the
+            // entire archive. Authorization is applied before the cursor boundary.
+            if (status == DiscussionStatus.Archived
+                && ctx.Request.Query.TryGetValue("limit", out var archivedLimitValue))
+            {
+                if (!int.TryParse(archivedLimitValue.FirstOrDefault(), out var archivedLimit))
+                    return Results.BadRequest(new { error = "invalid_limit" });
+                var includeLive = ctx.Request.Query["includeLive"].FirstOrDefault() != "false";
+                var includeHeartbeats = ctx.Request.Query["includeHeartbeats"].FirstOrDefault() == "true";
+                var includeArchiving = ctx.Request.Query["includeArchiving"].FirstOrDefault() != "false";
+                try
+                {
+                    var page = await store.ListArchivedPageAsync(
+                        archivedLimit,
+                        ctx.Request.Query["cursor"].FirstOrDefault(),
+                        search,
+                        agentFilter,
+                        includeLive,
+                        includeHeartbeats,
+                        includeArchiving,
+                        discussion => DiscussionAccessPolicy.CanRead(discussion, ctx),
+                        ctx.RequestAborted);
+                    return Results.Ok(new
+                    {
+                        items = page.Items.Select(DiscussionStore.ToInfo),
+                        nextCursor = page.NextCursor,
+                        hasMore = page.HasMore,
+                    });
+                }
+                catch (ArgumentException)
+                {
+                    return Results.BadRequest(new { error = "invalid_cursor" });
+                }
+            }
 
             IEnumerable<DiscussionRead> filtered = !string.IsNullOrEmpty(status)
                 ? await store.ListByStatusAsync(status, agentFilter, ctx.RequestAborted)
@@ -290,6 +328,8 @@ public static class DiscussionEndpoints
             ISearchAccessScopeProvider searchAccess) =>
         {
             var q = ctx.Request.Query["q"].FirstOrDefault();
+            var requestedStatus = ctx.Request.Query["status"].FirstOrDefault();
+            var agentFilter = ctx.Request.Query["agent"].FirstOrDefault();
             if (string.IsNullOrWhiteSpace(q))
                 return Results.BadRequest(new { error = "Query parameter 'q' is required" });
 
@@ -340,6 +380,10 @@ public static class DiscussionEndpoints
                     }
                 }
                 if (disc == null || !DiscussionAccessPolicy.CanRead(disc, ctx)) continue;
+                if (requestedStatus == DiscussionStatus.Archived
+                    && !DiscussionStatus.IsClosed(disc.Status)) continue;
+                if (agentFilter is not null && disc.AgentId is not null
+                    && disc.AgentId != agentFilter) continue;
 
                 if (merged.TryGetValue(disc.Id, out var existing))
                     merged[disc.Id] = (disc, existing.MatchCount + g.HitCount, [.. existing.Hits, .. g.Hits]);
@@ -365,6 +409,7 @@ public static class DiscussionEndpoints
                             timestamp = h.CreatedAt.UtcDateTime,
                             snippet = h.Snippet.Replace("**", ""),
                         }),
+                    discussion = DiscussionStore.ToInfo(m.Discussion),
                 });
 
             return Results.Ok(new { query = q, results });
@@ -1173,6 +1218,15 @@ public static class DiscussionEndpoints
 
             if (!probe.Exists || string.IsNullOrWhiteSpace(probe.ProviderSessionId))
             {
+                // Reopen must never discard the retained archive/session link.
+                // Leave it visibly stopped so the user sees the provider history
+                // is unavailable and can retry or inspect the read-only transcript.
+                if (ctx.Request.Query["reopened"].FirstOrDefault() == "true")
+                    return Results.Json(new
+                    {
+                        error = "resume_failed",
+                        message = "The archived provider session is no longer available",
+                    }, statusCode: 502);
                 var oldSessionId = discussion.SessionId;
                 await store.PatchAsync(discussion.EntityId, new JsonObject
                 {
@@ -1199,7 +1253,42 @@ public static class DiscussionEndpoints
             return Results.Ok(new { sessionId = discussion.SessionId, status = resumedStatus ?? discussion.Status, initialized = true });
         });
 
-        group.MapDelete("/discussions/{id}", async (string id, HttpContext ctx, DiscussionStore store, DiscussionLifecycle lifecycle, DiscussionActivity activity) =>
+        group.MapPost("/discussions/{id}/reopen", async (
+            string id,
+            HttpContext ctx,
+            DiscussionStore store,
+            DiscussionActivity activity,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
+        {
+            var discussion = await store.GetAsync(id, ctx.RequestAborted);
+            if (discussion is null) return NotFound();
+
+            var decision = DiscussionMutationPolicy.Reopen(discussion, ctx);
+            if (decision == DiscussionReopenDecision.AccessDenied) return AccessDenied(discussion);
+            if (decision == DiscussionReopenDecision.Archiving)
+                return Results.Json(new { error = "archiving", message = "Archive finalization is still in progress" }, statusCode: 409);
+            if (decision == DiscussionReopenDecision.UnsupportedType)
+                return Results.Json(new { error = "unsupported_type", message = "LIVE and Heartbeat discussions cannot be reopened" }, statusCode: 409);
+            if (decision == DiscussionReopenDecision.MissingSession)
+                return Results.Json(new { error = "missing_session", message = "This archive has no provider session to reopen" }, statusCode: 409);
+            if (decision == DiscussionReopenDecision.AlreadyOpen)
+                return Results.Ok(DiscussionStore.ToInfo(discussion));
+
+            var reopened = await store.TryReopenArchivedAsync(discussion.EntityId, ctx.RequestAborted);
+            if (reopened is null)
+                return Results.Json(new { error = "archiving", message = "Archive finalization is still in progress" }, statusCode: 409);
+
+            await events.PublishAsync("discussion.changed", new JsonObject
+            {
+                ["discussionId"] = id,
+                ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
+                ["confidential"] = reopened.Confidential,
+            }, ctx.RequestAborted);
+            _ = activity.OnReopened(id, reopened.Title, reopened.Confidential);
+            return Results.Ok(DiscussionStore.ToInfo(reopened));
+        });
+
+        group.MapDelete("/discussions/{id}", async (string id, HttpContext ctx, DiscussionStore store, DiscussionLifecycle lifecycle, DiscussionActivity activity, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
@@ -1219,6 +1308,12 @@ public static class DiscussionEndpoints
             var status = await lifecycle.BeginArchiveAsync(discussion);
             if (status == null) return NotFound();
 
+            await events.PublishAsync("discussion.changed", new JsonObject
+            {
+                ["discussionId"] = id,
+                ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
+                ["confidential"] = discussion.Confidential,
+            }, ctx.RequestAborted);
             _ = activity.OnArchived(id, discussion.Title, discussion.Confidential);
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Status = status }));
         });
@@ -1357,6 +1452,7 @@ public static class DiscussionEndpoints
                 : await store.GetAsync(id);
             if (discussion is null) return NotFound();
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+            if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
 
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });
@@ -1377,6 +1473,7 @@ public static class DiscussionEndpoints
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+            if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
 
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });
@@ -1491,6 +1588,7 @@ public static class DiscussionEndpoints
             if (discussion is null) return NotFound();
             var userId = UserId(ctx);
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+            if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
 
             if (string.IsNullOrWhiteSpace(request.Content)
                 && (request.Images == null || request.Images.Length == 0)
@@ -1521,6 +1619,7 @@ public static class DiscussionEndpoints
             {
                 var statusCode = outcome.ErrorCode switch
                 {
+                    "closed" => 409,
                     "invalid_images" or "invalid_image" or "unsupported_image_type" or "missing_content" => 400,
                     "image_attachments_not_supported" or "file_attachments_not_supported" => 422,
                     "attachment_not_found" or "attachment_expired" or "attachment_forbidden" or "invalid_attachment" or "attachment_limit_exceeded" => 422,

@@ -356,6 +356,13 @@ public sealed class DiscussionActivity(LiveEvents live)
             new { discussionId, title, kind = "archived" });
     }
 
+    public async Task OnReopened(string discussionId, string? title, bool confidential = false)
+    {
+        if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title) || confidential) return;
+        await live.PostAsync("discussion", $"\"{title}\" reopened",
+            new { discussionId, title, kind = "reopened" });
+    }
+
     private bool TryThrottle(string discussionId)
     {
         var now = DateTime.UtcNow;
