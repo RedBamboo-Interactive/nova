@@ -4,7 +4,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { MorphSpinner } from "@redbamboo/chat"
 import type { DelegationActivitySnapshot, DiscussionDelegationActivity, DiscussionInfo, AgentInfo } from "../../lib/types"
 import type { DiscussionListLoadState } from "../../lib/discussion-list-store"
-import type { ArchiveDiscussionItem } from "../../lib/archive-discussion-store"
+import { resolveArchiveSearchEscape, type ArchiveDiscussionItem } from "../../lib/archive-discussion-store"
 import { DelegationCount, DelegationSpinner } from "../delegation-activity"
 import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
@@ -69,10 +69,11 @@ interface Props {
   archiveQuery?: string
   archiveHasMore?: boolean
   onArchiveQueryChange?: (query: string) => void
+  onExitArchiveMode?: () => void
   onLoadMoreArchived?: () => void
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onLoadMoreArchived }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -279,6 +280,15 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
               type="search"
               value={archiveQuery}
               onChange={event => onArchiveQueryChange?.(event.target.value)}
+              onKeyDown={event => {
+                if (event.key !== "Escape") return
+                event.preventDefault()
+                event.stopPropagation()
+                if (resolveArchiveSearchEscape(archiveQuery) === "clear")
+                  onArchiveQueryChange?.("")
+                else
+                  onExitArchiveMode?.()
+              }}
               placeholder="Search archives…"
               className="h-8 w-full rounded-md border border-overlay-10 bg-overlay-4 pl-8 pr-3 text-xs text-contrast outline-none placeholder:text-text-muted focus:border-accent-a40"
             />

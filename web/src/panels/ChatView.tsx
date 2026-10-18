@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type Ref } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type ProviderUsageSnapshot, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
@@ -696,6 +696,10 @@ export function ChatView({
     setArchiveMode(!archiveMode)
   }, [archiveMode, setArchiveMode])
 
+  const handleExitArchiveMode = useCallback(() => {
+    setArchiveMode(false)
+  }, [setArchiveMode])
+
   const handleLoadMoreArchived = useCallback(() => {
     void refreshArchivedDiscussions(archiveQuery, agentFilter, true).catch(() => {})
   }, [agentFilter, archiveQuery, refreshArchivedDiscussions])
@@ -1050,7 +1054,20 @@ export function ChatView({
   )
 
   const sidebarHeader = (
-    <PanelHeader title="Discussions">
+    <PanelHeader
+      title={archiveMode ? "Archives" : "Discussions"}
+      leading={archiveMode ? (
+        <button
+          type="button"
+          onClick={handleExitArchiveMode}
+          aria-label="Back to discussions"
+          title="Back to discussions"
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
+        >
+          <i aria-hidden="true" className="ph-bold ph-arrow-left text-base" />
+        </button>
+      ) : undefined}
+    >
       {multiAgent && (
         <AgentPicker
           agents={agents}
@@ -1059,18 +1076,9 @@ export function ChatView({
           showAll
         />
       )}
-      <button
-        type="button"
-        onClick={handleToggleArchiveMode}
-        aria-pressed={archiveMode}
-        aria-label={archiveMode ? "Show open discussions" : "Browse archived discussions"}
-        title={archiveMode ? "Show open discussions" : "Browse archived discussions"}
-        className={`inline-flex h-7 w-7 items-center justify-center rounded text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast ${archiveMode ? "bg-overlay-10 text-contrast" : ""}`}
-      >
-        <i aria-hidden="true" className="ph-bold ph-archive text-sm" />
-      </button>
       {!archiveMode && (
         <button
+          type="button"
           onClick={openNewDiscussion}
           className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
           title={`New discussion (${floating ? "Alt+N" : "Ctrl+N"})`}
@@ -1079,6 +1087,24 @@ export function ChatView({
           <span>New</span>
         </button>
       )}
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
+          aria-label="More discussion options"
+          title="More"
+        >
+          <i aria-hidden="true" className="ph-bold ph-dots-three-vertical text-base" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" sideOffset={4}>
+          <DropdownMenuItem onClick={handleToggleArchiveMode}>
+            <i
+              aria-hidden="true"
+              className={`${archiveMode ? "ph-bold ph-arrow-left" : "ph-bold ph-archive"} size-4`}
+            />
+            {archiveMode ? "Back to discussions" : "Browse archives"}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </PanelHeader>
   )
 
@@ -1467,6 +1493,7 @@ export function ChatView({
               archiveQuery={archiveQuery}
               archiveHasMore={archiveHasMore}
               onArchiveQueryChange={setArchiveQuery}
+              onExitArchiveMode={handleExitArchiveMode}
               onLoadMoreArchived={handleLoadMoreArchived}
             />
           </div>

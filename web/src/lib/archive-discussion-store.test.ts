@@ -9,6 +9,7 @@ import {
   getArchiveDiscussionState,
   mergeArchivedSearchResults,
   resetArchiveDiscussionStore,
+  resolveArchiveSearchEscape,
   resolveKnownDiscussion,
   setArchiveMode,
   setArchiveQuery,
@@ -78,6 +79,11 @@ test("archive content search requests the chat and LIVE type scope", () => {
   assert.equal(params.get("includeLive"), "true")
   assert.equal(params.get("includeHeartbeats"), "false")
   assert.equal(params.get("agent"), "agent-a")
+})
+
+test("archive search Escape clears a query before leaving archive mode", () => {
+  assert.equal(resolveArchiveSearchEscape("needle"), "clear")
+  assert.equal(resolveArchiveSearchEscape(""), "exit")
 })
 
 test("a closed direct-url record outside the open list can commit read-only history", () => {

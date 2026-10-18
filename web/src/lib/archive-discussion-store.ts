@@ -172,6 +172,10 @@ export function createArchiveContentSearchParams(
   return search
 }
 
+export function resolveArchiveSearchEscape(query: string): "clear" | "exit" {
+  return query.length > 0 ? "clear" : "exit"
+}
+
 export function resolveKnownDiscussion(
   open: DiscussionInfo[],
   archived: DiscussionInfo[],
