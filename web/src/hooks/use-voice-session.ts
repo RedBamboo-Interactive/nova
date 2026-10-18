@@ -132,6 +132,7 @@ export function useVoiceSession(discussionId: string | null) {
       pc.ontrack = event => {
         void (async () => {
           const outputNotice = await applyVoiceOutputDevice(audio, voiceSettings)
+          if (audioRef.current !== audio) return
           if (outputNotice) setError(current => current ? `${current} ${outputNotice}` : outputNotice)
           audio.srcObject = event.streams[0] ?? new MediaStream([event.track])
           await audio.play().catch(() => setError("Tap the screen once to allow voice playback"))
