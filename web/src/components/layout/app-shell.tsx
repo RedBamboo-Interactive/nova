@@ -63,6 +63,9 @@ function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: st
     group: "Discussions",
     shortcut: "Alt+W",
     keywords: ["close", "archive", "remove"],
+    enabled: activeDiscussion?.type === "chat"
+      && activeDiscussion.status !== "archived"
+      && activeDiscussion.status !== "archiving",
     action: () => {
       if (!activeDiscussionId) return
       const id = activeDiscussionId

@@ -4,6 +4,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { MorphSpinner } from "@redbamboo/chat"
 import type { DelegationActivitySnapshot, DiscussionDelegationActivity, DiscussionInfo, AgentInfo } from "../../lib/types"
 import type { DiscussionListLoadState } from "../../lib/discussion-list-store"
+import type { ArchiveDiscussionItem } from "../../lib/archive-discussion-store"
 import { DelegationCount, DelegationSpinner } from "../delegation-activity"
 import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
@@ -64,9 +65,14 @@ interface Props {
   onFloat?: (id: string) => void
   getAgent?: (id: string | null) => AgentInfo | undefined
   multiAgent?: boolean
+  archiveMode?: boolean
+  archiveQuery?: string
+  archiveHasMore?: boolean
+  onArchiveQueryChange?: (query: string) => void
+  onLoadMoreArchived?: () => void
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onLoadMoreArchived }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -225,6 +231,98 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       </div>
     )
   }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent, delegationActivity])
+
+  const renderArchivedItem = useCallback((discussion: DiscussionInfo) => {
+    const item = discussion as ArchiveDiscussionItem
+    const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
+    return (
+      <div
+        data-discussion-id={discussion.id}
+        data-discussion-type={discussion.type}
+        data-discussion-status={discussion.status}
+        data-discussion-selected={discussion.id === activeDiscussionId || undefined}
+      >
+        <ItemListRow
+          selected={discussion.id === activeDiscussionId}
+          onClick={() => onSelect(discussion.id)}
+          icon={agent ? (
+            <img
+              src={agent.avatarUrl}
+              alt={agent.name}
+              className="h-full w-full rounded-lg object-cover opacity-70"
+              onError={(event) => { event.currentTarget.style.display = "none" }}
+            />
+          ) : <i aria-hidden="true" className="ph-bold ph-archive text-text-muted" />}
+          title={
+            <>
+              {discussion.type === "live" && <i className="ph-bold ph-broadcast mr-1.5 text-[10px] text-status-live" />}
+              {discussion.title || "Untitled discussion"}
+              {discussion.confidential && <i className="ph-bold ph-lock-simple ml-1.5 text-[10px] text-text-muted opacity-60" />}
+            </>
+          }
+          subtitle={item.searchSnippet
+            ? <span className="block truncate">{item.searchSnippet}</span>
+            : formatRelative(discussion.lastActivity)}
+        />
+      </div>
+    )
+  }, [activeDiscussionId, getAgent, multiAgent, onSelect])
+
+  if (archiveMode) {
+    return (
+      <div className="flex h-full flex-col overflow-hidden" data-archive-mode="true">
+        <div className="shrink-0 border-b border-overlay-6 p-3">
+          <label className="relative block">
+            <span className="sr-only">Search archived discussions</span>
+            <i aria-hidden="true" className="ph-bold ph-magnifying-glass absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-text-muted" />
+            <input
+              type="search"
+              value={archiveQuery}
+              onChange={event => onArchiveQueryChange?.(event.target.value)}
+              placeholder="Search archives…"
+              className="h-8 w-full rounded-md border border-overlay-10 bg-overlay-4 pl-8 pr-3 text-xs text-contrast outline-none placeholder:text-text-muted focus:border-accent-a40"
+            />
+          </label>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {discussions.length === 0 && loadState === "loading" ? (
+            <p data-archive-list-state="loading" className="p-4 text-center text-sm text-text-muted">
+              <i aria-hidden="true" className="ph-bold ph-spinner mr-1.5 animate-spin" />
+              Loading archived discussions…
+            </p>
+          ) : discussions.length === 0 && loadState === "failed" ? (
+            <div data-archive-list-state="failed" className="p-4 text-center text-sm text-text-muted">
+              <p className="mb-3">Couldn&apos;t load archived discussions</p>
+              <button onClick={onRetryLoad} className="rounded bg-overlay-10 px-3 py-1.5 text-xs text-contrast hover:bg-overlay-15">
+                <i aria-hidden="true" className="ph-bold ph-arrow-clockwise mr-1.5" />Retry
+              </button>
+            </div>
+          ) : (
+            <>
+              <ItemList
+                items={discussions}
+                keyFn={discussion => discussion.id}
+                emptyMessage={archiveQuery.trim() ? "No archived matches" : "No archived discussions"}
+                renderItem={renderArchivedItem}
+              />
+              {archiveHasMore && (
+                <div className="p-3 text-center">
+                  <button
+                    type="button"
+                    onClick={onLoadMoreArchived}
+                    disabled={loadState === "loading"}
+                    className="rounded-md bg-overlay-8 px-3 py-1.5 text-xs text-text-muted hover:bg-overlay-12 hover:text-contrast disabled:opacity-50"
+                  >
+                    {loadState === "loading" ? "Loading…" : "Load more"}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden">

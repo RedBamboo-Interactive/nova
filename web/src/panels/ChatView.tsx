@@ -155,6 +155,14 @@ export function ChatView({
   const {
     discussions,
     discussionListLoadState,
+    archivedDiscussions,
+    archiveMode,
+    archiveListLoadState,
+    archiveQuery,
+    archiveHasMore,
+    setArchiveMode,
+    setArchiveQuery,
+    refreshArchivedDiscussions,
     activeDiscussion,
     activeDiscussionId,
     activeMessages,
@@ -177,9 +185,11 @@ export function ChatView({
     updateDiscussionTitle,
     setConfidential,
     resumeDiscussion,
+    reopenDiscussion,
     loadEarlierMessages,
     retryHistoryLoad,
     isLoadingMessages,
+    isResolvingDiscussion,
     hasEarlierMessages,
     isLoadingEarlier,
     historyLoadFailure,
@@ -246,6 +256,15 @@ export function ChatView({
   const agentFilter = settings.agentFilter
 
   const filteredDiscussions = getSidebarDiscussionOrder(discussions, agentFilter)
+  const filteredArchivedDiscussions = getSidebarDiscussionOrder(archivedDiscussions, agentFilter)
+
+  useEffect(() => {
+    if (!archiveMode) return
+    const timer = environment.window.setTimeout(() => {
+      void refreshArchivedDiscussions(archiveQuery, agentFilter).catch(() => {})
+    }, archiveQuery.trim() ? 300 : 0)
+    return () => environment.window.clearTimeout(timer)
+  }, [agentFilter, archiveMode, archiveQuery, environment.window, refreshArchivedDiscussions])
 
   const pendingContext = useNovaPendingContext()
   const { toast } = useToast()
@@ -321,6 +340,7 @@ export function ChatView({
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false)
   const [titleEditing, setTitleEditing] = useState(false)
   const [titleUpdatePending, setTitleUpdatePending] = useState(false)
+  const [reopenPending, setReopenPending] = useState(false)
   const [confidentialityPending, setConfidentialityPending] = useState(false)
   const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
@@ -407,7 +427,7 @@ export function ChatView({
     if (!discussionId || !activeDiscussion) {
       return { ok: false, state: "open", error: { code: "discussion_required", message: "Select a discussion before attaching foreground context." } }
     }
-    if (activeDiscussion.type === "heartbeat" || activeDiscussion.status === "archived" || activeDiscussion.status === "stopped") {
+    if (activeDiscussion.type === "heartbeat" || activeDiscussion.status === "archived" || activeDiscussion.status === "archiving" || activeDiscussion.status === "stopped") {
       return { ok: false, state: "open", error: { code: "discussion_read_only", message: "This discussion cannot accept a context attachment." } }
     }
     if (capturingContextRef.current) {
@@ -441,7 +461,7 @@ export function ChatView({
   const captureMonitor = useCallback(async (sourceId: string): Promise<void> => {
     const discussionId = activeDiscussionId
     if (!discussionId || !activeDiscussion || capturingContextRef.current) return
-    if (activeDiscussion.type === "heartbeat" || activeDiscussion.status === "archived" || activeDiscussion.status === "stopped") return
+    if (activeDiscussion.type === "heartbeat" || activeDiscussion.status === "archived" || activeDiscussion.status === "archiving" || activeDiscussion.status === "stopped") return
 
     capturingContextRef.current = true
     setCapturingContext(true)
@@ -668,8 +688,27 @@ export function ChatView({
   }, [share])
 
   const handleRetryDiscussionList = useCallback(() => {
-    syncAndRefresh().catch(() => {})
-  }, [syncAndRefresh])
+    if (archiveMode) void refreshArchivedDiscussions(archiveQuery, agentFilter).catch(() => {})
+    else syncAndRefresh().catch(() => {})
+  }, [agentFilter, archiveMode, archiveQuery, refreshArchivedDiscussions, syncAndRefresh])
+
+  const handleToggleArchiveMode = useCallback(() => {
+    setArchiveMode(!archiveMode)
+  }, [archiveMode, setArchiveMode])
+
+  const handleLoadMoreArchived = useCallback(() => {
+    void refreshArchivedDiscussions(archiveQuery, agentFilter, true).catch(() => {})
+  }, [agentFilter, archiveQuery, refreshArchivedDiscussions])
+
+  const handleReopen = useCallback(async () => {
+    if (!activeDiscussionId || reopenPending) return
+    setReopenPending(true)
+    try {
+      await reopenDiscussion(activeDiscussionId)
+    } finally {
+      setReopenPending(false)
+    }
+  }, [activeDiscussionId, reopenDiscussion, reopenPending])
 
   const handleUpdateTitle = useCallback(async (id: string) => {
     if (titleUpdatePending) return
@@ -705,7 +744,8 @@ export function ChatView({
 
   // Sidebar row actions that drive the open discussion's header (rename, Info,
   // share) open that discussion first and run once it is the active one.
-  const voiceAvailable = !!activeDiscussion && activeDiscussion.status !== "archived" && activeDiscussion.status !== "stopped"
+  const discussionClosed = activeDiscussion?.status === "archived" || activeDiscussion?.status === "archiving"
+  const voiceAvailable = !!activeDiscussion && !discussionClosed && activeDiscussion.status !== "stopped"
     && voiceSession.phase !== "starting" && voiceSession.phase !== "connected"
   const startVoice = useCallback(() => { void voiceSession.start() }, [voiceSession])
   const openSessionInfo = useCallback(() => {
@@ -729,7 +769,7 @@ export function ChatView({
   }, [activeDiscussion?.id, handleShare, openSessionInfo, pendingRowAction, startVoice])
 
   // Desktop shortcuts for the open discussion; the menus show the same keys.
-  const canManageDiscussion = activeDiscussion?.type === "chat"
+  const canManageDiscussion = activeDiscussion?.type === "chat" && !discussionClosed
   const docked = !floating && !!activeDiscussion
   useCommand("nova-discussion-voice", {
     label: "Start Voice",
@@ -772,7 +812,7 @@ export function ChatView({
     description: "Create a share link for the open discussion",
     group: "Discussions",
     shortcut: DISCUSSION_SHORTCUTS.share,
-    enabled: docked && !activeDiscussion?.confidential,
+    enabled: docked && !discussionClosed && !activeDiscussion?.confidential,
     action: handleShare,
   })
 
@@ -850,7 +890,7 @@ export function ChatView({
           className="mt-0.5 shrink-0"
           checked={activeDiscussion.confidential ?? false}
           onCheckedChange={handleConfidentialToggle}
-          disabled={confidentialityPending}
+          disabled={confidentialityPending || discussionClosed}
           aria-busy={confidentialityPending}
           aria-label="Confidential discussion"
         />
@@ -863,7 +903,9 @@ export function ChatView({
     <>
     <PanelHeader
       leading={
-        liveHeartbeatTabs ? <div className="flex flex-1 min-w-0 self-stretch">{liveHeartbeatTabs}</div> : (
+        liveHeartbeatTabs ? <div className="flex flex-1 min-w-0 self-stretch">{liveHeartbeatTabs}</div> : discussionClosed ? (
+          <span className="truncate text-sm font-medium text-contrast">{activeDiscussion.title || "Untitled discussion"}</span>
+        ) : (
           <EditableTitle
             title={activeDiscussion.title || "New discussion"}
             onRename={(title) => renameDiscussion(activeDiscussion.id, title)}
@@ -920,7 +962,7 @@ export function ChatView({
                 onRename={canManageDiscussion ? () => setTitleEditing(true) : undefined}
                 onUpdateTitle={canManageDiscussion ? () => void handleUpdateTitle(activeDiscussion.id) : undefined}
                 updateTitlePending={titleUpdatePending}
-                onShare={!activeDiscussion.confidential ? handleShare : undefined}
+                onShare={!discussionClosed && !activeDiscussion.confidential ? handleShare : undefined}
                 onFloat={floatingSurface?.supported ? () => handleFloatDiscussion(activeDiscussion.id) : undefined}
                 onReset={activeDiscussion.type === "live" ? () => void handleRotateDiscussion(activeDiscussion.id) : undefined}
                 onClose={canManageDiscussion ? () => handleCloseDiscussion(activeDiscussion.id) : undefined}
@@ -1018,13 +1060,25 @@ export function ChatView({
         />
       )}
       <button
-        onClick={openNewDiscussion}
-        className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
-        title={`New discussion (${floating ? "Alt+N" : "Ctrl+N"})`}
+        type="button"
+        onClick={handleToggleArchiveMode}
+        aria-pressed={archiveMode}
+        aria-label={archiveMode ? "Show open discussions" : "Browse archived discussions"}
+        title={archiveMode ? "Show open discussions" : "Browse archived discussions"}
+        className={`inline-flex h-7 w-7 items-center justify-center rounded text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast ${archiveMode ? "bg-overlay-10 text-contrast" : ""}`}
       >
-        <i className="ph-bold ph-plus text-xs" />
-        <span>New</span>
+        <i aria-hidden="true" className="ph-bold ph-archive text-sm" />
       </button>
+      {!archiveMode && (
+        <button
+          onClick={openNewDiscussion}
+          className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
+          title={`New discussion (${floating ? "Alt+N" : "Ctrl+N"})`}
+        >
+          <i className="ph-bold ph-plus text-xs" />
+          <span>New</span>
+        </button>
+      )}
     </PanelHeader>
   )
 
@@ -1268,8 +1322,8 @@ export function ChatView({
         sessionId={activeDiscussionId}
         autoFocusMode={autoFocusMode}
         draftStorageKey="nova-drafts"
-        disabled={activeDiscussion.status === "archived" || activeDiscussion.status === "stopped"}
-        hideComposer={activeDiscussion.type === "heartbeat"}
+        disabled={discussionClosed || activeDiscussion.status === "stopped"}
+        hideComposer={activeDiscussion.type === "heartbeat" || discussionClosed}
         pendingQuestion={pendingQuestion}
         questionOutcome={questionOutcome}
         onAnswerQuestion={handleAnswerQuestion}
@@ -1295,13 +1349,33 @@ export function ChatView({
         renderAttachmentActions={renderWhatISeeAction}
         renderSideActions={renderSideActions}
       />
+      {discussionClosed && (
+        <div
+          data-slot="archived-discussion-bar"
+          className="shrink-0 border-t border-overlay-8 bg-card px-4 py-3"
+        >
+          <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
+            <span className="text-sm text-text-muted">This discussion is archived</span>
+            <button
+              type="button"
+              onClick={() => { void handleReopen() }}
+              disabled={reopenPending || activeDiscussion.status === "archiving" || !activeDiscussion.sessionId}
+              title={!activeDiscussion.sessionId ? "This archive has no provider session to reopen" : undefined}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <i aria-hidden="true" className={`ph-bold ${reopenPending ? "ph-spinner animate-spin" : "ph-arrow-counter-clockwise"}`} />
+              {activeDiscussion.status === "archiving" ? "Finalizing…" : reopenPending ? "Reopening…" : "Reopen"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   ) : (
     <div className="flex-1 flex items-center justify-center text-text-muted">
-      {isSpawning || discussionListLoadState === "loading" ? (
+      {isSpawning || isResolvingDiscussion || discussionListLoadState === "loading" ? (
         <div className="text-center">
           <i className="ph-bold ph-spinner animate-spin text-2xl mx-auto mb-3 opacity-40" />
-          <p className="text-sm">{isSpawning ? "Starting discussion…" : "Loading discussions…"}</p>
+          <p className="text-sm">{isSpawning ? "Starting discussion…" : isResolvingDiscussion ? "Loading discussion…" : "Loading discussions…"}</p>
         </div>
       ) : (
         <div className="text-center">
@@ -1375,8 +1449,8 @@ export function ChatView({
           {sidebarHeader}
           <div className="flex-1 overflow-hidden">
             <DiscussionSidebar
-              discussions={filteredDiscussions}
-              loadState={discussionListLoadState}
+              discussions={archiveMode ? filteredArchivedDiscussions : filteredDiscussions}
+              loadState={archiveMode ? archiveListLoadState : discussionListLoadState}
               onRetryLoad={handleRetryDiscussionList}
               delegationActivity={delegationActivity}
               activeDiscussionId={synchronizedDiscussionId ?? activeDiscussionId}
@@ -1389,6 +1463,11 @@ export function ChatView({
               onFloat={floatingSurface?.supported && !floating ? handleFloatDiscussion : undefined}
               getAgent={getAgent}
               multiAgent={multiAgent}
+              archiveMode={archiveMode}
+              archiveQuery={archiveQuery}
+              archiveHasMore={archiveHasMore}
+              onArchiveQueryChange={setArchiveQuery}
+              onLoadMoreArchived={handleLoadMoreArchived}
             />
           </div>
           {showAvatar && (

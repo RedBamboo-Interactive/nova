@@ -34,6 +34,21 @@ import {
   subscribeDiscussionList,
   upsertDiscussion,
 } from "../lib/discussion-list-store"
+import {
+  beginArchiveLoad,
+  canCommitDiscussionHistory,
+  completeArchiveLoad,
+  failArchiveLoad,
+  getArchiveDiscussionState,
+  mergeArchivedSearchResults,
+  removeArchivedDiscussion,
+  resolveKnownDiscussion,
+  setArchiveMode,
+  setArchiveQuery,
+  subscribeArchiveDiscussionState,
+  upsertArchivedDiscussion,
+  type ArchiveContentResult,
+} from "../lib/archive-discussion-store"
 
 function isClosed(status: string | undefined): boolean {
   return status === "archived" || status === "archiving"
@@ -187,6 +202,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
   // view state below (selection, loaded transcript, dialogs) remains local.
   const discussions = useSyncExternalStore(subscribeDiscussionList, getDiscussionList, getDiscussionList)
   const discussionListLoadState = useSyncExternalStore(subscribeDiscussionList, getDiscussionListLoadState, getDiscussionListLoadState)
+  const archiveState = useSyncExternalStore(
+    subscribeArchiveDiscussionState,
+    getArchiveDiscussionState,
+    getArchiveDiscussionState,
+  )
   const setDiscussions = setDiscussionList
   const [delegationActivity, setDelegationActivity] = useState<DelegationActivitySnapshot>({})
   const delegationActivityRef = useRef(delegationActivity)
@@ -258,6 +278,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const [isSpawning, setIsSpawning] = useState(false)
   const [upstreamConnected, setUpstreamConnected] = useState(true)
   const [loadingDiscussionId, setLoadingDiscussionId] = useState<string | null>(null)
+  const [resolvingDiscussionId, setResolvingDiscussionId] = useState<string | null>(null)
   const [loadingEarlierDiscussionId, setLoadingEarlierDiscussionId] = useState<string | null>(null)
   const loadingEarlierRef = useRef(new Set<string>())
   const [hasEarlierMessages, setHasEarlierMessages] = useState<Record<string, boolean>>({})
@@ -280,7 +301,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   useEffect(() => () => confidentialInvalidations.clear(), [confidentialInvalidations])
 
-  const activeDiscussion = discussions.find((d) => d.id === activeDiscussionId) ?? null
+  const activeDiscussion = activeDiscussionId
+    ? resolveKnownDiscussion(discussions, archiveState.knownItems, activeDiscussionId) ?? null
+    : null
   const activeMessages = activeDiscussionId ? messages[activeDiscussionId] ?? [] : []
   const isStreaming = activeDiscussionId ? streaming[activeDiscussionId] ?? false : false
   const isInterrupting = activeDiscussionId ? interrupting[activeDiscussionId] ?? false : false
@@ -302,6 +325,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
   // setState updater's side effect is not reliable (updaters may run later).
   const discussionsRef = useRef(discussions)
   discussionsRef.current = discussions
+  const archivedDiscussionsRef = useRef(archiveState.knownItems)
+  archivedDiscussionsRef.current = archiveState.knownItems
   const pendingQuestionsRef = useRef(pendingQuestions)
   pendingQuestionsRef.current = pendingQuestions
 
@@ -341,10 +366,18 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const captureRuntimeRead = useCallback((id: string) => ({
     generation: runtimeReadGenerationRef.current[id] ?? 0,
     connection: connectionGenerationRef.current,
-    sessionId: getDiscussionList().find(d => d.id === id)?.sessionId ?? null,
+    sessionId: resolveKnownDiscussion(
+      getDiscussionList(),
+      getArchiveDiscussionState().knownItems,
+      id,
+    )?.sessionId ?? null,
   }), [])
   const runtimeReadIsCurrent = useCallback((id: string, read: ReturnType<typeof captureRuntimeRead>) => {
-    const known = getDiscussionList().find(d => d.id === id)
+    const known = resolveKnownDiscussion(
+      getDiscussionList(),
+      getArchiveDiscussionState().knownItems,
+      id,
+    )
     return !!known && !isClosed(known.status) && !isDiscussionArchivePending(id)
       && historyLifecycleRef.current.canRun(id) && known.sessionId === read.sessionId
       && (runtimeReadGenerationRef.current[id] ?? 0) === read.generation
@@ -453,6 +486,66 @@ export function useDiscussions(eventResolver?: EventResolver) {
     await refreshDiscussions()
   }, [refreshDiscussions])
 
+  const refreshArchivedDiscussions = useCallback(async (
+    query = getArchiveDiscussionState().query,
+    agentId: string | null = null,
+    append = false,
+  ) => {
+    const normalizedQuery = query.trim()
+    const current = getArchiveDiscussionState()
+    const cursor = append && current.query === normalizedQuery && current.agentId === agentId
+      ? current.cursor
+      : null
+    beginArchiveLoad(normalizedQuery, append, agentId)
+
+    const listing = new URLSearchParams({
+      status: "archived",
+      limit: normalizedQuery ? "100" : "50",
+      includeLive: "true",
+      includeHeartbeats: "false",
+      includeArchiving: "true",
+    })
+    if (normalizedQuery) listing.set("search", normalizedQuery)
+    if (agentId) listing.set("agent", agentId)
+    if (cursor) listing.set("cursor", cursor)
+
+    try {
+      const pagePromise = api.get<{
+        items: DiscussionInfo[]
+        nextCursor: string | null
+        hasMore: boolean
+      }>(`/api/apps/nova/discussions?${listing}`)
+      const contentPromise = normalizedQuery
+        ? (() => {
+            const search = new URLSearchParams({
+              q: normalizedQuery,
+              limit: "100",
+              status: "archived",
+            })
+            if (agentId) search.set("agent", agentId)
+            return api.get<{ results: ArchiveContentResult[] }>(
+              `/api/apps/nova/discussions/search?${search}`,
+            )
+          })()
+        : Promise.resolve({ results: [] as ArchiveContentResult[] })
+      const [page, content] = await Promise.all([pagePromise, contentPromise])
+      const items = normalizedQuery
+        ? mergeArchivedSearchResults(page.items, content.results ?? [])
+        : page.items
+      completeArchiveLoad(
+        items,
+        normalizedQuery ? null : page.nextCursor,
+        normalizedQuery ? false : page.hasMore,
+        normalizedQuery,
+        agentId,
+        append && !normalizedQuery,
+      )
+    } catch (error) {
+      failArchiveLoad(normalizedQuery, agentId)
+      throw error
+    }
+  }, [])
+
   const acknowledgeRead = useCallback(async (id: string, conversationRevision: number) => {
     try {
       const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/read`, {
@@ -510,9 +603,16 @@ export function useDiscussions(eventResolver?: EventResolver) {
     if (!historyLifecycleRef.current.canRun(id)
       || !isCurrentHistoryGeneration(loadGenerationRef.current, id, generation))
       return "stale"
-    const known = getDiscussionList().find(d => d.id === id)
-    if (!known || isClosed(known.status) || isDiscussionArchivePending(id)
-      || runtimeRead && runtimeRead.sessionId !== known.sessionId) return "stale"
+    const known = resolveKnownDiscussion(
+      getDiscussionList(),
+      getArchiveDiscussionState().knownItems,
+      id,
+    )
+    if (!canCommitDiscussionHistory(
+      known,
+      isDiscussionArchivePending(id),
+      runtimeRead?.sessionId,
+    )) return "stale"
     if (data.session && data.discussion.sessionId && data.session.id !== data.discussion.sessionId)
       return "stale"
     // An overlay-only older page can omit session metadata while its outer
@@ -573,11 +673,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
     if (!historyLifecycleRef.current.canRun(id)
       || !isCurrentHistoryGeneration(loadGenerationRef.current, id, generation))
       return "stale"
-    if (runtimeRead && runtimeReadIsCurrent(id, runtimeRead)) {
-      if (isClosed(data.discussion.status)) {
-        clearStreamingLatch(id)
-        clearQuestion(id, pendingQuestionsRef.current[id] ? "session_ended" : null)
-      }
+    if (isClosed(data.discussion.status)) {
+      upsertArchivedDiscussion(data.discussion)
+    } else if (runtimeRead && runtimeReadIsCurrent(id, runtimeRead)) {
       if (responseSessionId !== runtimeRead.sessionId) {
         clearStreamingLatch(id)
         clearQuestion(id, null)
@@ -627,7 +725,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
     if (!historyLifecycleRef.current.canRun(id)) return
     if (!force && loadedRef.current.has(id)) return
 
-    const currentDiscussion = discussionsRef.current.find((d) => d.id === id)
+    const currentDiscussion = resolveKnownDiscussion(
+      discussionsRef.current,
+      archivedDiscussionsRef.current,
+      id,
+    )
     if (!currentDiscussion) return
     // An accepted-message event can beat the POST response that updates the
     // shared discussion record with a newly-created session id. Carrying the
@@ -1016,7 +1118,25 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const withoutPrevious = previousId ? clearHistoryLoadFailure(prev, previousId) : prev
       return clearHistoryLoadFailure(withoutPrevious, id)
     })
+    const known = resolveKnownDiscussion(
+      discussionsRef.current,
+      archivedDiscussionsRef.current,
+      id,
+    )
+    if (known && isClosed(known.status)) historyLifecycleRef.current.revive(id)
     setActiveDiscussionId(id)
+    if (!known) {
+      setResolvingDiscussionId(id)
+      void api.get<{ discussion: DiscussionInfo; messages: DiscussionMessage[] }>(
+        `/api/apps/nova/discussions/${encodeURIComponent(id)}?tail=1`,
+      ).then(data => {
+        historyLifecycleRef.current.revive(id)
+        if (isClosed(data.discussion.status)) upsertArchivedDiscussion(data.discussion)
+        else upsertDiscussion(data.discussion)
+      }).catch(() => {
+        // Missing and unauthorized deep links remain selected but unresolved.
+      }).finally(() => setResolvingDiscussionId(current => current === id ? null : current))
+    }
     startTransition(() => {
       // Render an already loaded discussion immediately, then revalidate its
       // current tail. WebSocket delivery is best-effort across mobile suspend
@@ -1024,8 +1144,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       // recovery boundary for any messages or tool calls missed in between.
       const wasLoaded = loadedRef.current.has(id)
       const tail = legacyHistoryTailRef.current[id] ?? INITIAL_HISTORY_TAIL
-      const revision = discussionsRef.current.find((discussion) => discussion.id === id)
-        ?.conversationRevision ?? 0
+      const revision = known?.conversationRevision ?? 0
       const pager = durableTranscriptPagersRef.current.get(id)
       const refresh = shouldCatchUpHistory(
         historyModesRef.current.get(id),
@@ -1050,12 +1169,17 @@ export function useDiscussions(eventResolver?: EventResolver) {
     () => discussions.filter((d) => !dismissedIds.has(d.id) && !isClosed(d.status)),
     [discussions, dismissedIds],
   )
+  const archivedDiscussions = useMemo(() => {
+    const known = new Set(archiveState.items.map(item => item.id))
+    const localClosing = discussions.filter(item => isClosed(item.status) && !known.has(item.id))
+    return [...localClosing, ...archiveState.items]
+  }, [archiveState.items, discussions])
 
   useEffect(() => {
     if (activeDiscussionId && !loadedRef.current.has(activeDiscussionId)) {
       loadMessages(activeDiscussionId)
     }
-  }, [discussions, activeDiscussionId, loadMessages])
+  }, [discussions, archiveState.knownItems, activeDiscussionId, loadMessages])
 
   const createDiscussion = useCallback(async (agentId?: string, qualityTier?: string, provider?: string) => {
     setIsSpawning(true)
@@ -1290,17 +1414,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [discussions, clearQuestion])
 
   const resumeDiscussion = useCallback(async (discussionId: string) => {
-    const disc = discussions.find((d) => d.id === discussionId)
+    const disc = resolveKnownDiscussion(discussions, archiveState.knownItems, discussionId)
     if (!disc) return
     try {
       const result = await api.post<{ sessionId: string | null; status: "idle" }>(
         `/api/apps/nova/discussions/${discussionId}/resume`
       )
-      setDiscussions((prev) =>
-        prev.map((d) => d.id === discussionId
-          ? { ...d, sessionId: result.sessionId, status: result.status }
-          : d)
-      )
+      upsertDiscussion({ ...disc, sessionId: result.sessionId, status: result.status })
     } catch (err) {
       toast({
         variant: "error",
@@ -1308,7 +1428,40 @@ export function useDiscussions(eventResolver?: EventResolver) {
         description: err instanceof Error ? err.message : "Unknown error",
       })
     }
-  }, [discussions, toast])
+  }, [discussions, archiveState.knownItems, toast])
+
+  const reopenDiscussion = useCallback(async (discussionId: string): Promise<boolean> => {
+    try {
+      const reopened = await api.post<DiscussionInfo>(
+        `/api/apps/nova/discussions/${discussionId}/reopen`,
+      )
+      historyLifecycleRef.current.revive(discussionId)
+      removeArchivedDiscussion(discussionId)
+      upsertDiscussion(reopened)
+
+      try {
+        const resumed = await api.post<{ sessionId: string | null; status: "idle" }>(
+          `/api/apps/nova/discussions/${discussionId}/resume?reopened=true`,
+        )
+        upsertDiscussion({ ...reopened, sessionId: resumed.sessionId, status: resumed.status })
+        return true
+      } catch (error) {
+        toast({
+          variant: "error",
+          title: "Discussion reopened, but the session could not restart",
+          description: error instanceof Error ? error.message : "The provider transcript may no longer be available.",
+        })
+        return false
+      }
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "Could not reopen discussion",
+        description: error instanceof Error ? error.message : "Unknown error",
+      })
+      return false
+    }
+  }, [toast])
 
   const handleWsEvent = useCallback((event: WsEvent) => {
     const activityData = event.data as Record<string, unknown>
@@ -1514,6 +1667,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const { discussionId } = event.data as { discussionId?: string }
       if (!discussionId) return
       void refreshDiscussions()
+      const archive = getArchiveDiscussionState()
+      if (archive.enabled)
+        void refreshArchivedDiscussions(archive.query, archive.agentId).catch(() => {})
       if (activeIdRef.current !== discussionId) return
       loadedRef.current.delete(discussionId)
       void catchUpMessages(discussionId)
@@ -1720,7 +1876,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discId]: reconciled.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, refreshDelegationActivity, delegationInvalidations, loadMessages, catchUpMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming, resetHistoryPaging, retireHistoryPaging])
+  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, refreshArchivedDiscussions, refreshDelegationActivity, delegationInvalidations, loadMessages, catchUpMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming, resetHistoryPaging, retireHistoryPaging])
   handleWsEventRef.current = handleWsEvent
 
   const handleUpstreamDisconnect = useCallback(() => {
@@ -1769,8 +1925,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
   }, [retireHistoryPaging, toast])
 
-  // Close is one tap away from Info on a phone and archived discussions cannot
-  // be reopened, so the DELETE waits out an Undo window instead of firing now.
+  // Close is one tap away from Info on a phone, so the DELETE waits out an Undo
+  // window instead of firing immediately. Reopen is a separate explicit action.
   const pendingArchiveCommitsRef = useRef(new Map<string, () => void>())
   useEffect(() => {
     const pending = pendingArchiveCommitsRef.current
@@ -1885,6 +2041,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
   return {
     discussions: visibleDiscussions,
     discussionListLoadState,
+    archivedDiscussions,
+    archiveMode: archiveState.enabled,
+    archiveListLoadState: archiveState.loadState,
+    archiveQuery: archiveState.query,
+    archiveHasMore: archiveState.hasMore,
+    setArchiveMode,
+    setArchiveQuery,
+    refreshArchivedDiscussions,
     activeDiscussion,
     activeDiscussionId,
     activeMessages,
@@ -1908,6 +2072,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     updateDiscussionTitle,
     setConfidential,
     resumeDiscussion,
+    reopenDiscussion,
     loadEarlierMessages,
     refreshDiscussions,
     delegationActivity,
@@ -1917,6 +2082,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     retryHistoryLoad,
     handleWsEvent,
     isLoadingMessages: loadingDiscussionId === activeDiscussionId && loadingDiscussionId !== null,
+    isResolvingDiscussion: resolvingDiscussionId === activeDiscussionId && resolvingDiscussionId !== null,
     hasEarlierMessages: activeDiscussionId ? hasEarlierMessages[activeDiscussionId] ?? false : false,
     isLoadingEarlier: loadingEarlierDiscussionId === activeDiscussionId && loadingEarlierDiscussionId !== null,
     historyLoadFailure: activeDiscussionId ? historyLoadFailures[activeDiscussionId]?.initial ?? null : null,
