@@ -2,7 +2,12 @@ import type { DiscussionInfo } from "./types"
 
 type DiscussionListUpdater = DiscussionInfo[] | ((previous: DiscussionInfo[]) => DiscussionInfo[])
 
+/** Whether the server list has been read at least once. Until it has, an empty
+ *  list means "not known yet", never "there are no discussions". */
+export type DiscussionListLoadState = "loading" | "ready" | "failed"
+
 let discussions: DiscussionInfo[] = []
+let loadState: DiscussionListLoadState = "loading"
 const listeners = new Set<() => void>()
 const pendingArchiveIds = new Set<string>()
 
@@ -51,6 +56,18 @@ export function setDiscussionList(update: DiscussionListUpdater): void {
   publish(stabilize(applyPendingArchives(next)))
 }
 
+export function getDiscussionListLoadState(): DiscussionListLoadState {
+  return loadState
+}
+
+/** Records the outcome of a server list read. Once one read has succeeded the
+ *  list stays ready: a later failed refresh keeps showing the last known list. */
+export function setDiscussionListLoadState(next: "ready" | "failed"): void {
+  if (loadState === next || loadState === "ready") return
+  loadState = next
+  for (const listener of listeners) listener()
+}
+
 export function upsertDiscussion(discussion: DiscussionInfo): void {
   setDiscussionList((current) => {
     const index = current.findIndex((item) => item.id === discussion.id)
@@ -77,5 +94,6 @@ export function isDiscussionArchivePending(id: string): boolean {
 /** Test-only reset for the module singleton. */
 export function resetDiscussionListStore(): void {
   pendingArchiveIds.clear()
+  loadState = "loading"
   publish([])
 }

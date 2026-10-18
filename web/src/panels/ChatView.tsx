@@ -154,6 +154,7 @@ export function ChatView({
 
   const {
     discussions,
+    discussionListLoadState,
     activeDiscussion,
     activeDiscussionId,
     activeMessages,
@@ -186,6 +187,7 @@ export function ChatView({
     upstreamConnected,
     delegationActivity,
     refreshDelegationActivity,
+    syncAndRefresh,
   } = disc
 
   const defaultDiscussionId = getSidebarDiscussionOrder(discussions, null)[0]?.id ?? null
@@ -664,6 +666,10 @@ export function ChatView({
     share.createShare()
     setShareDialogOpen(true)
   }, [share])
+
+  const handleRetryDiscussionList = useCallback(() => {
+    syncAndRefresh().catch(() => {})
+  }, [syncAndRefresh])
 
   const handleUpdateTitle = useCallback(async (id: string) => {
     if (titleUpdatePending) return
@@ -1272,10 +1278,10 @@ export function ChatView({
     </div>
   ) : (
     <div className="flex-1 flex items-center justify-center text-text-muted">
-      {isSpawning ? (
+      {isSpawning || discussionListLoadState === "loading" ? (
         <div className="text-center">
           <i className="ph-bold ph-spinner animate-spin text-2xl mx-auto mb-3 opacity-40" />
-          <p className="text-sm">Starting discussion…</p>
+          <p className="text-sm">{isSpawning ? "Starting discussion…" : "Loading discussions…"}</p>
         </div>
       ) : (
         <div className="text-center">
@@ -1350,6 +1356,8 @@ export function ChatView({
           <div className="flex-1 overflow-hidden">
             <DiscussionSidebar
               discussions={filteredDiscussions}
+              loadState={discussionListLoadState}
+              onRetryLoad={handleRetryDiscussionList}
               delegationActivity={delegationActivity}
               activeDiscussionId={synchronizedDiscussionId ?? activeDiscussionId}
               onSelect={handleSelectDiscussion}

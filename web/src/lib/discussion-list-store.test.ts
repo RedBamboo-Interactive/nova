@@ -3,9 +3,11 @@ import assert from "node:assert/strict"
 import {
   clearDiscussionArchivePending,
   getDiscussionList,
+  getDiscussionListLoadState,
   markDiscussionArchivePending,
   resetDiscussionListStore,
   setDiscussionList,
+  setDiscussionListLoadState,
   subscribeDiscussionList,
   upsertDiscussion,
 } from "./discussion-list-store.ts"
@@ -90,4 +92,31 @@ test("the create response replaces an incomplete websocket placeholder", () => {
 
   assert.equal(getDiscussionList()[0]?.entityId, "entity-new")
   assert.equal(getDiscussionList()[0]?.sessionId, "session-new")
+})
+
+test("an empty list is unknown until the server list has been read", () => {
+  resetDiscussionListStore()
+  let notifications = 0
+  const unsubscribe = subscribeDiscussionList(() => notifications++)
+
+  assert.equal(getDiscussionListLoadState(), "loading")
+  setDiscussionListLoadState("ready")
+
+  assert.equal(getDiscussionListLoadState(), "ready")
+  assert.equal(getDiscussionList().length, 0)
+  assert.equal(notifications, 1)
+  unsubscribe()
+})
+
+test("a failed first read can recover, but a later failure keeps the known list", () => {
+  resetDiscussionListStore()
+  setDiscussionListLoadState("failed")
+  assert.equal(getDiscussionListLoadState(), "failed")
+
+  setDiscussionList([discussion("kept")])
+  setDiscussionListLoadState("ready")
+  setDiscussionListLoadState("failed")
+
+  assert.equal(getDiscussionListLoadState(), "ready")
+  assert.equal(getDiscussionList()[0]?.id, "kept")
 })

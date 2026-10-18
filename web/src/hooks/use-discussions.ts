@@ -17,9 +17,11 @@ import { invalidatesDelegationActivity, unavailableDelegationActivity } from "..
 import {
   clearDiscussionArchivePending,
   getDiscussionList,
+  getDiscussionListLoadState,
   isDiscussionArchivePending,
   markDiscussionArchivePending,
   setDiscussionList,
+  setDiscussionListLoadState,
   subscribeDiscussionList,
   upsertDiscussion,
 } from "../lib/discussion-list-store"
@@ -175,6 +177,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   // is server state, so both trees observe one module-level snapshot while all
   // view state below (selection, loaded transcript, dialogs) remains local.
   const discussions = useSyncExternalStore(subscribeDiscussionList, getDiscussionList, getDiscussionList)
+  const discussionListLoadState = useSyncExternalStore(subscribeDiscussionList, getDiscussionListLoadState, getDiscussionListLoadState)
   const setDiscussions = setDiscussionList
   const [delegationActivity, setDelegationActivity] = useState<DelegationActivitySnapshot>({})
   const delegationActivityRef = useRef(delegationActivity)
@@ -406,7 +409,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const refreshDiscussions = useCallback(async () => {
     void refreshDelegationActivity(true)
     const reads = new Map(getDiscussionList().map(d => [d.id, captureRuntimeRead(d.id)]))
-    const list = await api.get<DiscussionInfo[]>("/api/apps/nova/discussions")
+    let list: DiscussionInfo[]
+    try {
+      list = await api.get<DiscussionInfo[]>("/api/apps/nova/discussions")
+    } catch (error) {
+      setDiscussionListLoadState("failed")
+      throw error
+    }
     for (const d of list) {
       const read = reads.get(d.id)
       if (read && d.sessionId === read.sessionId && isClosed(d.status) && runtimeReadIsCurrent(d.id, read)) {
@@ -423,9 +432,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...d, status: known.status, sessionId: known.sessionId }
       return d
     }))
+    setDiscussionListLoadState("ready")
   }, [refreshDelegationActivity, captureRuntimeRead, runtimeReadIsCurrent, clearStreamingLatch, clearQuestion])
 
   const syncAndRefresh = useCallback(async () => {
+    // Sync reconciles every open session with RedCompute and can take seconds,
+    // while the persisted list reads in milliseconds. Until the list has been
+    // shown once, show it first and let the post-sync refresh correct statuses.
+    if (getDiscussionListLoadState() !== "ready") await refreshDiscussions().catch(() => {})
     await api.post("/api/apps/nova/discussions/sync").catch(() => {})
     await refreshDiscussions()
   }, [refreshDiscussions])
@@ -440,7 +454,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [])
 
   useEffect(() => {
-    syncAndRefresh()
+    // A failed read is surfaced through discussionListLoadState with a retry.
+    syncAndRefresh().catch(() => {})
   }, [syncAndRefresh])
 
   const resetHistoryPaging = useCallback((id: string, forgetCapability = false) => {
@@ -1839,6 +1854,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   return {
     discussions: visibleDiscussions,
+    discussionListLoadState,
     activeDiscussion,
     activeDiscussionId,
     activeMessages,

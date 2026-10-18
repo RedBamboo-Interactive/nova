@@ -3,6 +3,7 @@ import type { ReactNode } from "react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, ItemList, ItemListRow } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
 import type { DelegationActivitySnapshot, DiscussionDelegationActivity, DiscussionInfo, AgentInfo } from "../../lib/types"
+import type { DiscussionListLoadState } from "../../lib/discussion-list-store"
 import { DelegationCount, DelegationSpinner } from "../delegation-activity"
 import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
@@ -50,6 +51,8 @@ function RowActionsMenu({ label, children }: { label: string; children: ReactNod
 
 interface Props {
   discussions: DiscussionInfo[]
+  loadState: DiscussionListLoadState
+  onRetryLoad: () => void
   delegationActivity: DelegationActivitySnapshot
   activeDiscussionId: string | null
   onSelect: (id: string) => void
@@ -63,7 +66,7 @@ interface Props {
   multiAgent?: boolean
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, delegationActivity, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -238,12 +241,30 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         </div>
       )}
       <div className="flex-1 overflow-hidden">
-        <ItemList
-          items={chat}
-          keyFn={(d) => d.id}
-          emptyMessage="No discussions yet"
-          renderItem={renderChatItem}
-        />
+        {discussions.length === 0 && loadState === "loading" ? (
+          <p data-discussion-list-state="loading" className="text-text-muted text-sm p-4 text-center">
+            <i aria-hidden="true" className="ph-bold ph-spinner animate-spin mr-1.5" />
+            Loading discussions…
+          </p>
+        ) : discussions.length === 0 && loadState === "failed" ? (
+          <div data-discussion-list-state="failed" className="text-text-muted text-sm p-4 text-center">
+            <p className="mb-3">Couldn't load discussions</p>
+            <button
+              onClick={onRetryLoad}
+              className="text-xs px-3 py-1.5 rounded bg-overlay-10 hover:bg-overlay-15 text-contrast transition-colors"
+            >
+              <i aria-hidden="true" className="ph-bold ph-arrow-clockwise mr-1.5" />
+              Retry
+            </button>
+          </div>
+        ) : (
+          <ItemList
+            items={chat}
+            keyFn={(d) => d.id}
+            emptyMessage="No discussions yet"
+            renderItem={renderChatItem}
+          />
+        )}
       </div>
     </div>
   )
