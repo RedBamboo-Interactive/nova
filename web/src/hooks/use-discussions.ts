@@ -11,6 +11,7 @@ import { applySessionStatus, applySettledSessionStatus, preservesRecentStreaming
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
 import { HistoryLifecycleTombstones, historyRevalidationDirection, invalidateHistoryGeneration, isCurrentHistoryGeneration, shouldAccumulatePushedHistoryOverlay, shouldCatchUpHistory } from "../lib/discussion-history-page"
+import { clearHistoryLoadFailure, describeHistoryLoadFailure, recordHistoryLoadFailure, type DiscussionHistoryFailureState } from "../lib/discussion-history-errors"
 import { LatestTaskCoordinator } from "../lib/latest-task-coordinator"
 import { invalidatesDelegationActivity, unavailableDelegationActivity } from "../lib/delegation-activity"
 import {
@@ -248,6 +249,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const [loadingEarlierDiscussionId, setLoadingEarlierDiscussionId] = useState<string | null>(null)
   const loadingEarlierRef = useRef(new Set<string>())
   const [hasEarlierMessages, setHasEarlierMessages] = useState<Record<string, boolean>>({})
+  const [historyLoadFailures, setHistoryLoadFailures] = useState<DiscussionHistoryFailureState>({})
   const loadedRef = useRef<Set<string>>(new Set())
   // Exists only for old servers that do not expose history-page. V2 never
   // derives pagination state from an accumulating tail count.
@@ -452,6 +454,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     legacyHistoryTailRef.current[id] = INITIAL_HISTORY_TAIL
     if (forgetCapability) historyModesRef.current.delete(id)
     setHasEarlierMessages((prev) => ({ ...prev, [id]: false }))
+    setHistoryLoadFailures((prev) => clearHistoryLoadFailure(prev, id))
   }, [])
 
   const retireHistoryPaging = useCallback((id: string) => {
@@ -467,6 +470,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     historyHardResetRef.current.delete(id)
     delete legacyHistoryTailRef.current[id]
     loadedRef.current.delete(id)
+    setHistoryLoadFailures((prev) => clearHistoryLoadFailure(prev, id))
   }, [])
 
   const commitHistoryPage = useCallback((
@@ -517,6 +521,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
         ? pager.prependOlderPage(generation, expectedCursor ?? null, page)
         : pager.appendNewerPage(generation, expectedCursor ?? null, page)
     if (!result.accepted) return false
+
+    setHistoryLoadFailures((prev) => clearHistoryLoadFailure(
+      prev,
+      id,
+      direction === "before" ? "earlier" : "initial",
+    ))
 
     const epochChanged = previousEpoch !== null && previousEpoch !== result.epoch
     if (epochChanged)
@@ -610,6 +620,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     const isCurrentLoad = () => loadGenerationRef.current[id] === generation
     const commitMessages = (authoritative: MessageBlock[], cursor?: TranscriptCursor | null) => {
       if (!isCurrentLoad()) return
+      setHistoryLoadFailures((prev) => clearHistoryLoadFailure(prev, id, "initial"))
       setMessages((prev) => {
         if (!isCurrentLoad()) return prev
         const current = prev[id] ?? []
@@ -661,6 +672,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
             // V2 server errors preserve the loaded window. Never reinterpret a
             // failed cursor/page response as an old rolling-tail snapshot.
             loadedRef.current.delete(id)
+            if (isCurrentLoad() && historyLifecycleRef.current.canRun(id)) {
+              setHistoryLoadFailures((prev) => recordHistoryLoadFailure(
+                prev,
+                id,
+                "initial",
+                describeHistoryLoadFailure(error),
+                (messagesRef.current[id]?.length ?? 0) > 0,
+              ))
+            }
             return
           }
         }
@@ -899,6 +919,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
               loadedRef.current.delete(id)
               // Queue a newest-page recovery behind this anchored request.
               void loadMessages(id, INITIAL_HISTORY_TAIL, true)
+            } else if (historyLifecycleRef.current.canRun(id)
+              && isCurrentHistoryGeneration(loadGenerationRef.current, id, requestId)) {
+              setHistoryLoadFailures((prev) => recordHistoryLoadFailure(
+                prev,
+                id,
+                "earlier",
+                describeHistoryLoadFailure(error),
+              ))
             }
           }
         })
@@ -931,7 +959,18 @@ export function useDiscussions(eventResolver?: EventResolver) {
       void loadMessages(id)
   }, [catchUpMessages, loadMessages])
 
+  const retryHistoryLoad = useCallback((id: string) => {
+    if (!historyLifecycleRef.current.canRun(id)) return Promise.resolve()
+    loadedRef.current.delete(id)
+    return loadMessages(id, INITIAL_HISTORY_TAIL, true)
+  }, [loadMessages])
+
   const selectDiscussion = useCallback((id: string) => {
+    const previousId = activeIdRef.current
+    setHistoryLoadFailures((prev) => {
+      const withoutPrevious = previousId ? clearHistoryLoadFailure(prev, previousId) : prev
+      return clearHistoryLoadFailure(withoutPrevious, id)
+    })
     setActiveDiscussionId(id)
     startTransition(() => {
       // Render an already loaded discussion immediately, then revalidate its
@@ -956,6 +995,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [acknowledgeRead, catchUpMessages, loadMessages])
 
   const clearDiscussionSelection = useCallback(() => {
+    const previousId = activeIdRef.current
+    if (previousId)
+      setHistoryLoadFailures((prev) => clearHistoryLoadFailure(prev, previousId))
     setActiveDiscussionId(null)
   }, [])
 
@@ -1708,6 +1750,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     // Optimistic close: record the intent first so list refreshes and session
     // events during the window and the DELETE cannot resurrect the row.
     markDiscussionArchivePending(id)
+    setHistoryLoadFailures((prev) => clearHistoryLoadFailure(prev, id))
     const wasActive = activeIdRef.current === id
     if (wasActive) setActiveDiscussionId(null)
 
@@ -1825,10 +1868,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
     refreshDelegationActivity,
     syncAndRefresh,
     reloadActiveMessages,
+    retryHistoryLoad,
     handleWsEvent,
     isLoadingMessages: loadingDiscussionId === activeDiscussionId && loadingDiscussionId !== null,
     hasEarlierMessages: activeDiscussionId ? hasEarlierMessages[activeDiscussionId] ?? false : false,
     isLoadingEarlier: loadingEarlierDiscussionId === activeDiscussionId && loadingEarlierDiscussionId !== null,
+    historyLoadFailure: activeDiscussionId ? historyLoadFailures[activeDiscussionId]?.initial ?? null : null,
+    earlierHistoryLoadFailure: activeDiscussionId ? historyLoadFailures[activeDiscussionId]?.earlier ?? null : null,
     upstreamConnected,
     handleUpstreamDisconnect,
     handleUpstreamReconnect,

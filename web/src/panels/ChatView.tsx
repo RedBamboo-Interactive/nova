@@ -177,9 +177,12 @@ export function ChatView({
     setConfidential,
     resumeDiscussion,
     loadEarlierMessages,
+    retryHistoryLoad,
     isLoadingMessages,
     hasEarlierMessages,
     isLoadingEarlier,
+    historyLoadFailure,
+    earlierHistoryLoadFailure,
     upstreamConnected,
     delegationActivity,
     refreshDelegationActivity,
@@ -556,6 +559,11 @@ export function ChatView({
     return loadEarlierMessages(activeDiscussionId)
   }, [activeDiscussionId, loadEarlierMessages])
 
+  const handleRetryHistory = useCallback(() => {
+    if (!activeDiscussionId) return
+    return retryHistoryLoad(activeDiscussionId)
+  }, [activeDiscussionId, retryHistoryLoad])
+
   const handleSelectDiscussion = useCallback((id: string) => {
     setPendingDiscussionId(id)
     if (floating) onSelectDiscussion?.(id)
@@ -846,6 +854,7 @@ export function ChatView({
   )
 
   const chatHeader = activeDiscussion && (
+    <>
     <PanelHeader
       leading={
         liveHeartbeatTabs ? <div className="flex flex-1 min-w-0 self-stretch">{liveHeartbeatTabs}</div> : (
@@ -949,6 +958,27 @@ export function ChatView({
         </SessionInfoButton>
       )}
     </PanelHeader>
+      {earlierHistoryLoadFailure && (
+        <div
+          role="alert"
+          data-slot="history-earlier-error"
+          className="shrink-0 border-b border-destructive-a20 bg-destructive-a10 px-4 py-2 text-destructive"
+        >
+          <div className="mx-auto flex max-w-3xl items-center justify-center gap-2 text-xs">
+            <i aria-hidden="true" className="ph-bold ph-warning-circle shrink-0 text-sm" />
+            <span className="min-w-0">Couldn&apos;t load earlier messages.</span>
+            <button
+              type="button"
+              onClick={handleLoadEarlier}
+              disabled={isLoadingEarlier}
+              className="shrink-0 rounded-md px-2 py-1 font-semibold text-destructive transition-colors hover:bg-destructive-a10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive-a40 disabled:opacity-50"
+            >
+              {isLoadingEarlier ? "Retrying…" : "Retry"}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   )
 
   const sidebarHeader = (
@@ -1173,6 +1203,26 @@ export function ChatView({
           <i className="ph-bold ph-spinner animate-spin text-2xl opacity-40" />
         </div>
       )}
+      {historyLoadFailure && activeMessages.length === 0 && !isLoadingMessages && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
+          <div
+            role="alert"
+            data-slot="history-load-error"
+            className="pointer-events-auto w-full max-w-sm rounded-xl border border-destructive-a30 bg-card px-4 py-3 text-center shadow-lg"
+          >
+            <i aria-hidden="true" className="ph-bold ph-warning-circle text-xl text-destructive" />
+            <p className="mt-1 text-sm font-semibold text-contrast">Couldn&apos;t load this discussion</p>
+            <p className="mt-1 break-words text-xs leading-relaxed text-text-muted">{historyLoadFailure.message}</p>
+            <button
+              type="button"
+              onClick={handleRetryHistory}
+              className="mt-3 inline-flex h-8 items-center justify-center rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
       <ChatPanel
         messages={activeMessages}
         isStreaming={isStreaming}
@@ -1198,7 +1248,7 @@ export function ChatView({
         questionOutcome={questionOutcome}
         onAnswerQuestion={handleAnswerQuestion}
         onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
-        hasEarlierMessages={hasEarlierMessages}
+        hasEarlierMessages={hasEarlierMessages && !earlierHistoryLoadFailure}
         onLoadEarlier={handleLoadEarlier}
         isLoadingEarlier={isLoadingEarlier}
         placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}
