@@ -121,6 +121,11 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 FlowNodeRecoveryPolicy.AtLeastOnce,
                 FlowNodeCancellationPolicy.Cooperative, 7_200),
             sp.GetRequiredService<NovaSessionActionHandler>()));
+        services.AddSingleton(sp => new DiscordReplyCallbacks(
+            sp.GetRequiredKeyedService<IPluginEvents>(PluginId),
+            sp.GetRequiredService<DiscussionStore>(),
+            sp.GetRequiredService<EventInjector>(),
+            sp.GetRequiredService<ILogger<DiscordReplyCallbacks>>()));
         services.AddSingleton(sp => new ExtensionContributions(
             sp.GetRequiredKeyedService<IPluginExtensions>(PluginId),
             sp.GetRequiredService<LiveEvents>()));
@@ -262,6 +267,9 @@ public sealed class NovaAppPlugin : ILeafPlugin
         // Optional extensions attach through generic backend slots. Nova does not
         // know which contributors are installed.
         host.GetRequiredService<ExtensionContributions>().Start();
+
+        // Replies to messages a discussion sent through Leaf Discord come back to it.
+        host.GetRequiredService<DiscordReplyCallbacks>().Start(lifetime.ApplicationStopping);
 
         // Keep the remaining Smart Home poller independent of Presence availability.
 

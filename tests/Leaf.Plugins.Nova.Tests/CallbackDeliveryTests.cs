@@ -221,7 +221,7 @@ public sealed class CallbackDeliveryTests
         Assert.Equal("vs_one", data.GetProperty("voiceSessionId").GetString());
     }
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         public List<DiscussionMessage> Records { get; } = [];
         public List<long> PageReads { get; } = [];
@@ -303,7 +303,7 @@ public sealed class CallbackDeliveryTests
         public void Dispose() => agents.Dispose();
     }
 
-    private sealed class Gateway : IComputeGateway
+    internal sealed class Gateway : IComputeGateway
     {
         public Dictionary<string, string> Admitted { get; } = [];
         public int Attempts { get; private set; }
