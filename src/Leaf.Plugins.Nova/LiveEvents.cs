@@ -64,19 +64,17 @@ public sealed class EventInjector(
 
     /// <summary>
     /// Like <see cref="InjectAsync"/>, for unsolicited external notices that must never
-    /// revive a discussion: the authoritative status is rechecked under the write gate and
-    /// a stopped, archiving or archived discussion is neither written to nor woken.
-    /// Returns false when the discussion was asleep.
+    /// revive a closed discussion: the authoritative status is rechecked under the write
+    /// gate and an archiving or archived discussion is neither written to nor woken.
+    /// Stopped is an open, interrupted state and still receives the notice.
+    /// Returns false when the discussion was closed.
     /// </summary>
-    public Task<bool> InjectIfAwakeAsync(
+    public Task<bool> InjectIfOpenAsync(
         DiscussionRead discussion, string content, string? source,
         JsonElement? metadata, string? userId, string idempotencyKey,
         CancellationToken ct = default)
         => InjectCoreAsync(discussion, content, null, source, null, null,
-            metadata, userId, idempotencyKey, false, ct, idempotencyKey, null, requireAwake: true);
-
-    internal static bool IsAwake(string? status)
-        => status is DiscussionStatus.Idle or DiscussionStatus.Thinking;
+            metadata, userId, idempotencyKey, false, ct, idempotencyKey, null, requireOpen: true);
 
     // Additive scoped entry point. Legacy injection signature, event identity, persistence,
     // delivery and reconciliation remain unchanged.
@@ -93,7 +91,7 @@ public sealed class EventInjector(
         string? senderAgentId, string? replyToDiscussionId, JsonElement? metadata, string? userId,
         string? idempotencyKey, bool redeliverOnReuse, CancellationToken ct,
         string? deliveryIdempotencyKey, PluginLiveEventRecipient? recipient,
-        bool requireAwake = false)
+        bool requireOpen = false)
     {
         var role = type is "assistant" or "system" ? type : "user";
         var sourceTag = $"event:{source ?? "automation"}";
@@ -115,12 +113,13 @@ public sealed class EventInjector(
         var admissionDenied = false;
         var persisted = await DiscussionEntityGate.RunAsync(discussion.EntityId, async () =>
         {
-            if (requireAwake)
+            if (requireOpen)
             {
                 var current = await entities.GetAsync(discussion.EntityId, ct);
                 if (current?.TypeSlug != "discussion"
-                    || !IsAwake(current.Data["status"] is JsonValue status
-                        && status.TryGetValue<string>(out var value) ? value : null))
+                    || DiscussionStatus.IsClosed(current.Data["status"] is JsonValue status
+                        && status.TryGetValue<string>(out var value)
+                            ? value : DiscussionStatus.Stopped))
                 { admissionDenied = true; return false; }
             }
             if (recipient is not null)

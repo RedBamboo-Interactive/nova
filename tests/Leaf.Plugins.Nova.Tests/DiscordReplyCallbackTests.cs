@@ -74,18 +74,30 @@ public sealed class DiscordReplyCallbackTests
         Assert.True(DiscordReplyCallbacks.Accepts(open, reply));
         Assert.True(DiscordReplyCallbacks.Accepts(open with { Status = DiscussionStatus.Thinking }, reply));
         Assert.True(DiscordReplyCallbacks.Accepts(open with { OwnerId = null }, reply));
-        Assert.False(DiscordReplyCallbacks.Accepts(open with { Status = DiscussionStatus.Stopped }, reply));
+        Assert.True(DiscordReplyCallbacks.Accepts(open with { Status = DiscussionStatus.Stopped }, reply));
         Assert.False(DiscordReplyCallbacks.Accepts(open with { Status = DiscussionStatus.Archiving }, reply));
         Assert.False(DiscordReplyCallbacks.Accepts(open with { Status = DiscussionStatus.Archived }, reply));
         Assert.False(DiscordReplyCallbacks.Accepts(open with { OwnerId = "owner-2" }, reply));
         Assert.False(DiscordReplyCallbacks.Accepts(open with { AgentId = "agent-2" }, reply));
     }
 
+    [Fact]
+    public async Task Stopped_discussion_is_interrupted_not_closed_and_still_hears_the_reply()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        f.Target.Data["status"] = DiscussionStatus.Stopped;
+
+        Assert.True(await Callbacks(f).HandleAsync(Payload(f), default));
+
+        Assert.Single(f.TargetMessages,
+            item => item.Metadata["source"]?.GetValue<string>() == "event:discord-reply");
+        Assert.Single(f.Gateway.Admitted);
+    }
+
     [Theory]
-    [InlineData(DiscussionStatus.Stopped)]
     [InlineData(DiscussionStatus.Archiving)]
     [InlineData(DiscussionStatus.Archived)]
-    public async Task Reply_never_writes_to_or_wakes_a_sleeping_discussion(string status)
+    public async Task Reply_never_writes_to_or_wakes_an_archived_discussion(string status)
     {
         using var f = new CallbackDeliveryTests.Fixture();
         f.Target.Data["status"] = status;
@@ -97,15 +109,15 @@ public sealed class DiscordReplyCallbackTests
     }
 
     [Fact]
-    public async Task Discussion_stopped_after_the_read_is_still_left_asleep()
+    public async Task Discussion_archived_after_the_read_is_still_left_closed()
     {
         using var f = new CallbackDeliveryTests.Fixture();
         var stale = await f.Store.GetAsync("target");
         Assert.NotNull(stale);
         Assert.Equal(DiscussionStatus.Thinking, stale.Status);
-        f.Target.Data["status"] = DiscussionStatus.Stopped;
+        f.Target.Data["status"] = DiscussionStatus.Archiving;
 
-        Assert.False(await f.Injector.InjectIfAwakeAsync(
+        Assert.False(await f.Injector.InjectIfOpenAsync(
             stale, "<nova-event source=\"discord-reply\">late</nova-event>", "discord-reply",
             null, "test-owner", "discord-reply:target:1"));
 

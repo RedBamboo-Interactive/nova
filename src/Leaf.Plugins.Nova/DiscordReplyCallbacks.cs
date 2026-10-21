@@ -57,9 +57,9 @@ public sealed class DiscordReplyCallbacks(
         if (discussion is null || !Accepts(discussion, reply)) return false;
 
         var key = $"discord-reply:{discussion.Id}:{reply.DiscordMessageId}";
-        // A reply is unsolicited: it may tell a discussion that is awake, never revive one
-        // that was stopped or archived. The injector rechecks status under the write gate.
-        return await injector.InjectIfAwakeAsync(discussion, BuildContent(reply), EventSource,
+        // A reply is unsolicited: it may reach an open discussion (stopped only means
+        // interrupted), never revive an archived one. The injector rechecks under the gate.
+        return await injector.InjectIfOpenAsync(discussion, BuildContent(reply), EventSource,
             JsonSerializer.SerializeToElement(new
             {
                 bindingId = reply.BindingEntityId,
@@ -77,12 +77,12 @@ public sealed class DiscordReplyCallbacks(
 
     /// <summary>
     /// The subscriber recorded the signed caller of the original send; the discussion must
-    /// still belong to that beneficiary and Agent, be Nova's own, and be awake (idle or
-    /// thinking). Stopped, archiving and archived discussions are left asleep.
+    /// still belong to that beneficiary and Agent, be Nova's own, and be open. Stopped is
+    /// open; archiving and archived discussions are never written to or woken.
     /// </summary>
     internal static bool Accepts(DiscussionRead discussion, DiscordReply reply)
         => !DiscussionApplicationOwner.IsForeign(discussion)
-           && EventInjector.IsAwake(discussion.Status)
+           && !DiscussionMutationPolicy.RejectSend(discussion)
            && OwnerScope.CanAccess(discussion.OwnerId, reply.OwnerUserId)
            && (discussion.AgentId is null
                || string.Equals(discussion.AgentId, reply.AgentEntityId, StringComparison.OrdinalIgnoreCase));
