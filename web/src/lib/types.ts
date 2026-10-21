@@ -108,6 +108,7 @@ export interface DiscussionHistorySession {
   status: string
   stopReason?: string | null
   title?: string | null
+  supportsSteering?: boolean
 }
 
 export interface DiscussionHistoryPageMetadata {

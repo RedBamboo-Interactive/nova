@@ -263,6 +263,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     return pager
   }, [])
   const [streaming, setStreaming] = useState<Record<string, boolean>>({})
+  const [steeringSupport, setSteeringSupport] = useState<Record<string, boolean>>({})
   const [pendingQuestions, setPendingQuestions] = useState<Record<string, PendingQuestion | null>>({})
   // How each discussion's last question ended, so a resolved card can say
   // "timed out" rather than the flat "Answered" it used to claim regardless.
@@ -310,6 +311,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     : null
   const activeMessages = activeDiscussionId ? messages[activeDiscussionId] ?? [] : []
   const isStreaming = activeDiscussionId ? streaming[activeDiscussionId] ?? false : false
+  const supportsSteering = activeDiscussionId ? steeringSupport[activeDiscussionId] ?? false : false
   const isInterrupting = activeDiscussionId ? interrupting[activeDiscussionId] ?? false : false
   const isResumePending = activeDiscussionId ? resumePending[activeDiscussionId] ?? false : false
   const activePendingQuestion = activeDiscussionId ? pendingQuestions[activeDiscussionId] ?? null : null
@@ -387,8 +389,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
       && (runtimeReadGenerationRef.current[id] ?? 0) === read.generation
       && connectionGenerationRef.current === read.connection
   }, [])
-  const hydrateRuntime = useCallback((id: string, session: { id: string; status?: string; stopReason?: string | null } | null | undefined, read: ReturnType<typeof captureRuntimeRead>) => {
+  const hydrateRuntime = useCallback((id: string, session: { id: string; status?: string; stopReason?: string | null; supportsSteering?: boolean } | null | undefined, read: ReturnType<typeof captureRuntimeRead>) => {
     if (!session?.status || session.id !== read.sessionId || !runtimeReadIsCurrent(id, read)) return
+    if (typeof session.supportsSteering === "boolean")
+      setSteeringSupport(previous => ({ ...previous, [id]: session.supportsSteering! }))
     const status = session.status
     if (status === "Active") {
       activeObservedAfterSendRef.current[id] = true
@@ -420,7 +424,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
    */
   const reconcileStreaming = useCallback(async () => {
     const reads = new Map(getDiscussionList().map(d => [d.id, captureRuntimeRead(d.id)]))
-    let list: { id: string; status: string; stopReason?: string }[]
+    let list: { id: string; status: string; stopReason?: string; supportsSteering?: boolean }[]
     try {
       list = await api.get<{ id: string; status: string; stopReason?: string }[]>("/ai-session/sessions?limit=200")
     } catch { return }
@@ -870,7 +874,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           let sessionCursor: TranscriptCursor | null = null
           if (disc.sessionId) {
             try {
-              const session = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+              const session = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string; supportsSteering?: boolean }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
               if (isCurrentLoad()) hydrateRuntime(id, session.session, runtimeRead)
               if (session.messages?.length) {
                 sessionMsgs = filterInternalBootstrapBlock(
@@ -1522,11 +1526,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
         void refreshDiscussions()
       }
     } else if (event.type === "session.updated") {
-      const session = event.data as { id: string; status: string; stopReason?: string; title?: string }
+      const session = event.data as { id: string; status: string; stopReason?: string; title?: string; supportsSteering?: boolean }
       const discId = sessionToDiscussion.get(session.id)
       if (!discId) return
       const known = discussionsRef.current.find((d) => d.id === discId)
       if (!known || isClosed(known.status) || isDiscussionArchivePending(discId) || !historyLifecycleRef.current.canRun(discId)) return
+      if (typeof session.supportsSteering === "boolean")
+        setSteeringSupport(previous => ({ ...previous, [discId]: session.supportsSteering! }))
       if (shouldRequestSessionTitleSync(known, session.title)) {
         void api.put<DiscussionInfo>(`/api/apps/nova/discussions/${discId}/title/session`)
           .then(upsertDiscussionMetadata)
@@ -2052,6 +2058,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     activeDiscussionId,
     activeMessages,
     isStreaming,
+    supportsSteering,
     isInterrupting,
     isResumePending,
     isSpawning,

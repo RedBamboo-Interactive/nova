@@ -168,6 +168,7 @@ export function ChatView({
     activeDiscussionId,
     activeMessages,
     isStreaming,
+    supportsSteering,
     isInterrupting,
     isResumePending,
     isSpawning,
@@ -1336,6 +1337,7 @@ export function ChatView({
       <ChatPanel
         messages={activeMessages}
         isStreaming={isStreaming}
+        supportsSteering={supportsSteering}
         isReconnecting={!upstreamConnected}
         interrupting={isInterrupting}
         resumePending={isResumePending}
