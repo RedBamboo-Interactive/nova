@@ -57,8 +57,10 @@ public sealed class DiscordReplyCallbacks(
         if (discussion is null || !Accepts(discussion, reply)) return false;
 
         var key = $"discord-reply:{discussion.Id}:{reply.DiscordMessageId}";
-        await injector.InjectAsync(discussion, BuildContent(reply), null, EventSource,
-            metadata: JsonSerializer.SerializeToElement(new
+        // A reply is unsolicited: it may tell a discussion that is awake, never revive one
+        // that was stopped or archived. The injector rechecks status under the write gate.
+        return await injector.InjectIfAwakeAsync(discussion, BuildContent(reply), EventSource,
+            JsonSerializer.SerializeToElement(new
             {
                 bindingId = reply.BindingEntityId,
                 bindingKind = reply.BindingKind,
@@ -70,18 +72,17 @@ public sealed class DiscordReplyCallbacks(
                 requestor = reply.RequestorDisplayName,
                 injectionSuspected = reply.InjectionSuspected,
             }),
-            userId: reply.OwnerUserId,
-            idempotencyKey: key, deliveryIdempotencyKey: key, ct: ct);
-        return true;
+            reply.OwnerUserId, key, ct);
     }
 
     /// <summary>
     /// The subscriber recorded the signed caller of the original send; the discussion must
-    /// still belong to that beneficiary and Agent, be Nova's own, and be open.
+    /// still belong to that beneficiary and Agent, be Nova's own, and be awake (idle or
+    /// thinking). Stopped, archiving and archived discussions are left asleep.
     /// </summary>
     internal static bool Accepts(DiscussionRead discussion, DiscordReply reply)
         => !DiscussionApplicationOwner.IsForeign(discussion)
-           && !DiscussionMutationPolicy.RejectSend(discussion)
+           && EventInjector.IsAwake(discussion.Status)
            && OwnerScope.CanAccess(discussion.OwnerId, reply.OwnerUserId)
            && (discussion.AgentId is null
                || string.Equals(discussion.AgentId, reply.AgentEntityId, StringComparison.OrdinalIgnoreCase));
