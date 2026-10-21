@@ -56,7 +56,8 @@ public static class AskEndpoints
 
             var outcome = await pipeline.SendAsync(
                 discussion, userId, request.Content, images: null,
-                device: new ResolvedDevice { Name = "API", Type = "api", Platform = "api" }, input: "api");
+                device: new ResolvedDevice { Name = "API", Type = "api", Platform = "api" }, input: "api",
+                humanInitiated: DiscussionAccessPolicy.IsHumanInitiated(ctx.User));
 
             if (!outcome.Success)
                 return Results.Json(new { error = outcome.ErrorMessage ?? "RedCompute is unavailable", code = outcome.ErrorCode ?? "redcompute_unavailable" }, statusCode: 502);

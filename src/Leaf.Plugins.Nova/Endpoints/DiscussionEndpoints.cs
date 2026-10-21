@@ -1615,15 +1615,18 @@ public static class DiscussionEndpoints
 
             var idempotencyKey = ctx.Request.Headers["X-Idempotency-Key"].FirstOrDefault();
 
+            var humanInitiated = DiscussionAccessPolicy.IsHumanInitiated(ctx.User);
             var outcome = request.Input is { Length: > 0 }
                 ? await pipeline.SendInputAsync(
                     discussion, userId, request.Input, resolved,
                     request.InputMethod ?? "typed", request.Delivery,
-                    idempotencyKey, request.DisplayContent, request.MessageUid)
+                    idempotencyKey, request.DisplayContent, request.MessageUid,
+                    humanInitiated: humanInitiated)
                 : await pipeline.SendAsync(
                     discussion, userId, request.Content, request.Images, resolved,
                     request.InputMethod ?? "typed", request.Delivery,
-                    idempotencyKey, request.DisplayContent, request.MessageUid);
+                    idempotencyKey, request.DisplayContent, request.MessageUid,
+                    humanInitiated: humanInitiated);
 
             if (!outcome.Success)
             {

@@ -230,16 +230,19 @@ public sealed class CallbackDeliveryTests
         private readonly LeafEntity live;
         private readonly AgentDirectory agents;
         public DiscussionStore Store { get; }
+        public Guid AgentId { get; }
         public EventInjector Injector { get; }
         private readonly LiveEvents liveEvents;
         public IEnumerable<DiscussionMessage> TargetMessages => Records.Where(m => m.DiscussionId == Target.Id);
         public IEnumerable<DiscussionMessage> LiveMessages => Records.Where(m => m.DiscussionId == live.Id);
 
-        public Fixture(bool confidential = false, bool sessionless = false)
+        public Fixture(bool confidential = false, bool sessionless = false,
+            AgentActivitySignals? activity = null, string type = "chat")
         {
             var agent = Entity("agent", "nova", new());
+            AgentId = agent.Id;
             Target = Entity("discussion", DiscussionStore.Slug("target"), new() {
-                ["discussion_id"] = "target", ["app"] = "nova", ["status"] = "thinking", ["agent"] = agent.Id.ToString(),
+                ["discussion_id"] = "target", ["app"] = "nova", ["type"] = type, ["status"] = "thinking", ["agent"] = agent.Id.ToString(),
                 ["session_id"] = sessionless ? null : "target-session", ["owner_id"] = "test-owner",
                 ["confidential"] = confidential, ["last_processed_session_assistant_uid"] = "",
             });
@@ -278,8 +281,8 @@ public sealed class CallbackDeliveryTests
             var events = Proxy.Create<IPluginEvents>((method, _) => method == "Subscribe" ? new Noop() : Task.CompletedTask);
             agents = new AgentDirectory(entities, events) { NovaAgentId = agent.Id.ToString() };
             var client = new RedComputeClient(Gateway);
-            Store = new DiscussionStore(entities, discussions);
-            Injector = new EventInjector(discussions, events, client, agents, entities, new ConversationUnread(Store, discussions, client));
+            Store = new DiscussionStore(entities, discussions, activity);
+            Injector = new EventInjector(discussions, events, client, agents, entities, new ConversationUnread(Store, discussions, client), activity);
             liveEvents = new LiveEvents(Store, Injector, agents);
         }
 

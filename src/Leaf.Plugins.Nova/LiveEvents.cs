@@ -21,7 +21,8 @@ public sealed class EventInjector(
     RedComputeClient redCompute,
     AgentDirectory agents,
     IEntityStore entities,
-    ConversationUnread conversationUnread)
+    ConversationUnread conversationUnread,
+    AgentActivitySignals? activity = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -238,12 +239,16 @@ public sealed class EventInjector(
                  new ComputeContextReference("event", uid, NameSnapshot: source)], method: "POST", ct: ct);
             // Retried callback delivery uses the existing durable admission contract.
             // Other event callers (including heartbeat redelivery) keep their policy.
-            if (deliveryIdempotencyKey is not null)
-                return (await redCompute.SendMessageDetailedAsync(
+            var forwarded = deliveryIdempotencyKey is not null
+                ? (await redCompute.SendMessageDetailedAsync(
                     sessionId, messageBody, provenance, ct, idempotencyKey:
-                        "nova-event:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(deliveryIdempotencyKey))))).Success;
-            return await redCompute.SendMessageAsync(
-                sessionId, messageBody, provenance, ct) != null;
+                        "nova-event:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(deliveryIdempotencyKey))))).Success
+                : await redCompute.SendMessageAsync(
+                    sessionId, messageBody, provenance, ct) != null;
+            // An injected event (heartbeat, automation, callback, delegation, Discord
+            // reply) is never a person talking in this discussion.
+            if (forwarded) activity?.TurnAdmitted(discussion, userFacing: false);
+            return forwarded;
         }
         catch
         {

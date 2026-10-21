@@ -69,8 +69,15 @@ public sealed class NovaAppPlugin : ILeafPlugin
             new AgentWorkspaces(
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredService<IAgentWorkspacePathResolver>()));
+        // Content-free nova.agent.activity signals for peripheral displays.
         services.AddSingleton(sp =>
-            new DiscussionStore(sp.GetRequiredKeyedService<IEntityStore>(PluginId), sp.GetRequiredService<IDiscussions>()));
+            new AgentActivitySignals(
+                sp.GetRequiredKeyedService<IPluginEvents>(PluginId),
+                new RedComputeAgentActivityProbe(sp.GetRequiredService<RedComputeClient>()),
+                sp.GetRequiredService<ILogger<AgentActivitySignals>>()));
+        services.AddSingleton(sp =>
+            new DiscussionStore(sp.GetRequiredKeyedService<IEntityStore>(PluginId), sp.GetRequiredService<IDiscussions>(),
+                sp.GetRequiredService<AgentActivitySignals>()));
         services.AddSingleton<ConversationUnread>();
         services.AddSingleton(sp => new DelegationActivity(sp.GetRequiredService<IDiscussions>(),
             sp.GetRequiredService<RedComputeClient>(), sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
@@ -91,7 +98,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<RedComputeClient>(),
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
-                sp.GetRequiredService<ConversationUnread>()));
+                sp.GetRequiredService<ConversationUnread>(),
+                sp.GetRequiredService<AgentActivitySignals>()));
         services.AddSingleton(sp =>
             new LiveEvents(
                 sp.GetRequiredService<DiscussionStore>(),
@@ -183,7 +191,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<IAgentScratchSpace>(),
                 sp.GetRequiredService<ExtensionContributions>(),
                 sp.GetRequiredService<ConversationUnread>(),
-                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<MessagePipeline>>()));
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<MessagePipeline>>(),
+                sp.GetRequiredService<AgentActivitySignals>()));
     }
 
     public void MapEndpoints(RouteGroupBuilder group)

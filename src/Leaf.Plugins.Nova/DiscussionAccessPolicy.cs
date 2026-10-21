@@ -63,6 +63,24 @@ public static class DiscussionAccessPolicy
                 LocalDefaultAuthenticationType, StringComparison.Ordinal)
             && !IsExecution(principal);
 
+    /// <summary>
+    /// Whether a person, rather than an Agent or automation, initiated the request:
+    /// any non-execution principal, a user actor, or an app acting at a browser for
+    /// its signed user beneficiary. Agent executions, automation workers and derived
+    /// child executions are not.
+    /// </summary>
+    public static bool IsHumanInitiated(ClaimsPrincipal principal)
+    {
+        if (!IsExecution(principal)) return true;
+        if (!TryReadExecution(principal, out var execution) || execution is null) return false;
+        if (execution.ParentExecutionId is not null
+            || !execution.BeneficiaryKind.Equals("user", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return execution.ActorKind.Equals("user", StringComparison.OrdinalIgnoreCase)
+            || (execution.ActorKind.Equals("app", StringComparison.OrdinalIgnoreCase)
+                && execution.HasBrowserContext);
+    }
+
     private static bool IsExecution(ClaimsPrincipal principal)
         => string.Equals(principal.FindFirstValue(TokenUseClaim), ExecutionTokenUse,
             StringComparison.OrdinalIgnoreCase);
@@ -118,16 +136,19 @@ public static class DiscussionAccessPolicy
             if (actorKind is null || actorId is null || beneficiaryKind is null)
                 return false;
 
-            var hasNovaBrowserContext = root.TryGetProperty("context", out var contexts)
+            var browserRoutes = root.TryGetProperty("context", out var contexts)
                 && contexts.ValueKind == JsonValueKind.Array
-                && contexts.EnumerateArray().Any(item =>
-                    string.Equals(String(item, "kind"), "browser",
-                        StringComparison.OrdinalIgnoreCase)
-                    && IsNovaRoute(String(item, "route")));
+                    ? contexts.EnumerateArray()
+                        .Where(item => string.Equals(String(item, "kind"), "browser",
+                            StringComparison.OrdinalIgnoreCase))
+                        .Select(item => String(item, "route"))
+                        .ToList()
+                    : [];
+            var hasNovaBrowserContext = browserRoutes.Any(IsNovaRoute);
             execution = new ParsedExecution(
                 appId, actorKind, actorStableId, actorId,
                 beneficiaryKind, beneficiaryId, hasNovaBrowserContext,
-                String(root, "parentExecutionId"));
+                String(root, "parentExecutionId"), browserRoutes.Count > 0);
             return true;
         }
         catch (JsonException)
@@ -154,5 +175,6 @@ public static class DiscussionAccessPolicy
         string BeneficiaryKind,
         string? BeneficiaryId,
         bool HasNovaBrowserContext,
-        string? ParentExecutionId);
+        string? ParentExecutionId,
+        bool HasBrowserContext);
 }

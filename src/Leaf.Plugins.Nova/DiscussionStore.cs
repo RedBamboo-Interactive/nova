@@ -115,7 +115,8 @@ public static class OwnerScope
 /// is over). Same slugs and data keys the standalone app mirrored, so existing rows
 /// carry over untouched: <c>discussion-nova-{id}</c> with <c>data.app = "nova"</c>.
 /// </summary>
-public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussions)
+public sealed class DiscussionStore(
+    IEntityStore entities, IDiscussions discussions, AgentActivitySignals? activity = null)
 {
     internal const int QueryPageSize = 500;
     internal const int MaxListedDiscussions = 10_000;
@@ -870,8 +871,24 @@ public sealed class DiscussionStore(IEntityStore entities, IDiscussions discussi
             if (!allowed) return null;
 
             await entities.PatchAsync(entityId, new JsonObject { ["status"] = to }, null, ct);
+            NotifyStatusWritten(entity, to);
             return to;
         }, ct);
+
+    /// <summary>Observe-only: activity signals can never affect a status write.</summary>
+    private void NotifyStatusWritten(LeafEntity entity, string status)
+    {
+        if (activity is null) return;
+        try
+        {
+            if (Map(entity) is { } written)
+                activity.StatusWritten(written with { Status = status });
+        }
+        catch
+        {
+            // Best effort by design.
+        }
+    }
 
     /// <summary>
     /// The sole exception to closed-state terminality: an explicit user reopen may

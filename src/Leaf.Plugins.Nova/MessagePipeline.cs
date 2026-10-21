@@ -42,7 +42,8 @@ public sealed class MessagePipeline(
     IAgentScratchSpace scratchSpace,
     ExtensionContributions extensions,
     ConversationUnread conversationUnread,
-    ILogger<MessagePipeline> logger)
+    ILogger<MessagePipeline> logger,
+    AgentActivitySignals? activity = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -144,10 +145,10 @@ public sealed class MessagePipeline(
         string content, ImageAttachmentDto[]? images, ResolvedDevice device, string input,
         string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
         string? requestedMessageUid = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default, bool humanInitiated = true)
         => SendCoreAsync(discussion, userId, content, images, null, device, input,
             delivery, idempotencyKey, displayContent, persistUserMessage: true,
-            requestedMessageUid, ct);
+            requestedMessageUid, ct, humanInitiated);
 
     /// <summary>
     /// Starts a real discussion turn while keeping its bootstrap instruction out of
@@ -171,21 +172,22 @@ public sealed class MessagePipeline(
             displayContent: "",
             persistUserMessage: false,
             requestedMessageUid: messageUid,
-            ct);
+            ct,
+            humanInitiated: false);
 
     public Task<SendMessageOutcome> SendInputAsync(
         DiscussionRead discussion, string? userId,
         InputPartDto[] parts, ResolvedDevice device, string input,
         string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
         string? requestedMessageUid = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default, bool humanInitiated = true)
     {
         var content = string.Join("\n", parts
             .Where(part => string.Equals(part.Type, "text", StringComparison.OrdinalIgnoreCase))
             .Select(part => part.Text ?? ""));
         return SendCoreAsync(discussion, userId, content, null, parts, device, input,
             delivery, idempotencyKey, displayContent, persistUserMessage: true,
-            requestedMessageUid, ct);
+            requestedMessageUid, ct, humanInitiated);
     }
 
     private async Task<SendMessageOutcome> SendCoreAsync(
@@ -193,7 +195,7 @@ public sealed class MessagePipeline(
         string content, ImageAttachmentDto[]? images, InputPartDto[]? inputParts,
         ResolvedDevice device, string input, string? delivery, string? idempotencyKey,
         string? displayContent, bool persistUserMessage, string? requestedMessageUid,
-        CancellationToken ct = default)
+        CancellationToken ct = default, bool humanInitiated = true)
     {
         // Endpoint checks provide the immediate 409, while this authoritative
         // re-read protects every internal caller that sends by explicit record.
@@ -434,6 +436,9 @@ public sealed class MessagePipeline(
         if (sendResult.Payload is { ValueKind: JsonValueKind.Object } payload
             && payload.TryGetProperty("messageUid", out var muEl))
             messageUid = muEl.GetString();
+
+        // Delivered or queued, the session now has work for this Agent.
+        activity?.TurnAdmitted(discussion with { SessionId = sessionId }, humanInitiated);
 
         var disposition = "delivered";
         string? queueItemId = null;
