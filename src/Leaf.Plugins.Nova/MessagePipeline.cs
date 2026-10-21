@@ -96,7 +96,12 @@ public sealed class MessagePipeline(
         string? modelOverride = null, string? effortOverride = null)
     {
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
-        if (agent == null) return null;
+        if (agent == null)
+        {
+            logger.LogWarning("Session creation skipped: agent {AgentId} did not resolve",
+                agentId ?? "(none)");
+            return null;
+        }
         var scratch = scratchSpace.PrepareExecution(
             agent.Name,
             discussionId ?? parentJobId ?? Guid.NewGuid().ToString("N"));
