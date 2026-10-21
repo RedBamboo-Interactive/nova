@@ -167,6 +167,37 @@ public sealed class DelegateEndpointSecurityTests
         Assert.Contains("developer_instructions_not_supported", reason, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("codex-default", null, "anthropic-direct", "anthropic-direct", "codex-default")]
+    [InlineData(null, null, "codex-default", "anthropic-direct", "codex-default")]
+    [InlineData(null, null, null, "anthropic-direct", "anthropic-direct")]
+    [InlineData(null, null, " ", "anthropic-direct", "anthropic-direct")]
+    [InlineData(null, null, null, null, null)]
+    [InlineData(null, "gpt-5.6-sol", "anthropic-direct", "anthropic-direct", null)]
+    [InlineData("codex-default", "gpt-5.6-sol", "anthropic-direct", "anthropic-direct", "codex-default")]
+    public void New_delegation_inherits_the_calling_discussion_provider_unless_overridden(
+        string? requestProvider, string? requestModel, string? discussionProvider,
+        string? agentProvider, string? expected)
+    {
+        var request = new DelegateRequest { Prompt = "work", Provider = requestProvider, Model = requestModel };
+        var discussion = new DiscussionRead("d1", null, null, "idle", DateTime.UtcNow, DateTime.UtcNow, 0,
+            null, "user-1", Guid.NewGuid(), "agent-1", Provider: discussionProvider);
+        var agent = new AgentInfo("agent-1", "nova", "Nova", null, null, null, null, null, null, null,
+            Provider: agentProvider);
+
+        Assert.Equal(expected, DelegateEndpoints.EffectiveProvider(request, discussion, agent));
+    }
+
+    [Fact]
+    public void Delegation_without_a_discussion_uses_the_attributed_agent_provider()
+    {
+        var agent = new AgentInfo("agent-1", "nova", "Nova", null, null, null, null, null, null, null,
+            Provider: "anthropic-direct");
+
+        Assert.Equal("anthropic-direct", DelegateEndpoints.EffectiveProvider(
+            new DelegateRequest { Prompt = "work" }, null, agent));
+    }
+
     private static ClaimsPrincipal Principal(string subject, params Claim[] claims) => new(
         new ClaimsIdentity([new Claim("sub", subject), .. claims], "test"));
 

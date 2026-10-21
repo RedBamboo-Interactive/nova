@@ -186,6 +186,9 @@ public static class DelegateEndpoints
             if (resolvedAgent == null)
                 return Results.Json(new { error = "agent_not_found", message = "No linked Agent entity is available for delegation" }, statusCode: 422);
 
+            if (!isContinuation)
+                request.Provider = EffectiveProvider(request, discussion, resolvedAgent);
+
             var ownerId = discussion?.OwnerId ?? callerId;
             var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ctx.RequestAborted);
             var baseContext = new List<ComputeContextReference>();
@@ -424,6 +427,21 @@ public static class DelegateEndpoints
                 navigationPath,
             });
         });
+    }
+
+    /// <summary>
+    /// Provider for a new delegated session. An explicit provider (or one supplied by an
+    /// explicitly named Agent) wins. Otherwise the session runs on the same provider as the
+    /// calling discussion, resolved the way that discussion's own session is created. An explicit
+    /// model without a provider is left to RedCompute so a provider is never paired with another
+    /// provider's model. Null falls through to the suite default.
+    /// </summary>
+    internal static string? EffectiveProvider(DelegateRequest request, DiscussionRead? discussion, AgentInfo callingAgent)
+    {
+        if (!string.IsNullOrWhiteSpace(request.Provider)) return request.Provider;
+        if (!string.IsNullOrWhiteSpace(request.Model)) return null;
+        if (!string.IsNullOrWhiteSpace(discussion?.Provider)) return discussion.Provider;
+        return string.IsNullOrWhiteSpace(callingAgent.Provider) ? null : callingAgent.Provider;
     }
 
     private static string StringValue(JsonObject data, string key, string fallback = "") =>
