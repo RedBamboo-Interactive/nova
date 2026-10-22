@@ -27,6 +27,19 @@ public sealed class DiscussionAccessPolicyTests
     }
 
     [Fact]
+    public void ExternalConversationExecutionCanReadOnlyItsOwningAgentsOwnersDiscussion()
+    {
+        var discussion = ConfidentialDiscussion();
+
+        Assert.True(DiscussionAccessPolicy.CanRead(
+            discussion, AgentExecution(Agent, Owner, "external-conversation")));
+        Assert.False(DiscussionAccessPolicy.CanRead(
+            discussion, AgentExecution("another-agent", Owner, "external-conversation")));
+        Assert.False(DiscussionAccessPolicy.CanRead(
+            discussion, AgentExecution(Agent, "another-user", "external-conversation")));
+    }
+
+    [Fact]
     public void BrowserReadRequiresRootNovaAppContextAndExactOwner()
     {
         var discussion = ConfidentialDiscussion();
@@ -101,14 +114,17 @@ public sealed class DiscussionAccessPolicyTests
     private static DefaultHttpContext LocalDefault()
         => Context(new ClaimsIdentity([new Claim("sub", "local-user")], "LocalDefault"));
 
-    private static DefaultHttpContext AgentExecution(string agentId, string beneficiaryId)
+    private static DefaultHttpContext AgentExecution(
+        string agentId, string beneficiaryId, string? contextKind = null)
     {
         var identity = JsonSerializer.Serialize(new
         {
             app = new { id = "nova", name = "Nova" },
             actor = new { kind = "agent", id = "nova", entityId = agentId },
             beneficiary = new { kind = "user", id = beneficiaryId },
-            context = Array.Empty<object>(),
+            context = contextKind is null
+                ? Array.Empty<object>()
+                : [new { kind = contextKind, id = "binding-1" }],
         });
         return ExecutionContext(beneficiaryId, identity);
     }

@@ -47,5 +47,10 @@ public sealed class DiscordPromptInjectionVerifierTests
 
         Assert.DoesNotContain("Laurent", prompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("local owner", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ordinary read-only retrieval", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not require private approval for that lookup",
+            prompt, StringComparison.Ordinal);
+        Assert.Contains("decides what can safely be disclosed to the public audience",
+            prompt, StringComparison.Ordinal);
     }
 }

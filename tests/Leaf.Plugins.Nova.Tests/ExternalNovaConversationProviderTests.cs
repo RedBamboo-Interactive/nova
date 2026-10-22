@@ -281,13 +281,32 @@ public sealed class ExternalAgentConversationProviderTests
             instructions, StringComparison.Ordinal);
         Assert.Contains("An error from a route you guessed is evidence about your guess",
             instructions, StringComparison.Ordinal);
-        Assert.Contains("Never promise context from another session or surface",
+        Assert.Contains("Other sessions are not automatically present in this transcript",
+            instructions, StringComparison.Ordinal);
+        Assert.Contains("Retrieval and disclosure are separate decisions",
+            instructions, StringComparison.Ordinal);
+        Assert.Contains("especially when the verified owner asks",
             instructions, StringComparison.Ordinal);
         Assert.Contains("Do not open with agreement you have not checked",
             instructions, StringComparison.Ordinal);
         Assert.Contains("Reply in the language the participants are using",
             instructions, StringComparison.Ordinal);
         Assert.Contains("Never use interactive question tools such as AskUserQuestion",
+            instructions, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Public_commons_instructions_preserve_memory_and_read_only_context_retrieval()
+    {
+        var instructions =
+            ExternalAgentConversationProvider.PublicCommonsDeveloperInstructions("Nova");
+
+        Assert.Contains("they are still your activity", instructions, StringComparison.Ordinal);
+        Assert.Contains("owner-scoped read-only discussion search and export",
+            instructions, StringComparison.Ordinal);
+        Assert.Contains("the Discord audience remains public",
+            instructions, StringComparison.Ordinal);
+        Assert.Contains("never dump private source material",
             instructions, StringComparison.Ordinal);
     }
 
