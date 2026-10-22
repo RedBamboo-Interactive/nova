@@ -98,3 +98,24 @@ test("idle settles immediately after Active was observed for the submitted turn"
     false,
   )
 })
+
+// Any session.stream event used to latch isStreaming and force the discussion
+// Active, so a background subagent's calls brought back "Reading..." and Stop
+// over an idle session (Chat Stability Journal cfb5b994).
+test("background stream events never touch the turn state", async () => {
+  const { sessionStreamEffects } = await import("./discussion-runtime.ts")
+  const streaming = { isStreaming: true, resumePending: false }
+  for (const event of [
+    { type: "tool_use" as const, parentToolUseId: "toolu_agent" },
+    { type: "tool_result" as const, parentToolUseId: "toolu_agent" },
+    { type: "task" as const },
+  ]) {
+    assert.deepEqual(sessionStreamEffects(event, streaming), { applyTurnState: false, settleIdle: false, forceActive: false })
+    assert.deepEqual(sessionStreamEffects({ type: "text" }, { ...streaming, background: true }).applyTurnState, false)
+  }
+  assert.deepEqual(sessionStreamEffects({ type: "tool_use" }, streaming), { applyTurnState: true, settleIdle: false, forceActive: true })
+  assert.deepEqual(sessionStreamEffects({ type: "status", content: "idle" }, { isStreaming: false, resumePending: false }),
+    { applyTurnState: true, settleIdle: true, forceActive: false })
+  assert.deepEqual(sessionStreamEffects({ type: "status", content: "killed" }, { isStreaming: false, resumePending: true }),
+    { applyTurnState: true, settleIdle: false, forceActive: true })
+})

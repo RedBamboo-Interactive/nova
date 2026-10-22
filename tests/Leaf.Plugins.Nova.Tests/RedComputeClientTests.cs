@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Leaf.Plugins.Nova;
+using Leaf.Plugins.Nova.Endpoints;
 using Leaf.Sdk.Services;
 using Xunit;
 
@@ -63,6 +64,28 @@ public sealed class RedComputeClientTests
         Assert.Equal("[]", message.AttachmentsJson);
         Assert.True(page.Page.HasEarlier);
         Assert.Equal("newer", page.Page.NewestCursor);
+    }
+
+    // Background work attribution must survive Nova's typed proxy of the transcript page,
+    // or the client renders a subagent's calls as phantom assistant turns.
+    [Fact]
+    public async Task TranscriptPageCarriesBackgroundAttributionAndLiveTasks()
+    {
+        var gateway = new StaticComputeGateway(
+            """{"session":{"id":"session-1","status":"Idle","backgroundTasks":[{"taskId":"t1","kind":"agent","status":"running"}]},"messages":[{"id":7,"role":"assistant","eventType":"tool_use","toolName":"Bash","messageId":"toolu_child","messageUid":"turn-1","parentToolUseId":"toolu_agent","epoch":"e","sequence":7,"timestamp":"2026-10-22T09:00:00Z","recordCreatedAt":"2026-10-22T09:00:00Z"},{"id":8,"role":"assistant","eventType":"text","content":"noted","messageUid":"wake","turnOrigin":{"kind":"background-task","taskId":"t1"},"epoch":"e","sequence":8,"timestamp":"2026-10-22T09:00:01Z","recordCreatedAt":"2026-10-22T09:00:01Z"}],"page":{"epoch":"e","direction":"newest","hasEarlier":false,"hasLater":false,"fromSequence":7,"throughSequence":8,"boundaryComplete":true}}""");
+
+        var result = await new RedComputeClient(gateway).GetTranscriptPageAsync("session-1", 500);
+
+        var page = Assert.IsType<SessionTranscriptPage>(result.Value);
+        Assert.Equal("toolu_agent", page.Messages[0].ParentToolUseId);
+        Assert.Equal("t1", page.Messages[1].TurnOrigin!.Value.GetProperty("taskId").GetString());
+        Assert.Equal("t1", page.Session.BackgroundTasks!.Value[0].GetProperty("taskId").GetString());
+        var projected = DiscussionEndpoints.ProjectCanonicalHistoryMessages(page.Messages);
+        Assert.Equal("toolu_agent", projected[0].ParentToolUseId);
+        var json = System.Text.Json.JsonSerializer.Serialize(projected,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        Assert.Contains("\"parentToolUseId\":\"toolu_agent\"", json);
+        Assert.Contains("\"turnOrigin\":{\"kind\":\"background-task\",\"taskId\":\"t1\"}", json);
     }
 
     [Fact]

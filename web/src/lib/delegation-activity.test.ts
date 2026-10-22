@@ -55,3 +55,12 @@ test("only linked session lifecycles and originating discussion changes invalida
   assert.equal(invalidatesDelegationActivity("discussion.changed", { discussionId: "other-private" }, linked, discussions), false)
   assert.equal(invalidatesDelegationActivity("session.message", { sessionId: "worker" }, linked, discussions), false)
 })
+
+test("delegations join the shared background row as a count segment", async () => {
+  const { delegationStatusSegment } = await import("./delegation-activity.ts")
+  assert.equal(delegationStatusSegment(undefined), null)
+  assert.equal(delegationStatusSegment(activity()), null)
+  assert.deepEqual(delegationStatusSegment(activity("running")), {
+    key: "delegations", label: "1 delegation", title: delegationActivityLabel(activity("running")) })
+  assert.equal(delegationStatusSegment(activity("running", "queued"))?.label, "2 delegations")
+})

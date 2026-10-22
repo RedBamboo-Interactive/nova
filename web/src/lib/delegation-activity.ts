@@ -18,6 +18,20 @@ export function delegationActivityLabel(activity: DiscussionDelegationActivity):
   return `${count} ${noun} ${label}…`
 }
 
+/**
+ * Delegations as one segment of the shared background status row, used when
+ * background tasks also run ("1 delegation · 2 agents working"). Delegation data
+ * stays Nova-owned; only the row is shared. Null when no delegation is shown.
+ */
+export function delegationStatusSegment(activity: DiscussionDelegationActivity | undefined): { key: string; label: string; title: string } | null {
+  if (!activity || (activity.ongoingCount === 0 && activity.unknownCount === 0)) return null
+  const count = activity.ongoingCount
+  const label = activity.available && count > 0
+    ? `${count} ${count === 1 ? "delegation" : "delegations"}`
+    : delegationActivityLabel(activity)
+  return { key: "delegations", label, title: delegationActivityLabel(activity) }
+}
+
 /** An unavailable read is not a terminal lifecycle observation. */
 export function unavailableDelegationActivity(previous: DelegationActivitySnapshot): DelegationActivitySnapshot {
   return Object.fromEntries(Object.entries(previous).map(([id, activity]) => [id, {

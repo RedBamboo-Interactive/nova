@@ -109,6 +109,7 @@ export interface DiscussionHistorySession {
   stopReason?: string | null
   title?: string | null
   supportsSteering?: boolean
+  backgroundTasks?: import("@redbamboo/chat").BackgroundTaskInfo[]
 }
 
 export interface DiscussionHistoryPageMetadata {
@@ -155,6 +156,9 @@ export interface ClaudeStreamEvent {
    * persisted, so a reloaded conversation never has one.
    */
   requestId?: string | null
+  /** Launching tool call of background work (a subagent); never a sign the turn is busy. */
+  parentToolUseId?: string | null
+  turnOrigin?: import("@redbamboo/chat").TurnOrigin | null
   epoch?: string | null
   sequence?: number | null
 }

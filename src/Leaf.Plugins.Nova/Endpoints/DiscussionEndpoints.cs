@@ -2131,6 +2131,8 @@ public static class DiscussionEndpoints
                 RecordCreatedAt = message.RecordCreatedAt,
                 AttachmentsJson = message.AttachmentsJson,
                 MessageUid = message.MessageUid,
+                ParentToolUseId = message.ParentToolUseId,
+                TurnOrigin = message.TurnOrigin,
             };
         }).ToList();
 

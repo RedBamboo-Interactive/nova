@@ -458,3 +458,23 @@ test("canonical batches replace original user bridges but preserve unrelated sam
     ...canonical, inputMessageUids: JSON.parse(r.attachmentsJson!).inputMessageUids,
   }))), [unrelated, canonical])
 })
+
+test("background records attach to their launching call across an overlay boundary and never open a turn", async () => {
+  const { rebuildBlocks } = await import("../../node_modules/@redbamboo/chat/src/lib/rebuild-blocks.ts")
+  const agent = transcriptRecord("record-1", "2026-10-22T09:00:00Z", "", 1, {
+    eventType: "tool_use", toolName: "Agent", messageId: "toolu_agent", content: null, phase: null })
+  const marker = delegationMarker("delegation-1", "2026-10-22T09:00:01Z")
+  // The subagent keeps calling tools after an ambient overlay split the record spans.
+  const child = transcriptRecord("record-2", "2026-10-22T09:00:02Z", "", 2, {
+    eventType: "tool_use", toolName: "Bash", messageId: "toolu_child", parentToolUseId: "toolu_agent", content: null, phase: null })
+  const task = transcriptRecord("record-3", "2026-10-22T09:00:03Z", "", 3, {
+    role: "system", eventType: "task", messageId: "task-1", parentToolUseId: "toolu_agent", content: null, phase: null,
+    toolInput: JSON.stringify({ taskId: "task-1", kind: "agent", status: "completed" }) })
+
+  const blocks = mergePagedDiscussionRecordsAndOverlays([marker], [agent, child, task], rebuildBlocks)
+
+  assert.deepEqual(blocks.map(block => block.id), ["growing-turn", "delegation-1"])
+  const square = blocks[0]!.parts.find(part => part.toolUseId === "toolu_agent")
+  assert.equal(square?.children?.[0]?.toolUseId, "toolu_child")
+  assert.equal(square?.task?.status, "completed")
+})

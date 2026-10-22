@@ -2,12 +2,12 @@ import { useState, useCallback, useEffect, useRef, useMemo, useSyncExternalStore
 import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DelegationActivitySnapshot, DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
-import type { ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
+import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
 import { canonicalUserMessageUids, DeferredInvalidationCoordinator, DurableTranscriptPager, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
 import { accumulateHistoryOverlays, coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeNovaMessageArrival, mergePagedDiscussionRecordsAndOverlays } from "../lib/discussion-transcript"
-import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch, shouldRequestSessionTitleSync } from "../lib/discussion-runtime"
+import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch, sessionStreamEffects, shouldRequestSessionTitleSync } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
 import { HistoryLifecycleTombstones, historyRevalidationDirection, invalidateHistoryGeneration, isCurrentHistoryGeneration, shouldAccumulatePushedHistoryOverlay, shouldCatchUpHistory } from "../lib/discussion-history-page"
@@ -264,6 +264,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [])
   const [streaming, setStreaming] = useState<Record<string, boolean>>({})
   const [steeringSupport, setSteeringSupport] = useState<Record<string, boolean>>({})
+  // Live background work per discussion (session.backgroundTasks). It never
+  // makes a discussion busy; it only feeds the background status line.
+  const [backgroundTasksByDiscussion, setBackgroundTasksByDiscussion] = useState<Record<string, BackgroundTaskInfo[]>>({})
   const [pendingQuestions, setPendingQuestions] = useState<Record<string, PendingQuestion | null>>({})
   // How each discussion's last question ended, so a resolved card can say
   // "timed out" rather than the flat "Answered" it used to claim regardless.
@@ -312,6 +315,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const activeMessages = activeDiscussionId ? messages[activeDiscussionId] ?? [] : []
   const isStreaming = activeDiscussionId ? streaming[activeDiscussionId] ?? false : false
   const supportsSteering = activeDiscussionId ? steeringSupport[activeDiscussionId] ?? false : false
+  const backgroundTasks = useMemo(
+    () => activeDiscussionId ? backgroundTasksByDiscussion[activeDiscussionId] ?? [] : [],
+    [activeDiscussionId, backgroundTasksByDiscussion])
   const isInterrupting = activeDiscussionId ? interrupting[activeDiscussionId] ?? false : false
   const isResumePending = activeDiscussionId ? resumePending[activeDiscussionId] ?? false : false
   const activePendingQuestion = activeDiscussionId ? pendingQuestions[activeDiscussionId] ?? null : null
@@ -389,10 +395,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
       && (runtimeReadGenerationRef.current[id] ?? 0) === read.generation
       && connectionGenerationRef.current === read.connection
   }, [])
-  const hydrateRuntime = useCallback((id: string, session: { id: string; status?: string; stopReason?: string | null; supportsSteering?: boolean } | null | undefined, read: ReturnType<typeof captureRuntimeRead>) => {
+  const hydrateRuntime = useCallback((id: string, session: { id: string; status?: string; stopReason?: string | null; supportsSteering?: boolean; backgroundTasks?: BackgroundTaskInfo[] } | null | undefined, read: ReturnType<typeof captureRuntimeRead>) => {
     if (!session?.status || session.id !== read.sessionId || !runtimeReadIsCurrent(id, read)) return
     if (typeof session.supportsSteering === "boolean")
       setSteeringSupport(previous => ({ ...previous, [id]: session.supportsSteering! }))
+    if (Array.isArray(session.backgroundTasks))
+      setBackgroundTasksByDiscussion(previous => ({ ...previous, [id]: session.backgroundTasks! }))
     const status = session.status
     if (status === "Active") {
       activeObservedAfterSendRef.current[id] = true
@@ -424,7 +432,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
    */
   const reconcileStreaming = useCallback(async () => {
     const reads = new Map(getDiscussionList().map(d => [d.id, captureRuntimeRead(d.id)]))
-    let list: { id: string; status: string; stopReason?: string; supportsSteering?: boolean }[]
+    let list: { id: string; status: string; stopReason?: string; supportsSteering?: boolean; backgroundTasks?: BackgroundTaskInfo[] }[]
     try {
       list = await api.get<{ id: string; status: string; stopReason?: string }[]>("/ai-session/sessions?limit=200")
     } catch { return }
@@ -874,7 +882,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           let sessionCursor: TranscriptCursor | null = null
           if (disc.sessionId) {
             try {
-              const session = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string; supportsSteering?: boolean }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+              const session = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string; supportsSteering?: boolean; backgroundTasks?: BackgroundTaskInfo[] }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
               if (isCurrentLoad()) hydrateRuntime(id, session.session, runtimeRead)
               if (session.messages?.length) {
                 sessionMsgs = filterInternalBootstrapBlock(
@@ -1356,6 +1364,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
     return deliverMessage(discussionId, content, undefined, options, input, attachments)
   }, [deliverMessage])
 
+  /** Stop one background task. Its terminal state arrives as a `task` record and session.updated. */
+  const stopBackgroundTask = useCallback(async (discussionId: string, taskId: string) => {
+    const disc = discussions.find((d) => d.id === discussionId)
+    if (!disc?.sessionId) return
+    await api.post(`/ai-session/sessions/${disc.sessionId}/background-tasks/${encodeURIComponent(taskId)}/stop`)
+  }, [discussions])
+
   const interruptDiscussion = useCallback(async (discussionId: string) => {
     const disc = discussions.find((d) => d.id === discussionId)
     if (!disc?.sessionId) return
@@ -1526,13 +1541,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
         void refreshDiscussions()
       }
     } else if (event.type === "session.updated") {
-      const session = event.data as { id: string; status: string; stopReason?: string; title?: string; supportsSteering?: boolean }
+      const session = event.data as { id: string; status: string; stopReason?: string; title?: string; supportsSteering?: boolean; backgroundTasks?: BackgroundTaskInfo[] }
       const discId = sessionToDiscussion.get(session.id)
       if (!discId) return
       const known = discussionsRef.current.find((d) => d.id === discId)
       if (!known || isClosed(known.status) || isDiscussionArchivePending(discId) || !historyLifecycleRef.current.canRun(discId)) return
       if (typeof session.supportsSteering === "boolean")
         setSteeringSupport(previous => ({ ...previous, [discId]: session.supportsSteering! }))
+      if (Array.isArray(session.backgroundTasks))
+        setBackgroundTasksByDiscussion(previous => ({ ...previous, [discId]: session.backgroundTasks! }))
       if (shouldRequestSessionTitleSync(known, session.title)) {
         void api.put<DiscussionInfo>(`/api/apps/nova/discussions/${discId}/title/session`)
           .then(upsertDiscussionMetadata)
@@ -1625,6 +1642,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
       runtimeReadGenerationRef.current[discId] = (runtimeReadGenerationRef.current[discId] ?? 0) + 1
       delete activeObservedAfterSendRef.current[discId]
       setStreaming((prev) => ({ ...prev, [discId]: false }))
+      // Background tasks die with the provider process; their squares settle
+      // from the durable `lost` records.
+      setBackgroundTasksByDiscussion((prev) => ({ ...prev, [discId]: [] }))
       // A card still up when the session died was never answered.
       clearQuestion(discId, pendingQuestionsRef.current[discId] ? "session_ended" : questionStatesRef.current[discId]?.outcome ?? null)
       setInterrupting((prev) => ({ ...prev, [discId]: false }))
@@ -1821,7 +1841,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }
       const discId = sessionToDiscussion.get(sessionId)
       if (!discId) return
-      runtimeReadGenerationRef.current[discId] = (runtimeReadGenerationRef.current[discId] ?? 0) + 1
+      // Background work streams while the main loop is idle: it says nothing about
+      // the session's status, so it must not invalidate a runtime status read.
+      if (!evt.parentToolUseId && evt.type !== "task")
+        runtimeReadGenerationRef.current[discId] = (runtimeReadGenerationRef.current[discId] ?? 0) + 1
       const known = getDiscussionList().find(d => d.id === discId)
       if (!known || isClosed(known.status) || isDiscussionArchivePending(discId) || !historyLifecycleRef.current.canRun(discId)) return
       // Copied field by field rather than spread, so keep this in step with
@@ -1843,6 +1866,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
         phase: evt.phase ?? null,
         timestamp: serverTimestamp ?? new Date().toISOString(),
         requestId: evt.requestId ?? null,
+        parentToolUseId: evt.parentToolUseId ?? null,
+        turnOrigin: evt.turnOrigin ?? null,
         epoch: evt.epoch ?? null,
         sequence: evt.sequence ?? null,
       }
@@ -1851,25 +1876,29 @@ export function useDiscussions(eventResolver?: EventResolver) {
         const current = prev[discId] ?? []
         const result = processStreamEvent(current, true, chatEvent, resumePendingRef.current[discId] ?? false, questionStatesRef.current[discId])
         const reconciled = transcriptAccumulator(discId).receiveLive(chatEvent, current)
-        setStreaming((p) => ({ ...p, [discId]: result.isStreaming }))
-        setInterrupting((p) => ({ ...p, [discId]: result.interrupting }))
-        setResumePending((p) => ({ ...p, [discId]: result.resumePending }))
-        // The lifecycle is owned by processStreamEvent now — it knows that
-        // "interrupting" is transitional and must not drop a live question, and
-        // that only a question_resolved says how one actually ended. Mirror it
-        // wholesale rather than second-guessing it here.
-        questionStatesRef.current = { ...questionStatesRef.current, [discId]: result.question }
-        setPendingQuestions((p) => ({ ...p, [discId]: result.question.pending }))
-        setQuestionOutcomes((p) => ({ ...p, [discId]: result.question.outcome }))
+        // Background work only changes messages: no streaming latch, no Stop, no
+        // steering, no question state and no forced Active.
+        const effects = sessionStreamEffects(chatEvent, result)
+        if (effects.applyTurnState) {
+          setStreaming((p) => ({ ...p, [discId]: result.isStreaming }))
+          setInterrupting((p) => ({ ...p, [discId]: result.interrupting }))
+          setResumePending((p) => ({ ...p, [discId]: result.resumePending }))
+          // The lifecycle is owned by processStreamEvent now — it knows that
+          // "interrupting" is transitional and must not drop a live question, and
+          // that only a question_resolved says how one actually ended. Mirror it
+          // wholesale rather than second-guessing it here.
+          questionStatesRef.current = { ...questionStatesRef.current, [discId]: result.question }
+          setPendingQuestions((p) => ({ ...p, [discId]: result.question.pending }))
+          setQuestionOutcomes((p) => ({ ...p, [discId]: result.question.outcome }))
+        }
         // "killed" is terminal but NOT safe/idle yet — the process is being
         // replaced, and the discussion list must not advertise it as available
         // until the follow-up status says so.
-        if (chatEvent.type === "status" && chatEvent.content !== "interrupting"
-            && !result.isStreaming && !result.resumePending) {
+        if (effects.settleIdle) {
           setDiscussions((p) =>
             p.map((d) => d.id === discId ? { ...d, status: "idle" as const } : d)
           )
-        } else if (result.isStreaming || result.resumePending) {
+        } else if (effects.forceActive) {
           // Recover when session.updated raced ahead of a newly-associated
           // session id. Any live stream activity is sufficient evidence that
           // the discussion is running.
@@ -2059,6 +2088,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     activeMessages,
     isStreaming,
     supportsSteering,
+    backgroundTasks,
+    stopBackgroundTask,
     isInterrupting,
     isResumePending,
     isSpawning,

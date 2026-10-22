@@ -1,4 +1,6 @@
-import { CONTEXT_COMPACTION_TOOL_NAME, getEffectiveToolName, isEventBlock } from "@redbamboo/chat"
+import { CONTEXT_COMPACTION_TOOL_NAME } from "@redbamboo/chat/chat-status"
+import { isEventBlock } from "@redbamboo/chat/event-parts"
+import { getEffectiveToolName } from "@redbamboo/chat/tool-semantics"
 import type { MessageBlock } from "@redbamboo/chat"
 
 export interface NovaStreamingStatus {
@@ -32,6 +34,9 @@ export function getNovaStreamingStatus(messages: MessageBlock[]): NovaStreamingS
 
     for (let j = block.parts.length - 1; j >= 0; j--) {
       const part = block.parts[j]!
+      // Background work (a subagent's calls) is not what Nova is doing in this
+      // turn. Shared chat keeps it off the turn's parts; never label from it.
+      if (part.parentToolUseId) continue
 
       if (part.type === "thinking") {
         return { icon: "ph-bold ph-brain", label: "Thinking..." }

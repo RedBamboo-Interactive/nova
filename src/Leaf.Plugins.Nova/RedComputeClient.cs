@@ -30,6 +30,15 @@ public sealed class SessionMessage
     /// a block id, and therefore the key reactions are stored against.
     /// </summary>
     public string? MessageUid { get; set; }
+
+    /// <summary>
+    /// Launching tool call of the background work (a subagent) this record belongs to.
+    /// The chat client attaches such records to that call instead of the timeline.
+    /// </summary>
+    public string? ParentToolUseId { get; set; }
+
+    /// <summary>Why a turn started without user input; passed through to the client as-is.</summary>
+    public JsonElement? TurnOrigin { get; set; }
 }
 
 /// <summary>Point-in-time view of a RedCompute session: status, title, and raw messages.</summary>
@@ -48,6 +57,8 @@ public sealed class SessionPageInfo
     public string? Status { get; set; }
     public string? StopReason { get; set; }
     public string? Title { get; set; }
+    /// <summary>Live background tasks RedCompute overlays on the page; passed through as-is.</summary>
+    public JsonElement? BackgroundTasks { get; set; }
 }
 
 /// <summary>Authoritative keyset facts returned by RedCompute.</summary>

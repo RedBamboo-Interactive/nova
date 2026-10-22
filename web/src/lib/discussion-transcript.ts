@@ -1,4 +1,5 @@
 import type { MessageBlock, PersistedMessage } from "@redbamboo/chat"
+import { attachBackgroundRecords, isBackgroundRecord } from "@redbamboo/chat/background-work"
 import type { DiscussionHistoryOverlay } from "./types.ts"
 import { byTimestamp } from "./message-order.ts"
 
@@ -210,8 +211,12 @@ export function mergePagedDiscussionRecordsAndOverlays(
     ...canonicalUserBlocks.flatMap(block => (block.inputMessageUids ?? []).flatMap(uid => [`uid:${uid}`, `id:${uid}`])),
   ])
 
+  // Background work (a subagent's calls, task lifecycle) never belongs to a span:
+  // its launching call may sit in another span, past an overlay. Attach it once
+  // to the final blocks instead.
   const retainedRecords = records.filter(record =>
-    !eventOverlayKeys.has(stableRecordIdentity(record)))
+    !eventOverlayKeys.has(stableRecordIdentity(record)) && !isBackgroundRecord(record))
+  const backgroundRecords = orderPagedTranscriptRecords(records.filter(isBackgroundRecord))
   const retainedOverlays = overlayBlocks.filter(block => {
     const source = block.metadata?.source
     return (typeof source === "string" && source.startsWith("event:"))
@@ -251,7 +256,7 @@ export function mergePagedDiscussionRecordsAndOverlays(
     overlayIndex++
   }
 
-  return coalesceDiscussionTurnBlocks(merged)
+  return attachBackgroundRecords(coalesceDiscussionTurnBlocks(merged), backgroundRecords)
 }
 
 /**

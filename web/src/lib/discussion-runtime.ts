@@ -1,4 +1,24 @@
+import { isBackgroundEvent } from "@redbamboo/chat/background-work"
+import type { ChatEvent, ProcessEventResult } from "@redbamboo/chat"
 import type { DiscussionInfo } from "./types"
+
+/**
+ * What one live session.stream event may do to the discussion's turn state.
+ * Background work (a subagent's calls, a task's lifecycle) streams while the
+ * main loop is idle: it must never latch streaming, Stop or steering, never
+ * force the discussion Active and never invalidate a runtime status read.
+ */
+export function sessionStreamEffects(
+  event: Pick<ChatEvent, "type" | "content" | "parentToolUseId">,
+  result: Pick<ProcessEventResult, "isStreaming" | "resumePending" | "background">,
+): { applyTurnState: boolean; settleIdle: boolean; forceActive: boolean } {
+  if (result.background || isBackgroundEvent(event))
+    return { applyTurnState: false, settleIdle: false, forceActive: false }
+  // "killed" is terminal but NOT safe/idle yet: the process is being replaced.
+  const settleIdle = event.type === "status" && event.content !== "interrupting"
+    && !result.isStreaming && !result.resumePending
+  return { applyTurnState: true, settleIdle, forceActive: !settleIdle && (result.isStreaming || result.resumePending) }
+}
 
 /**
  * A pushed title is only a signal to ask Nova's server for the current
