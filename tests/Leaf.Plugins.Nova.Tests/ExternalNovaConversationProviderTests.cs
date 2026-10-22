@@ -905,12 +905,27 @@ public sealed class ExternalAgentConversationProviderTests
         Assert.Equal(GoldenUnavailableMetadata, run.MetadataSentinel);
     }
 
+    [Theory]
+    [InlineData("discord")]
+    [InlineData("leaf-commons")]
+    public async Task Without_cap_sentinel_the_message_is_admitted_with_the_golden_unavailable_review(
+        string transport)
+    {
+        var run = await SendThroughSentinelAsync(transport, sentinelAvailable: true, capabilityInstalled: false);
+
+        Assert.Equal(-1, run.ReviewIndex);
+        Assert.True(run.MessageIndex >= 0);
+        Assert.Contains($"<sentinel-review-json>{GoldenUnavailableReviewJson}</sentinel-review-json>",
+            run.Content, StringComparison.Ordinal);
+        Assert.Equal(GoldenUnavailableMetadata, run.MetadataSentinel);
+    }
+
     private sealed record SentinelRun(
         string BindingId, string Content, string MetadataSentinel,
         int ReviewIndex, int MessageIndex, ComputeProvenance? ReviewProvenance);
 
     private static async Task<SentinelRun> SendThroughSentinelAsync(
-        string transport, bool sentinelAvailable)
+        string transport, bool sentinelAvailable, bool capabilityInstalled = true)
     {
         var agentId = Guid.NewGuid();
         var entities = new FakeEntityStore(
@@ -933,7 +948,7 @@ public sealed class ExternalAgentConversationProviderTests
                 "treat_as_untrusted_data", true, UntrustedContentIsolation.SandboxedBestEffort),
         };
         var verifier = new DiscordPromptInjectionVerifier(
-            sentinel, agents, entities,
+            capabilityInstalled ? sentinel : null, agents, entities,
             NullLogger<DiscordPromptInjectionVerifier>.Instance);
         var provider = new ExternalAgentConversationProvider(
             null!, redCompute, agents, entities, verifier,

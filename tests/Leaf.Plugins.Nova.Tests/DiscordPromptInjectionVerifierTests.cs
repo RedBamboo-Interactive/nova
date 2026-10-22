@@ -117,6 +117,39 @@ public sealed class DiscordPromptInjectionVerifierTests
     }
 
     [Fact]
+    public async Task Without_cap_sentinel_every_review_is_unavailable_with_one_warning()
+    {
+        var logger = new CountingLogger();
+        var verifier = new DiscordPromptInjectionVerifier(
+            null, new AgentDirectory(new Store(), new NoEvents()), new Store(), logger);
+
+        for (var i = 0; i < 3; i++)
+            Assert.Same(DiscordInjectionReview.Unavailable, await verifier.ReviewAsync(
+                AgentId.ToString(), null, null, null, null, "owner-1", "binding-1", 1, "hello"));
+
+        Assert.Equal(1, logger.Warnings);
+    }
+
+    [Fact]
+    public async Task Cancellation_during_the_review_is_unavailable_as_before_the_move()
+    {
+        // The in-process verifier caught every exception from its Compute call, cancellation
+        // included, and returned Unavailable; SendAsync's next cancellable step then observed the token.
+        var (verifier, sentinel) = Create();
+        using var cancellation = new CancellationTokenSource();
+        sentinel.OnReview = () =>
+        {
+            cancellation.Cancel();
+            cancellation.Token.ThrowIfCancellationRequested();
+        };
+
+        var review = await verifier.ReviewAsync(AgentId.ToString(), null, null, null, null,
+            "owner-1", "binding-1", 1, "hello", ct: cancellation.Token);
+
+        Assert.Same(DiscordInjectionReview.Unavailable, review);
+    }
+
+    [Fact]
     public async Task Without_a_request_id_no_idempotency_key_is_invented()
     {
         var (verifier, sentinel) = Create();
@@ -155,11 +188,13 @@ public sealed class DiscordPromptInjectionVerifierTests
         public List<UntrustedContentReviewRequest> Requests { get; } = [];
         public required UntrustedContentVerdict Verdict { get; init; }
         public Exception? Throw { get; set; }
+        public Action? OnReview { get; set; }
 
         public Task<UntrustedContentReviewResult> ReviewAsync(
             UntrustedContentReviewRequest request, CancellationToken ct = default)
         {
             Requests.Add(request);
+            OnReview?.Invoke();
             if (Throw is not null) throw Throw;
             return Task.FromResult(new UntrustedContentReviewResult(
                 Verdict, null, [], new UntrustedContentScreening(0, [], [], request.Content, []), "job-1", "trace-1"));
@@ -169,6 +204,21 @@ public sealed class DiscordPromptInjectionVerifierTests
             string content, UntrustedContentFormat format = UntrustedContentFormat.Text,
             string? ownerDisplayName = null)
             => new(0, [], [], content, []);
+    }
+
+    private sealed class CountingLogger : Microsoft.Extensions.Logging.ILogger<DiscordPromptInjectionVerifier>
+    {
+        public int Warnings { get; private set; }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning) Warnings++;
+        }
     }
 
     private sealed class Store(params LeafEntity[] entities) : IEntityStore

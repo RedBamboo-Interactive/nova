@@ -44,7 +44,9 @@ public sealed class NovaAppPlugin : ILeafPlugin
         services.AddSingleton<RedComputeClient>();
         services.AddSingleton(sp =>
             new DiscordPromptInjectionVerifier(
-                sp.GetRequiredService<IUntrustedContentReview>(),
+                // Optional: provided by cap-sentinel when installed. Without it every review is
+                // the advisory Unavailable verdict and messages are still admitted.
+                sp.GetService<IUntrustedContentReview>(),
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
                 sp.GetRequiredService<ILogger<DiscordPromptInjectionVerifier>>()));

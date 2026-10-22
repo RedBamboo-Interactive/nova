@@ -20,13 +20,20 @@ public sealed record DiscordInjectionReview(
 /// fallbacks, Nova's review provenance, and the four-field <see cref="DiscordInjectionReview"/>
 /// whose JSON shape leaf-discord's projection parses. The capability's isolation report is
 /// logged here; it is not part of that wire shape.
+/// <para>
+/// cap-sentinel is a soft dependency. When it is not installed (or is disabled, or incompatible
+/// with the kernel) every review is <see cref="DiscordInjectionReview.Unavailable"/> and the
+/// message is still admitted, exactly as when the old in-process verifier could not run.
+/// </para>
 /// </summary>
 public sealed class DiscordPromptInjectionVerifier(
-    IUntrustedContentReview sentinel,
+    IUntrustedContentReview? sentinel,
     AgentDirectory agents,
     IEntityStore entities,
     ILogger<DiscordPromptInjectionVerifier> logger)
 {
+    private int missingSentinelLogged;
+
     public async Task<DiscordInjectionReview> ReviewAsync(
         string agentReference,
         string? provider,
@@ -41,6 +48,14 @@ public sealed class DiscordPromptInjectionVerifier(
         string? requestId = null,
         CancellationToken ct = default)
     {
+        if (sentinel is null)
+        {
+            if (Interlocked.Exchange(ref missingSentinelLogged, 1) == 0)
+                logger.LogWarning(
+                    "The sentinel capability (cap-sentinel) is not installed; Discord and Leaf Commons messages are admitted with an unavailable prompt-injection review");
+            return DiscordInjectionReview.Unavailable;
+        }
+
         var agent = (await agents.GetAgentsAsync(ct: ct)).FirstOrDefault(candidate =>
             candidate.Id.Equals(agentReference, StringComparison.OrdinalIgnoreCase)
             || candidate.Slug.Equals(agentReference, StringComparison.OrdinalIgnoreCase));
@@ -83,8 +98,10 @@ public sealed class DiscordPromptInjectionVerifier(
                 result.TraceId, bindingId, generation, result.Verdict.Isolation, result.Verdict.Available);
             return ToDiscordReview(result.Verdict);
         }
-        catch (Exception ex) when (!ct.IsCancellationRequested)
+        catch (Exception ex)
         {
+            // As before the move: any failure of the review itself, cancellation included, is
+            // advisory Unavailable. The caller's next cancellable step observes the token.
             logger.LogWarning(ex,
                 "Discord prompt-injection verifier failed for {BindingId} generation {Generation}",
                 bindingId, generation);

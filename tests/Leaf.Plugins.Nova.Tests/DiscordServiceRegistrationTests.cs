@@ -38,8 +38,45 @@ public sealed class DiscordServiceRegistrationTests
     }
 
     [Fact]
-    public void Nova_requires_the_sentinel_capability_that_provides_the_shared_shield()
-        => Assert.Contains("sentinel", new NovaAppPlugin().Manifest.Requires);
+    public void External_conversation_services_resolve_without_cap_sentinel_installed()
+    {
+        var plugin = new NovaAppPlugin();
+        var services = new ServiceCollection();
+        plugin.ConfigureServices(services, new PluginContext
+        {
+            Manifest = plugin.Manifest,
+            PluginDirectory = AppContext.BaseDirectory,
+            DevMode = true,
+        });
+
+        services.AddLogging();
+        services.AddKeyedSingleton<IEntityStore>(NovaAppPlugin.PluginId, new NoIoEntityStore());
+        services.AddSingleton<IAgentScratchSpace>(new NoIoScratchSpace());
+        services.AddSingleton(Uninitialized<RedComputeClient>());
+        services.AddSingleton(Uninitialized<AgentDirectory>());
+        services.AddSingleton(Uninitialized<MessagePipeline>());
+
+        var provider = services.BuildServiceProvider();
+
+        Assert.Null(provider.GetService<IUntrustedContentReview>());
+        Assert.NotNull(provider.GetRequiredService<DiscordPromptInjectionVerifier>());
+        Assert.NotNull(provider.GetRequiredService<ExternalAgentConversationProvider>());
+    }
+
+    [Fact]
+    public void Nova_treats_sentinel_as_optional_and_needs_the_kernel_api_that_declares_it()
+    {
+        var manifest = new NovaAppPlugin().Manifest;
+
+        // A missing, disabled or incompatible cap-sentinel must not disable Nova, and with it
+        // leaf-discord and leaf-commons, which require nova.
+        Assert.DoesNotContain("sentinel", manifest.Requires);
+        // Nova references IUntrustedContentReview, which first ships in kernel API 0.1.2.
+        Assert.Equal("^0.1.2", manifest.KernelApi);
+        Assert.True(KernelApi.Satisfies(manifest.KernelApi));
+        Assert.True(SemverRange.Satisfies("0.1.2", manifest.KernelApi));
+        Assert.False(SemverRange.Satisfies("0.1.1", manifest.KernelApi));
+    }
 
     private static T Uninitialized<T>() where T : class
         => (T)RuntimeHelpers.GetUninitializedObject(typeof(T));
