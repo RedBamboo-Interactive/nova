@@ -44,10 +44,9 @@ public sealed class NovaAppPlugin : ILeafPlugin
         services.AddSingleton<RedComputeClient>();
         services.AddSingleton(sp =>
             new DiscordPromptInjectionVerifier(
-                sp.GetRequiredService<RedComputeClient>(),
+                sp.GetRequiredService<IUntrustedContentReview>(),
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
-                sp.GetRequiredService<IAgentScratchSpace>(),
                 sp.GetRequiredService<ILogger<DiscordPromptInjectionVerifier>>()));
         services.AddSingleton(sp =>
             new ExternalAgentConversationProvider(

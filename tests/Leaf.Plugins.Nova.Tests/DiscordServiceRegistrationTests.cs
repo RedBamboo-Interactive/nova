@@ -24,6 +24,8 @@ public sealed class DiscordServiceRegistrationTests
         services.AddLogging();
         services.AddKeyedSingleton<IEntityStore>(NovaAppPlugin.PluginId, new NoIoEntityStore());
         services.AddSingleton<IAgentScratchSpace>(new NoIoScratchSpace());
+        // Provided by cap-sentinel, which Nova's manifest requires.
+        services.AddSingleton<IUntrustedContentReview>(new NoIoSentinel());
         services.AddSingleton(Uninitialized<RedComputeClient>());
         services.AddSingleton(Uninitialized<AgentDirectory>());
         services.AddSingleton(Uninitialized<MessagePipeline>());
@@ -35,8 +37,24 @@ public sealed class DiscordServiceRegistrationTests
         Assert.Same(external, provider.GetRequiredService<IExternalAgentConversationProvider>());
     }
 
+    [Fact]
+    public void Nova_requires_the_sentinel_capability_that_provides_the_shared_shield()
+        => Assert.Contains("sentinel", new NovaAppPlugin().Manifest.Requires);
+
     private static T Uninitialized<T>() where T : class
         => (T)RuntimeHelpers.GetUninitializedObject(typeof(T));
+
+    private sealed class NoIoSentinel : IUntrustedContentReview
+    {
+        public Task<UntrustedContentReviewResult> ReviewAsync(
+            UntrustedContentReviewRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public UntrustedContentScreening Screen(
+            string content, UntrustedContentFormat format = UntrustedContentFormat.Text,
+            string? ownerDisplayName = null)
+            => throw new NotSupportedException();
+    }
 
     private sealed class NoIoScratchSpace : IAgentScratchSpace
     {

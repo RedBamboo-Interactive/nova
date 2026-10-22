@@ -156,7 +156,8 @@ public sealed class ExternalAgentConversationProvider(
                 input.Metadata?["sentinel_quality_tier"]?.GetValue<string>(),
                 input.Metadata?["sentinel_model"]?.GetValue<string>(),
                 input.Metadata?["sentinel_effort"]?.GetValue<string>(),
-                ownerId, handle.BindingId, handle.Generation, input.Content, ct)
+                ownerId, handle.BindingId, handle.Generation, input.Content,
+                transport, input.RequestId, ct)
             : new DiscordInjectionReview("not_applicable", [], "Use the application-scoped Agent instructions.", true);
         var messageUid = StableUid(handle, input.RequestId);
         var content = BuildSessionInput(handle, input, review, transport);
