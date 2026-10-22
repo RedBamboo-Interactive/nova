@@ -78,6 +78,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
         services.AddSingleton(sp =>
             new DiscussionStore(sp.GetRequiredKeyedService<IEntityStore>(PluginId), sp.GetRequiredService<IDiscussions>(),
                 sp.GetRequiredService<AgentActivitySignals>()));
+        services.AddSingleton<VoiceBackendForwarder>();
         services.AddSingleton<ConversationUnread>();
         services.AddSingleton(sp => new DelegationActivity(sp.GetRequiredService<IDiscussions>(),
             sp.GetRequiredService<RedComputeClient>(), sp.GetRequiredKeyedService<IEntityStore>(PluginId)));

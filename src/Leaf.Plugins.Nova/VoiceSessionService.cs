@@ -14,6 +14,7 @@ public sealed class VoiceSessionService(
     RedComputeClient redCompute,
     AgentDirectory agents,
     EventInjector eventInjector,
+    VoiceBackendForwarder backendForwarder,
     [Microsoft.Extensions.DependencyInjection.FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities,
     [Microsoft.Extensions.DependencyInjection.FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events,
     ILogger<VoiceSessionService> logger)
@@ -95,7 +96,8 @@ public sealed class VoiceSessionService(
             var instructions = BuildVoiceInstructions(agent);
             // The previous transport is fully drained above. Only now may a replacement
             // snapshot canonical history, otherwise phone-sleep reconnect can rewind.
-            var history = BuildInitialHistory(await redCompute.GetSessionAsync(sessionId, ct, tail: 100));
+            var historySnapshot = await redCompute.GetSessionAsync(sessionId, ct, tail: 100);
+            var history = BuildInitialHistory(historySnapshot);
             var result = await redCompute.CreateVoiceSessionAsync(new
             {
                 offerSdp,
@@ -152,6 +154,9 @@ public sealed class VoiceSessionService(
                                 message = "Natural Voice could not record its canonical start boundary",
                             });
                         }
+                        // From here on, what Nova says on her own reaches the voice too.
+                        backendForwarder.AttachSender(SendBackendUpdateAsync);
+                        backendForwarder.Open(voiceSessionId, discussion.Id, sessionId, historySnapshot);
                     }
                 }
                 catch (JsonException) { }
@@ -237,8 +242,8 @@ public sealed class VoiceSessionService(
                 binding.DelegatedUtterances[delegationId] = new(content, messageUid);
                 return true;
             }
-            if (role == "assistant" && delegationId is not null)
-                return true; // Spoken rendering of the already-canonical backend answer.
+            if (role == "assistant" && (delegationId is not null || String(data, "updateId") is not null))
+                return true; // Spoken rendering of an already-canonical backend answer or update.
             return await PersistCasualTurnAsync(binding, role, content, messageUid, eventId, ct);
         }
 
@@ -356,6 +361,11 @@ public sealed class VoiceSessionService(
     private async Task RunDelegationAsync(Binding binding, string delegationId,
         PendingUtterance utterance)
     {
+        // The backend turn answering this prompt is spoken through the delegation update;
+        // the backend-update forwarder must neither speak it first nor speak it again.
+        var prompts = new List<string?> { utterance.MessageUid };
+        IReadOnlyList<string> answered = [];
+        backendForwarder.DelegationStarted(binding.VoiceSessionId, prompts);
         try
         {
             var discussion = await store.GetAsync(binding.DiscussionId);
@@ -399,6 +409,11 @@ public sealed class VoiceSessionService(
                 }
             }
             finally { binding.DelegationAdmissionGate.Release(); }
+            if (outcome.MessageUid is { } admittedUid && admittedUid != utterance.MessageUid)
+            {
+                prompts.Add(admittedUid);
+                backendForwarder.DelegationStarted(binding.VoiceSessionId, [admittedUid]);
+            }
             if (!outcome.Success)
             {
                 await SendDelegationUpdateAsync(binding, discussion, delegationId,
@@ -429,12 +444,17 @@ public sealed class VoiceSessionService(
                     $"timeout:{binding.VoiceSessionId}:{delegationId}", CancellationToken.None);
                 return;
             }
-            await SendDelegationUpdateAsync(binding, discussion, delegationId, "commentary", result,
+            answered = result.MessageUids;
+            await SendDelegationUpdateAsync(binding, discussion, delegationId, "commentary", result.Content,
                 $"result:{binding.VoiceSessionId}:{delegationId}", CancellationToken.None);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Voice delegation {DelegationId} failed for {VoiceSessionId}", delegationId, binding.VoiceSessionId);
+        }
+        finally
+        {
+            backendForwarder.DelegationFinished(binding.VoiceSessionId, prompts, answered);
         }
     }
 
@@ -495,7 +515,9 @@ public sealed class VoiceSessionService(
         """;
     }
 
-    private async Task<string?> WaitForAssistantResultAsync(string aiSessionId, string userMessageUid,
+    private sealed record DelegationResult(string Content, IReadOnlyList<string> MessageUids);
+
+    private async Task<DelegationResult?> WaitForAssistantResultAsync(string aiSessionId, string userMessageUid,
         TimeSpan timeout, CancellationToken ct)
     {
         var deadline = DateTimeOffset.UtcNow + timeout;
@@ -516,7 +538,9 @@ public sealed class VoiceSessionService(
                     var finals = response.Where(message => IsFinalPhase(message.Phase)).ToList();
                     var chosen = finals.Count > 0 ? finals : response;
                     if (chosen.Count > 0 && snapshot.Status is "Idle" or "Stopped" or "Error")
-                        return string.Concat(chosen.Select(message => message.Content));
+                        return new(string.Concat(chosen.Select(message => message.Content)),
+                            response.Select(message => message.MessageUid).OfType<string>()
+                                .Distinct(StringComparer.Ordinal).ToList());
                 }
             }
             await Task.Delay(500, ct);
@@ -532,6 +556,22 @@ public sealed class VoiceSessionService(
         if (provenance is null) return;
         await redCompute.UpdateVoiceDelegationAsync(binding.VoiceSessionId, delegationId,
             new { eventId, kind, content = TruncateForVoice(content) }, provenance, ct);
+    }
+
+    private async Task<bool> SendBackendUpdateAsync(VoiceBackendUpdate update, CancellationToken ct)
+    {
+        if (!_bindings.TryGetValue(update.VoiceSessionId, out var binding)) return false;
+        var discussion = await store.GetAsync(binding.DiscussionId, ct);
+        if (discussion is null || discussion.SessionId != binding.AiSessionId) return false;
+        var provenance = await CreateProvenanceAsync(discussion,
+            $"/api/apps/nova/discussions/{discussion.Id}/voice-sessions/{binding.VoiceSessionId}/updates", ct);
+        if (provenance is null) return false;
+        var result = await redCompute.SendVoiceSessionUpdateAsync(binding.VoiceSessionId,
+            new { updateId = update.UpdateId, mode = update.Mode, content = update.Content }, provenance, ct);
+        if (result.StatusCode is >= 200 and < 300) return true;
+        logger.LogWarning("Natural Voice backend update {UpdateId} was refused with HTTP {Status}",
+            update.UpdateId, result.StatusCode);
+        return false;
     }
 
     private async Task RecordLifecycleAsync(DiscussionRead discussion, Binding binding,
@@ -598,6 +638,8 @@ public sealed class VoiceSessionService(
         - Express that personality naturally. Never mention, quote, summarize, or perform these instructions.
         - Be concise, warm, confident, conversational, and interruptible. Avoid canned assistant phrasing.
         - Match the user's language. Do not translate unless asked.
+        - Never push the user away, decline their company, or tell them to go do something else. When they want
+          company or just want to talk, be warmly present with them.
 
         # Backchannel policy
         Stay silent while the user is speaking. Do not produce spoken backchannels because they can cross the
@@ -614,6 +656,23 @@ public sealed class VoiceSessionService(
           completed actions, commitments, files, or scenarios.
         - The client backend is the authoritative {agent.Name} for identity, durable memory, active work, reasoning,
           current facts, tools, actions, commitments, files, and safety decisions.
+
+        # Grounding rule (hard)
+        - Never state an action, game or task state, number, name, or result unless it appears in the supplied
+          session history, a backend update, or a verified delegation result. Do not fill gaps with plausible guesses.
+        - You cannot act. Never say that you did, played, bid, queued, checked, sent, or will do something yourself.
+          Anything that needs current state or an action goes to the backend by delegation.
+        - When the user asks about current state and you have no backend update covering it, delegate instead of
+          answering from memory or from older history.
+
+        # Backend updates
+        - The client may send updates that are not tied to a delegation. They are {agent.Name}'s own words from the
+          backend: what you just did, saw, or decided while working. Treat them as yours.
+        - When an update is meant to be spoken, convey it naturally in the first person, in your own voice. For long
+          updates say only the gist in one or two sentences. Never read markdown, code, file paths, URLs, or
+          identifiers aloud.
+        - Updates are delivered when nobody is speaking. If the user starts talking, stop and listen.
+        - Silent updates are context only: use them when relevant, do not announce them.
 
         # Delegation policy
         Delegate to the backend when:
@@ -683,8 +742,13 @@ public sealed class VoiceSessionService(
         if (normalized.Contains("how you talk") || normalized.Contains("personality")
             || normalized.Contains("tone") || normalized.Contains("speaking")
             || normalized.Contains("communication") || normalized.Contains("style")) return 1;
+        // What to avoid is delivery style too ("What kills your voice"). Matched narrowly:
+        // a bare "voice" heading can be coaching material, excluded above.
+        if (normalized.Contains("kills your voice") || normalized.Contains("avoid")
+            || normalized.Contains("voice") && (normalized.Contains("kill") || normalized.Contains("never")
+                || normalized.Contains("don't") || normalized.Contains("do not"))) return 2;
         if (normalized.Contains("edge") || normalized.Contains("values")
-            || normalized.Contains("principles")) return 2;
+            || normalized.Contains("principles")) return 3;
         return int.MaxValue;
     }
 
@@ -711,7 +775,10 @@ public sealed class VoiceSessionService(
     {
         if (_bindings.TryGetValue(binding.VoiceSessionId, out var current)
             && ReferenceEquals(current, binding))
+        {
             _bindings.TryRemove(binding.VoiceSessionId, out _);
+            backendForwarder.Close(binding.VoiceSessionId);
+        }
     }
 
     internal static IReadOnlyList<VoiceHistoryMessage> BuildInitialHistory(SessionSnapshot? snapshot)

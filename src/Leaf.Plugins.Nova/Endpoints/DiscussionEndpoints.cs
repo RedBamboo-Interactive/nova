@@ -1476,7 +1476,7 @@ public static class DiscussionEndpoints
             RedComputeClient redCompute, AgentDirectory agents,
             [FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities,
             [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events,
-            DiscussionActivity activity) =>
+            DiscussionActivity activity, VoiceBackendForwarder voiceForwarder) =>
         {
             var discussion = await store.GetAsync(id);
             if (discussion is null) return NotFound();
@@ -1588,6 +1588,8 @@ public static class DiscussionEndpoints
                 });
 
             _ = activity.OnNovaMessage(id, discussion.Title, request.Content, discussion.Confidential);
+            // A proactive message never settles a session turn; tell an open voice directly.
+            _ = voiceForwarder.OnDirectAssistantMessageAsync(id, uid, request.Content, CancellationToken.None);
             return Results.Ok(new { success = true, discussion = DiscussionStore.ToInfo(discussion) });
         });
 

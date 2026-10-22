@@ -158,6 +158,72 @@ public sealed class VoiceSessionServiceTests
     }
 
     [Fact]
+    public void Voice_prompt_forbids_unverified_claims_and_owns_backend_updates()
+    {
+        var prompt = VoiceSessionService.BuildVoiceInstructions(Agent(description: null, identity: null));
+
+        Assert.Contains("Never state an action, game or task state, number, name, or result unless it appears", prompt);
+        Assert.Contains("Never say that you did, played, bid, queued, checked", prompt);
+        Assert.Contains("no backend update covering it, delegate instead of", prompt);
+        Assert.Contains("# Backend updates", prompt);
+        Assert.Contains("own words from the", prompt);
+        Assert.Contains("in the first person", prompt);
+        Assert.Contains("one or two sentences", prompt);
+        Assert.Contains("Never read markdown, code, file paths, URLs", prompt);
+        Assert.Contains("Never push the user away, decline their company, or tell them to go do something else", prompt);
+        Assert.Contains("be warmly present", prompt);
+    }
+
+    [Fact]
+    public void Voice_persona_keeps_what_kills_the_voice_without_reviving_motivation_examples()
+    {
+        var persona = VoiceSessionService.BuildVoicePersona(Agent(
+            description: null,
+            identity: """
+                ## Who you are
+                You are Nova.
+                ## Your edge
+                edge-marker
+                ## The motivation voice
+                Open the passport and do it together in ten minutes.
+                ## How you talk
+                Speak naturally and clearly.
+                ## What kills your voice
+                - Telling him to go do something else.
+                ## Repository topology
+                backend-only-marker
+                """));
+
+        Assert.Contains("Telling him to go do something else.", persona);
+        Assert.DoesNotContain("passport", persona);
+        Assert.DoesNotContain("backend-only-marker", persona);
+        // Ordered by priority: what to avoid outranks the edge section under budget pressure.
+        Assert.True(persona.IndexOf("What kills your voice", StringComparison.Ordinal)
+            < persona.IndexOf("edge-marker", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Voice_persona_stays_within_budget_with_the_real_identity_shape()
+    {
+        var section = new string('z', 1_400);
+        var persona = VoiceSessionService.BuildVoicePersona(Agent(
+            description: new string('d', 600),
+            identity: $"""
+                ## Who you are
+                {section}
+                ## How you talk
+                {section}
+                ## What kills your voice
+                kills-marker
+                ## Your edge
+                {section}
+                """));
+
+        Assert.True(persona.Length <= VoiceSessionService.VoicePersonaMaxChars);
+        Assert.Contains("kills-marker", persona);
+    }
+
+    [Fact]
     public void Delegated_voice_content_carries_recent_direct_turns_without_changing_the_visible_utterance()
     {
         var turns = new[]

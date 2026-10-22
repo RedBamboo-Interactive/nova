@@ -16,7 +16,8 @@ internal static class ConversationRevision
 public sealed class ConversationUnread(
     DiscussionStore store,
     IDiscussions discussions,
-    RedComputeClient redCompute)
+    RedComputeClient redCompute,
+    VoiceBackendForwarder? voiceForwarder = null)
 {
     public Task<DiscussionRead> EnsureBaselineAsync(
         DiscussionRead discussion, CancellationToken ct = default)
@@ -41,6 +42,11 @@ public sealed class ConversationUnread(
         var snapshot = await redCompute.GetSessionAsync(discussion.SessionId, ct);
         if (snapshot is null || snapshot.Status != "Idle")
             return discussion;
+
+        // The same settled snapshot tells an open Natural Voice session what Nova said on
+        // her own. Delivery never delays or fails this reconciliation.
+        if (voiceForwarder is not null)
+            _ = voiceForwarder.OnSettledAsync(discussion.Id, discussion.SessionId, snapshot, CancellationToken.None);
 
         var records = await discussions.GetMessagesAsync(discussion.EntityId, ct: ct);
         var directMessageUids = records

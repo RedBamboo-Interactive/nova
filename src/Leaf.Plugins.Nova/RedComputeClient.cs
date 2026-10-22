@@ -316,6 +316,12 @@ public sealed class RedComputeClient(IComputeGateway gateway)
             $"/voice-session/sessions/{Uri.EscapeDataString(voiceSessionId)}/delegations/{Uri.EscapeDataString(delegationId)}/update",
             body, provenance, ct);
 
+    public async Task<ProxyResult> SendVoiceSessionUpdateAsync(string voiceSessionId,
+        object body, ComputeProvenance provenance, CancellationToken ct = default)
+        => await SendProxyAsync(HttpMethod.Post,
+            $"/voice-session/sessions/{Uri.EscapeDataString(voiceSessionId)}/updates",
+            body, provenance, ct);
+
     public async Task<ProxyResult> CloseVoiceSessionAsync(string voiceSessionId,
         ComputeProvenance provenance, CancellationToken ct = default)
         => await SendProxyAsync(HttpMethod.Post,
