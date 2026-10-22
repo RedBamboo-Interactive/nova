@@ -16,12 +16,12 @@
   },
   "leafSdk": {
     "repository": "RedBamboo-Interactive/redleaf",
-    "commit": "21e6fd393196fbe2179293ff3f05cb3501ebeaed",
+    "commit": "4fc37053b683fcf53743dea27155ddea657c8871",
     "sourcePath": "src/Leaf.Sdk"
   },
   "redbamboo": {
     "repository": "RedBamboo-Interactive/redbamboo-packages",
-    "commit": "3597471640d8574421a9109e7177f613c21be81a",
+    "commit": "c4783e070aacc7e3fb51fac10f817f63668f3e90",
     "lockPath": "pnpm-lock.yaml",
     "inputs": [
       {
