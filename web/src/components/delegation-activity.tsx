@@ -1,8 +1,8 @@
 import { Link } from "react-router-dom"
 import { MorphSpinner } from "@redbamboo/chat"
-import type { BackgroundTaskInfo } from "@redbamboo/chat"
-import type { DiscussionDelegationActivity } from "../lib/types"
-import { backgroundWorkLabel, delegationSessionLabel, runningBackgroundTasks } from "../lib/delegation-activity"
+import type { ActivityStatusGroup, BackgroundTaskInfo } from "@redbamboo/chat"
+import type { DelegationSessionActivity, DiscussionDelegationActivity } from "../lib/types"
+import { backgroundWorkLabel, delegationActivityLabel, delegationSessionLabel, runningBackgroundTasks } from "../lib/delegation-activity"
 import { delegationSessionPath } from "../lib/delegation-session-link"
 import { BUILTIN_EVENTS } from "../lib/event-type-resolution"
 
@@ -38,6 +38,60 @@ export function BackgroundWorkCount({ activity, backgroundTasks }: { activity?: 
       ))}
     </span>
   )
+}
+
+const isLive = (session: DelegationSessionActivity) => ["running", "queued", "starting"].includes(session.status)
+
+/** One delegated Code session: what it is, where it runs, and its state. */
+function DelegationSessionDetails({ session, onNavigate }: { session: DelegationSessionActivity; onNavigate: () => void }) {
+  const path = delegationSessionPath({ sessionId: session.sessionId })
+  return (
+    <div data-slot="delegation-session-details" className="space-y-3">
+      <div className="min-w-0">
+        <p className="break-words text-sm text-contrast">{session.title || `Code session ${session.sessionId}`}</p>
+        <p className="mt-0.5 break-words text-xs text-text-muted">{session.repository || session.repositoryId || "Agent workspace"}</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${isLive(session) ? "bg-pink-500/15 text-pink-300" : "bg-overlay-6 text-text-muted"}`}>
+          {delegationSessionLabel(session.status)}
+        </span>
+        {session.status === "unavailable" && session.lastKnownStatus && (
+          <span className="text-[11px] text-text-muted">Last known: {delegationSessionLabel(session.lastKnownStatus).toLowerCase()}</span>
+        )}
+      </div>
+      {(session.blockedReason || session.errorCode) && (
+        <p className="break-words text-xs text-text-muted">{(session.blockedReason || session.errorCode)!.replaceAll("_", " ")}</p>
+      )}
+      {path && (
+        <Link to={path} onClick={onNavigate}
+          className="inline-flex items-center gap-1.5 rounded-md bg-overlay-6 px-2.5 py-1 text-xs text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast">
+          <i aria-hidden="true" className="ph ph-code text-[11px]" />
+          Open in Code
+        </Link>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Delegations as host work in the chat's one activity row: a circle per
+ * delegated session (delegations are events, and events are circles), opening
+ * its details in the shared dialog. Null when no delegation is shown.
+ */
+export function delegationActivityGroup(activity: DiscussionDelegationActivity | undefined): ActivityStatusGroup | null {
+  if (!activity || (activity.ongoingCount === 0 && activity.unknownCount === 0)) return null
+  return {
+    label: delegationActivityLabel(activity),
+    items: activity.sessions.map(session => ({
+      key: session.sessionId,
+      title: "Delegation",
+      label: `${session.title || `Code session ${session.sessionId}`}: ${delegationSessionLabel(session.status).toLowerCase()}`,
+      color: delegationColor,
+      shape: "circle" as const,
+      running: activity.available && isLive(session),
+      renderDetails: (close: () => void) => <DelegationSessionDetails session={session} onNavigate={close} />,
+    })),
+  }
 }
 
 export function DelegationsInfo({ activity }: { activity?: DiscussionDelegationActivity }) {

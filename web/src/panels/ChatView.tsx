@@ -10,8 +10,7 @@ import { DISCUSSION_SHORTCUTS, DiscussionActionItems } from "../components/discu
 import { AgentPicker } from "../components/agent-picker"
 import { TransitioningAgentAvatar } from "../components/transitioning-agent-avatar"
 import { NovaStatusLine } from "../components/nova-status-line"
-import { delegationStatusSegment } from "../lib/delegation-activity"
-import { DelegationsInfo } from "../components/delegation-activity"
+import { DelegationsInfo, delegationActivityGroup } from "../components/delegation-activity"
 import { ReactionPills, AddReactionButton } from "../components/discussion/reactions"
 import { createNovaSpeechBackend } from "../lib/speech"
 import { useLocalSettings } from "../hooks/use-local-settings"
@@ -1117,20 +1116,15 @@ export function ChatView({
     </PanelHeader>
   )
 
-  // One row for work behind the conversation: while background tasks run,
-  // delegations join the shared background row instead of their own line.
-  const backgroundRunning = backgroundTasks.some(task => !task.status || task.status === "running")
-  const backgroundStatusExtras = useMemo(() => {
-    const segment = backgroundRunning ? delegationStatusSegment(activeDelegations) : null
-    return segment ? [segment] : undefined
-  }, [activeDelegations, backgroundRunning])
+  // Delegations are host work in the chat's one activity row, after the
+  // session, its agents and its background tasks.
+  const delegationRowActivity = useMemo(() => delegationActivityGroup(activeDelegations), [activeDelegations])
   const handleStopBackgroundTask = useCallback((taskId: string) =>
     activeDiscussionId ? stopBackgroundTask(activeDiscussionId, taskId) : undefined,
   [activeDiscussionId, stopBackgroundTask])
   const renderStatusLine = useCallback(({ isStreaming, isReconnecting, messages }: { isStreaming: boolean; isReconnecting: boolean; messages: import("@redbamboo/chat").MessageBlock[] }) => (
-    <NovaStatusLine isStreaming={isStreaming} isReconnecting={isReconnecting} messages={messages} delegationActivity={activeDelegations}
-      delegationsInBackgroundRow={backgroundRunning} />
-  ), [activeDelegations, backgroundRunning])
+    <NovaStatusLine isStreaming={isStreaming} isReconnecting={isReconnecting} messages={messages} />
+  ), [])
 
   const resolveAgentInfo = useCallback((agentId: string) => {
     const agent = getAgent(agentId)
@@ -1355,7 +1349,7 @@ export function ChatView({
         supportsSteering={supportsSteering}
         backgroundTasks={backgroundTasks}
         onStopBackgroundTask={handleStopBackgroundTask}
-        backgroundStatusExtras={backgroundStatusExtras}
+        hostActivity={delegationRowActivity}
         isReconnecting={!upstreamConnected}
         interrupting={isInterrupting}
         resumePending={isResumePending}

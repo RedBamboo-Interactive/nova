@@ -21,9 +21,8 @@ export function delegationActivityLabel(activity: DiscussionDelegationActivity):
 }
 
 /**
- * Delegations as one segment of the shared background status row, used when
- * background tasks also run ("1 delegation · 2 agents working"). Delegation data
- * stays Nova-owned; only the row is shared. Null when no delegation is shown.
+ * Delegations as a count segment beside other background work
+ * ("1 delegation · 2 agents working"). Null when no delegation is shown.
  */
 export function delegationStatusSegment(activity: DiscussionDelegationActivity | undefined): { key: string; label: string; title: string } | null {
   if (!activity || (activity.ongoingCount === 0 && activity.unknownCount === 0)) return null
