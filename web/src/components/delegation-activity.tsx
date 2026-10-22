@@ -1,8 +1,8 @@
 import { Link } from "react-router-dom"
 import { MorphSpinner } from "@redbamboo/chat"
-import type { ActivityStatusGroup, BackgroundTaskInfo } from "@redbamboo/chat"
+import type { ActivityStatusGroup } from "@redbamboo/chat"
 import type { DelegationSessionActivity, DiscussionDelegationActivity } from "../lib/types"
-import { backgroundWorkLabel, delegationActivityLabel, delegationSessionLabel, runningBackgroundTasks } from "../lib/delegation-activity"
+import { delegationActivityLabel, delegationSessionLabel } from "../lib/delegation-activity"
 import { delegationSessionPath } from "../lib/delegation-session-link"
 import { BUILTIN_EVENTS } from "../lib/event-type-resolution"
 
@@ -12,32 +12,6 @@ const delegationColor = `var(--color-accent-magenta, ${BUILTIN_EVENTS.delegation
 
 export function DelegationSpinner({ paused = false }: { paused?: boolean }) {
   return <span data-slot="delegation-spinner" aria-hidden="true" className="inline-flex shrink-0"><MorphSpinner color={delegationColor} paused={paused} /></span>
-}
-
-/** One small spinner per ongoing delegation, then one per running background task. */
-export function BackgroundWorkCount({ activity, backgroundTasks }: { activity?: DiscussionDelegationActivity; backgroundTasks?: readonly BackgroundTaskInfo[] }) {
-  const running = runningBackgroundTasks(backgroundTasks)
-  const delegations = activity?.ongoingCount ?? 0
-  if (!delegations && !running.length) return null
-  const label = backgroundWorkLabel(activity, running)
-  const slot = "inline-flex h-3.5 w-3.5 items-center justify-center [&_[data-slot=delegation-spinner]]:scale-75"
-  return (
-    <span data-slot="background-work-count" role="img" aria-label={label} title={label} className="inline-flex self-center items-center gap-1 whitespace-nowrap">
-      {activity && Array.from({ length: delegations }, (_, index) => {
-        const session = activity.sessions[index]
-        return (
-          <span key={`delegation:${session?.sessionId ?? index}`} data-slot="delegation-count-item" className={slot}>
-            <DelegationSpinner paused={!activity.available || !session || !["running", "queued", "starting"].includes(session.status)} />
-          </span>
-        )
-      })}
-      {running.map((task, index) => (
-        <span key={`task:${task.taskId ?? index}`} data-slot="background-task-count-item" className={slot}>
-          <DelegationSpinner />
-        </span>
-      ))}
-    </span>
-  )
 }
 
 const isLive = (session: DelegationSessionActivity) => ["running", "queued", "starting"].includes(session.status)

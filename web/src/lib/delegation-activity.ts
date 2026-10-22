@@ -1,4 +1,4 @@
-import { describeBackgroundCount } from "@redbamboo/chat/background-work"
+import { orderBackgroundActivity, summarizeBackgroundActivity } from "@redbamboo/chat/background-work"
 import type { BackgroundTaskInfo } from "@redbamboo/chat"
 import type { DelegationActivitySnapshot, DelegationSessionActivity, DiscussionDelegationActivity } from "./types"
 
@@ -20,36 +20,35 @@ export function delegationActivityLabel(activity: DiscussionDelegationActivity):
   return `${count} ${noun} ${label}…`
 }
 
-/**
- * Delegations as a count segment beside other background work
- * ("1 delegation · 2 agents working"). Null when no delegation is shown.
- */
-export function delegationStatusSegment(activity: DiscussionDelegationActivity | undefined): { key: string; label: string; title: string } | null {
-  if (!activity || (activity.ongoingCount === 0 && activity.unknownCount === 0)) return null
-  const count = activity.ongoingCount
-  const label = activity.available && count > 0
-    ? `${count} ${count === 1 ? "delegation" : "delegations"}`
-    : delegationActivityLabel(activity)
-  return { key: "delegations", label, title: delegationActivityLabel(activity) }
-}
-
 /** Background tasks (subagents, shells) the session still reports as running. */
 export function runningBackgroundTasks(tasks: readonly BackgroundTaskInfo[] | undefined): BackgroundTaskInfo[] {
   return tasks?.filter(task => !task.status || task.status === "running") ?? []
 }
 
+/** What a discussion's one sidebar indicator shows, and why. */
+export interface DiscussionActivityIndicator {
+  /** The highest-priority work: the session, its agents, other background tasks, its delegations, or nothing. */
+  source: "session" | "agents" | "tasks" | "delegations" | "none"
+  /** The same text the chat's activity row shows for that work; empty for the session and for nothing. */
+  label: string
+  /** Kind of the leading background task, which picks its colour. */
+  leadKind?: string
+  paused: boolean
+}
+
 /**
- * Everything working behind one discussion, worded like the chat's background
- * row: "1 delegation running…", "2 agents working", or both joined
- * ("1 delegation · 2 agents working"). Empty when nothing is shown.
+ * The chat activity row's priority, reduced to one indicator: the session
+ * itself, then agents, then other background tasks, then delegations.
  */
-export function backgroundWorkLabel(activity: DiscussionDelegationActivity | undefined,
-  running: readonly Pick<BackgroundTaskInfo, "kind">[]): string {
+export function discussionActivityIndicator(status: string, activity: DiscussionDelegationActivity | undefined,
+  tasks: readonly BackgroundTaskInfo[] | undefined): DiscussionActivityIndicator {
+  if (status === "thinking") return { source: "session", label: "", paused: false }
+  const running = orderBackgroundActivity(runningBackgroundTasks(tasks))
   const delegations = activity?.ongoingCount ? activity : undefined
-  if (!running.length) return delegations ? delegationActivityLabel(delegations) : ""
-  const tasks = `${describeBackgroundCount(running)} working`
-  const segment = delegations ? delegationStatusSegment(delegations) : null
-  return segment ? `${segment.label} · ${tasks}` : tasks
+  const summary = summarizeBackgroundActivity(running, delegations ? { label: delegationActivityLabel(delegations) } : null)
+  if (!summary) return { source: "none", label: "", paused: true }
+  if (summary.source === "host") return { source: "delegations", label: summary.label, paused: delegationAnimationPaused(delegations!) }
+  return { source: summary.source, label: summary.label, leadKind: running[0]?.kind, paused: false }
 }
 
 /** An unavailable read is not a terminal lifecycle observation. */

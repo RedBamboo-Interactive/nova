@@ -56,30 +56,27 @@ test("only linked session lifecycles and originating discussion changes invalida
   assert.equal(invalidatesDelegationActivity("session.message", { sessionId: "worker" }, linked, discussions), false)
 })
 
-test("delegations join the shared background row as a count segment", async () => {
-  const { delegationStatusSegment } = await import("./delegation-activity.ts")
-  assert.equal(delegationStatusSegment(undefined), null)
-  assert.equal(delegationStatusSegment(activity()), null)
-  assert.deepEqual(delegationStatusSegment(activity("running")), {
-    key: "delegations", label: "1 delegation", title: delegationActivityLabel(activity("running")) })
-  assert.equal(delegationStatusSegment(activity("running", "queued"))?.label, "2 delegations")
-})
-
-test("sidebar background work counts running tasks beside delegations, worded like the chat row", async () => {
-  const { backgroundWorkLabel, runningBackgroundTasks } = await import("./delegation-activity.ts")
+test("the sidebar indicator follows the activity row's priority", async () => {
+  const { discussionActivityIndicator, runningBackgroundTasks } = await import("./delegation-activity.ts")
   const tasks = [
-    { taskId: "a", kind: "agent", status: "running" },
-    { taskId: "b", kind: "agent" },
-    { taskId: "c", kind: "shell", status: "running" },
-    { taskId: "d", kind: "agent", status: "completed" },
-    { taskId: "e", kind: "agent", status: "lost" },
+    { taskId: "shell", kind: "shell", status: "running", startedAt: "2026-10-22T09:00:01Z" },
+    { taskId: "agent", kind: "agent", startedAt: "2026-10-22T09:00:05Z" },
+    { taskId: "done", kind: "agent", status: "completed" },
+    { taskId: "lost", kind: "agent", status: "lost" },
   ]
-  assert.deepEqual(runningBackgroundTasks(tasks).map(task => task.taskId), ["a", "b", "c"])
+  assert.deepEqual(runningBackgroundTasks(tasks).map(task => task.taskId), ["shell", "agent"])
   assert.deepEqual(runningBackgroundTasks(undefined), [])
-  assert.equal(backgroundWorkLabel(undefined, []), "")
-  assert.equal(backgroundWorkLabel(activity(), []), "")
-  assert.equal(backgroundWorkLabel(activity("running"), []), "1 delegation running…")
-  assert.equal(backgroundWorkLabel(undefined, runningBackgroundTasks(tasks)), "2 agents · 1 shell working")
-  assert.equal(backgroundWorkLabel(activity(), [{ kind: "agent" }]), "1 agent working")
-  assert.equal(backgroundWorkLabel(activity("running", "queued"), [{ kind: "agent" }, { kind: "agent" }]), "2 delegations · 2 agents working")
+  // The session working outranks everything behind it.
+  assert.deepEqual(discussionActivityIndicator("thinking", activity("running"), tasks), { source: "session", label: "", paused: false })
+  // Then agents, then other background tasks, then delegations.
+  assert.deepEqual(discussionActivityIndicator("idle", activity("running"), tasks),
+    { source: "agents", label: "1 agent working", leadKind: "agent", paused: false })
+  assert.deepEqual(discussionActivityIndicator("idle", activity("running"), [tasks[0]]),
+    { source: "tasks", label: "1 shell working", leadKind: "shell", paused: false })
+  assert.deepEqual(discussionActivityIndicator("idle", activity("running", "queued"), [tasks[2]]),
+    { source: "delegations", label: "2 delegations ongoing…", paused: false })
+  // Delegations that are only waiting or blocked keep a still indicator.
+  assert.equal(discussionActivityIndicator("idle", activity("waiting_to_resume"), undefined).paused, true)
+  assert.deepEqual(discussionActivityIndicator("idle", activity(), []), { source: "none", label: "", paused: true })
+  assert.equal(discussionActivityIndicator("stopped", undefined, undefined).source, "none")
 })

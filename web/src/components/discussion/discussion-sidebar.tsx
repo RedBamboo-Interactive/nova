@@ -6,10 +6,10 @@ import type { BackgroundTaskInfo } from "@redbamboo/chat"
 import type { DelegationActivitySnapshot, DiscussionDelegationActivity, DiscussionInfo, AgentInfo } from "../../lib/types"
 import type { DiscussionListLoadState } from "../../lib/discussion-list-store"
 import { resolveArchiveSearchEscape, type ArchiveDiscussionItem } from "../../lib/archive-discussion-store"
-import { BackgroundWorkCount, DelegationSpinner } from "../delegation-activity"
+
 import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
-import { delegationAnimationPaused, runningBackgroundTasks } from "../../lib/delegation-activity"
+import { discussionActivityIndicator } from "../../lib/delegation-activity"
 import { DiscussionActionItems } from "./discussion-actions-menu"
 import { formatOwningApp } from "../../lib/discussion-owner"
 
@@ -23,18 +23,34 @@ const statusColor: Record<string, string> = {
   archived: "var(--color-text-disabled)",
 }
 
+// Background work takes the chat activity row's colours: agents and
+// delegations pink, shells and other background tasks gold.
+const agentColor = "rgb(236 72 153)"
+const delegationColor = `var(--color-accent-magenta, ${agentColor})`
+const taskColor = "var(--color-accent-gold)"
+
 /** Ongoing delegations or running background tasks: work behind an otherwise idle discussion. */
-function hasBackgroundWork(activity: DiscussionDelegationActivity | undefined, backgroundTasks: readonly BackgroundTaskInfo[] | undefined): boolean {
-  return !!activity?.ongoingCount || runningBackgroundTasks(backgroundTasks).length > 0
+function hasBackgroundWork(discussion: DiscussionInfo, activity: DiscussionDelegationActivity | undefined, backgroundTasks: readonly BackgroundTaskInfo[] | undefined): boolean {
+  const source = discussionActivityIndicator(discussion.status, activity, backgroundTasks).source
+  return source !== "none" && source !== "session"
 }
 
+/**
+ * One indicator per discussion, chosen by the chat activity row's priority:
+ * the session working, then its agents, then other background tasks, then
+ * its delegations, then its idle or stopped state.
+ */
 function DiscussionStatusIcon({ discussion, activity, backgroundTasks }: { discussion: DiscussionInfo; activity?: DiscussionDelegationActivity; backgroundTasks?: readonly BackgroundTaskInfo[] }) {
-  if (discussion.status === "thinking" || !hasBackgroundWork(activity, backgroundTasks)) return (
+  const indicator = discussionActivityIndicator(discussion.status, activity, backgroundTasks)
+  if (indicator.source === "session" || indicator.source === "none") return (
     <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
   )
-  // A running background task animates on its own; delegations alone pause when none is live.
-  const paused = runningBackgroundTasks(backgroundTasks).length === 0 && (!activity || delegationAnimationPaused(activity))
-  return <DelegationSpinner paused={paused} />
+  const color = indicator.source === "agents" ? agentColor : indicator.source === "delegations" ? delegationColor : taskColor
+  return (
+    <span data-slot="discussion-activity" data-activity-source={indicator.source} role="img" aria-label={indicator.label} title={indicator.label} className="inline-flex shrink-0">
+      <MorphSpinner color={color} paused={indicator.paused} />
+    </span>
+  )
 }
 
 /** Row actions trigger: always visible on touch screens, which have no hover.
@@ -131,7 +147,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           </div>
         }
         className={[
-          agent || hasBackgroundWork(delegationActivity[discussion.id], backgroundTasks[discussion.id]) ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
+          agent || hasBackgroundWork(discussion, delegationActivity[discussion.id], backgroundTasks[discussion.id]) ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
           unread ? "[&_[data-slot=item-list-title]]:font-semibold" : "",
         ].filter(Boolean).join(" ")}
         title={
@@ -140,7 +156,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             <span style={{ color: "var(--color-status-live)" }}>Live</span>
           </span>
         }
-        subtitle={<span className="inline-flex items-baseline gap-1.5"><span>{formatRelative(discussion.lastActivity)}</span><BackgroundWorkCount activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} /></span>}
+        subtitle={formatRelative(discussion.lastActivity)}
         trailing={
           <div className="flex items-center gap-1.5">
             {unread && (
@@ -199,7 +215,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           </div>
         }
         className={[
-          agent || hasBackgroundWork(delegationActivity[discussion.id], backgroundTasks[discussion.id]) ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
+          agent || hasBackgroundWork(discussion, delegationActivity[discussion.id], backgroundTasks[discussion.id]) ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
           !alive ? "[&_[data-slot=item-list-title]]:opacity-50"
           : unread ? "[&_[data-slot=item-list-title]]:text-contrast [&_[data-slot=item-list-title]]:font-semibold"
           : "",
@@ -210,7 +226,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             {discussion.confidential && <i className="ph-bold ph-lock-simple text-[10px] text-text-muted ml-1.5 opacity-60" />}
           </>
         }
-        subtitle={<span className="inline-flex items-baseline gap-1.5"><span>{formatRelative(discussion.lastActivity)}</span>{discussion.ownedBy && <span>· {formatOwningApp(discussion.ownedBy.app)}</span>}<BackgroundWorkCount activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} /></span>}
+        subtitle={<span className="inline-flex items-baseline gap-1.5"><span>{formatRelative(discussion.lastActivity)}</span>{discussion.ownedBy && <span>· {formatOwningApp(discussion.ownedBy.app)}</span>}</span>}
         trailing={
           discussion.status !== "archived" ? (
             <div className="flex items-center gap-1.5">
