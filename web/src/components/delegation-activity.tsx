@@ -1,7 +1,8 @@
 import { Link } from "react-router-dom"
 import { MorphSpinner } from "@redbamboo/chat"
+import type { BackgroundTaskInfo } from "@redbamboo/chat"
 import type { DiscussionDelegationActivity } from "../lib/types"
-import { delegationActivityLabel, delegationSessionLabel } from "../lib/delegation-activity"
+import { backgroundWorkLabel, delegationSessionLabel, runningBackgroundTasks } from "../lib/delegation-activity"
 import { delegationSessionPath } from "../lib/delegation-session-link"
 import { BUILTIN_EVENTS } from "../lib/event-type-resolution"
 
@@ -13,19 +14,28 @@ export function DelegationSpinner({ paused = false }: { paused?: boolean }) {
   return <span data-slot="delegation-spinner" aria-hidden="true" className="inline-flex shrink-0"><MorphSpinner color={delegationColor} paused={paused} /></span>
 }
 
-export function DelegationCount({ activity }: { activity?: DiscussionDelegationActivity }) {
-  if (!activity?.ongoingCount) return null
-  const label = delegationActivityLabel(activity)
+/** One small spinner per ongoing delegation, then one per running background task. */
+export function BackgroundWorkCount({ activity, backgroundTasks }: { activity?: DiscussionDelegationActivity; backgroundTasks?: readonly BackgroundTaskInfo[] }) {
+  const running = runningBackgroundTasks(backgroundTasks)
+  const delegations = activity?.ongoingCount ?? 0
+  if (!delegations && !running.length) return null
+  const label = backgroundWorkLabel(activity, running)
+  const slot = "inline-flex h-3.5 w-3.5 items-center justify-center [&_[data-slot=delegation-spinner]]:scale-75"
   return (
-    <span data-slot="delegation-count" role="img" aria-label={label} title={label} className="inline-flex self-center items-center gap-1 whitespace-nowrap">
-      {Array.from({ length: activity.ongoingCount }, (_, index) => {
+    <span data-slot="background-work-count" role="img" aria-label={label} title={label} className="inline-flex self-center items-center gap-1 whitespace-nowrap">
+      {activity && Array.from({ length: delegations }, (_, index) => {
         const session = activity.sessions[index]
         return (
-          <span key={session?.sessionId ?? index} className="inline-flex h-3.5 w-3.5 items-center justify-center [&_[data-slot=delegation-spinner]]:scale-75">
+          <span key={`delegation:${session?.sessionId ?? index}`} data-slot="delegation-count-item" className={slot}>
             <DelegationSpinner paused={!activity.available || !session || !["running", "queued", "starting"].includes(session.status)} />
           </span>
         )
       })}
+      {running.map((task, index) => (
+        <span key={`task:${task.taskId ?? index}`} data-slot="background-task-count-item" className={slot}>
+          <DelegationSpinner />
+        </span>
+      ))}
     </span>
   )
 }

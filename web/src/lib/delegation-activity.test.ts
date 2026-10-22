@@ -64,3 +64,22 @@ test("delegations join the shared background row as a count segment", async () =
     key: "delegations", label: "1 delegation", title: delegationActivityLabel(activity("running")) })
   assert.equal(delegationStatusSegment(activity("running", "queued"))?.label, "2 delegations")
 })
+
+test("sidebar background work counts running tasks beside delegations, worded like the chat row", async () => {
+  const { backgroundWorkLabel, runningBackgroundTasks } = await import("./delegation-activity.ts")
+  const tasks = [
+    { taskId: "a", kind: "agent", status: "running" },
+    { taskId: "b", kind: "agent" },
+    { taskId: "c", kind: "shell", status: "running" },
+    { taskId: "d", kind: "agent", status: "completed" },
+    { taskId: "e", kind: "agent", status: "lost" },
+  ]
+  assert.deepEqual(runningBackgroundTasks(tasks).map(task => task.taskId), ["a", "b", "c"])
+  assert.deepEqual(runningBackgroundTasks(undefined), [])
+  assert.equal(backgroundWorkLabel(undefined, []), "")
+  assert.equal(backgroundWorkLabel(activity(), []), "")
+  assert.equal(backgroundWorkLabel(activity("running"), []), "1 delegation running…")
+  assert.equal(backgroundWorkLabel(undefined, runningBackgroundTasks(tasks)), "2 agents · 1 shell working")
+  assert.equal(backgroundWorkLabel(activity(), [{ kind: "agent" }]), "1 agent working")
+  assert.equal(backgroundWorkLabel(activity("running", "queued"), [{ kind: "agent" }, { kind: "agent" }]), "2 delegations · 2 agents working")
+})

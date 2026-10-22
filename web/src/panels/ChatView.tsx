@@ -171,6 +171,7 @@ export function ChatView({
     isStreaming,
     supportsSteering,
     backgroundTasks,
+    backgroundTasksByDiscussion,
     stopBackgroundTask,
     isInterrupting,
     isResumePending,
@@ -1513,6 +1514,7 @@ export function ChatView({
               loadState={archiveMode ? archiveListLoadState : discussionListLoadState}
               onRetryLoad={handleRetryDiscussionList}
               delegationActivity={delegationActivity}
+              backgroundTasks={backgroundTasksByDiscussion}
               activeDiscussionId={synchronizedDiscussionId ?? activeDiscussionId}
               onSelect={handleSelectDiscussion}
               onArchive={handleCloseDiscussion}

@@ -568,8 +568,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
   useEffect(() => {
     // A failed read is surfaced through discussionListLoadState with a retry.
-    syncAndRefresh().catch(() => {})
-  }, [syncAndRefresh])
+    // Then hydrate live session state (background tasks included) for every listed
+    // discussion, which otherwise arrives only with its next session.updated.
+    syncAndRefresh().then(() => reconcileStreaming(), () => {})
+  }, [syncAndRefresh, reconcileStreaming])
 
   const resetHistoryPaging = useCallback((id: string, forgetCapability = false) => {
     // Invalidate any response already in flight before clearing its anchors.
@@ -2089,6 +2091,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     isStreaming,
     supportsSteering,
     backgroundTasks,
+    backgroundTasksByDiscussion,
     stopBackgroundTask,
     isInterrupting,
     isResumePending,

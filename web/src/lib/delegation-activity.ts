@@ -1,3 +1,5 @@
+import { describeBackgroundCount } from "@redbamboo/chat/background-work"
+import type { BackgroundTaskInfo } from "@redbamboo/chat"
 import type { DelegationActivitySnapshot, DelegationSessionActivity, DiscussionDelegationActivity } from "./types"
 
 export function delegationSessionLabel(status: DelegationSessionActivity["status"]): string {
@@ -30,6 +32,25 @@ export function delegationStatusSegment(activity: DiscussionDelegationActivity |
     ? `${count} ${count === 1 ? "delegation" : "delegations"}`
     : delegationActivityLabel(activity)
   return { key: "delegations", label, title: delegationActivityLabel(activity) }
+}
+
+/** Background tasks (subagents, shells) the session still reports as running. */
+export function runningBackgroundTasks(tasks: readonly BackgroundTaskInfo[] | undefined): BackgroundTaskInfo[] {
+  return tasks?.filter(task => !task.status || task.status === "running") ?? []
+}
+
+/**
+ * Everything working behind one discussion, worded like the chat's background
+ * row: "1 delegation running…", "2 agents working", or both joined
+ * ("1 delegation · 2 agents working"). Empty when nothing is shown.
+ */
+export function backgroundWorkLabel(activity: DiscussionDelegationActivity | undefined,
+  running: readonly Pick<BackgroundTaskInfo, "kind">[]): string {
+  const delegations = activity?.ongoingCount ? activity : undefined
+  if (!running.length) return delegations ? delegationActivityLabel(delegations) : ""
+  const tasks = `${describeBackgroundCount(running)} working`
+  const segment = delegations ? delegationStatusSegment(delegations) : null
+  return segment ? `${segment.label} · ${tasks}` : tasks
 }
 
 /** An unavailable read is not a terminal lifecycle observation. */
