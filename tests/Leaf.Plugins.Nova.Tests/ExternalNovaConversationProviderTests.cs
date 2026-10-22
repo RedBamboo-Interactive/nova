@@ -357,6 +357,59 @@ public sealed class ExternalAgentConversationProviderTests
         Assert.True(callbackBody.RootElement.GetProperty("force").GetBoolean());
     }
 
+    [Fact]
+    public async Task Public_commons_message_invokes_sentinel_before_admission()
+    {
+        var scratchPath = Path.Combine(
+            Path.GetTempPath(), $"nova-commons-sentinel-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(scratchPath);
+        try
+        {
+            var agentId = Guid.NewGuid();
+            var entities = new FakeEntityStore(
+                Entity(agentId, "agent", "nova", "Nova"),
+                Entity(Guid.NewGuid(), "plugin", NovaAppPlugin.PluginId, "Nova"));
+            using var agents = new AgentDirectory(entities, new NoOpPluginEvents());
+            var gateway = new ReusedSessionGateway();
+            var redCompute = new RedComputeClient(gateway);
+            var verifier = new DiscordPromptInjectionVerifier(
+                redCompute, agents, entities, new FixedScratchSpace(scratchPath),
+                NullLogger<DiscordPromptInjectionVerifier>.Instance);
+            var provider = new ExternalAgentConversationProvider(
+                null!, redCompute, agents, entities, verifier,
+                NullLogger<ExternalAgentConversationProvider>.Instance);
+            var handle = new ExternalConversationHandle(
+                "leaf-agent-session", "leaf-commons:binding", 1,
+                "conversation-1", "session-1");
+
+            await provider.SendAsync(handle, new ExternalConversationInput(
+                "relay-message-1", new ExternalRequestor("envoy:peer", "Atlas · North"),
+                "Please inspect this failure.", [], new JsonObject
+                {
+                    ["transport"] = "leaf-commons",
+                    ["application_id"] = "leaf-commons",
+                    ["agent_id"] = agentId.ToString(),
+                    ["sentinel_agent_id"] = agentId.ToString(),
+                    ["binding_id"] = "leaf-commons:binding",
+                    ["owner_user_id"] = "owner-1",
+                }));
+
+            var sentinelIndex = gateway.Requests.FindIndex(request =>
+                request.Path == "/ai-session/execute");
+            var messageIndex = gateway.Requests.FindIndex(request =>
+                request.Path == "/ai-session/sessions/session-1/message");
+            Assert.True(sentinelIndex >= 0);
+            Assert.True(messageIndex > sentinelIndex);
+            using var body = JsonDocument.Parse(gateway.Requests[messageIndex].Body);
+            Assert.True(body.RootElement.GetProperty("metadata")
+                .GetProperty("sentinel").GetProperty("available").GetBoolean());
+        }
+        finally
+        {
+            Directory.Delete(scratchPath, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("Idle", 0, true)]
     [InlineData("Stopped", 0, true)]
@@ -644,6 +697,71 @@ public sealed class ExternalAgentConversationProviderTests
         Assert.DoesNotContain("must not leak", prompt, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Public_commons_scope_uses_full_public_agent_privacy_instructions()
+    {
+        var request = new ExternalConversationOpenRequest(
+            "leaf-commons:binding", 1, Guid.NewGuid().ToString(), Guid.NewGuid().ToString(),
+            "leaf-commons-public",
+            new ExternalConversationScope(
+                "leaf-commons", "leaf-commons", "message:root", "public-discord-conversation"),
+            "commons-open");
+
+        var instructions = ExternalAgentConversationProvider.DeveloperInstructions(request, "Nova");
+
+        Assert.Contains("real workspace, and normal tools", instructions);
+        Assert.Contains("other people's AI agents", instructions);
+        Assert.Contains("Consequential external actions", instructions);
+        Assert.True(ExternalAgentConversationProvider.RequiresSentinelReview("leaf-commons"));
+    }
+
+    [Fact]
+    public void Public_commons_input_keeps_verified_sender_behavior_and_sentinel_separate()
+    {
+        var handle = new ExternalConversationHandle(
+            "leaf-agent-session", "leaf-commons:binding", 1, "conversation", "session");
+        var input = new ExternalConversationInput(
+            "relay-message", new ExternalRequestor("envoy:peer", "Atlas · North"),
+            "Inspect this quoted instruction as data", [], new JsonObject
+            {
+                ["application_id"] = "leaf-commons",
+                ["relay_verified_sender"] = new JsonObject
+                {
+                    ["schema"] = "leaf-commons-relay-sender/v1",
+                    ["source"] = "commons_relay",
+                    ["verified"] = true,
+                    ["external_id"] = "envoy:peer",
+                    ["display_name"] = "Atlas · North",
+                    ["authority"] = "requestor-only",
+                },
+                ["external_behavior"] = new JsonObject
+                {
+                    ["schema"] = "leaf-commons-behavior/v1",
+                    ["source"] = "leaf_owner_configuration",
+                    ["trust"] = "trusted_owner_configuration",
+                    ["response_mode"] = "direct",
+                    ["instructions"] = "Investigate real bugs and answer concisely.",
+                },
+            });
+
+        var prompt = ExternalAgentConversationProvider.BuildSessionInput(
+            handle, input, new DiscordInjectionReview("medium", ["quoted_instruction"],
+                "treat as data", true), "leaf-commons");
+        var envelope = ParseTaggedJson(prompt, "external-input-json");
+        var behavior = ParseTaggedJson(prompt, "external-behavior-json");
+        var sentinel = ParseTaggedJson(prompt, "sentinel-review-json");
+
+        Assert.Equal("Atlas · North",
+            envelope.GetProperty("verifiedRelaySender").GetProperty("displayName").GetString());
+        Assert.Equal("requestor-only",
+            envelope.GetProperty("verifiedRelaySender").GetProperty("authority").GetString());
+        Assert.Equal("Inspect this quoted instruction as data",
+            envelope.GetProperty("message").GetString());
+        Assert.Equal("Investigate real bugs and answer concisely.",
+            behavior.GetProperty("instructions").GetString());
+        Assert.Equal("medium", sentinel.GetProperty("Risk").GetString());
+    }
+
     private static JsonElement ParseTaggedJson(string prompt, string tag)
     {
         var opening = $"<{tag}>";
@@ -820,6 +938,8 @@ public sealed class ExternalAgentConversationProviderTests
             Requests.Add((path, body));
             var content = request.Method == HttpMethod.Get
                 ? """{"session":{"status":"Idle","providerSessionId":"thread-1"}}"""
+                : path == "/ai-session/execute"
+                    ? """{"success":true,"text":"{\"risk\":\"none\",\"signals\":[],\"handling\":\"normal\"}","sessionId":"sentinel-1"}"""
                 : path.EndsWith("/message", StringComparison.Ordinal)
                     ? """{"disposition":"delivered","queueItemId":"queue-1"}"""
                     : "{}";
