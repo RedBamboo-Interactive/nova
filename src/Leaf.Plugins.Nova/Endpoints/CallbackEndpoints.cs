@@ -48,9 +48,13 @@ public static class CallbackEndpoints
         var provenEndedCompletion = status == "Ended" && reason == "completed"
             && promptMessageUid is not null && deliveredMessageUid is not null && executionObserved;
 
-        var restartPause = status is "Stopped" or "Ended"
-            && stopReason is "maintenance_restart" or "orphaned_on_restart";
-        var outcome = restartPause || stopReason == "usage_limit" ? "paused"
+        var resumablePause = status is "Stopped" or "Ended"
+            && DiscussionStatus.IsAutoResumableStop(stopReason);
+        var idleParking = stopReason is "idle_timeout" or "idle_ttl_expired";
+        var pauseSuffix = !resumablePause ? ""
+            : idleParking ? " — parked; resumes on the next message"
+            : " — waiting to resume after restart";
+        var outcome = resumablePause || stopReason == "usage_limit" ? "paused"
             : status == "Idle" || provenEndedCompletion ? "completed"
             : status == "Cancelled" ? reason == "superseded" ? "superseded" : "cancelled"
             : status == "Error" || reason == "failed" ? "failed"
@@ -59,7 +63,8 @@ public static class CallbackEndpoints
 
         var summary = (status, stopReason) switch
         {
-            _ when restartPause => $"Session {sessionId} paused for restart; awaiting recovery, completion has not been reported",
+            _ when idleParking => $"Session {sessionId} parked after inactivity; it will resume on the next message",
+            _ when resumablePause => $"Session {sessionId} paused for restart; awaiting recovery, completion has not been reported",
             (_, "usage_limit") => $"Session {sessionId} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
             _ when provenEndedCompletion => $"Session {sessionId} completed{(title != null ? $": {title}" : "")}",
             ("Idle", _) => $"Session {sessionId} completed{(title != null ? $": {title}" : "")}",
@@ -98,7 +103,7 @@ public static class CallbackEndpoints
             return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
 
         if (!discussion.Confidential)
-            await live.PostAsync("callback", $"Delegated session {outcome}{(title != null ? $": {title}" : "")}{(restartPause ? " — waiting to resume after restart" : "")}",
+            await live.PostAsync("callback", $"Delegated session {outcome}{(title != null ? $": {title}" : "")}{pauseSuffix}",
                 idempotencyKey: key is null ? null : $"{key}:live", ct: ctx.RequestAborted);
         return Results.Ok(new { handled = true, sessionId, discussionId, status });
     }

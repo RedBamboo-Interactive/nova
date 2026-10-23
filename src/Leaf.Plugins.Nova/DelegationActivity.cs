@@ -235,7 +235,7 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
         // Explicit stop/failure is terminal. Maintenance recovery with accepted
         // pending input remains work, even though the provider itself is stopped.
         if (session.Status == "Ended"
-            || session.Status == "Stopped" && session.StopReason is not ("maintenance_restart" or "orphaned_on_restart"))
+            || session.Status == "Stopped" && !DiscussionStatus.IsAutoResumableStop(session.StopReason))
             return "finished";
         if (session.Status == "Active" || session.QueueBlockedReason == "active_turn") return "running";
         if (session.Status == "Starting" || session.QueueBlockedReason == "session_starting") return "starting";

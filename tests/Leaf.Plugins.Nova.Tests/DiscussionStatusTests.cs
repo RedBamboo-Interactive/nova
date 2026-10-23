@@ -21,6 +21,8 @@ public sealed class DiscussionStatusTests
     [Theory]
     [InlineData("maintenance_restart")]
     [InlineData("orphaned_on_restart")]
+    [InlineData("idle_timeout")]
+    [InlineData("idle_ttl_expired")]
     public void Restart_recovery_projects_a_stopped_provider_as_resumable_idle(string stopReason)
     {
         Assert.Equal(DiscussionStatus.Idle,

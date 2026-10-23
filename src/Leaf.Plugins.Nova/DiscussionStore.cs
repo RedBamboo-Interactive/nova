@@ -23,6 +23,9 @@ public static class DiscussionStatus
 
     public static bool IsClosed(string status) => status is Archived or Archiving;
 
+    public static bool IsAutoResumableStop(string? stopReason)
+        => stopReason is "maintenance_restart" or "orphaned_on_restart" or "idle_timeout" or "idle_ttl_expired";
+
     public static string? FromSessionStatus(
         string? sessionStatus,
         string discussionType,
@@ -31,7 +34,7 @@ public static class DiscussionStatus
         {
             "Active" => Thinking,
             "Idle" or "Starting" => Idle,
-            "Stopped" when stopReason is "maintenance_restart" or "orphaned_on_restart" => Idle,
+            "Stopped" when IsAutoResumableStop(stopReason) => Idle,
             "Stopped" or "Error" => Stopped,
             _ => null,
         };

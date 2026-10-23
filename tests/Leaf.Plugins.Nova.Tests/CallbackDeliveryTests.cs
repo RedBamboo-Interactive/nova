@@ -121,6 +121,20 @@ public sealed class CallbackDeliveryTests
         Assert.Equal(3, f.TargetMessages.Count());
     }
 
+    [Fact]
+    public async Task IdleParkingIsPausedNotCompletedAndLaterCompletionStillDelivers()
+    {
+        using var f = new Fixture();
+        Assert.Equal(200, await f.Complete("prompt-one", "Stopped", "idle_timeout"));
+        Assert.Contains("parked after inactivity", f.TargetMessages.Single().Content);
+        Assert.Contains("resumes on the next message", f.LiveMessages.Single().Content);
+        Assert.DoesNotContain("completed", f.LiveMessages.Single().Content);
+
+        Assert.Equal(200, await f.Complete("prompt-one"));
+        Assert.Equal(2, f.TargetMessages.Count());
+        Assert.Contains(f.LiveMessages, message => message.Content.Contains("completed"));
+    }
+
     [Theory]
     [InlineData("Error", null, "failed")]
     [InlineData("Stopped", "user_stopped", "stopped")]
@@ -140,6 +154,7 @@ public sealed class CallbackDeliveryTests
     [InlineData(null, null, null, "ended")]
     [InlineData("failed", null, null, "failed")]
     [InlineData("completed", "prompt-one", "maintenance_restart", "paused")]
+    [InlineData("completed", "prompt-one", "idle_timeout", "paused")]
     public async Task EndedOnlyMeansCompletedWithExactPromptDeliveryEvidence(
         string? reason, string? deliveredUid, string? stopReason, string expected)
     {

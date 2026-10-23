@@ -189,6 +189,8 @@ public sealed class RedComputeClientTests
     [Theory]
     [InlineData("Stopped", "maintenance_restart", true)]
     [InlineData("Stopped", "orphaned_on_restart", true)]
+    [InlineData("Stopped", "idle_timeout", true)]
+    [InlineData("Stopped", "idle_ttl_expired", true)]
     [InlineData("Stopped", "process_exited", true)]
     [InlineData("Stopped", null, true)]
     [InlineData("Error", "provider_fault", true)]

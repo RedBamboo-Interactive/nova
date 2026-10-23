@@ -33,6 +33,8 @@ public sealed class DelegationActivityTests
     [Theory]
     [InlineData("maintenance_restart", "waiting_to_resume")]
     [InlineData("orphaned_on_restart", "waiting_to_resume")]
+    [InlineData("idle_timeout", "waiting_to_resume")]
+    [InlineData("idle_ttl_expired", "waiting_to_resume")]
     [InlineData("user_stopped", "finished")]
     public void AcceptedQueuedRecoveryDiffersFromExplicitStop(string reason, string expected)
         => Assert.Equal(expected, DelegationActivity.ProjectStatus(

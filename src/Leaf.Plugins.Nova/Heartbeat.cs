@@ -514,6 +514,7 @@ public sealed class HeartbeatService(
 
         return reason.Equals("maintenance_restart", StringComparison.OrdinalIgnoreCase)
             || reason.Equals("orphaned_on_restart", StringComparison.OrdinalIgnoreCase)
+            || reason.Equals("idle_timeout", StringComparison.OrdinalIgnoreCase)
             || reason.StartsWith("process_exited", StringComparison.OrdinalIgnoreCase)
             || reason.StartsWith("resume_failed", StringComparison.OrdinalIgnoreCase)
             || reason.Equals("idle_ttl_expired", StringComparison.OrdinalIgnoreCase)
