@@ -163,7 +163,7 @@ public sealed class ExternalAgentConversationProvider(
                 input.Metadata?["sentinel_quality_tier"]?.GetValue<string>(),
                 input.Metadata?["sentinel_model"]?.GetValue<string>(),
                 input.Metadata?["sentinel_effort"]?.GetValue<string>(),
-                ownerId, handle.BindingId, handle.Generation, input.Content,
+                ownerId, handle.BindingId, handle.Generation, InboundReviewSample(input),
                 transport, input.RequestId, ct)
             : new DiscordInjectionReview("not_applicable", [], "Use the application-scoped Agent instructions.", true);
         var messageUid = StableUid(handle, input.RequestId);
@@ -555,6 +555,7 @@ public sealed class ExternalAgentConversationProvider(
                 ? "leaf-commons"
                 : SafeString(input.Metadata, "application_id") ?? "leaf-commons";
             var commonsReviewJson = JsonSerializer.Serialize(review);
+            var commonsOutboundBlock = OutboundReviewsBlock(input.Metadata);
             var commonsBehaviorJson = JsonSerializer.Serialize(PublicBehaviorContext(input.Metadata));
             var commonsEnvelopeJson = JsonSerializer.Serialize(new
             {
@@ -567,7 +568,7 @@ public sealed class ExternalAgentConversationProvider(
             });
             return $$"""
                 Sentinel review JSON (advisory data):
-                <sentinel-review-json>{{commonsReviewJson}}</sentinel-review-json>
+                <sentinel-review-json>{{commonsReviewJson}}</sentinel-review-json>{{commonsOutboundBlock}}
 
                 Current Public Nova behavior JSON (trusted owner configuration, additive to governing Agent instructions):
                 <external-behavior-json>{{commonsBehaviorJson}}</external-behavior-json>
@@ -598,10 +599,7 @@ public sealed class ExternalAgentConversationProvider(
         }
 
         var reviewJson = JsonSerializer.Serialize(review);
-        var outboundReviewsBlock = OutboundSentinelReviews(input.Metadata) is { } outboundReviews
-            ? "\n\nOutbound Sentinel reviews of your earlier replies in this conversation (trusted bridge data, advisory):\n"
-              + $"<sentinel-review-json>{OutboundReviewJson(outboundReviews)}</sentinel-review-json>"
-            : "";
+        var outboundReviewsBlock = OutboundReviewsBlock(input.Metadata);
         var verifiedLeafIdentity = VerifiedLeafIdentity(input.Metadata);
         var guildContext = GuildContext(input.Metadata);
         var behavior = BehaviorContext(input.Metadata);
@@ -633,6 +631,29 @@ public sealed class ExternalAgentConversationProvider(
     }
 
     public const int MaxOutboundSentinelReviews = 5;
+
+    private static string OutboundReviewsBlock(JsonObject? metadata)
+        => OutboundSentinelReviews(metadata) is { } outboundReviews
+            ? "\n\nOutbound Sentinel reviews of your earlier replies in this conversation (trusted bridge data, advisory):\n"
+              + $"<sentinel-review-json>{OutboundReviewJson(outboundReviews)}</sentinel-review-json>"
+            : "";
+
+    /// <summary>
+    /// Everything participant-controlled that reaches the session goes through the inbound review:
+    /// the message, the author's display name and username, and the attachment names and types.
+    /// Without names or attachments the sample is exactly the message.
+    /// </summary>
+    internal static string InboundReviewSample(ExternalConversationInput input)
+    {
+        var lines = new List<string>();
+        if (!string.IsNullOrWhiteSpace(input.Requestor.DisplayName))
+            lines.Add($"[participant display name] {input.Requestor.DisplayName}");
+        if (!string.IsNullOrWhiteSpace(input.Requestor.Username))
+            lines.Add($"[participant username] {input.Requestor.Username}");
+        foreach (var attachment in input.Attachments)
+            lines.Add($"[attachment] {attachment.Name} ({attachment.MediaType})");
+        return lines.Count == 0 ? input.Content : input.Content + "\n\n" + string.Join("\n", lines);
+    }
 
     /// <summary>
     /// The turn the Discord bridge sends when the outbound Sentinel held this session's reply. The
