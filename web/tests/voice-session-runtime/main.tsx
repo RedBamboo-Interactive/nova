@@ -2,7 +2,7 @@ import React, { useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
 import type { MessageBlock } from "@redbamboo/chat"
 import { VoiceSessionPanel } from "../../src/components/voice-session-panel"
-import type { VoiceSessionPhase } from "../../src/hooks/use-voice-session"
+import { useVoiceSession, type VoiceSessionPhase } from "../../src/hooks/use-voice-session"
 import { useScreenWakeLock } from "../../src/hooks/use-screen-wake-lock"
 import "./shell-preflight.css"
 import "../../src/plugin.css"
@@ -140,4 +140,15 @@ function Fixture() {
   )
 }
 
-createRoot(document.getElementById("root")!).render(<Fixture />)
+function LifecycleFixture() {
+  const voice = useVoiceSession("lifecycle-fixture")
+  return (
+    <main>
+      <button type="button" onClick={voice.open}>Open voice</button>
+      <output data-testid="voice-phase">{voice.phase}</output>
+    </main>
+  )
+}
+
+const lifecycleFixture = new URLSearchParams(window.location.search).has("lifecycle")
+createRoot(document.getElementById("root")!).render(lifecycleFixture ? <LifecycleFixture /> : <Fixture />)

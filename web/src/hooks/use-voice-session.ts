@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { api } from "../lib/api"
 import { getSettings } from "../lib/settings-store"
 import { acquireVoiceInput, applyVoiceOutputDevice } from "../lib/voice-audio-devices"
+import { shouldCloseVoiceWhenHidden } from "../lib/voice-session-lifecycle"
 import { applyVoiceEvent, type VoiceCaptionState } from "./voice-session-events"
 import { useScreenWakeLock } from "./use-screen-wake-lock"
 
@@ -223,7 +224,7 @@ export function useVoiceSession(discussionId: string | null) {
   }, [discussionId, stop])
   useEffect(() => {
     const closeWhenBackgrounded = () => {
-      if (document.visibilityState === "hidden") void stop()
+      if (shouldCloseVoiceWhenHidden(document.visibilityState)) void stop()
     }
     const closeWhenPageLeaves = () => { void stop() }
     document.addEventListener("visibilitychange", closeWhenBackgrounded)
