@@ -11,25 +11,38 @@ interface AgentPickerProps {
   selectedId: string | null
   onSelect: (agentId: string | null) => void
   showAll?: boolean
+  /**
+   * Inside a `dock-header` container (a docked or wide inline header), the label collapses
+   * to icon + chevron when the header is too narrow for it (the full label stays as
+   * the accessible name and tooltip), and the trigger tightens at the narrowest
+   * widths. The thresholds belong to the Discussions header's layout.
+   */
+  collapsible?: boolean
 }
 
-export function AgentPicker({ agents, selectedId, onSelect, showAll = false }: AgentPickerProps) {
+export function AgentPicker({ agents, selectedId, onSelect, showAll = false, collapsible = false }: AgentPickerProps) {
   const selected = agents.find((a) => a.id === selectedId)
+  const label = selected ? selected.name : "All agents"
 
   if (agents.length <= 1 && !showAll) return null
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium text-text-muted hover:text-text hover:bg-overlay-5 transition-colors cursor-pointer">
+      <DropdownMenuTrigger
+        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium text-text-muted hover:text-text hover:bg-overlay-5 transition-colors cursor-pointer${collapsible ? " @min-[0px]/dock-header:whitespace-nowrap @min-[0px]/dock-header:shrink-0 @max-[201px]/dock-header:px-1.5" : ""}`}
+        aria-label={collapsible ? `Agent filter: ${label}` : undefined}
+        title={collapsible ? label : undefined}
+      >
         {selected ? (
           <>
             <AgentAvatar agent={selected} size={16} />
-            <span>{selected.name}</span>
+            {/* An agent name never takes more room than "All agents". */}
+            <span className={collapsible ? "@min-[0px]/dock-header:max-w-[58px] @min-[0px]/dock-header:truncate @max-[294px]/dock-header:hidden" : undefined}>{selected.name}</span>
           </>
         ) : (
           <>
             <i className="ph-bold ph-users text-[10px]" />
-            <span>All agents</span>
+            <span className={collapsible ? "@max-[294px]/dock-header:hidden" : undefined}>All agents</span>
           </>
         )}
         <i className="ph-bold ph-caret-down text-[8px] opacity-50" />

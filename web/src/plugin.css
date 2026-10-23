@@ -449,3 +449,12 @@
     mask-image: none;
   }
 }
+
+/* The Discussions header adapts to its own width through the dock-header container (see
+   ChatView). Docked, the dock's header slot is that container; inline it is the header
+   itself, from 768px only, so phones (tabs) and Floating Nova render exactly as before. */
+@media (width >= 48rem) {
+  .nova-discussions-header {
+    container: dock-header / inline-size;
+  }
+}

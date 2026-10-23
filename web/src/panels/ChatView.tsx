@@ -1069,20 +1069,38 @@ export function ChatView({
     </>
   )
 
+  // Where the dock exists (docked, or inline from 768px) nothing in this row ever wraps:
+  // the header adapts to the width it really has (the dock-header container: the dock's
+  // slot after the grip, or this header itself inline). Thresholds are the measured one-line widths, rounded up: with the agent
+  // label 293.1px, so the label shows from 294px; with "New" labelled 230.3px (231px);
+  // with both as icons 200.7px (201px), below which the actions tighten to 188.7px.
+  // Docked at the list minimum (240px) the header has 196px, so the title only
+  // truncates below the list minimum.
+  const sidebarTitle = (
+    <span className="text-[14px] font-medium text-contrast flex-1 @min-[0px]/dock-header:min-w-0 @min-[0px]/dock-header:truncate">
+      {archiveMode ? "Archives" : "Discussions"}
+    </span>
+  )
   const sidebarHeader = (
     <PanelHeader
-      title={archiveMode ? "Archives" : "Discussions"}
+      // The dock-header container exists only where the dock does (docked, the dock's
+      // slot; inline from 768px, this header). Phones (tabs) and Floating Nova have no
+      // container, so every rule gated on it is off and the header renders as before.
+      className="nova-discussions-header"
       leading={archiveMode ? (
-        <button
-          type="button"
-          onClick={handleExitArchiveMode}
-          aria-label="Back to discussions"
-          title="Back to discussions"
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
-        >
-          <i aria-hidden="true" className="ph-bold ph-arrow-left text-base" />
-        </button>
-      ) : undefined}
+        <>
+          <button
+            type="button"
+            onClick={handleExitArchiveMode}
+            aria-label="Back to discussions"
+            title="Back to discussions"
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
+          >
+            <i aria-hidden="true" className="ph-bold ph-arrow-left text-base" />
+          </button>
+          {sidebarTitle}
+        </>
+      ) : sidebarTitle}
     >
       {multiAgent && (
         <AgentPicker
@@ -1090,22 +1108,24 @@ export function ChatView({
           selectedId={agentFilter}
           onSelect={(id) => setSettings({ agentFilter: id })}
           showAll
+          collapsible
         />
       )}
       {!archiveMode && (
         <button
           type="button"
           onClick={openNewDiscussion}
-          className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10"
+          className="flex items-center gap-1 text-text-muted text-[12px] hover:text-contrast transition-colors px-2 py-1 rounded hover:bg-overlay-10 @min-[0px]/dock-header:shrink-0 @min-[0px]/dock-header:whitespace-nowrap @max-[201px]/dock-header:px-1.5"
           title={`New discussion (${floating ? "Alt+N" : "Ctrl+N"})`}
+          aria-label="New discussion"
         >
           <i className="ph-bold ph-plus text-xs" />
-          <span>New</span>
+          <span className="@max-[231px]/dock-header:hidden">New</span>
         </button>
       )}
       <DropdownMenu>
         <DropdownMenuTrigger
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50 @max-[201px]/dock-header:w-6"
           aria-label="More discussion options"
           title="More"
         >
