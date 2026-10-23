@@ -56,8 +56,8 @@ test("Nova is a protected, versioned backend-plus-frontend extension", () => {
   assert.equal(manifest.frontend.package, "@redbamboo/plugin-nova")
   assert.equal(packageJson.version, manifest.version)
   assert.equal(input.classification, "protected")
-  assert.equal(input.toolchain.node, "22.23.1")
-  assert.equal(packageJson.engines.node, "22.23.1")
+  assert.equal(input.toolchain.node, "22.23.4")
+  assert.equal(packageJson.engines.node, "22.23.4")
   assert.deepEqual(input.dependencies, [
     { id: "redleaf", versionRange: ">=0.1.25 <0.2.0" },
   ])
@@ -172,7 +172,7 @@ test("workflow uses immutable action SHAs and one channel-neutral RedLeaf ingest
   assert.match(workflow, /repository: RedBamboo-Interactive\/nova/)
   assert.match(workflow, /repository: RedBamboo-Interactive\/redleaf/)
   assert.match(workflow, /repository: RedBamboo-Interactive\/redbamboo-packages/)
-  assert.match(workflow, /node-version: 22\.23\.1/)
+  assert.match(workflow, /node-version: 22\.23\.4/)
   assert.match(workflow, /PSVersionTable\.PSVersion\.Major -ne 7/)
   assert.match(workflow, /corepack pnpm install --frozen-lockfile/g)
   const releaseToolRestore = workflow.indexOf("dotnet restore tools/RedLeaf.ReleaseTool/RedLeaf.ReleaseTool.csproj --locked-mode --nologo")
