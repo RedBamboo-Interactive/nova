@@ -167,6 +167,16 @@ public sealed class ExternalAgentConversationProvider(
                 transport, input.RequestId, ct)
             : new DiscordInjectionReview("not_applicable", [], "Use the application-scoped Agent instructions.", true);
         var messageUid = StableUid(handle, input.RequestId);
+        // Fail closed (Laurent, 2026-10-23): bridge content without a Sentinel verdict never
+        // reaches the session. The transport keeps the message and may retry it later.
+        if (outboundNotice is null && RequiresSentinelReview(transport) && !review.Available)
+        {
+            logger.LogWarning(
+                "Refused {Transport} message {RequestId} for {BindingId}: the Sentinel review is unavailable",
+                transport, input.RequestId, handle.BindingId);
+            return new ExternalConversationAdmission(
+                messageUid, ExternalConversationDispositions.RefusedSentinelUnavailable);
+        }
         var content = outboundNotice is not null
             ? BuildOutboundSentinelNotice(outboundNotice)
             : BuildSessionInput(handle, input, review, transport);
