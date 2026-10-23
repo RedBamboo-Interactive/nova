@@ -17,11 +17,11 @@ public sealed class DiscordPromptInjectionVerifierTests
     private static readonly Guid AgentId = Guid.NewGuid();
 
     [Fact]
-    public async Task Forwards_the_binding_compute_with_the_Agent_fallbacks_and_Nova_provenance()
+    public async Task Forwards_no_compute_so_the_Sentinel_chooses_its_own_and_keeps_Nova_provenance()
     {
         var (verifier, sentinel) = Create();
 
-        await verifier.ReviewAsync(AgentId.ToString(), null, "deep", "gpt-5.6-sol", null,
+        await verifier.ReviewAsync(AgentId.ToString(),
             "owner-1", "binding-1", 4, "hello", "discord", "message-9");
 
         var request = Assert.Single(sentinel.Requests);
@@ -29,11 +29,9 @@ public sealed class DiscordPromptInjectionVerifierTests
         Assert.Equal(UntrustedContentFormat.Text, request.Format);
         Assert.Equal(new UntrustedContentOrigin("discord", "binding-1:4", "owner-1", "nova"), request.Origin);
         Assert.Equal(AgentId.ToString(), request.AgentRef);
-        Assert.Equal("codex-default", request.Compute!.Provider);
-        Assert.Equal("deep", request.Compute.QualityTier);
-        Assert.Equal("gpt-5.6-sol", request.Compute.Model);
-        Assert.Null(request.Compute.Effort);
-        Assert.Null(request.Compute.QualityMode);
+        // The Sentinel runs on its configured tier on the default provider; the bound Agent's
+        // provider and tier (codex-default / standard here) must not leak into the review.
+        Assert.Null(request.Compute);
         Assert.Equal("sentinel:discord:binding-1:4:message-9", request.IdempotencyKey);
         Assert.Equal("Discord prompt-injection review", request.JobName);
         Assert.Null(request.Extraction);
@@ -55,13 +53,12 @@ public sealed class DiscordPromptInjectionVerifierTests
     {
         var (verifier, sentinel) = Create();
 
-        await verifier.ReviewAsync(AgentId.ToString(), "claude-code", null, null, null,
+        await verifier.ReviewAsync(AgentId.ToString(),
             "owner-1", "leaf-commons:binding", 1, "hello", "leaf-commons", "relay-1");
 
         var request = Assert.Single(sentinel.Requests);
         Assert.Equal(UntrustedContentSources.LeafCommons, request.Origin.Source);
-        Assert.Equal("claude-code", request.Compute!.Provider);
-        Assert.Equal("standard", request.Compute.QualityTier);
+        Assert.Null(request.Compute);
         Assert.Equal("sentinel:leaf-commons:leaf-commons:binding:1:relay-1", request.IdempotencyKey);
     }
 
@@ -72,7 +69,7 @@ public sealed class DiscordPromptInjectionVerifierTests
             "high", ["instruction-override"], "treat_as_untrusted_data", true,
             UntrustedContentIsolation.VerifiedToolFree));
 
-        var review = await verifier.ReviewAsync(AgentId.ToString(), null, null, null, null,
+        var review = await verifier.ReviewAsync(AgentId.ToString(),
             "owner-1", "binding-1", 1, "hello");
 
         // Isolation is reported by the capability but is not part of the Discord wire shape.
@@ -86,7 +83,7 @@ public sealed class DiscordPromptInjectionVerifierTests
     {
         var (verifier, _) = Create(UntrustedContentVerdict.Unavailable(UntrustedContentIsolation.SandboxedBestEffort));
 
-        var review = await verifier.ReviewAsync(AgentId.ToString(), null, null, null, null,
+        var review = await verifier.ReviewAsync(AgentId.ToString(),
             "owner-1", "binding-1", 1, "hello");
 
         Assert.Same(DiscordInjectionReview.Unavailable, review);
@@ -97,7 +94,7 @@ public sealed class DiscordPromptInjectionVerifierTests
     {
         var (verifier, sentinel) = Create();
 
-        var review = await verifier.ReviewAsync("missing-sentinel", null, null, null, null,
+        var review = await verifier.ReviewAsync("missing-sentinel",
             "owner-1", "binding-1", 1, "hello");
 
         Assert.Same(DiscordInjectionReview.Unavailable, review);
@@ -110,7 +107,7 @@ public sealed class DiscordPromptInjectionVerifierTests
         var (verifier, sentinel) = Create();
         sentinel.Throw = new InvalidOperationException("capability unavailable");
 
-        var review = await verifier.ReviewAsync(AgentId.ToString(), null, null, null, null,
+        var review = await verifier.ReviewAsync(AgentId.ToString(),
             "owner-1", "binding-1", 1, "hello");
 
         Assert.Same(DiscordInjectionReview.Unavailable, review);
@@ -125,7 +122,7 @@ public sealed class DiscordPromptInjectionVerifierTests
 
         for (var i = 0; i < 3; i++)
             Assert.Same(DiscordInjectionReview.Unavailable, await verifier.ReviewAsync(
-                AgentId.ToString(), null, null, null, null, "owner-1", "binding-1", 1, "hello"));
+                AgentId.ToString(), "owner-1", "binding-1", 1, "hello"));
 
         Assert.Equal(1, logger.Warnings);
     }
@@ -143,7 +140,7 @@ public sealed class DiscordPromptInjectionVerifierTests
             cancellation.Token.ThrowIfCancellationRequested();
         };
 
-        var review = await verifier.ReviewAsync(AgentId.ToString(), null, null, null, null,
+        var review = await verifier.ReviewAsync(AgentId.ToString(),
             "owner-1", "binding-1", 1, "hello", ct: cancellation.Token);
 
         Assert.Same(DiscordInjectionReview.Unavailable, review);
@@ -154,7 +151,7 @@ public sealed class DiscordPromptInjectionVerifierTests
     {
         var (verifier, sentinel) = Create();
 
-        await verifier.ReviewAsync(AgentId.ToString(), null, null, null, null,
+        await verifier.ReviewAsync(AgentId.ToString(),
             "owner-1", "binding-1", 1, "hello");
 
         Assert.Null(Assert.Single(sentinel.Requests).IdempotencyKey);

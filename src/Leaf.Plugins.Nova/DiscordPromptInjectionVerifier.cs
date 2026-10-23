@@ -16,8 +16,8 @@ public sealed record DiscordInjectionReview(
 /// <summary>
 /// Nova's adapter onto the shared Sentinel (<see cref="IUntrustedContentReview"/>, provided by
 /// cap-sentinel). It keeps the Discord and Leaf Commons review semantics Nova has always had:
-/// the binding's Sentinel Agent, its per-binding compute with the Agent's provider and tier as
-/// fallbacks, Nova's review provenance, and the four-field <see cref="DiscordInjectionReview"/>
+/// the binding's Agent (which only names the reviewer; the Sentinel chooses its own compute),
+/// Nova's review provenance, and the four-field <see cref="DiscordInjectionReview"/>
 /// whose JSON shape leaf-discord's projection parses. The capability's isolation report is
 /// logged here; it is not part of that wire shape.
 /// <para>
@@ -36,10 +36,6 @@ public sealed class DiscordPromptInjectionVerifier(
 
     public async Task<DiscordInjectionReview> ReviewAsync(
         string agentReference,
-        string? provider,
-        string? qualityTier,
-        string? model,
-        string? effort,
         string ownerUserId,
         string bindingId,
         long generation,
@@ -79,13 +75,8 @@ public sealed class DiscordPromptInjectionVerifier(
                 Content = content,
                 Origin = new UntrustedContentOrigin(
                     source, $"{bindingId}:{generation}", ownerUserId, NovaAppPlugin.PluginId),
-                Compute = new UntrustedContentCompute
-                {
-                    Provider = provider ?? agent.Provider,
-                    QualityTier = qualityTier ?? agent.QualityTier,
-                    Model = model,
-                    Effort = effort,
-                },
+                // No compute: the Sentinel always runs on its configured tier (fast by default) on
+                // the installation's default provider. The Agent only names the reviewer.
                 AgentRef = agent.Id,
                 IdempotencyKey = string.IsNullOrWhiteSpace(requestId)
                     ? null

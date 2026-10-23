@@ -159,10 +159,6 @@ public sealed class ExternalAgentConversationProvider(
             : RequiresSentinelReview(transport)
             ? await verifier.ReviewAsync(
                 sentinelAgentId,
-                input.Metadata?["sentinel_provider"]?.GetValue<string>(),
-                input.Metadata?["sentinel_quality_tier"]?.GetValue<string>(),
-                input.Metadata?["sentinel_model"]?.GetValue<string>(),
-                input.Metadata?["sentinel_effort"]?.GetValue<string>(),
                 ownerId, handle.BindingId, handle.Generation, InboundReviewSample(input),
                 transport, input.RequestId, ct)
             : new DiscordInjectionReview("not_applicable", [], "Use the application-scoped Agent instructions.", true);
