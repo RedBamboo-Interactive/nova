@@ -12,6 +12,7 @@ import { isDiscussionUnread } from "../../lib/discussion-unread"
 import { discussionActivityIndicator } from "../../lib/delegation-activity"
 import { DiscussionActionItems } from "./discussion-actions-menu"
 import { formatOwningApp } from "../../lib/discussion-owner"
+import { createDiscussionTitleResolver } from "../../lib/discussion-display-title"
 
 /** Row actions that act through the open discussion's header, so they open it first. */
 export type DiscussionRowAction = "voice" | "info" | "rename" | "share"
@@ -112,6 +113,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
     }
     return { live, chat }
   }, [discussions])
+  const titleOf = useMemo(() => createDiscussionTitleResolver(discussions), [discussions])
 
   const renderLiveItem = useCallback((discussion: DiscussionInfo) => {
     const unread = isDiscussionUnread(discussion)
@@ -222,7 +224,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         ].filter(Boolean).join(" ")}
         title={
           <>
-            {discussion.title || "New discussion"}
+            {titleOf(discussion) || "New discussion"}
             {discussion.confidential && <i className="ph-bold ph-lock-simple text-[10px] text-text-muted ml-1.5 opacity-60" />}
           </>
         }
@@ -267,7 +269,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
       </div>
     )
-  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent, delegationActivity, backgroundTasks])
+  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent, delegationActivity, backgroundTasks, titleOf])
 
   const renderArchivedItem = useCallback((discussion: DiscussionInfo) => {
     const item = discussion as ArchiveDiscussionItem
@@ -293,7 +295,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           title={
             <>
               {discussion.type === "live" && <i className="ph-bold ph-broadcast mr-1.5 text-[10px] text-status-live" />}
-              {discussion.title || "Untitled discussion"}
+              {titleOf(discussion) || "Untitled discussion"}
               {discussion.confidential && <i className="ph-bold ph-lock-simple ml-1.5 text-[10px] text-text-muted opacity-60" />}
             </>
           }
@@ -303,7 +305,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         />
       </div>
     )
-  }, [activeDiscussionId, getAgent, multiAgent, onSelect])
+  }, [activeDiscussionId, getAgent, multiAgent, onSelect, titleOf])
 
   if (archiveMode) {
     return (

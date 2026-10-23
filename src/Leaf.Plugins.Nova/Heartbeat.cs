@@ -815,16 +815,17 @@ public sealed class HeartbeatService(
             .ToList();
 
         var lines = new List<string>();
+        var title = DiscussionDisplayTitle.Resolver(all.Select(DiscussionDisplayTitle.Of));
         var live = all.FirstOrDefault(d => d.Type == "live");
         if (live != null)
-            lines.Add($"LIVE discussion: {live.Id} (\"{live.Title ?? "Live"}\")");
+            lines.Add($"LIVE discussion: {live.Id} (\"{title(DiscussionDisplayTitle.Of(live))}\")");
 
         foreach (var d in all)
         {
             var age = now.UtcDateTime - d.LastActivity;
             var ageText = age.TotalMinutes < 60 ? $"{(int)age.TotalMinutes}m ago" : $"{(int)age.TotalHours}h ago";
             var changed = lastTick != null && d.LastActivity > lastTick.Value.UtcDateTime ? " [CHANGED since last tick]" : "";
-            lines.Add($"- [{d.Type}] \"{d.Title ?? "untitled"}\" ({d.Id}) status={d.Status}, {d.MessageCount} msgs, last activity {ageText}{changed}");
+            lines.Add($"- [{d.Type}] \"{title(DiscussionDisplayTitle.Of(d)) ?? "untitled"}\" ({d.Id}) status={d.Status}, {d.MessageCount} msgs, last activity {ageText}{changed}");
         }
 
         var newestActivity = all.Count > 0 ? all.Max(d => d.LastActivity) : (DateTime?)null;

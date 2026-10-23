@@ -37,9 +37,10 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         sb.AppendLine($"Exported: {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC — {discussionsToExport.Count} discussion(s)");
         sb.AppendLine();
 
+        var title = DiscussionDisplayTitle.Resolver(discussionsToExport.Select(DiscussionDisplayTitle.Of));
         foreach (var disc in discussionsToExport)
         {
-            await AppendDiscussionAsync(sb, disc, ct);
+            await AppendDiscussionAsync(sb, disc, title(DiscussionDisplayTitle.Of(disc)), ct);
             sb.AppendLine("---");
             sb.AppendLine();
         }
@@ -50,12 +51,13 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
     public async Task<string> ExportSingleAsync(DiscussionRead disc, CancellationToken ct = default)
     {
         var sb = new StringBuilder();
-        await AppendDiscussionAsync(sb, disc, ct);
+        await AppendDiscussionAsync(sb, disc, DiscussionDisplayTitle.For(disc), ct);
         return sb.ToString();
     }
 
-    private async Task AppendDiscussionAsync(StringBuilder sb, DiscussionRead disc, CancellationToken ct)
+    private async Task AppendDiscussionAsync(StringBuilder sb, DiscussionRead disc, string? title, CancellationToken ct)
     {
+        var heading = $"## {title ?? "Untitled"} [{disc.Id}]";
         var snapshot = disc.SessionId is not null
             ? await redCompute.GetSessionAsync(disc.SessionId, ct)
             : null;
@@ -66,12 +68,12 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
             .ToList();
 
         if (snapshot is { Messages.Count: > 0 })
-            AppendSessionExport(sb, disc, snapshot.Messages, records, localEvents);
+            AppendSessionExport(sb, disc, heading, snapshot.Messages, records, localEvents);
         else
-            AppendLocalExport(sb, disc, records);
+            AppendLocalExport(sb, disc, heading, records);
     }
 
-    private static void AppendSessionExport(StringBuilder sb, DiscussionRead disc,
+    private static void AppendSessionExport(StringBuilder sb, DiscussionRead disc, string heading,
         List<SessionMessage> raw, IReadOnlyList<DiscussionMessage> records,
         List<DiscussionMessage> localEvents)
     {
@@ -125,7 +127,7 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
             ? $"{visibleMessageCount} message(s), {eventEntries.Count} event(s)"
             : $"{visibleMessageCount} message(s)";
 
-        sb.AppendLine($"## {disc.Title ?? "Untitled"} [{disc.Id}]");
+        sb.AppendLine(heading);
         sb.AppendLine($"Created: {disc.CreatedAt:yyyy-MM-dd HH:mm} — {countLabel}");
         sb.AppendLine();
 
@@ -153,12 +155,12 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         }
     }
 
-    private static void AppendLocalExport(StringBuilder sb, DiscussionRead disc, IReadOnlyList<DiscussionMessage> messages)
+    private static void AppendLocalExport(StringBuilder sb, DiscussionRead disc, string heading, IReadOnlyList<DiscussionMessage> messages)
     {
         messages = messages
             .Where(message => message.Metadata["source"]?.GetValue<string>() != "queued-user-message")
             .ToArray();
-        sb.AppendLine($"## {disc.Title ?? "Untitled"} [{disc.Id}]");
+        sb.AppendLine(heading);
         sb.AppendLine($"Created: {disc.CreatedAt:yyyy-MM-dd HH:mm} — {messages.Count} message(s) [persisted records only, session expired]");
         sb.AppendLine();
 

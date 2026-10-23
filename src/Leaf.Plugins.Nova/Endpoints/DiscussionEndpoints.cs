@@ -398,12 +398,17 @@ public static class DiscussionEndpoints
                     merged[disc.Id] = (disc, g.HitCount, g.Hits.ToList());
             }
 
+            var displayTitle = DiscussionDisplayTitle.Resolver(
+                merged.Values.Select(m => DiscussionDisplayTitle.Of(m.Discussion)));
             var results = merged.Values
                 .Take(limit)
                 .Select(m => new
                 {
                     discussionId = m.Discussion.Id,
                     title = m.Discussion.Title,
+                    // Agent-facing name: untitled LIVEs read "Live · <UTC start date>".
+                    // The browser derives its own in the viewer's locale.
+                    displayTitle = displayTitle(DiscussionDisplayTitle.Of(m.Discussion)),
                     status = m.Discussion.Status,
                     lastActivity = m.Discussion.LastActivity,
                     matchCount = m.MatchCount,

@@ -78,6 +78,13 @@ public sealed class ContextSnapshot
 
         [JsonPropertyName("type")]
         public string Type { get; set; } = "chat";
+
+        /// <summary>Start time; names an untitled LIVE. Null in snapshots persisted before it existed.</summary>
+        [JsonPropertyName("createdAt")]
+        public DateTime? CreatedAt { get; set; }
+
+        [JsonPropertyName("agentId")]
+        public string? AgentId { get; set; }
     }
 }
 
@@ -130,6 +137,8 @@ public static class NovaContextBuilder
             Status = d.Status,
             LastActivity = d.LastActivity,
             Type = d.Type,
+            CreatedAt = d.CreatedAt,
+            AgentId = d.AgentId,
         };
     }
 
@@ -148,6 +157,7 @@ public static class NovaContextBuilder
 
         var active = snapshot.Discussions.Where(d => !DiscussionStatus.IsClosed(d.Status)).ToList();
         var archived = snapshot.Discussions.Where(d => DiscussionStatus.IsClosed(d.Status) && d.MessageCount > 0).ToList();
+        var title = TitleResolver(snapshot.Discussions);
 
         if (active.Count > 0)
         {
@@ -156,7 +166,7 @@ public static class NovaContextBuilder
             {
                 var marker = d.Id == currentId ? " <- you are here" : "";
                 var liveTag = d.Type == "live" ? "[LIVE]" : "";
-                sb.Append($"\n- {liveTag}[{d.Id}] \"{d.Title ?? "(untitled)"}\" . {d.MessageCount} msgs . {FormatRelativeTime(now - d.LastActivity)}{marker}");
+                sb.Append($"\n- {liveTag}[{d.Id}] \"{title(d)}\" . {d.MessageCount} msgs . {FormatRelativeTime(now - d.LastActivity)}{marker}");
             }
         }
 
@@ -164,14 +174,15 @@ public static class NovaContextBuilder
         {
             sb.Append("\n\nRecently archived:");
             foreach (var d in archived)
-                sb.Append($"\n- [{d.Id}] \"{d.Title ?? "(untitled)"}\" . {d.MessageCount} msgs . archived {FormatRelativeTime(now - d.LastActivity)}");
+                sb.Append($"\n- [{d.Id}] \"{title(d)}\" . {d.MessageCount} msgs . archived {FormatRelativeTime(now - d.LastActivity)}");
         }
 
         if (snapshot.OtherAgentDiscussions.Count > 0)
         {
             sb.Append("\n\nOther agents' active discussions:");
+            var otherTitle = TitleResolver(snapshot.OtherAgentDiscussions);
             foreach (var d in snapshot.OtherAgentDiscussions)
-                sb.Append($"\n- [{d.Id}] \"{d.Title ?? "(untitled)"}\" . {d.MessageCount} msgs . {FormatRelativeTime(now - d.LastActivity)}");
+                sb.Append($"\n- [{d.Id}] \"{otherTitle(d)}\" . {d.MessageCount} msgs . {FormatRelativeTime(now - d.LastActivity)}");
         }
 
         sb.Append($"\n\nRecall any discussion: curl -s {ApiBase}/discussions/{{id}}/export");
@@ -218,17 +229,19 @@ public static class NovaContextBuilder
         var currIds = current.Discussions.Select(d => d.Id).ToHashSet();
         var prevMap = previous.Discussions.ToDictionary(d => d.Id);
         var currMap = current.Discussions.ToDictionary(d => d.Id);
+        var currTitle = TitleResolver(current.Discussions);
+        var prevTitle = TitleResolver(previous.Discussions);
 
         foreach (var id in currIds.Except(prevIds))
         {
             var d = currMap[id];
-            changes.Add($"New discussion [{d.Id}] \"{d.Title ?? "(untitled)"}\" ({d.Status})");
+            changes.Add($"New discussion [{d.Id}] \"{currTitle(d)}\" ({d.Status})");
         }
 
         foreach (var id in prevIds.Except(currIds))
         {
             var d = prevMap[id];
-            changes.Add($"Discussion [{d.Id}] \"{d.Title ?? "(untitled)"}\" no longer visible");
+            changes.Add($"Discussion [{d.Id}] \"{prevTitle(d)}\" no longer visible");
         }
 
         foreach (var id in currIds.Intersect(prevIds))
@@ -237,11 +250,11 @@ public static class NovaContextBuilder
             var curr = currMap[id];
 
             if (prev.Status != curr.Status)
-                changes.Add($"Discussion [{id}] \"{curr.Title ?? "(untitled)"}\" changed status: {prev.Status} -> {curr.Status}");
+                changes.Add($"Discussion [{id}] \"{currTitle(curr)}\" changed status: {prev.Status} -> {curr.Status}");
 
             var newMsgs = curr.MessageCount - prev.MessageCount;
             if (newMsgs > 0)
-                changes.Add($"{newMsgs} new message{(newMsgs > 1 ? "s" : "")} in [{id}] \"{curr.Title ?? "(untitled)"}\"");
+                changes.Add($"{newMsgs} new message{(newMsgs > 1 ? "s" : "")} in [{id}] \"{currTitle(curr)}\"");
 
             if (prev.Title != curr.Title && curr.Title != null)
                 changes.Add($"Discussion [{id}] renamed to \"{curr.Title}\"");
@@ -251,17 +264,19 @@ public static class NovaContextBuilder
         var currOther = current.OtherAgentDiscussions.Select(d => d.Id).ToHashSet();
         var prevOtherMap = previous.OtherAgentDiscussions.ToDictionary(d => d.Id);
         var currOtherMap = current.OtherAgentDiscussions.ToDictionary(d => d.Id);
+        var currOtherTitle = TitleResolver(current.OtherAgentDiscussions);
+        var prevOtherTitle = TitleResolver(previous.OtherAgentDiscussions);
 
         foreach (var id in currOther.Except(prevOther))
         {
             var d = currOtherMap[id];
-            changes.Add($"New discussion from another agent: [{d.Id}] \"{d.Title ?? "(untitled)"}\"");
+            changes.Add($"New discussion from another agent: [{d.Id}] \"{currOtherTitle(d)}\"");
         }
 
         foreach (var id in prevOther.Except(currOther))
         {
             var d = prevOtherMap[id];
-            changes.Add($"Other agent discussion [{d.Id}] \"{d.Title ?? "(untitled)"}\" no longer active");
+            changes.Add($"Other agent discussion [{d.Id}] \"{prevOtherTitle(d)}\" no longer active");
         }
 
         if (current.Outfit != previous.Outfit)
@@ -371,5 +386,12 @@ public static class NovaContextBuilder
         if (elapsed.TotalMinutes < 60) return $"{(int)elapsed.TotalMinutes}min ago";
         if (elapsed.TotalHours < 24) return $"{(int)elapsed.TotalHours}h ago";
         return $"{(int)elapsed.TotalDays}d ago";
+    }
+
+    private static Func<ContextSnapshot.DiscussionEntry, string> TitleResolver(
+        IEnumerable<ContextSnapshot.DiscussionEntry> peers)
+    {
+        var resolve = DiscussionDisplayTitle.Resolver(peers.Select(DiscussionDisplayTitle.Of));
+        return d => resolve(DiscussionDisplayTitle.Of(d)) ?? "(untitled)";
     }
 }

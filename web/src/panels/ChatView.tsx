@@ -24,6 +24,7 @@ import { setSettings } from "../lib/settings-store"
 import { api, novaExecution } from "../lib/api"
 import { findLiveHeartbeatPair } from "../lib/live-heartbeat"
 import { getAdjacentSidebarDiscussion, getSidebarDiscussionOrder } from "../lib/discussion-navigation"
+import { createDiscussionTitleResolver } from "../lib/discussion-display-title"
 import {
   FLOATING_NOVA_NAVIGATION_EVENT,
   FLOATING_NOVA_SHORTCUT_LIST,
@@ -245,13 +246,19 @@ export function ChatView({
     }
   }, [requestedDiscussionId, pendingDiscussionId, synchronizedDiscussionId, activeDiscussionId, selectDiscussion, clearDiscussionSelection])
 
+  // Same-day Lives are told apart against every discussion this view has loaded.
+  const activeDisplayTitle = useMemo(() => activeDiscussion
+    ? createDiscussionTitleResolver([...discussions, ...archivedDiscussions])(activeDiscussion)
+    : null, [activeDiscussion, discussions, archivedDiscussions])
+  const discussionClosed = activeDiscussion?.status === "archived" || activeDiscussion?.status === "archiving"
+
   useBreadcrumbLabel(
     !floating && urlDiscussionId ? `/apps/nova/chat/${urlDiscussionId}` : undefined,
-    activeDiscussion?.type === "live"
+    activeDiscussion?.type === "live" && !discussionClosed
       ? "Live"
       : activeDiscussion?.type === "heartbeat"
         ? "Heartbeat"
-        : activeDiscussion?.title || "New Discussion",
+        : activeDisplayTitle || "New Discussion",
   )
 
   const { agents, getAgent, refreshAgents } = useAgents()
@@ -335,7 +342,9 @@ export function ChatView({
     () => { void openLocalFile(filePath, opts) }
   ), [openLocalFile])
 
-  const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming, activeDiscussion)
+  const sessionStatsDiscussion = useMemo(() => activeDiscussion && { ...activeDiscussion, title: activeDisplayTitle },
+    [activeDiscussion, activeDisplayTitle])
+  const sessionStats = useSessionStats(activeDiscussion?.sessionId, isStreaming, sessionStatsDiscussion)
   const loadProviderUsage = useCallback((provider: string, forceRefresh = false) =>
     api.get<ProviderUsageSnapshot>(
       `/ai-session/providers/${encodeURIComponent(provider)}/usage${forceRefresh ? "?refresh=true" : ""}`,
@@ -753,7 +762,6 @@ export function ChatView({
 
   // Sidebar row actions that drive the open discussion's header (rename, Info,
   // share) open that discussion first and run once it is the active one.
-  const discussionClosed = activeDiscussion?.status === "archived" || activeDiscussion?.status === "archiving"
   // Another app owns this discussion (a Storyboard campaign Agent thread): Nova shows
   // its transcript but never writes to it or sends into its session.
   const owningApp = activeDiscussion?.ownedBy ? formatOwningApp(activeDiscussion.ownedBy.app) : null
@@ -916,10 +924,10 @@ export function ChatView({
     <PanelHeader
       leading={
         liveHeartbeatTabs ? <div className="flex flex-1 min-w-0 self-stretch">{liveHeartbeatTabs}</div> : discussionClosed || owningApp ? (
-          <span className="truncate text-sm font-medium text-contrast">{activeDiscussion.title || "Untitled discussion"}</span>
+          <span className="truncate text-sm font-medium text-contrast">{activeDisplayTitle || (activeDiscussion.type === "heartbeat" ? "Heartbeat" : "Untitled discussion")}</span>
         ) : (
           <EditableTitle
-            title={activeDiscussion.title || "New discussion"}
+            title={activeDisplayTitle || "New discussion"}
             onRename={(title) => renameDiscussion(activeDiscussion.id, title)}
             editing={titleEditing}
             onEditingChange={setTitleEditing}

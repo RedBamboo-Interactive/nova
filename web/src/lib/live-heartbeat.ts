@@ -14,10 +14,14 @@ export function findLiveHeartbeatPair(
     return null
   }
 
+  const isOpen = (discussion: DiscussionInfo) =>
+    discussion.status !== "archived" && discussion.status !== "archiving"
+  // An archived Live or Heartbeat is a past day, not the current pair: it
+  // keeps its own titled header instead of the switcher.
+  if (!isOpen(activeDiscussion)) return null
+
   const isCurrentForAgent = (discussion: DiscussionInfo) =>
-    discussion.agentId === activeDiscussion.agentId
-    && discussion.status !== "archived"
-    && discussion.status !== "archiving"
+    discussion.agentId === activeDiscussion.agentId && isOpen(discussion)
 
   const live = discussions.find((discussion) => discussion.type === "live" && isCurrentForAgent(discussion))
   const heartbeat = discussions.find((discussion) => discussion.type === "heartbeat" && isCurrentForAgent(discussion))

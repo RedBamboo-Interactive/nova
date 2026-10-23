@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import { ModalBase, ModalHeader, Input } from "@redbamboo/ui"
 import { api } from "../../lib/api"
+import { createDiscussionTitleResolver } from "../../lib/discussion-display-title"
+import type { DiscussionInfo } from "../../lib/types"
 
 interface SearchSnippet {
   role: string
@@ -15,6 +17,7 @@ interface SearchResult {
   lastActivity?: string | null
   matchCount: number
   snippets: SearchSnippet[]
+  discussion?: DiscussionInfo
 }
 
 interface Props {
@@ -27,6 +30,9 @@ export function SearchOverlay({ onClose, onNavigate }: Props) {
   const [results, setResults] = useState<SearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const titleOf = useMemo(() => createDiscussionTitleResolver(
+    results.flatMap(r => r.discussion ? [r.discussion] : []),
+  ), [results])
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -77,7 +83,7 @@ export function SearchOverlay({ onClose, onNavigate }: Props) {
               className="w-full text-left px-3 py-2 rounded hover:bg-overlay-10 transition-colors"
             >
               <div className="flex items-center gap-2">
-                <span className="text-sm text-contrast truncate">{r.title || "Untitled"}</span>
+                <span className="text-sm text-contrast truncate">{(r.discussion ? titleOf(r.discussion) : r.title) || "Untitled"}</span>
                 <span className="text-[10px] text-text-muted shrink-0">
                   {r.matchCount} match{r.matchCount === 1 ? "" : "es"}
                 </span>
