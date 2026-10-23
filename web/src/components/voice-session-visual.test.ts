@@ -11,6 +11,8 @@ const connected = {
 }
 
 test("voice visual state follows conversational activity", () => {
+  assert.equal(resolveVoiceSessionVisualState({ ...connected, phase: "ready" }), "ready")
+  assert.equal(voiceSessionStatusLabel("ready"), "Ready to call")
   assert.equal(resolveVoiceSessionVisualState(connected), "listening")
   assert.equal(resolveVoiceSessionVisualState({ ...connected, userActive: true }), "listening")
   assert.equal(resolveVoiceSessionVisualState({ ...connected, assistantActive: true }), "speaking")

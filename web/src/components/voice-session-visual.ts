@@ -1,6 +1,7 @@
 import type { VoiceSessionPhase } from "../hooks/use-voice-session"
 
 export type VoiceSessionVisualState =
+  | "ready"
   | "connecting"
   | "listening"
   | "speaking"
@@ -25,6 +26,7 @@ export function resolveVoiceSessionVisualState({
   assistantActive,
   userActive,
 }: VoiceSessionVisualInput): VoiceSessionVisualState {
+  if (phase === "ready" || phase === "idle") return "ready"
   if (phase === "closing" || phase === "closed") return "ending"
   if (phase === "error") return "error"
   if (phase === "degraded") return "interrupted"
@@ -38,6 +40,7 @@ export function resolveVoiceSessionVisualState({
 
 export function voiceSessionStatusLabel(state: VoiceSessionVisualState): string {
   switch (state) {
+    case "ready": return "Ready to call"
     case "connecting": return "Connecting"
     case "listening": return "Listening"
     case "speaking": return "Speaking"

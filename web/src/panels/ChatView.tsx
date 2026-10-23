@@ -766,8 +766,8 @@ export function ChatView({
   // its transcript but never writes to it or sends into its session.
   const owningApp = activeDiscussion?.ownedBy ? formatOwningApp(activeDiscussion.ownedBy.app) : null
   const voiceAvailable = !!activeDiscussion && !discussionClosed && !owningApp && activeDiscussion.status !== "stopped"
-    && voiceSession.phase !== "starting" && voiceSession.phase !== "connected"
-  const startVoice = useCallback(() => { void voiceSession.start() }, [voiceSession])
+    && (voiceSession.phase === "idle" || voiceSession.phase === "closed")
+  const openVoice = useCallback(() => { voiceSession.open() }, [voiceSession])
   const openSessionInfo = useCallback(() => {
     void refreshDelegationActivity(true)
     setSessionInfoOpen(true)
@@ -784,20 +784,20 @@ export function ChatView({
     setMobileTab(1)
     if (pendingRowAction.action === "info") openSessionInfo()
     else if (pendingRowAction.action === "rename") setTitleEditing(true)
-    else if (pendingRowAction.action === "voice") startVoice()
+    else if (pendingRowAction.action === "voice") openVoice()
     else handleShare()
-  }, [activeDiscussion?.id, handleShare, openSessionInfo, pendingRowAction, startVoice])
+  }, [activeDiscussion?.id, handleShare, openSessionInfo, openVoice, pendingRowAction])
 
   // Desktop shortcuts for the open discussion; the menus show the same keys.
   const canManageDiscussion = activeDiscussion?.type === "chat" && !discussionClosed && !owningApp
   const docked = !floating && !!activeDiscussion
   useCommand("nova-discussion-voice", {
-    label: "Start Voice",
-    description: "Start a voice session in the open discussion",
+    label: "Open Voice",
+    description: "Open voice call controls for the current discussion",
     group: "Discussions",
     shortcut: DISCUSSION_SHORTCUTS.voice,
     enabled: docked && voiceAvailable,
-    action: startVoice,
+    action: openVoice,
   })
 
   useCommand("nova-discussion-info", {
@@ -976,7 +976,7 @@ export function ChatView({
             <DropdownMenuContent align="end" sideOffset={4}>
               <DiscussionActionItems
                 showShortcuts
-                onVoice={owningApp ? undefined : startVoice}
+                onVoice={owningApp ? undefined : openVoice}
                 voiceDisabled={!voiceAvailable}
                 onInfo={openSessionInfo}
                 onRename={canManageDiscussion ? () => setTitleEditing(true) : undefined}
@@ -1322,6 +1322,7 @@ export function ChatView({
           getTranscriptPayloadMediaUrl={getTranscriptPayloadMediaUrl}
           getTranscriptPayloadDownloadUrl={getTranscriptPayloadDownloadUrl}
           returnFocusRef={voiceSessionTriggerRef}
+          onStart={() => void voiceSession.start()}
           onMute={voiceSession.toggleMute}
           onEnd={() => void voiceSession.stop()}
         />

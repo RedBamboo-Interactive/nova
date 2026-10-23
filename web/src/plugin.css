@@ -126,6 +126,7 @@
 
 .nova-voice-mode {
   --nova-voice-accent: var(--primary);
+  --nova-voice-call: #22c55e;
   animation: nova-voice-mode-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
   transform-origin: center;
 }
@@ -351,9 +352,12 @@
 .nova-voice-mode__control:hover { background: rgb(from var(--accent) r g b / 0.82); }
 .nova-voice-mode__control:disabled { cursor: default; opacity: 0.36; }
 .nova-voice-mode__control--mute[data-active] { border-color: rgb(from var(--color-accent-gold) r g b / 0.4); color: var(--color-accent-gold); background: rgb(from var(--color-accent-gold) r g b / 0.14); }
+.nova-voice-mode__control--call { width: 4.25rem; height: 4.25rem; border-color: rgb(from var(--nova-voice-call) r g b / 0.55); color: white; background: var(--nova-voice-call); box-shadow: 0 1rem 2.4rem rgb(from var(--nova-voice-call) r g b / 0.3), inset 0 1px rgb(from var(--contrast) r g b / 0.18); }
+.nova-voice-mode__control--call:hover { background: color-mix(in srgb, var(--nova-voice-call) 88%, black); box-shadow: 0 1rem 2.8rem rgb(from var(--nova-voice-call) r g b / 0.42); }
 .nova-voice-mode__control--end { width: 4.25rem; height: 4.25rem; border-color: rgb(from var(--destructive) r g b / 0.5); color: var(--primary-foreground); background: var(--destructive); box-shadow: 0 1rem 2.4rem rgb(from var(--destructive) r g b / 0.34), inset 0 1px rgb(from var(--contrast) r g b / 0.18); }
 .nova-voice-mode__control--end:hover { background: color-mix(in srgb, var(--destructive) 88%, var(--foreground)); box-shadow: 0 1rem 2.8rem rgb(from var(--destructive) r g b / 0.46); }
 
+.nova-voice-mode[data-visual-state="ready"] { --nova-voice-accent: var(--nova-voice-call); }
 .nova-voice-mode[data-visual-state="listening"] { --nova-voice-accent: var(--color-status-live); }
 .nova-voice-mode[data-visual-state="speaking"] { --nova-voice-accent: var(--color-accent-gold); }
 .nova-voice-mode[data-visual-state="working"] { --nova-voice-accent: var(--primary); }

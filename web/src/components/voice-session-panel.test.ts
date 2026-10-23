@@ -25,13 +25,24 @@ test("voice mode is an immersive modal backed by the active Agent portrait", () 
 test("voice controls and surfaces use the Leaf design language", () => {
   assert.match(panelSource, /import \{ Button \} from "@redbamboo\/ui"/)
   assert.match(panelSource, /<Button[\s\S]*variant="outline"/)
-  assert.match(panelSource, /variant="destructive"/)
-  assert.match(panelSource, /ph-bold ph-phone-disconnect/)
+  assert.match(panelSource, /canStart \? "default" : "destructive"/)
+  assert.match(panelSource, /aria-label=\{canStart \? "Start voice call" : "End voice session"\}/)
+  assert.match(panelSource, /canStart \? "ph-phone" : "ph-phone-disconnect"/)
   assert.doesNotMatch(panelSource, /ph-fill ph-phone-disconnect/)
   assert.match(cssSource, /--nova-voice-accent: var\(--primary\)/)
   assert.match(cssSource, /background: rgb\(from var\(--popover\)/)
   assert.match(cssSource, /border-radius: 999px/)
   assert.match(cssSource, /nova-voice-mode-enter 220ms cubic-bezier\(0\.16, 1, 0\.3, 1\)/)
+})
+
+test("opening voice mode is free and only the green Call control starts admission", () => {
+  assert.match(hookSource, /const open = useCallback\(\(\) => \{[\s\S]*setPhase\("ready"\)/)
+  assert.match(hookSource, /if \(discussionRef\.current && discussionRef\.current !== discussionId\) void stop\(\)/)
+  assert.match(chatViewSource, /const openVoice = useCallback\(\(\) => \{ voiceSession\.open\(\) \}/)
+  assert.match(chatViewSource, /onVoice=\{owningApp \? undefined : openVoice\}/)
+  assert.match(panelSource, /onClick=\{canStart \? onStart : onEnd\}/)
+  assert.match(cssSource, /--nova-voice-call: #22c55e/)
+  assert.match(cssSource, /\.nova-voice-mode__control--call[\s\S]*background: var\(--nova-voice-call\)/)
 })
 
 test("voice mode projects the canonical discussion through the shared controlled chat", () => {

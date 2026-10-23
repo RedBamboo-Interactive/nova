@@ -2,6 +2,7 @@ import React, { useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
 import type { MessageBlock } from "@redbamboo/chat"
 import { VoiceSessionPanel } from "../../src/components/voice-session-panel"
+import type { VoiceSessionPhase } from "../../src/hooks/use-voice-session"
 import { useScreenWakeLock } from "../../src/hooks/use-screen-wake-lock"
 import "./shell-preflight.css"
 import "../../src/plugin.css"
@@ -96,22 +97,26 @@ const messages: MessageBlock[] = [
 ]
 
 function Fixture() {
+  const readyFixture = new URLSearchParams(window.location.search).has("ready")
   const returnFocusRef = useRef<HTMLButtonElement>(null)
+  const [phase, setPhase] = useState<VoiceSessionPhase>(readyFixture ? "ready" : "connected")
   const [muted, setMuted] = useState(false)
+  const [startCount, setStartCount] = useState(0)
   const [endCount, setEndCount] = useState(0)
-  const [awake, setAwake] = useState(true)
+  const [awake, setAwake] = useState(!readyFixture)
   useScreenWakeLock(awake)
   return (
     <>
       <button ref={returnFocusRef} className="sr-only">Voice trigger</button>
+      <output data-testid="start-count" className="sr-only">{startCount}</output>
       <output data-testid="end-count" className="sr-only">{endCount}</output>
       <VoiceSessionPanel
         agentName="Nova"
         avatarUrl="http://127.0.0.1:18804/api/assets/c0978012-eb6b-46a7-824e-170f2435ad79.png"
-        phase="connected"
+        phase={phase}
         muted={muted}
         delegating={false}
-        startedAt={Date.now() - 83_000}
+        startedAt={phase === "connected" ? Date.now() - 83_000 : null}
         error={null}
         userCaption="Can you check what the real voice session is doing with my memory?"
         assistantCaption="Yes. I’m working through the real Nova session now."
@@ -119,10 +124,16 @@ function Fixture() {
         messages={messages}
         isStreaming={false}
         returnFocusRef={returnFocusRef}
+        onStart={() => {
+          setAwake(true)
+          setStartCount(value => value + 1)
+          setPhase("starting")
+        }}
         onMute={() => setMuted(value => !value)}
         onEnd={() => {
           setAwake(false)
           setEndCount(value => value + 1)
+          setPhase("closing")
         }}
       />
     </>

@@ -34,6 +34,7 @@ interface Props {
   getTranscriptPayloadMediaUrl?: (ref: TranscriptPayloadRef) => string
   getTranscriptPayloadDownloadUrl?: (ref: TranscriptPayloadRef) => string
   returnFocusRef: RefObject<HTMLButtonElement | null>
+  onStart: () => void
   onMute: () => void
   onEnd: () => void
 }
@@ -63,7 +64,7 @@ function useRecentActivity(value: string) {
 export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedAt, error,
   delegating, userCaption, assistantCaption, captionSpeaker, messages, isStreaming, resolveImageSrc,
   resolveFileLink, resolveEventLink, loadTranscriptPayload, getTranscriptPayloadMediaUrl, getTranscriptPayloadDownloadUrl,
-  returnFocusRef, onMute, onEnd }: Props) {
+  returnFocusRef, onStart, onMute, onEnd }: Props) {
   const [now, setNow] = useState(Date.now())
   const panelRef = useRef<HTMLDivElement>(null)
   const muteRef = useRef<HTMLButtonElement>(null)
@@ -87,6 +88,7 @@ export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedA
   }, [returnFocusRef])
 
   const connected = phase === "connected"
+  const canStart = phase === "ready" || phase === "error"
   const visualState = resolveVoiceSessionVisualState({ phase, muted, delegating, assistantActive, userActive })
   const status = voiceSessionStatusLabel(visualState)
   const captionTimestamp = useMemo(() => new Date().toISOString(), [captionSpeaker])
@@ -145,7 +147,21 @@ export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedA
           <span className="nova-voice-mode__status-dot" aria-hidden="true" />
           <span>{status}</span>
         </div>
-        <span className="nova-voice-mode__timer font-mono text-xs tabular-nums">{formatElapsed(startedAt, now)}</span>
+        <div className="flex items-center gap-2">
+          <span className="nova-voice-mode__timer font-mono text-xs tabular-nums">{formatElapsed(startedAt, now)}</span>
+          {canStart && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              onClick={onEnd}
+              aria-label="Close voice mode"
+              title="Close voice mode"
+            >
+              <i className="ph-bold ph-x text-base" aria-hidden="true" />
+            </Button>
+          )}
+        </div>
       </header>
 
       <main className="relative z-10 flex min-h-0 flex-1 flex-col items-center overflow-hidden px-5 py-4 text-center sm:px-8 sm:py-5">
@@ -228,16 +244,16 @@ export function VoiceSessionPanel({ agentName, avatarUrl, phase, muted, startedA
           <Button
             ref={endRef}
             type="button"
-            variant="destructive"
+            variant={canStart ? "default" : "destructive"}
             size="icon-lg"
-            onClick={onEnd}
-            className="nova-voice-mode__control nova-voice-mode__control--end rounded-full"
-            aria-label="End voice session"
-            title="End voice session"
+            onClick={canStart ? onStart : onEnd}
+            className={`nova-voice-mode__control ${canStart ? "nova-voice-mode__control--call" : "nova-voice-mode__control--end"} rounded-full`}
+            aria-label={canStart ? "Start voice call" : "End voice session"}
+            title={canStart ? "Start voice call" : "End voice session"}
           >
-            <i className="ph-bold ph-phone-disconnect text-2xl" aria-hidden="true" />
+            <i className={`ph-bold ${canStart ? "ph-phone" : "ph-phone-disconnect"} text-2xl`} aria-hidden="true" />
           </Button>
-          <span className="text-[11px] font-medium text-muted-foreground">End</span>
+          <span className="text-[11px] font-medium text-muted-foreground">{canStart ? "Call" : "End"}</span>
         </div>
       </footer>
     </div>

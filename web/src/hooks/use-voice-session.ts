@@ -5,7 +5,7 @@ import { acquireVoiceInput, applyVoiceOutputDevice } from "../lib/voice-audio-de
 import { applyVoiceEvent, type VoiceCaptionState } from "./voice-session-events"
 import { useScreenWakeLock } from "./use-screen-wake-lock"
 
-export type VoiceSessionPhase = "idle" | "starting" | "connected" | "degraded" | "closing" | "closed" | "error"
+export type VoiceSessionPhase = "idle" | "ready" | "starting" | "connected" | "degraded" | "closing" | "closed" | "error"
 
 const VOICE_MODE_EXIT_MS = 160
 
@@ -86,6 +86,23 @@ export function useVoiceSession(discussionId: string | null) {
     }, VOICE_MODE_EXIT_MS)
   }, [])
 
+  const open = useCallback(() => {
+    if (!discussionId || (phase !== "idle" && phase !== "closed")) return
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+    startAttemptRef.current++
+    discussionRef.current = discussionId
+    setSessionId(null)
+    setStartedAt(null)
+    setMuted(false)
+    setDelegating(false)
+    setError(null)
+    setCaptions({ speaker: null, user: "", assistant: "" })
+    setPhase("ready")
+  }, [discussionId, phase])
+
   const stop = useCallback(async () => {
     if (phase === "idle" || phase === "closed" || phase === "closing") return
     startAttemptRef.current++
@@ -102,13 +119,14 @@ export function useVoiceSession(discussionId: string | null) {
   }, [finishCloseAfterTransition, phase, releaseMedia])
 
   const start = useCallback(async () => {
-    if (!discussionId || phase === "starting" || phase === "connected" || phase === "closing") return
+    if (!discussionId || (phase !== "ready" && phase !== "error")) return
     if (closeTimerRef.current !== null) {
       window.clearTimeout(closeTimerRef.current)
       closeTimerRef.current = null
     }
     setPhase("starting")
     const attempt = ++startAttemptRef.current
+    discussionRef.current = discussionId
     setError(null)
     setCaptions({ speaker: null, user: "", assistant: "" })
     try {
@@ -188,7 +206,6 @@ export function useVoiceSession(discussionId: string | null) {
     } catch (caught) {
       releaseMedia()
       sessionRef.current = null
-      discussionRef.current = null
       setSessionId(null)
       setPhase("error")
       setError(caught instanceof Error ? caught.message : "Voice session could not start")
@@ -202,7 +219,7 @@ export function useVoiceSession(discussionId: string | null) {
   }, [muted])
 
   useEffect(() => {
-    if (sessionRef.current && discussionRef.current !== discussionId) void stop()
+    if (discussionRef.current && discussionRef.current !== discussionId) void stop()
   }, [discussionId, stop])
   useEffect(() => {
     const closeWhenBackgrounded = () => {
@@ -227,5 +244,5 @@ export function useVoiceSession(discussionId: string | null) {
     }
   }, [releaseMedia])
 
-  return { phase, sessionId, muted, startedAt, delegating, error, captions, start, stop, toggleMute }
+  return { phase, sessionId, muted, startedAt, delegating, error, captions, open, start, stop, toggleMute }
 }
