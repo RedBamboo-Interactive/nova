@@ -44,7 +44,8 @@ export function discussionActivityIndicator(status: string, activity: Discussion
   tasks: readonly BackgroundTaskInfo[] | undefined): DiscussionActivityIndicator {
   if (status === "thinking") return { source: "session", label: "", paused: false }
   const running = orderBackgroundActivity(runningBackgroundTasks(tasks))
-  const delegations = activity?.ongoingCount ? activity : undefined
+  // Shown on the same condition as the chat row's delegations, unknown ones included.
+  const delegations = activity && (activity.ongoingCount > 0 || activity.unknownCount > 0) ? activity : undefined
   const summary = summarizeBackgroundActivity(running, delegations ? { label: delegationActivityLabel(delegations) } : null)
   if (!summary) return { source: "none", label: "", paused: true }
   if (summary.source === "host") return { source: "delegations", label: summary.label, paused: delegationAnimationPaused(delegations!) }

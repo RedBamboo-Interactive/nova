@@ -78,5 +78,8 @@ test("the sidebar indicator follows the activity row's priority", async () => {
   // Delegations that are only waiting or blocked keep a still indicator.
   assert.equal(discussionActivityIndicator("idle", activity("waiting_to_resume"), undefined).paused, true)
   assert.deepEqual(discussionActivityIndicator("idle", activity(), []), { source: "none", label: "", paused: true })
+  // Unknown delegations show, still, exactly when the chat row shows them.
+  assert.deepEqual(discussionActivityIndicator("idle", { ...activity(), available: false, unknownCount: 1 }, []),
+    { source: "delegations", label: "Delegation status unavailable", paused: true })
   assert.equal(discussionActivityIndicator("stopped", undefined, undefined).source, "none")
 })
