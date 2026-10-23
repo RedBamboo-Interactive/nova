@@ -70,9 +70,9 @@ test("the sidebar indicator follows the activity row's priority", async () => {
   assert.deepEqual(discussionActivityIndicator("thinking", activity("running"), tasks), { source: "session", label: "", paused: false })
   // Then agents, then other background tasks, then delegations.
   assert.deepEqual(discussionActivityIndicator("idle", activity("running"), tasks),
-    { source: "agents", label: "1 agent working", leadKind: "agent", paused: false })
+    { source: "agents", label: "Agent working...", leadKind: "agent", paused: false })
   assert.deepEqual(discussionActivityIndicator("idle", activity("running"), [tasks[0]]),
-    { source: "tasks", label: "1 shell working", leadKind: "shell", paused: false })
+    { source: "tasks", label: "Running command...", leadKind: "shell", paused: false })
   assert.deepEqual(discussionActivityIndicator("idle", activity("running", "queued"), [tasks[2]]),
     { source: "delegations", label: "2 delegations ongoing…", paused: false })
   // Delegations that are only waiting or blocked keep a still indicator.

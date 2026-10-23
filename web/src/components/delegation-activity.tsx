@@ -56,6 +56,7 @@ export function delegationActivityGroup(activity: DiscussionDelegationActivity |
   if (!activity || (activity.ongoingCount === 0 && activity.unknownCount === 0)) return null
   return {
     label: delegationActivityLabel(activity),
+    icon: BUILTIN_EVENTS.delegation!.icon ?? undefined,
     items: activity.sessions.map(session => ({
       key: session.sessionId,
       title: "Delegation",

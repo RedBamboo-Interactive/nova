@@ -31,9 +31,9 @@ async function main() {
     // The session working outranks the agent behind it: the ordinary thinking spinner.
     assert.equal(await indicator('session').count(), 0, 'the session owns its indicator while it works')
     assert.equal(await indicator('agents').getAttribute('data-activity-source'), 'agents')
-    assert.equal(await indicator('agents').getAttribute('aria-label'), '2 agents working')
+    assert.equal(await indicator('agents').getAttribute('aria-label'), 'Agents working...')
     assert.equal(await indicator('tasks').getAttribute('data-activity-source'), 'tasks')
-    assert.equal(await indicator('tasks').getAttribute('aria-label'), '1 shell working')
+    assert.equal(await indicator('tasks').getAttribute('aria-label'), 'Running command...')
     assert.equal(await indicator('delegations').getAttribute('data-activity-source'), 'delegations')
     assert.equal(await indicator('idle').count(), 0)
     // One indicator per row: nothing beside the timestamp any more.
