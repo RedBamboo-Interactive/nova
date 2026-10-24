@@ -43,6 +43,8 @@ public class DiscussionEventRequest
     public string? SenderAgentId { get; set; }
     public string? ReplyToDiscussionId { get; set; }
     public JsonElement? Metadata { get; set; }
+    /// <summary>Optional caller key: a retry under it neither stores nor delivers the event twice.</summary>
+    public string? IdempotencyKey { get; set; }
 }
 
 public class NovaMessageRequest
@@ -109,6 +111,75 @@ public static class DiscussionEndpoints
         => discussion.Confidential ? NotFound() : Forbidden();
     private static IResult Closed()
         => Results.Json(new { error = "closed", message = "Archived discussions are read-only" }, statusCode: 409);
+
+    private static readonly TimeSpan EventSessionWait = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// <c>success</c> means the event will reach the session exactly once: delivered now (200) or
+    /// durably queued until the session exists (202). A system event is recorded for display only.
+    /// Anything that did not and will not reach the session is a non-success the caller can act on.
+    /// </summary>
+    internal static IResult EventResponse(EventInjectionResult result) => result.Delivery switch
+    {
+        EventDelivery.Delivered or EventDelivery.Reused =>
+            Results.Ok(new { success = true, delivery = "delivered", messageUid = result.MessageUid }),
+        EventDelivery.Recorded =>
+            Results.Ok(new { success = true, delivery = "recorded", messageUid = result.MessageUid }),
+        EventDelivery.Queued => Results.Json(new
+        {
+            success = true, delivery = "queued", messageUid = result.MessageUid,
+            message = "The discussion has no AI session yet; the event is stored and will be delivered, once, when it starts.",
+        }, statusCode: StatusCodes.Status202Accepted),
+        EventDelivery.Failed => Results.Json(new
+        {
+            success = false, delivery = "failed", messageUid = result.MessageUid, retryable = true,
+            error = result.ErrorCode ?? "event_delivery_failed",
+            message = result.ErrorMessage ?? "The event was stored but the AI session did not accept it. Retry with an idempotencyKey to avoid a duplicate.",
+        }, statusCode: StatusCodes.Status502BadGateway),
+        EventDelivery.Denied => Closed(),
+        _ => Results.Json(new
+        {
+            success = false, delivery = "undeliverable", messageUid = result.MessageUid, retryable = false,
+            error = result.ErrorCode ?? "event_undeliverable",
+            message = result.ErrorMessage ?? "The event cannot be delivered to this discussion's AI session.",
+        }, statusCode: StatusCodes.Status422UnprocessableEntity),
+    };
+
+    internal static async Task<IResult> PostEventAsync(string id, DiscussionEventRequest request, HttpContext ctx,
+        DiscussionStore store, AgentDirectory agents, EventInjector injector, MessagePipeline pipeline)
+    {
+        // "live" resolves to the current LIVE discussion — the heartbeat posts
+        // its note-events through this form since the LIVE id rotates daily.
+        var discussion = await LiveDiscussionAlias.ResolveAsync(id, agents.NovaAgentId,
+            i => store.GetAsync(i, ctx.RequestAborted),
+            () => store.ListByTypeAsync("live", ct: ctx.RequestAborted));
+        if (discussion is null) return NotFound();
+        if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+        if (DiscussionApplicationOwner.IsForeign(discussion)) return DiscussionApplicationOwner.Refusal(discussion);
+        if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
+
+        if (string.IsNullOrWhiteSpace(request.Content))
+            return Results.BadRequest(new { error = "Content is required" });
+        if (request.IdempotencyKey is { } requestKey && (string.IsNullOrWhiteSpace(requestKey) || requestKey.Length > 200))
+            return Results.BadRequest(new { error = "invalid_idempotency_key", message = "idempotencyKey must be 1-200 characters" });
+
+        var result = await injector.InjectEventAsync(discussion, request.Content, request.Type, request.Source,
+            request.SenderAgentId, request.ReplyToDiscussionId, request.Metadata, UserId(ctx),
+            request.IdempotencyKey, ctx.RequestAborted);
+
+        // A discussion created a moment ago is still getting its session. The event is queued
+        // and the creation delivers it; wait a bounded while so the answer can say delivered.
+        if (result.Delivery == EventDelivery.Queued && result.MessageUid is { } queuedUid
+            && pipeline.PendingSessionCreation(discussion.Id) is { } creation)
+        {
+            try { await creation.WaitAsync(EventSessionWait, ctx.RequestAborted); }
+            catch (TimeoutException) { }
+            await injector.DeliverPendingAsync(discussion.EntityId, ctx.RequestAborted);
+            result = await injector.QueuedStateAsync(discussion.EntityId, queuedUid, ctx.RequestAborted);
+        }
+
+        return EventResponse(result);
+    }
 
     public static void Map(RouteGroupBuilder group)
     {
@@ -1461,26 +1532,8 @@ public static class DiscussionEndpoints
             });
         });
 
-        group.MapPost("/discussions/{id}/event", async (string id, DiscussionEventRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, EventInjector injector) =>
-        {
-            // "live" resolves to the current LIVE discussion — the heartbeat posts
-            // its note-events through this form since the LIVE id rotates daily.
-            var discussion = await LiveDiscussionAlias.ResolveAsync(id, agents.NovaAgentId,
-                i => store.GetAsync(i, ctx.RequestAborted),
-                () => store.ListByTypeAsync("live", ct: ctx.RequestAborted));
-            if (discussion is null) return NotFound();
-            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
-            if (DiscussionApplicationOwner.IsForeign(discussion)) return DiscussionApplicationOwner.Refusal(discussion);
-            if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
-
-            if (string.IsNullOrWhiteSpace(request.Content))
-                return Results.BadRequest(new { error = "Content is required" });
-
-            await injector.InjectAsync(discussion, request.Content, request.Type, request.Source,
-                request.SenderAgentId, request.ReplyToDiscussionId, request.Metadata, UserId(ctx));
-
-            return Results.Ok(new { success = true });
-        });
+        group.MapPost("/discussions/{id}/event", (string id, DiscussionEventRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, EventInjector injector, MessagePipeline pipeline)
+            => PostEventAsync(id, request, ctx, store, agents, injector, pipeline));
 
         group.MapPost("/discussions/{id}/nova-message", async (string id, NovaMessageRequest request,
             HttpContext ctx, DiscussionStore store, ConversationUnread conversationUnread,

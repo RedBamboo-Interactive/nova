@@ -103,7 +103,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredKeyedService<IEntityStore>(PluginId),
                 sp.GetRequiredService<ConversationUnread>(),
-                sp.GetRequiredService<AgentActivitySignals>()));
+                sp.GetRequiredService<AgentActivitySignals>(),
+                sp.GetRequiredService<ILogger<EventInjector>>()));
         services.AddSingleton(sp =>
             new LiveEvents(
                 sp.GetRequiredService<DiscussionStore>(),
@@ -196,7 +197,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<ExtensionContributions>(),
                 sp.GetRequiredService<ConversationUnread>(),
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<MessagePipeline>>(),
-                sp.GetRequiredService<AgentActivitySignals>()));
+                sp.GetRequiredService<AgentActivitySignals>(),
+                sp.GetRequiredService<EventInjector>()));
     }
 
     public void MapEndpoints(RouteGroupBuilder group)
@@ -290,6 +292,10 @@ public sealed class NovaAppPlugin : ILeafPlugin
         // shutdown hook, so the loop binds to ApplicationStopping, not the boot ct.
         var confidentialBackfill = host.GetRequiredService<ConfidentialSessionBackfill>();
         _ = Task.Run(() => confidentialBackfill.RunAsync(lifetime.ApplicationStopping),
+            CancellationToken.None);
+        // Events queued before a session existed, whose drain a restart interrupted.
+        var injector = host.GetRequiredService<EventInjector>();
+        _ = Task.Run(() => injector.DeliverAllPendingAsync(lifetime.ApplicationStopping),
             CancellationToken.None);
         var poller = host.GetRequiredService<LivePoller>();
         _ = Task.Run(() => poller.RunAsync(lifetime.ApplicationStopping), CancellationToken.None);

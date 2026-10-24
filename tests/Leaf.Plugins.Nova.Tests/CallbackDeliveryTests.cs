@@ -61,6 +61,11 @@ public sealed class CallbackDeliveryTests
         Assert.Single(f.TargetMessages, m => m.Metadata.ContainsKey("idempotency_key"));
         Assert.Single(f.LiveMessages);
         Assert.Contains(f.PageReads, after => after >= 1000);
+        // Without a session the completion waits in the queue, once, for the session to exist.
+        var target = await f.Entities.GetAsync(f.Target.Id);
+        var queued = Assert.Single(PendingEventDeliveries.Read(target!.Data));
+        Assert.Equal(f.TargetMessages.Single(m => m.Metadata.ContainsKey("idempotency_key")).Metadata["uid"]!.GetValue<string>(), queued.Uid);
+        Assert.Empty(f.Gateway.Admitted);
     }
 
     [Fact]
@@ -287,9 +292,21 @@ public sealed class CallbackDeliveryTests
                 "GetBySlugAsync" => Task.FromResult(all.FirstOrDefault(e => e.Slug == (string)args[0]!)),
                 "GetAsync" => Task.FromResult(all.FirstOrDefault(e => e.Id == (Guid)args[0]!)),
                 "QueryAsync" => Task.FromResult<IReadOnlyList<LeafEntity>>(all.Where(e => e.TypeSlug == ((EntityQuery)args[0]!).TypeSlug).ToArray()),
+                "PatchAsync" => Task.FromResult(Patch((Guid)args[0]!, (JsonObject)args[1]!)),
                 _ => throw new NotSupportedException(method),
             });
             Entities = entities;
+            // Shallow, like the kernel's entity patch (a session-less target queues its events).
+            LeafEntity Patch(Guid id, JsonObject patch)
+            {
+                lock (all)
+                {
+                    var index = Array.FindIndex(all, e => e.Id == id);
+                    var data = all[index].Data.DeepClone().AsObject();
+                    foreach (var (key, value) in patch) data[key] = value?.DeepClone();
+                    return all[index] = all[index] with { Data = data };
+                }
+            }
             async Task<IReadOnlyList<DiscussionMessage>> ReadPageAsync(object?[] args)
             {
                 // Model an asynchronous database read so concurrent callbacks

@@ -966,7 +966,7 @@ public sealed class DiscussionStore(
         => entity is { TypeSlug: "discussion" }
             && Str(entity.Data, "app") == "nova";
 
-    private static DiscussionRead? Map(LeafEntity entity)
+    internal static DiscussionRead? Map(LeafEntity entity)
     {
         var d = entity.Data;
         var id = Str(d, "discussion_id");

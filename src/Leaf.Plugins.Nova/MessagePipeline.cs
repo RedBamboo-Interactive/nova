@@ -43,11 +43,16 @@ public sealed class MessagePipeline(
     ExtensionContributions extensions,
     ConversationUnread conversationUnread,
     ILogger<MessagePipeline> logger,
-    AgentActivitySignals? activity = null)
+    AgentActivitySignals? activity = null,
+    EventInjector? eventInjector = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly ConcurrentDictionary<string, Task<string?>> _pendingSessions = new();
+
+    /// <summary>The background session creation still running for a discussion, if any.</summary>
+    public Task<string?>? PendingSessionCreation(string discussionId)
+        => _pendingSessions.TryGetValue(discussionId, out var pending) ? pending : null;
 
     /// <summary>Kick off background session creation for a fresh discussion.</summary>
     public void BeginSessionCreation(DiscussionRead discussion)
@@ -70,6 +75,9 @@ public sealed class MessagePipeline(
                 var current = await store.GetAsync(discId);
                 if (current is { SessionId: null })
                     await store.PatchAsync(current.EntityId, new JsonObject { ["session_id"] = sessionId });
+                // Events posted while the session was being created waited for it. This runs
+                // before the entry leaves _pendingSessions, so a waiter sees them delivered.
+                await DeliverQueuedEventsAsync(discussion, CancellationToken.None);
                 return sessionId;
             }
             catch (ComputeMaintenanceException)
@@ -225,7 +233,9 @@ public sealed class MessagePipeline(
         var sessionIsNew = false;
         var computeOwnerId = discussion.OwnerId;
 
-        if (sessionId is null && _pendingSessions.TryRemove(discussion.Id, out var pending))
+        // Peek: the creation removes itself when done, and a concurrent send or event
+        // must still find it rather than start a second session.
+        if (sessionId is null && _pendingSessions.TryGetValue(discussion.Id, out var pending))
             sessionId = await pending;
 
         if (sessionId is null)
@@ -292,6 +302,13 @@ public sealed class MessagePipeline(
                 catch { /* best-effort — don't block the user's message */ }
             }
         }
+
+        // Events accepted before this message reach the session first: those posted before a
+        // deferred discussion's first reply, or while its session was being created or reset.
+        var queued = await DeliverQueuedEventsAsync(discussion, ct);
+        if (queued?.Status == EventDrainStatus.Failed)
+            return new(false, sessionId, queued.ErrorCode ?? "event_delivery_failed",
+                "Earlier events in this discussion could not be delivered yet, so this message was not sent ahead of them. Try again shortly.");
 
         var priorMessage = discussion.InjectedContext;
         var now = DateTime.UtcNow;
@@ -547,6 +564,20 @@ public sealed class MessagePipeline(
 
         return new(true, sessionId, null, null, metadata, acceptedMessageUid,
             disposition, queueItemId, queue, item);
+    }
+
+    private async Task<EventDrainResult?> DeliverQueuedEventsAsync(DiscussionRead discussion, CancellationToken ct)
+    {
+        if (eventInjector is null) return null;
+        try
+        {
+            return await eventInjector.DeliverPendingAsync(discussion.EntityId, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Queued events for discussion {DiscussionId} could not be delivered", discussion.Id);
+            return new(EventDrainStatus.Failed, 0, "event_delivery_failed", ex.Message);
+        }
     }
 
     private Task PersistUserMessageAsync(Guid discussionEntityId, string content,
