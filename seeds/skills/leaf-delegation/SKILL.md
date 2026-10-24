@@ -100,6 +100,32 @@ Continue the same session so its transcript and context remain intact:
 Continuation resumes stopped or errored sessions when possible, sends one idempotent prompt, and
 registers a fresh terminal callback.
 
+`delivery` chooses how the prompt meets a turn that is already running. It uses RedCompute's values
+exactly; anything else is refused with 400 `invalid_delivery`, never sent as another mode:
+
+- `after-current` (default, "queue"): runs after the current turn and any input queued before it.
+- `steer-current`: joins the running turn without stopping it. RedCompute demotes it to
+  `after-current` when the session is starting, the provider or turn cannot be steered, or delivery
+  is paused for maintenance. On an idle session it simply runs as the next turn.
+- `interrupt-current`: interrupts the running turn, then runs in queue order. It does not overtake
+  prompts already queued ahead of it.
+
+A new session has no turn to act on: only `after-current` is accepted there, and other values return
+400 `delivery_requires_session`. Use `interrupt-current` for an urgent correction such as "stop
+touching that repository"; queue ordinary follow-ups.
+
+The response's `delivery` object reports what RedCompute recorded at admission: `requested`,
+`effective` (the policy RedCompute holds now), `effectiveFinal` (false while a steer can still be
+demoted), `state`, `demotionReason` (`steer_unavailable`), `inputsAhead` (other queued prompts run
+first), `queueItemId` and `replayed`. `turnInterrupted` is `false` for queue and steer; for
+`interrupt-current` it is `null` because RedCompute does not report whether a turn was running. When
+`inputsAhead` is true after an interrupt, the earlier queued prompts run before this one.
+
+The completion callback is always bound to this prompt. A steered prompt reports when the turn it
+joined ends. An interrupted turn reports through its own earlier registration, as an ordinary
+`Idle` completion: RedCompute does not mark it interrupted. Read it against the
+`(interrupt-current requested)` marker in the discussion, not as completion of the new prompt.
+
 ## Verify delivery and completion
 
 Treat the response fields independently. Delegation succeeded only when `promptSent` is `true`.

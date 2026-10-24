@@ -26,6 +26,9 @@ public class DelegateRequest
     // Compatibility for callers using the old provider-specific terminology.
     public string? QualityMode { get; set; }
     public string? Provider { get; set; }
+    // RedCompute's delivery policy, forwarded verbatim: after-current (default), steer-current or
+    // interrupt-current. Only a continuation has a turn to steer or interrupt.
+    public string? Delivery { get; set; }
     public DelegationDeploymentTarget? DeploymentVerificationTarget { get; set; }
 }
 
@@ -52,6 +55,9 @@ public static class DelegateEndpoints
         bool isContinuation = !string.IsNullOrWhiteSpace(request.SessionId);
         if (string.IsNullOrWhiteSpace(request.Prompt))
             return Results.BadRequest(new { error = "prompt is required" });
+        if (DeliveryError(request.Delivery, isContinuation) is { } deliveryError)
+            return Results.BadRequest(deliveryError);
+        var delivery = request.Delivery ?? AfterCurrent;
         if (request.DeploymentVerificationTarget is { } target
             && (target.Service is not ("redleaf" or "redcompute") || string.IsNullOrWhiteSpace(target.RunId)
                 || target.RunId.Length > 100 || target.RunId.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-')))
@@ -282,6 +288,16 @@ public static class DelegateEndpoints
         RedComputeClient.SendMessageResult? lastPromptResult = null;
         var promptMessageUid = Guid.NewGuid().ToString("N");
         var promptIdempotencyKey = $"nova-delegate:{sessionId}:{promptMessageUid}";
+        // Every attempt sends this same body under the same key, so a retry is an idempotent
+        // replay: RedCompute interrupts or steers only on a fresh admission, never on a replay.
+        var promptBody = new Dictionary<string, object?>
+        {
+            ["content"] = request.Prompt,
+            ["messageUid"] = promptMessageUid,
+            ["delivery"] = delivery,
+        };
+        if (request.DeploymentVerificationTarget is not null)
+            promptBody["deploymentVerificationTarget"] = request.DeploymentVerificationTarget;
         // Subscribe before dispatch so a fast prompt completion cannot outrun registration.
         // Compute binds this exact UID to its durable accepted input; no queued input means no completion.
         if (!string.IsNullOrWhiteSpace(request.DiscussionId))
@@ -303,10 +319,7 @@ public static class DelegateEndpoints
                     "/api/apps/nova/delegate",
                     [.. baseContext, new ComputeContextReference("session", sessionId)],
                     method: "POST", ct: ctx.RequestAborted);
-                var result = await redCompute.SendMessageDetailedAsync(sessionId,
-                    request.DeploymentVerificationTarget is null
-                        ? (object)new { content = request.Prompt, messageUid = promptMessageUid }
-                        : new { content = request.Prompt, messageUid = promptMessageUid, deploymentVerificationTarget = request.DeploymentVerificationTarget },
+                var result = await redCompute.SendMessageDetailedAsync(sessionId, promptBody,
                     messageProvenance, ctx.RequestAborted,
                     idempotencyKey: promptIdempotencyKey);
                 lastPromptResult = result;
@@ -368,6 +381,8 @@ public static class DelegateEndpoints
             }, statusCode: 502);
         }
 
+        var deliveryReport = ReportDelivery(delivery, lastPromptResult?.Payload);
+
         // 3. Record the delegation where it was requested. This is a system
         // event: it belongs in the visible discussion timeline but must not
         // become another model-facing user turn.
@@ -386,10 +401,15 @@ public static class DelegateEndpoints
                     agentId = resolvedAgent.Id,
                     promptMessageUid,
                     status = "started",
-                });
+                    delivery = deliveryReport,
+                }, ReportJson);
+                // Interrupting or steering changes what the session's other turns mean, so the
+                // timeline says it was requested; a later completion is read against this.
                 await injector.InjectAsync(
                     discussion,
-                    $"Delegated to Code session {sessionId}",
+                    delivery == AfterCurrent
+                        ? $"Delegated to Code session {sessionId}"
+                        : $"Delegated to Code session {sessionId} ({delivery} requested)",
                     "system",
                     "delegation",
                     metadata: eventData,
@@ -430,8 +450,97 @@ public static class DelegateEndpoints
             repository = resolvedRepository?.Id,
             delegationEventRecorded,
             navigationPath,
+            delivery = deliveryReport,
         });
     }
+
+    internal const string AfterCurrent = "after-current";
+    internal const string SteerCurrent = "steer-current";
+    internal const string InterruptCurrent = "interrupt-current";
+    private static readonly JsonSerializerOptions ReportJson = new(JsonSerializerDefaults.Web);
+
+    /// <summary>
+    /// Null when the delivery is acceptable. Values are RedCompute's own vocabulary and are never
+    /// translated or defaulted: an unknown value is refused rather than sent as another mode. A new
+    /// session has no turn to steer or interrupt, so only the default is accepted there.
+    /// </summary>
+    internal static object? DeliveryError(string? delivery, bool isContinuation)
+    {
+        if (delivery is null) return null;
+        if (delivery is not (AfterCurrent or SteerCurrent or InterruptCurrent))
+            return new
+            {
+                error = "invalid_delivery",
+                message = $"delivery must be '{AfterCurrent}', '{SteerCurrent}' or '{InterruptCurrent}'",
+            };
+        if (!isContinuation && delivery != AfterCurrent)
+            return new
+            {
+                error = "delivery_requires_session",
+                message = $"delivery '{delivery}' needs an existing session with a turn to act on; a new session accepts only '{AfterCurrent}'",
+            };
+        return null;
+    }
+
+    /// <summary>
+    /// What RedCompute's admission response says happened to the prompt, never inferred.
+    /// <para><c>effective</c> is the policy RedCompute holds for the queue item: steer-current is
+    /// demoted to after-current (reason <c>steer_unavailable</c>) when the session is still starting,
+    /// its provider cannot steer, the turn refuses the steer, or delivery is paused for maintenance.
+    /// Only steer-current can still change after admission, so
+    /// <c>effectiveFinal</c> is false while a steer is pending. A steer-current item delivered to an
+    /// idle session ran as that session's next turn; the response does not distinguish this from
+    /// joining an active turn.</para>
+    /// <para><c>turnInterrupted</c> is false for after-current and steer-current, which never
+    /// interrupt. For interrupt-current it is null: RedCompute interrupts only on a fresh admission to
+    /// an active session and does not report whether it did.</para>
+    /// <para><c>inputsAhead</c> is true when other caller inputs precede this one in the FIFO.
+    /// interrupt-current interrupts the running turn but does not overtake queued input, so those
+    /// run first. Null when the queue position cannot decide it (a pending steer overtakes ordinary
+    /// input).</para>
+    /// </summary>
+    internal static DeliveryReport ReportDelivery(string requested, JsonElement? payload)
+    {
+        JsonElement item = default;
+        var hasItem = payload is { ValueKind: JsonValueKind.Object } p
+            && p.TryGetProperty("item", out item) && item.ValueKind == JsonValueKind.Object;
+        var effective = hasItem ? Text(item, "delivery") : null;
+        var state = hasItem ? Text(item, "state") : null;
+        var itemId = hasItem ? Text(item, "id") : null;
+        var errorCode = hasItem && item.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object
+            ? Text(error, "code") : null;
+        var replayed = payload is { ValueKind: JsonValueKind.Object } r
+            && r.TryGetProperty("existing", out var existing) && existing.ValueKind == JsonValueKind.True;
+        var head = payload is { ValueKind: JsonValueKind.Object } q
+            && q.TryGetProperty("queue", out var queue) && queue.ValueKind == JsonValueKind.Object
+                ? Text(queue, "headItemId") : null;
+
+        bool? inputsAhead = state switch
+        {
+            null => null,
+            "delivered" or "cancelled" => false,
+            "pending" when effective is (AfterCurrent or InterruptCurrent) && itemId is not null =>
+                head is not null && head != itemId,
+            _ => null,
+        };
+        return new DeliveryReport(
+            requested,
+            effective,
+            EffectiveFinal: effective is not null && (effective != SteerCurrent || state is "delivered" or "cancelled"),
+            state,
+            DemotionReason: requested != effective && effective is not null ? errorCode : null,
+            TurnInterrupted: requested == InterruptCurrent ? null : false,
+            inputsAhead,
+            itemId,
+            replayed);
+    }
+
+    internal sealed record DeliveryReport(
+        string Requested, string? Effective, bool EffectiveFinal, string? State, string? DemotionReason,
+        bool? TurnInterrupted, bool? InputsAhead, string? QueueItemId, bool Replayed);
+
+    private static string? Text(JsonElement element, string name)
+        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     /// <summary>
     /// The webhooks a delegation registers for its discussion: completion, and the opt-in question

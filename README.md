@@ -49,6 +49,16 @@ Explicit replacement uses the authenticated Compute endpoint `POST
 the matching never-delivered pending verification, retaining its terminal audit.
 It neither admits a replacement prompt nor cancels ordinary queued work.
 
+A continuation can send `delivery`: `after-current` (default), `steer-current` or
+`interrupt-current`, forwarded verbatim to RedCompute's message admission. Unknown
+values return 400 `invalid_delivery`; a new session accepts only `after-current`
+(400 `delivery_requires_session`). Every attempt of the bounded retry reuses one
+idempotency key and body, so a lost acknowledgement replays and never steers or
+interrupts twice. The response's `delivery` object reports RedCompute's admission
+record (`requested`, `effective`, `effectiveFinal`, `state`, `demotionReason`,
+`inputsAhead`, `queueItemId`, `replayed`); `turnInterrupted` is null for
+`interrupt-current` because RedCompute does not report it.
+
 ## Release candidate input
 
 `release/producer-input.v1.json` defines the compact, channel-neutral release

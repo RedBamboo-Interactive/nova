@@ -259,6 +259,8 @@ public sealed class CallbackDeliveryTests
         public LeafEntity Target { get; }
         private readonly LeafEntity live;
         private readonly AgentDirectory agents;
+        public AgentDirectory Agents => agents;
+        public IEntityStore Entities { get; }
         public DiscussionStore Store { get; }
         public Guid AgentId { get; }
         public EventInjector Injector { get; }
@@ -287,6 +289,7 @@ public sealed class CallbackDeliveryTests
                 "QueryAsync" => Task.FromResult<IReadOnlyList<LeafEntity>>(all.Where(e => e.TypeSlug == ((EntityQuery)args[0]!).TypeSlug).ToArray()),
                 _ => throw new NotSupportedException(method),
             });
+            Entities = entities;
             async Task<IReadOnlyList<DiscussionMessage>> ReadPageAsync(object?[] args)
             {
                 // Model an asynchronous database read so concurrent callbacks
