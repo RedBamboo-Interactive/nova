@@ -1381,9 +1381,7 @@ public static class DiscussionEndpoints
                 ? await store.ListByTypeAsync("live", ct: ctx.RequestAborted)
                 : null;
             var discussion = id == "live"
-                ? candidates!.FirstOrDefault(d =>
-                    d.Type == "live" && !DiscussionStatus.IsClosed(d.Status)
-                    && (agents.NovaAgentId == null || d.AgentId == null || d.AgentId == agents.NovaAgentId))
+                ? LiveDiscussionAlias.FirstOpen(candidates!, agents.NovaAgentId)
                 : await store.GetAsync(id);
             if (discussion is null && id == "live" && !string.IsNullOrWhiteSpace(idempotencyKey))
             {
@@ -1457,11 +1455,9 @@ public static class DiscussionEndpoints
         {
             // "live" resolves to the current LIVE discussion — the heartbeat posts
             // its note-events through this form since the LIVE id rotates daily.
-            var discussion = id == "live"
-                ? (await store.ListByTypeAsync("live", ct: ctx.RequestAborted)).FirstOrDefault(d =>
-                    !DiscussionStatus.IsClosed(d.Status)
-                    && (agents.NovaAgentId == null || d.AgentId == null || d.AgentId == agents.NovaAgentId))
-                : await store.GetAsync(id);
+            var discussion = await LiveDiscussionAlias.ResolveAsync(id, agents.NovaAgentId,
+                i => store.GetAsync(i, ctx.RequestAborted),
+                () => store.ListByTypeAsync("live", ct: ctx.RequestAborted));
             if (discussion is null) return NotFound();
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
             if (DiscussionApplicationOwner.IsForeign(discussion)) return DiscussionApplicationOwner.Refusal(discussion);
@@ -1483,7 +1479,9 @@ public static class DiscussionEndpoints
             [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events,
             DiscussionActivity activity, VoiceBackendForwarder voiceForwarder) =>
         {
-            var discussion = await store.GetAsync(id);
+            var discussion = await LiveDiscussionAlias.ResolveAsync(id, agents.NovaAgentId,
+                i => store.GetAsync(i, ctx.RequestAborted),
+                () => store.ListByTypeAsync("live", ct: ctx.RequestAborted));
             if (discussion is null) return NotFound();
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
             if (DiscussionApplicationOwner.IsForeign(discussion)) return DiscussionApplicationOwner.Refusal(discussion);
@@ -1492,6 +1490,8 @@ public static class DiscussionEndpoints
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });
 
+            // From here on use the concrete id: "live" is only a route alias.
+            id = discussion.Id;
             discussion = await conversationUnread.EnsureBaselineAsync(discussion, ctx.RequestAborted);
 
             string? partsJson = null;
