@@ -178,7 +178,7 @@ public sealed class DelegateDeliveryTests
         var delivery = (await Delegate(f, compute, new() { SessionId = "worker", Prompt = "stop", Delivery = "interrupt-current" })).Body.GetProperty("delivery");
 
         Assert.Equal("interrupt-current", delivery.GetProperty("effective").GetString());
-        // RedCompute's admission does not say whether a turn was running to interrupt.
+        // An older RedCompute does not say whether a turn was running to interrupt.
         Assert.Equal(JsonValueKind.Null, delivery.GetProperty("turnInterrupted").ValueKind);
         Assert.Equal(ahead, delivery.GetProperty("inputsAhead").GetBoolean());
     }
@@ -241,6 +241,55 @@ public sealed class DelegateDeliveryTests
         await Delegate(f, new Compute(), new() { SessionId = "worker", Prompt = "next", DiscussionId = "target" });
 
         Assert.Equal("Delegated to Code session worker", Assert.Single(f.TargetMessages).Content);
+    }
+
+    // The current RedCompute reply: the item names what was requested and why it changed, and an
+    // interrupt-current admission says what the interrupt did.
+    private static string CurrentAdmission(string requested, string delivery, string state, string? head = null,
+        string? deliveryReason = null, string? interruptResult = null)
+        => JsonSerializer.Serialize(new
+        {
+            accepted = true,
+            existing = false,
+            disposition = state == "delivered" ? "delivered" : "queued",
+            queueItemId = "q_item",
+            queue = new { depth = 1, state = "waiting_for_session", headItemId = head },
+            item = new { id = "q_item", state, delivery, requestedDelivery = requested, deliveryReason, interruptResult },
+            interruptResult,
+            turnInterrupted = interruptResult == "interrupted",
+        });
+
+    [Theory]
+    [InlineData("interrupted", true)]
+    [InlineData("not_active", false)]
+    [InlineData("maintenance", false)]
+    public async Task Interrupt_reports_what_RedCompute_says_the_interrupt_did(string result, bool interrupted)
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        var compute = new Compute { Admission = CurrentAdmission("interrupt-current", "interrupt-current", "pending", head: "q_item", interruptResult: result) };
+
+        var delivery = (await Delegate(f, compute, new() { SessionId = "worker", Prompt = "stop", Delivery = "interrupt-current" })).Body.GetProperty("delivery");
+
+        Assert.Equal(interrupted, delivery.GetProperty("turnInterrupted").GetBoolean());
+        Assert.Equal(result, delivery.GetProperty("interruptResult").GetString());
+        // It overtakes the queue: nothing runs before it.
+        Assert.False(delivery.GetProperty("inputsAhead").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Steer_on_an_idle_session_reports_it_ran_as_the_next_turn()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        var compute = new Compute { Admission = CurrentAdmission("steer-current", "after-current", "delivered", deliveryReason: "no_active_turn") };
+
+        var delivery = (await Delegate(f, compute, new() { SessionId = "worker", Prompt = "also", Delivery = "steer-current" })).Body.GetProperty("delivery");
+
+        Assert.Equal("steer-current", delivery.GetProperty("requested").GetString());
+        Assert.Equal("after-current", delivery.GetProperty("effective").GetString());
+        Assert.Equal("no_active_turn", delivery.GetProperty("deliveryReason").GetString());
+        Assert.Equal("no_active_turn", delivery.GetProperty("demotionReason").GetString());
+        Assert.True(delivery.GetProperty("effectiveFinal").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, delivery.GetProperty("interruptResult").ValueKind);
     }
 
     private static string Admission(string delivery, string state, string? head = null, string? errorCode = null, bool existing = false)

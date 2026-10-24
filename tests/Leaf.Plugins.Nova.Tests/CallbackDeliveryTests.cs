@@ -323,7 +323,8 @@ public sealed class CallbackDeliveryTests
         public async Task<int> Complete(string? id, string status = "Idle", string? stopReason = null,
             string? reason = null, string? deliveredMessageUid = null, string? promptMessageUid = null, bool executionObserved = false,
             int? backgroundTasksRunning = null, int? deliverySequence = null, string? workState = null,
-            string? title = "same title", int? pendingInputs = null)
+            string? title = "same title", int? pendingInputs = null,
+            string? turnId = null, string? turnOutcome = null, string? interruptSource = null, string? interruptedBy = null)
         {
             var ctx = new DefaultHttpContext();
             ctx.Connection.RemoteIpAddress = IPAddress.Loopback;
@@ -339,6 +340,9 @@ public sealed class CallbackDeliveryTests
             if (deliverySequence is not null) body["deliverySequence"] = deliverySequence;
             if (workState is not null) body["workState"] = workState;
             if (pendingInputs is not null) body["pendingInputs"] = pendingInputs;
+            if (turnId is not null) body["turnId"] = turnId;
+            if (turnOutcome is not null) body["turnOutcome"] = turnOutcome;
+            if (interruptSource is not null) body["interruptedBy"] = new JsonObject { ["source"] = interruptSource, ["messageUid"] = interruptedBy };
             ctx.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body.ToJsonString()));
             var result = await CallbackEndpoints.HandleSessionCompleteAsync(ctx, Store, Injector, liveEvents);
             return ((IStatusCodeHttpResult)result).StatusCode ?? 200;

@@ -55,9 +55,16 @@ values return 400 `invalid_delivery`; a new session accepts only `after-current`
 (400 `delivery_requires_session`). Every attempt of the bounded retry reuses one
 idempotency key and body, so a lost acknowledgement replays and never steers or
 interrupts twice. The response's `delivery` object reports RedCompute's admission
-record (`requested`, `effective`, `effectiveFinal`, `state`, `demotionReason`,
-`inputsAhead`, `queueItemId`, `replayed`); `turnInterrupted` is null for
-`interrupt-current` because RedCompute does not report it.
+record (`requested`, `effective`, `effectiveFinal`, `state`, `deliveryReason`, with
+`demotionReason` as its first name, `inputsAhead`, `queueItemId`, `replayed`), and for
+`interrupt-current` RedCompute's `turnInterrupted` and `interruptResult`. RedCompute
+delivers `interrupt-current` ahead of older queued input.
+
+Completion callbacks carry RedCompute's `turnId`, `turnOutcome` and `interruptedBy`.
+An interrupted turn becomes a `session-interrupted` event naming who interrupted it,
+never a completion. A turn is de-duplicated on `turnId` (falling back to
+`deliveredMessageUid` from older senders), so a steered prompt and the turn it joined
+arrive once.
 
 ## Release candidate input
 

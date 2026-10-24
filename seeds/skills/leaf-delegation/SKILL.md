@@ -105,10 +105,12 @@ exactly; anything else is refused with 400 `invalid_delivery`, never sent as ano
 
 - `after-current` (default, "queue"): runs after the current turn and any input queued before it.
 - `steer-current`: joins the running turn without stopping it. RedCompute demotes it to
-  `after-current` when the session is starting, the provider or turn cannot be steered, or delivery
-  is paused for maintenance. On an idle session it simply runs as the next turn.
-- `interrupt-current`: interrupts the running turn, then runs in queue order. It does not overtake
-  prompts already queued ahead of it.
+  `after-current` (`deliveryReason: steer_unavailable`) when the session is starting, the provider
+  or turn cannot be steered, or delivery is paused for maintenance. With no turn running it runs as
+  the next turn (`effective: after-current`, `deliveryReason: no_active_turn`).
+- `interrupt-current`: interrupts the running turn and is delivered next, ahead of prompts queued
+  before it, which keep their order behind it. Nothing overtakes a prompt already being delivered
+  or a failed one. During a maintenance drain the running turn is left to finish.
 
 A new session has no turn to act on: only `after-current` is accepted there, and other values return
 400 `delivery_requires_session`. Use `interrupt-current` for an urgent correction such as "stop
@@ -116,15 +118,19 @@ touching that repository"; queue ordinary follow-ups.
 
 The response's `delivery` object reports what RedCompute recorded at admission: `requested`,
 `effective` (the policy RedCompute holds now), `effectiveFinal` (false while a steer can still be
-demoted), `state`, `demotionReason` (`steer_unavailable`), `inputsAhead` (other queued prompts run
-first), `queueItemId` and `replayed`. `turnInterrupted` is `false` for queue and steer; for
-`interrupt-current` it is `null` because RedCompute does not report whether a turn was running. When
-`inputsAhead` is true after an interrupt, the earlier queued prompts run before this one.
+demoted), `state`, `deliveryReason` (`steer_unavailable` or `no_active_turn`; `demotionReason` is
+the same value under its first name), `inputsAhead` (other prompts are delivered first),
+`queueItemId` and `replayed`. `turnInterrupted` is `false` for queue and steer. For
+`interrupt-current` it is `true` when a running turn accepted the interrupt; otherwise
+`interruptResult` says why not (`not_active`, `maintenance`, `unsupported`, `not_found`, `error`).
+A retry replays the first admission's result and never interrupts twice.
 
 The completion callback is always bound to this prompt. A steered prompt reports when the turn it
-joined ends. An interrupted turn reports through its own earlier registration, as an ordinary
-`Idle` completion: RedCompute does not mark it interrupted. Read it against the
-`(interrupt-current requested)` marker in the discussion, not as completion of the new prompt.
+joined ends, and that turn arrives in the discussion once, not once per prompt it carried. The turn
+an interrupt ended reports through its own registration as a `session-interrupted` event that names
+who interrupted it ("interrupted by prompt … (interrupt-current)"); it never reads as completed. The
+interrupting prompt then reports its own turn. A turn that finished before the interrupt landed is
+an ordinary completion: the interrupt arrived too late to stop it.
 
 ## Verify delivery and completion
 

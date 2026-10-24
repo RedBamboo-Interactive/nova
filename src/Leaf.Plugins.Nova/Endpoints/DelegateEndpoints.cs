@@ -484,20 +484,21 @@ public static class DelegateEndpoints
 
     /// <summary>
     /// What RedCompute's admission response says happened to the prompt, never inferred.
-    /// <para><c>effective</c> is the policy RedCompute holds for the queue item: steer-current is
-    /// demoted to after-current (reason <c>steer_unavailable</c>) when the session is still starting,
-    /// its provider cannot steer, the turn refuses the steer, or delivery is paused for maintenance.
-    /// Only steer-current can still change after admission, so
-    /// <c>effectiveFinal</c> is false while a steer is pending. A steer-current item delivered to an
-    /// idle session ran as that session's next turn; the response does not distinguish this from
-    /// joining an active turn.</para>
+    /// <para><c>effective</c> is the policy RedCompute holds for the queue item and
+    /// <c>deliveryReason</c> why it differs from the one requested: <c>steer_unavailable</c> when a
+    /// steer was demoted (session starting, provider or turn cannot steer, maintenance), or
+    /// <c>no_active_turn</c> when no turn was running and the steer ran as the next turn. Only a
+    /// pending steer can still change, so <c>effectiveFinal</c> is false while one is pending.
+    /// <c>demotionReason</c> is the same value, kept for callers of the first contract.</para>
     /// <para><c>turnInterrupted</c> is false for after-current and steer-current, which never
-    /// interrupt. For interrupt-current it is null: RedCompute interrupts only on a fresh admission to
-    /// an active session and does not report whether it did.</para>
-    /// <para><c>inputsAhead</c> is true when other caller inputs precede this one in the FIFO.
-    /// interrupt-current interrupts the running turn but does not overtake queued input, so those
-    /// run first. Null when the queue position cannot decide it (a pending steer overtakes ordinary
-    /// input).</para>
+    /// interrupt. For interrupt-current it is RedCompute's answer: true when a running turn accepted
+    /// the interrupt (<c>interruptResult</c> says what happened otherwise: not_active, maintenance,
+    /// unsupported, ...). The interrupted turn's own completion reports whether it really ended
+    /// interrupted. Null only from a RedCompute that does not report it.</para>
+    /// <para><c>inputsAhead</c> is true when other caller inputs will be delivered before this one.
+    /// interrupt-current overtakes ordinary queued input, so it is false for one unless an input is
+    /// in flight or failed, or an earlier interrupt-current input is still queued. Null when the queue
+    /// position cannot decide it (a pending steer overtakes ordinary input).</para>
     /// </summary>
     internal static DeliveryReport ReportDelivery(string requested, JsonElement? payload)
     {
@@ -509,6 +510,14 @@ public static class DelegateEndpoints
         var itemId = hasItem ? Text(item, "id") : null;
         var errorCode = hasItem && item.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object
             ? Text(error, "code") : null;
+        // Current RedCompute names the reason; an older one only left the demotion's error code.
+        var deliveryReason = hasItem ? Text(item, "deliveryReason") : null;
+        deliveryReason ??= requested != effective && effective is not null ? errorCode : null;
+        var interruptResult = payload is { ValueKind: JsonValueKind.Object } i ? Text(i, "interruptResult") : null;
+        bool? reportedInterrupted = payload is { ValueKind: JsonValueKind.Object } t
+            && t.TryGetProperty("turnInterrupted", out var interrupted)
+            && interrupted.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? interrupted.GetBoolean() : null;
         var replayed = payload is { ValueKind: JsonValueKind.Object } r
             && r.TryGetProperty("existing", out var existing) && existing.ValueKind == JsonValueKind.True;
         var head = payload is { ValueKind: JsonValueKind.Object } q
@@ -528,16 +537,19 @@ public static class DelegateEndpoints
             effective,
             EffectiveFinal: effective is not null && (effective != SteerCurrent || state is "delivered" or "cancelled"),
             state,
-            DemotionReason: requested != effective && effective is not null ? errorCode : null,
-            TurnInterrupted: requested == InterruptCurrent ? null : false,
+            deliveryReason,
+            DemotionReason: deliveryReason,
+            TurnInterrupted: requested == InterruptCurrent ? reportedInterrupted : false,
+            InterruptResult: requested == InterruptCurrent ? interruptResult : null,
             inputsAhead,
             itemId,
             replayed);
     }
 
     internal sealed record DeliveryReport(
-        string Requested, string? Effective, bool EffectiveFinal, string? State, string? DemotionReason,
-        bool? TurnInterrupted, bool? InputsAhead, string? QueueItemId, bool Replayed);
+        string Requested, string? Effective, bool EffectiveFinal, string? State, string? DeliveryReason,
+        string? DemotionReason, bool? TurnInterrupted, string? InterruptResult, bool? InputsAhead,
+        string? QueueItemId, bool Replayed);
 
     private static string? Text(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;

@@ -60,6 +60,19 @@ public static class CallbackEndpoints
         // Inputs still queued on the session when RedCompute built this payload (absent from older senders).
         var pendingInputs = body.TryGetProperty("pendingInputs", out var pendingValue)
             && pendingValue.ValueKind == JsonValueKind.Number && pendingValue.TryGetInt32(out var pendingCount) && pendingCount > 0 ? pendingCount : 0;
+        // RedCompute's turn ledger: the turn this completion reports (shared by every prompt one turn
+        // carried, steered ones included), how it ended, and the interrupt that ended it. Absent from
+        // older senders.
+        var turnId = body.TryGetProperty("turnId", out var turnValue) && turnValue.ValueKind == JsonValueKind.String
+            ? turnValue.GetString() : null;
+        var turnOutcome = body.TryGetProperty("turnOutcome", out var turnOutcomeValue) && turnOutcomeValue.ValueKind == JsonValueKind.String
+            ? turnOutcomeValue.GetString() : null;
+        string? interruptSource = null, interruptedByMessageUid = null;
+        if (body.TryGetProperty("interruptedBy", out var interruptedBy) && interruptedBy.ValueKind == JsonValueKind.Object)
+        {
+            interruptSource = interruptedBy.TryGetProperty("source", out var source) && source.ValueKind == JsonValueKind.String ? source.GetString() : null;
+            interruptedByMessageUid = interruptedBy.TryGetProperty("messageUid", out var by) && by.ValueKind == JsonValueKind.String ? by.GetString() : null;
+        }
         var backgroundTurn = status == "Idle" && workState == "background";
         // A turn the session started without a queued prompt (a peer message, a self-wake), reported
         // through the discussion's session-scoped question subscription: no prompt of ours ran it.
@@ -74,7 +87,11 @@ public static class CallbackEndpoints
         var pauseSuffix = !resumablePause ? ""
             : idleParking ? " — parked; resumes on the next message"
             : " — waiting to resume after restart";
+        // An interrupted turn did not complete, whatever status the session went idle with.
+        var interruptedTurn = turnOutcome == "interrupted" && status is "Idle" or "Ended"
+            && !resumablePause && stopReason != "usage_limit";
         var outcome = resumablePause || stopReason == "usage_limit" ? "paused"
+            : interruptedTurn ? "interrupted"
             : backgroundTurn ? "background"
             : status == "Idle" || provenEndedCompletion ? "completed"
             : status == "Cancelled" ? reason == "superseded" ? "superseded" : "cancelled"
@@ -90,6 +107,9 @@ public static class CallbackEndpoints
             _ when idleParking => $"Session {shownSession} parked after inactivity; it will resume on the next message",
             _ when resumablePause => $"Session {shownSession} paused for restart; awaiting recovery, completion has not been reported",
             (_, "usage_limit") => $"Session {shownSession} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
+            _ when interruptedTurn => $"Session {shownSession} turn was interrupted{InterruptedBy(interruptSource, interruptedByMessageUid)}{(title != null ? $" ({title})" : "")}; it did not complete"
+                + (backgroundTurn ? $", and {BackgroundTasks(backgroundTasksRunning)} still running" : "")
+                + (pendingInputs > 0 ? $"; it has {QueuedPrompts(pendingInputs)}, which it will run next" : ""),
             _ when backgroundTurn => $"Session {shownSession} ended its turn{(title != null ? $" ({title})" : "")} with {BackgroundTasks(backgroundTasksRunning)} still running; it is not finished and will report again when that work wakes it",
             _ when unpromptedTurn => $"Session {shownSession} finished a turn it started on its own{(title != null ? $" ({title})" : "")}"
                 + (pendingInputs > 0 ? $"; it has {QueuedPrompts(pendingInputs)}, which it will run next" : ""),
@@ -104,8 +124,14 @@ public static class CallbackEndpoints
         if (unprompted && !unpromptedTurn) summary += " (in a turn it started on its own)";
 
         var eventKind = unpromptedTurn ? "unprompted-turn"
-            : outcome switch { "paused" => "paused", "background" => "turn-ended", _ => "complete" };
-        var eventContent = backgroundTurn
+            : outcome switch { "paused" => "paused", "background" => "turn-ended", "interrupted" => "interrupted", _ => "complete" };
+        var eventContent = interruptedTurn
+            ? $"""
+            <nova-event source="callback:session-{eventKind}" type="session-{eventKind}" stopReason="{NovaEventText.Attribute(stopReason ?? "unknown")}" interruptSource="{NovaEventText.Attribute(interruptSource ?? "unknown")}">
+            {summary}
+            </nova-event>
+            """
+            : backgroundTurn
             ? $"""
             <nova-event source="callback:session-{eventKind}" type="session-{eventKind}" stopReason="{NovaEventText.Attribute(stopReason ?? "unknown")}" backgroundTasksRunning="{backgroundTasksRunning}">
             {summary}
@@ -130,12 +156,17 @@ public static class CallbackEndpoints
         // settle without it, and so can a member whose earlier delivery was still retrying.
         // A later turn of the same session has a new deliveredMessageUid and still arrives.
         // Pause, cancellation and supersession are per-prompt outcomes and keep the callbackId key.
+        // RedCompute now names the turn itself (turnId): a steered prompt reports the turn it joined
+        // under that turn's id, while its deliveredMessageUid is its own, so the two completions of
+        // one turn collapse into one event. Older senders fall back to deliveredMessageUid, which
+        // is the turn id of every unsteered turn.
+        var turnKey = turnId is { Length: > 0 and <= MaxIdentity } ? turnId : deliveredMessageUid;
         var turnIdentity = callbackId is not null
-            && deliveredMessageUid is { Length: > 0 and <= MaxIdentity }
+            && turnKey is { Length: > 0 and <= MaxIdentity }
             && outcome is not ("paused" or "cancelled" or "superseded");
         // Legacy senders remain compatible. A session ID alone cannot identify a
         // completion: later continuations of that same session must still arrive.
-        var key = turnIdentity ? $"session-turn:{sessionId}:{discussionId}:{deliveredMessageUid}"
+        var key = turnIdentity ? $"session-turn:{sessionId}:{discussionId}:{turnKey}"
             : callbackId is null ? null : $"session-complete:{sessionId}:{discussionId}:{callbackId}";
         // Pause and eventual terminal delivery share prompt correlation, but not
         // deduplication identity. A pause must never swallow the later completion.
@@ -146,6 +177,9 @@ public static class CallbackEndpoints
             sessionId, callbackId, promptMessageUid, status, stopReason, reason, deliveredMessageUid, executionObserved, outcome,
             backgroundTasksRunning, deliverySequence, workState, pendingInputs, title = rawTitle,
             trigger = unprompted ? "unprompted" : null,
+            turnId, turnOutcome,
+            interruptedBy = interruptSource is null && interruptedByMessageUid is null ? null
+                : new { source = interruptSource, messageUid = interruptedByMessageUid },
         });
         var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
             metadata: metadata,
@@ -157,7 +191,9 @@ public static class CallbackEndpoints
             return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
 
         if (!discussion.Confidential)
-            await live.PostAsync("callback", backgroundTurn
+            await live.PostAsync("callback", interruptedTurn
+                    ? $"Delegated session turn was interrupted{InterruptedBy(interruptSource, interruptedByMessageUid)}{(title != null ? $": {title}" : "")}"
+                    : backgroundTurn
                     ? $"Delegated session turn ended with {BackgroundTasks(backgroundTasksRunning)} still running{(title != null ? $": {title}" : "")}"
                     : unpromptedTurn
                     ? $"Delegated session finished a turn it started on its own{(title != null ? $": {title}" : "")}"
@@ -169,6 +205,19 @@ public static class CallbackEndpoints
     }
 
     private static string BackgroundTasks(int count) => count == 1 ? "1 background task" : $"{count} background tasks";
+
+    /// <summary>Who interrupted the turn, in the words of the event; the message UID is rendered inert.</summary>
+    internal static string InterruptedBy(string? source, string? messageUid)
+    {
+        var prompt = NovaEventText.Field(messageUid, MaxIdentity);
+        return source switch
+        {
+            "interrupt-current" => prompt is null ? " by an interrupt-current prompt" : $" by prompt {prompt} (interrupt-current)",
+            "send-now" => prompt is null ? " by send-now" : $" by send-now for prompt {prompt}",
+            "interrupt" => " by a stop request",
+            _ => "",
+        };
+    }
     private static string QueuedPrompts(int count) => count == 1 ? "1 more queued prompt" : $"{count} more queued prompts";
 
     // Bounds for worker-authored values rendered into an event; metadata keeps them whole.
