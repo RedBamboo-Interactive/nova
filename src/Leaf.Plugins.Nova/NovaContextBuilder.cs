@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Leaf.Plugins.Nova.Endpoints;
 using Leaf.Sdk.Services;
 
 namespace Leaf.Plugins.Nova;
@@ -93,6 +94,16 @@ public sealed class ContextSnapshot
 /// snapshot on the first message, delta against the previous snapshot afterwards.
 /// The curl hints point at the plugin's kernel-hosted API (port 18804).
 /// </summary>
+/// <remarks>
+/// Nearly everything interpolated here is externally sourced: discussion titles, LIVE event
+/// sources and content (Sonos/Spotify track and artist names, automation output, posted events),
+/// extension context (mail summaries, presence), outfit, mood, reaction lines, and device fields
+/// parsed from the client's User-Agent. A value containing "&lt;/nova-context&gt;" would close the
+/// block and make the rest read as the user's own message. So each block body is composed apart
+/// from the frame and passed through <see cref="NovaEventText.Neutralize"/> as a whole (its fixed
+/// text holds no Nova tag, so ordinary context is unchanged byte for byte), and every attribute of
+/// the opening tag is escaped.
+/// </remarks>
 public static class NovaContextBuilder
 {
     private const string ApiBase = "http://127.0.0.1:18804/api/apps/nova";
@@ -148,7 +159,6 @@ public static class NovaContextBuilder
         List<string>? reactionLines = null)
     {
         var sb = new StringBuilder();
-        AppendOpenTag(sb, now, device, input, currentId, agentName);
 
         if (snapshot.Mood != null)
             sb.Append($"\nMood: {snapshot.Mood}");
@@ -214,6 +224,16 @@ public static class NovaContextBuilder
         if (snapshot.Outfit != null)
             sb.Append($"\n\n{snapshot.Outfit}");
 
+        return Frame(sb, now, device, input, currentId, agentName);
+    }
+
+    // The opening tag, the neutralized body, the closing tag.
+    private static string Frame(StringBuilder body, DateTime now, ResolvedDevice device,
+        string input, string currentId, string? agentName)
+    {
+        var sb = new StringBuilder();
+        AppendOpenTag(sb, now, device, input, currentId, agentName);
+        sb.Append(NovaEventText.Neutralize(body.ToString()));
         sb.Append("\n</nova-context>");
         return sb.ToString();
     }
@@ -315,7 +335,6 @@ public static class NovaContextBuilder
         }
 
         var sb = new StringBuilder();
-        AppendOpenTag(sb, now, device, input, currentId, agentName);
 
         if (reactionLines is { Count: > 0 })
             foreach (var r in reactionLines)
@@ -332,8 +351,7 @@ public static class NovaContextBuilder
             sb.Append("\nNo context changes since last message.");
         }
 
-        sb.Append("\n</nova-context>");
-        return sb.ToString();
+        return Frame(sb, now, device, input, currentId, agentName);
     }
 
     public static string SerializeSnapshot(ContextSnapshot snapshot)
@@ -375,9 +393,12 @@ public static class NovaContextBuilder
     private static void AppendOpenTag(StringBuilder sb, DateTime now, ResolvedDevice device,
         string input, string currentId, string? agentName)
     {
-        var agentAttr = agentName != null ? $" agent=\"{agentName}\"" : "";
-        var roomAttr = device.Room != null ? $" room=\"{device.Room}\"" : "";
-        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{device.ShortLabel}\" device_type=\"{device.Type}\" platform=\"{device.Platform}\" input=\"{input}\" discussion=\"{currentId}\"{agentAttr}{roomAttr}>");
+        // Device name, type and platform come from the client's User-Agent; the agent name and room
+        // are user-editable entities.
+        static string A(string value) => NovaEventText.AttributeText(value);
+        var agentAttr = agentName != null ? $" agent=\"{A(agentName)}\"" : "";
+        var roomAttr = device.Room != null ? $" room=\"{A(device.Room)}\"" : "";
+        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{A(device.ShortLabel)}\" device_type=\"{A(device.Type)}\" platform=\"{A(device.Platform)}\" input=\"{A(input)}\" discussion=\"{A(currentId)}\"{agentAttr}{roomAttr}>");
     }
 
     private static string FormatRelativeTime(TimeSpan elapsed)

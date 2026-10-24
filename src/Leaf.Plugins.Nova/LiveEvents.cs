@@ -229,7 +229,7 @@ public sealed class EventInjector(
             // text opening with "<nova-event" is framed and neutralized like any other.
             var taggedContent = framed
                 ? content
-                : $"<nova-event source=\"{NovaEventText.SourceAttribute(source ?? "automation")}\">\n{NovaEventText.Neutralize(content)}\n</nova-event>";
+                : $"<nova-event source=\"{NovaEventText.AttributeText(source ?? "automation")}\">\n{NovaEventText.Neutralize(content)}\n</nova-event>";
 
             // The transcript copy carries the same uid as the stream record —
             // one logical event, one identity.

@@ -45,12 +45,13 @@ internal static class NovaEventText
     }
 
     /// <summary>
-    /// An event source for the frame's source attribute: tags neutralized and the characters that
-    /// could end the attribute or the tag escaped. Ordinary sources ("heartbeat-tick",
-    /// "automation:Backup &amp; Sync", "agent-response:abc") render exactly as written.
+    /// A value for a double-quoted frame attribute (an event source, a device name, an agent name):
+    /// tags neutralized and the characters that could end the attribute or the tag escaped.
+    /// Ordinary values ("heartbeat-tick", "automation:Backup &amp; Sync", "Pixel 9") render exactly as
+    /// written.
     /// </summary>
-    internal static string SourceAttribute(string source)
-        => Neutralize(source).Replace("\"", "&quot;").Replace("<", "&lt;").Replace(">", "&gt;")
+    internal static string AttributeText(string value)
+        => Neutralize(value).Replace("\"", "&quot;").Replace("<", "&lt;").Replace(">", "&gt;")
             .Replace("\r", " ").Replace("\n", " ");
 
     /// <summary>A Field that is also safe inside a double-quoted frame attribute.</summary>
