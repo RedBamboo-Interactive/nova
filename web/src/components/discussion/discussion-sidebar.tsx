@@ -92,6 +92,8 @@ interface Props {
   onRowAction: (id: string, action: DiscussionRowAction) => void
   onUpdateTitle: (id: string) => void
   onFloat?: (id: string) => void
+  /** Stops a running chat's session process; the next send resumes it. */
+  onStop?: (id: string) => void
   getAgent?: (id: string | null) => AgentInfo | undefined
   multiAgent?: boolean
   archiveMode?: boolean
@@ -102,7 +104,7 @@ interface Props {
   onLoadMoreArchived?: () => void
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, multiAgent, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -252,6 +254,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                   onUpdateTitle={() => onUpdateTitle(discussion.id)}
                   onShare={!discussion.confidential ? () => onRowAction(discussion.id, "share") : undefined}
                   onFloat={onFloat ? () => onFloat(discussion.id) : undefined}
+                  onStop={onStop && alive && discussion.sessionId ? () => onStop(discussion.id) : undefined}
                   onClose={() => onArchive(discussion.id)}
                 />
                 )}
@@ -269,7 +272,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
       </div>
     )
-  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, getAgent, multiAgent, delegationActivity, backgroundTasks, titleOf])
+  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, multiAgent, delegationActivity, backgroundTasks, titleOf])
 
   const renderArchivedItem = useCallback((discussion: DiscussionInfo) => {
     const item = discussion as ArchiveDiscussionItem

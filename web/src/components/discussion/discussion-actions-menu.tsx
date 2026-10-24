@@ -24,6 +24,8 @@ export interface DiscussionActionHandlers {
   onShare?: () => void
   onFloat?: () => void
   onReset?: () => void
+  /** Stops the session process to free memory; the next send resumes it. */
+  onStop?: () => void
   onClose?: () => void
   /** Shortcuts act on the open discussion, so only its menus advertise them. */
   showShortcuts?: boolean
@@ -41,6 +43,7 @@ export function DiscussionActionItems({
   onShare,
   onFloat,
   onReset,
+  onStop,
   onClose,
   showShortcuts = false,
   children,
@@ -103,6 +106,12 @@ export function DiscussionActionItems({
           <i aria-hidden="true" className="ph-bold ph-arrows-clockwise size-4" />
           Reset timeline
           {shortcut(DISCUSSION_SHORTCUTS.reset)}
+        </DropdownMenuItem>
+      )}
+      {onStop && (
+        <DropdownMenuItem onClick={onStop}>
+          <i aria-hidden="true" className="ph-bold ph-stop size-4" />
+          Stop
         </DropdownMenuItem>
       )}
       {children}

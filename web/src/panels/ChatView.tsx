@@ -184,6 +184,7 @@ export function ChatView({
     sendMessage,
     sendInput,
     interruptDiscussion,
+    stopDiscussion,
     answerQuestion,
     archiveDiscussion,
     rotateDiscussion,
@@ -980,6 +981,7 @@ export function ChatView({
                 onShare={!discussionClosed && !owningApp && !activeDiscussion.confidential ? handleShare : undefined}
                 onFloat={floatingSurface?.supported ? () => handleFloatDiscussion(activeDiscussion.id) : undefined}
                 onReset={activeDiscussion.type === "live" ? () => void handleRotateDiscussion(activeDiscussion.id) : undefined}
+                onStop={canManageDiscussion && activeDiscussion.sessionId && activeDiscussion.status !== "stopped" ? () => void stopDiscussion(activeDiscussion.id) : undefined}
                 onClose={canManageDiscussion ? () => handleCloseDiscussion(activeDiscussion.id) : undefined}
               />
             </DropdownMenuContent>
@@ -1542,6 +1544,7 @@ export function ChatView({
               onRowAction={handleRowAction}
               onUpdateTitle={handleUpdateTitle}
               onFloat={floatingSurface?.supported && !floating ? handleFloatDiscussion : undefined}
+              onStop={stopDiscussion}
               getAgent={getAgent}
               multiAgent={multiAgent}
               archiveMode={archiveMode}

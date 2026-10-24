@@ -1422,6 +1422,23 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [discussions, clearStreamingLatch])
 
   /**
+   * Stop the session behind a discussion to free its process. The discussion
+   * stays listed, greyed; the user's next send resumes it.
+   */
+  const stopDiscussion = useCallback(async (discussionId: string) => {
+    const disc = discussions.find((d) => d.id === discussionId)
+    if (!disc?.sessionId || disc.status === "stopped" || isClosed(disc.status)) return
+    try {
+      await api.post(`/ai-session/sessions/${disc.sessionId}/stop`)
+      clearStreamingLatch(discussionId)
+      setDiscussions((prev) => prev.map((d) => d.id === discussionId && !isClosed(d.status) ? { ...d, status: "stopped" as const } : d))
+      await api.put(`/api/apps/nova/discussions/${discussionId}/stopped`)
+    } catch (err) {
+      toast({ variant: "error", title: "Failed to stop discussion", description: err instanceof Error ? err.message : "Unknown error" })
+    }
+  }, [discussions, clearStreamingLatch, toast])
+
+  /**
    * Two different things wear the name "answer" here.
    *
    * When the session is parked on an AskUserQuestion the CLI is blocked on a
@@ -2117,6 +2134,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     sendMessage,
     sendInput,
     interruptDiscussion,
+    stopDiscussion,
     answerQuestion,
     archiveDiscussion,
     rotateDiscussion,
