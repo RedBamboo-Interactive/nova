@@ -3,6 +3,8 @@
 import { isEventBlock, eventInputMessageUid } from "@redbamboo/chat/event-parts"
 import type { MessageBlock, MessagePart } from "@redbamboo/chat"
 import type { EventType } from "./types"
+import { AGENT_NOTE_KEY, parseAgentNote } from "./agent-note.ts"
+import { DEFAULT_EVENT } from "./event-type-resolution.ts"
 
 /**
  * Where frieze events sit in a discussion.
@@ -68,18 +70,25 @@ function eventKey(source: string): string {
 
 export function buildEventPart(event: FriezeEvent, resolve?: EventTypeResolver): MessagePart {
   const eventType = resolve?.(event.source)
-  const text = unwrapEventText(event.content)
+  const unwrapped = unwrapEventText(event.content)
+  const note = parseAgentNote(eventKey(event.source), unwrapped)
+  const text = note?.text ?? unwrapped
+  const data = note
+    ? { ...event.data, agent: note.agent, discussionId: note.discussionId, topic: note.topic }
+    : event.data
   return {
     type: "tool_use",
     ...(event.messageUid ? { messageUid: event.messageUid } : {}),
-    toolName: `event:${eventKey(event.source)}`,
+    toolName: `event:${note ? AGENT_NOTE_KEY : eventKey(event.source)}`,
     // The timestamp rides on the part, not the block: merged groups keep only
     // the first event's block timestamp, so the modal needs its own copy.
     toolInput: JSON.stringify({
       event: text,
+      // An unregistered source has no better title than its own key.
+      label: eventType && eventType.key !== DEFAULT_EVENT.key ? eventType.name : null,
       icon: eventType?.icon ?? null,
       color: eventType?.color ?? null,
-      data: event.data,
+      data,
       timestamp: event.timestamp,
     }),
     content: text,

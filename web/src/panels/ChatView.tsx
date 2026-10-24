@@ -39,6 +39,7 @@ import { applyPendingVisibleContext } from "../lib/pending-visible-context-store
 import { isDiscussionSelectionCurrent, resolveRequestedDiscussionId } from "../lib/discussion-view-selection"
 import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToContext, type MonitorVisualSource } from "../lib/visual-capture"
 import { delegationSessionPath } from "../lib/delegation-session-link"
+import { AGENT_NOTE_KEY } from "../lib/agent-note"
 import { formatOwningApp } from "../lib/discussion-owner"
 import { useVoiceSession } from "../hooks/use-voice-session"
 import { VoiceSessionPanel } from "../components/voice-session-panel"
@@ -620,7 +621,7 @@ export function ChatView({
   // Semantic events navigate only this router/client. Never round-trip through
   // the global codered.navigate WebSocket event for delegation markers.
   const resolveEventLink = useCallback((event: ParsedEvent) => {
-    if (event.key === "discussion") {
+    if (event.key === "discussion" || event.key === AGENT_NOTE_KEY) {
       const discussionId = event.data?.discussionId
       if (typeof discussionId !== "string" || !discussionId) return undefined
       return () => handleSelectDiscussion(discussionId)

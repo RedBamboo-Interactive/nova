@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { appendEvent, orderMessages } from "./message-order.ts"
+import { appendEvent, buildEventPart, orderMessages } from "./message-order.ts"
+import { resolveEventType } from "./event-type-resolution.ts"
 import type { ChatEvent, MessageBlock } from "@redbamboo/chat"
 import { processStreamEvent } from "../../../../redbamboo-packages/packages/chat/src/lib/process-stream-event.ts"
 
@@ -198,4 +199,33 @@ test("legacy events and unknown live identities are preserved without content ma
   assert.equal(orderMessages([one, two]).flatMap(b => b.parts).length, 2)
   const arrival = { source: "event:coordination", content: "same", data: null, timestamp: at(6) }
   assert.equal(appendEvent(appendEvent([], arrival), arrival).flatMap(b => b.parts).length, 2)
+})
+
+test("an Agent instance note projects to one magenta agent-note part keeping its identity", () => {
+  const part = buildEventPart({
+    messageUid: "57d5c2d7",
+    source: "event:nova-855ddaca",
+    content: "[internal] From 855ddaca (Nightly / Sentinel vision): Note c7a15ef is now pushed.",
+    data: null,
+    timestamp: at(15),
+  }, source => resolveEventType(source, new Map()))
+
+  assert.equal(part.toolName, "event:agent-note")
+  assert.equal(part.messageUid, "57d5c2d7")
+  assert.equal(part.content, "Note c7a15ef is now pushed.")
+  const payload = JSON.parse(part.toolInput!)
+  assert.equal(payload.label, "Nova · 855ddaca")
+  assert.equal(payload.color, "rgb(236 72 153)")
+  assert.deepEqual(payload.data, { agent: "nova", discussionId: "855ddaca", topic: "Nightly / Sentinel vision" })
+  assert.equal(payload.timestamp, at(15))
+})
+
+test("an unregistered event keeps its key as the title", () => {
+  const part = buildEventPart(
+    { source: "event:heartbeat", content: "tick", data: null, timestamp: at(16) },
+    source => resolveEventType(source, new Map()),
+  )
+
+  assert.equal(part.toolName, "event:heartbeat")
+  assert.equal(JSON.parse(part.toolInput!).label, null)
 })
