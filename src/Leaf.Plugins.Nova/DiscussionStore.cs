@@ -23,8 +23,13 @@ public static class DiscussionStatus
 
     public static bool IsClosed(string status) => status is Archived or Archiving;
 
+    /// <summary>Stops RedCompute recovers from on its own after a restart (mirrors SessionStopReasons.IsRestartRecoverable).</summary>
+    public static bool IsRestartRecoverableStop(string? stopReason)
+        => stopReason is "maintenance_restart" or "orphaned_on_restart";
+
+    /// <summary>Stops RedCompute resumes on the next prompt (mirrors SessionStopReasons.IsAutoResumable). Delegation semantics only; the discussion indicator uses <see cref="IsRestartRecoverableStop"/>.</summary>
     public static bool IsAutoResumableStop(string? stopReason)
-        => stopReason is "maintenance_restart" or "orphaned_on_restart" or "idle_timeout" or "idle_ttl_expired";
+        => IsRestartRecoverableStop(stopReason) || stopReason is "idle_timeout" or "idle_ttl_expired";
 
     public static string? FromSessionStatus(
         string? sessionStatus,
@@ -34,7 +39,7 @@ public static class DiscussionStatus
         {
             "Active" => Thinking,
             "Idle" or "Starting" => Idle,
-            "Stopped" when IsAutoResumableStop(stopReason) => Idle,
+            "Stopped" when IsRestartRecoverableStop(stopReason) => Idle,
             "Stopped" or "Error" => Stopped,
             _ => null,
         };

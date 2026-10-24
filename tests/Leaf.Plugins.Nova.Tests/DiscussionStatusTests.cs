@@ -21,8 +21,6 @@ public sealed class DiscussionStatusTests
     [Theory]
     [InlineData("maintenance_restart")]
     [InlineData("orphaned_on_restart")]
-    [InlineData("idle_timeout")]
-    [InlineData("idle_ttl_expired")]
     public void Restart_recovery_projects_a_stopped_provider_as_resumable_idle(string stopReason)
     {
         Assert.Equal(DiscussionStatus.Idle,
@@ -34,5 +32,25 @@ public sealed class DiscussionStatusTests
     {
         Assert.Equal(DiscussionStatus.Stopped,
             DiscussionStatus.FromSessionStatus("Stopped", "chat", "user_stopped"));
+    }
+
+    [Theory]
+    [InlineData("user_stopped")]
+    [InlineData("idle_timeout")]
+    [InlineData("idle_ttl_expired")]
+    [InlineData(null)]
+    public void Every_other_stop_is_the_one_grey_stopped_state(string? stopReason)
+    {
+        Assert.Equal(DiscussionStatus.Stopped,
+            DiscussionStatus.FromSessionStatus("Stopped", "chat", stopReason));
+    }
+
+    [Theory]
+    [InlineData("idle_timeout")]
+    [InlineData("idle_ttl_expired")]
+    public void Idle_parking_stays_auto_resumable_for_delegation(string stopReason)
+    {
+        Assert.True(DiscussionStatus.IsAutoResumableStop(stopReason));
+        Assert.False(DiscussionStatus.IsRestartRecoverableStop(stopReason));
     }
 }
