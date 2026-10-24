@@ -41,393 +41,395 @@ public static class DelegateEndpoints
 {
     public static void Map(RouteGroupBuilder group)
     {
-        group.MapPost("/delegate", async (HttpContext ctx, DelegateRequest request, RedComputeClient redCompute,
-            AgentDirectory agentDir, AgentWorkspaces workspaces, DiscussionStore discussions,
-            [FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities,
-            EventInjector injector) =>
-        {
-            bool isContinuation = !string.IsNullOrWhiteSpace(request.SessionId);
-            if (string.IsNullOrWhiteSpace(request.Prompt))
-                return Results.BadRequest(new { error = "prompt is required" });
-            if (request.DeploymentVerificationTarget is { } target
-                && (target.Service is not ("redleaf" or "redcompute") || string.IsNullOrWhiteSpace(target.RunId)
-                    || target.RunId.Length > 100 || target.RunId.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-')))
-                return Results.BadRequest(new { error = "invalid_deployment_target" });
+        group.MapPost("/delegate", HandleDelegateAsync);
+    }
 
-            var callerId = TrustedCallerId(ctx.User);
-            if (callerId == null)
+    internal static async Task<IResult> HandleDelegateAsync(HttpContext ctx, DelegateRequest request, RedComputeClient redCompute,
+        AgentDirectory agentDir, AgentWorkspaces workspaces, DiscussionStore discussions,
+        [FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities,
+        EventInjector injector)
+    {
+        bool isContinuation = !string.IsNullOrWhiteSpace(request.SessionId);
+        if (string.IsNullOrWhiteSpace(request.Prompt))
+            return Results.BadRequest(new { error = "prompt is required" });
+        if (request.DeploymentVerificationTarget is { } target
+            && (target.Service is not ("redleaf" or "redcompute") || string.IsNullOrWhiteSpace(target.RunId)
+                || target.RunId.Length > 100 || target.RunId.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-')))
+            return Results.BadRequest(new { error = "invalid_deployment_target" });
+
+        var callerId = TrustedCallerId(ctx.User);
+        if (callerId == null)
+            return Results.Json(new
+            {
+                error = "authentication_required",
+                message = "Delegation requires a signed user or execution identity; local-user is not delegated authority",
+            }, statusCode: StatusCodes.Status401Unauthorized);
+
+        var hasExplicitProjectPath = !isContinuation
+            && !string.IsNullOrWhiteSpace(request.ProjectPath);
+        LeafEntity? resolvedRepository = null;
+        if (!isContinuation && !string.IsNullOrWhiteSpace(request.Repository))
+        {
+            resolvedRepository = Guid.TryParse(request.Repository, out var repositoryId)
+                ? await entities.GetAsync(repositoryId, ctx.RequestAborted)
+                : await entities.GetBySlugAsync("repository", request.Repository, ctx.RequestAborted);
+            if (resolvedRepository is not { TypeSlug: "repository" })
                 return Results.Json(new
                 {
-                    error = "authentication_required",
-                    message = "Delegation requires a signed user or execution identity; local-user is not delegated authority",
-                }, statusCode: StatusCodes.Status401Unauthorized);
+                    error = "repository_not_found",
+                    message = $"Repository '{request.Repository}' not found",
+                }, statusCode: 404);
 
-            var hasExplicitProjectPath = !isContinuation
-                && !string.IsNullOrWhiteSpace(request.ProjectPath);
-            LeafEntity? resolvedRepository = null;
-            if (!isContinuation && !string.IsNullOrWhiteSpace(request.Repository))
-            {
-                resolvedRepository = Guid.TryParse(request.Repository, out var repositoryId)
-                    ? await entities.GetAsync(repositoryId, ctx.RequestAborted)
-                    : await entities.GetBySlugAsync("repository", request.Repository, ctx.RequestAborted);
-                if (resolvedRepository is not { TypeSlug: "repository" })
-                    return Results.Json(new
-                    {
-                        error = "repository_not_found",
-                        message = $"Repository '{request.Repository}' not found",
-                    }, statusCode: 404);
-
-                var status = StringValue(resolvedRepository.Data, "status", "active");
-                if (!string.Equals(status, "active", StringComparison.OrdinalIgnoreCase))
-                    return Results.Json(new
-                    {
-                        error = "repository_inactive",
-                        message = $"Repository '{resolvedRepository.Name}' is not active",
-                    }, statusCode: 409);
-
-                var repositoryPath = StringValue(resolvedRepository.Data, "local_path");
-                if (string.IsNullOrWhiteSpace(repositoryPath) || !Directory.Exists(repositoryPath))
-                    return Results.Json(new
-                    {
-                        error = "repository_checkout_unavailable",
-                        message = $"Repository '{resolvedRepository.Name}' has no available local checkout",
-                    }, statusCode: 409);
-
-                request.ProjectPath = Path.GetFullPath(repositoryPath);
-            }
-
-            // Compatibility for callers that still send a physical path. Code sessions are
-            // repository-backed, so resolve the path to one exact active Repository entity
-            // instead of creating a session whose membership has to be guessed later.
-            if (resolvedRepository is null && hasExplicitProjectPath)
-            {
-                var repositories = await entities.QueryAsync(new EntityQuery
+            var status = StringValue(resolvedRepository.Data, "status", "active");
+            if (!string.Equals(status, "active", StringComparison.OrdinalIgnoreCase))
+                return Results.Json(new
                 {
-                    TypeSlug = "repository",
-                    Limit = 500,
-                }, ctx.RequestAborted);
-                var matches = FindMatchingActiveRepositories(repositories, request.ProjectPath!);
-                if (matches.Count == 0)
-                    return Results.Json(new
-                    {
-                        error = "repository_not_found_for_path",
-                        message = "projectPath must exactly match an active Repository entity checkout",
-                    }, statusCode: StatusCodes.Status422UnprocessableEntity);
-                if (matches.Count > 1)
-                    return Results.Json(new
-                    {
-                        error = "repository_path_ambiguous",
-                        message = "projectPath matches more than one active Repository entity",
-                    }, statusCode: StatusCodes.Status409Conflict);
+                    error = "repository_inactive",
+                    message = $"Repository '{resolvedRepository.Name}' is not active",
+                }, statusCode: 409);
 
-                resolvedRepository = matches[0];
-                var repositoryPath = StringValue(resolvedRepository.Data, "local_path");
-                if (!Directory.Exists(repositoryPath))
-                    return Results.Json(new
-                    {
-                        error = "repository_checkout_unavailable",
-                        message = $"Repository '{resolvedRepository.Name}' has no available local checkout",
-                    }, statusCode: StatusCodes.Status409Conflict);
-                request.ProjectPath = Path.GetFullPath(repositoryPath);
-            }
+            var repositoryPath = StringValue(resolvedRepository.Data, "local_path");
+            if (string.IsNullOrWhiteSpace(repositoryPath) || !Directory.Exists(repositoryPath))
+                return Results.Json(new
+                {
+                    error = "repository_checkout_unavailable",
+                    message = $"Repository '{resolvedRepository.Name}' has no available local checkout",
+                }, statusCode: 409);
 
-            // Resolve agent if specified: provides workspace, provider, quality defaults.
-            AgentInfo? resolvedAgent = null;
-            if (!isContinuation && !string.IsNullOrWhiteSpace(request.Agent))
+            request.ProjectPath = Path.GetFullPath(repositoryPath);
+        }
+
+        // Compatibility for callers that still send a physical path. Code sessions are
+        // repository-backed, so resolve the path to one exact active Repository entity
+        // instead of creating a session whose membership has to be guessed later.
+        if (resolvedRepository is null && hasExplicitProjectPath)
+        {
+            var repositories = await entities.QueryAsync(new EntityQuery
             {
-                var agents = await agentDir.GetAgentsAsync(ct: ctx.RequestAborted);
-                resolvedAgent = agents.FirstOrDefault(a =>
-                    a.Id == request.Agent || a.Slug == request.Agent);
-                if (resolvedAgent == null)
-                    return Results.Json(new { error = "agent_not_found", message = $"Agent '{request.Agent}' not found" }, statusCode: 404);
+                TypeSlug = "repository",
+                Limit = 500,
+            }, ctx.RequestAborted);
+            var matches = FindMatchingActiveRepositories(repositories, request.ProjectPath!);
+            if (matches.Count == 0)
+                return Results.Json(new
+                {
+                    error = "repository_not_found_for_path",
+                    message = "projectPath must exactly match an active Repository entity checkout",
+                }, statusCode: StatusCodes.Status422UnprocessableEntity);
+            if (matches.Count > 1)
+                return Results.Json(new
+                {
+                    error = "repository_path_ambiguous",
+                    message = "projectPath matches more than one active Repository entity",
+                }, statusCode: StatusCodes.Status409Conflict);
 
-                var ws = await workspaces.GetAsync(resolvedAgent.Id, ctx.RequestAborted);
-                ws.GenerateClaudeMd();
+            resolvedRepository = matches[0];
+            var repositoryPath = StringValue(resolvedRepository.Data, "local_path");
+            if (!Directory.Exists(repositoryPath))
+                return Results.Json(new
+                {
+                    error = "repository_checkout_unavailable",
+                    message = $"Repository '{resolvedRepository.Name}' has no available local checkout",
+                }, statusCode: StatusCodes.Status409Conflict);
+            request.ProjectPath = Path.GetFullPath(repositoryPath);
+        }
 
-                request.ProjectPath ??= ws.WorkspacePath;
-                request.Provider ??= resolvedAgent.Provider;
-                if (string.IsNullOrWhiteSpace(request.Model)
-                    && string.IsNullOrWhiteSpace(request.QualityTier)
-                    && string.IsNullOrWhiteSpace(request.QualityMode))
-                    request.QualityTier = resolvedAgent.QualityTier;
-            }
+        // Resolve agent if specified: provides workspace, provider, quality defaults.
+        AgentInfo? resolvedAgent = null;
+        if (!isContinuation && !string.IsNullOrWhiteSpace(request.Agent))
+        {
+            var agents = await agentDir.GetAgentsAsync(ct: ctx.RequestAborted);
+            resolvedAgent = agents.FirstOrDefault(a =>
+                a.Id == request.Agent || a.Slug == request.Agent);
+            if (resolvedAgent == null)
+                return Results.Json(new { error = "agent_not_found", message = $"Agent '{request.Agent}' not found" }, statusCode: 404);
 
-            if (!isContinuation && string.IsNullOrWhiteSpace(request.ProjectPath))
-                return Results.BadRequest(new { error = "Either sessionId, repository, projectPath, or agent is required" });
+            var ws = await workspaces.GetAsync(resolvedAgent.Id, ctx.RequestAborted);
+            ws.GenerateClaudeMd();
 
-            DiscussionRead? discussion = null;
-            if (!string.IsNullOrWhiteSpace(request.DiscussionId))
-            {
-                discussion = await discussions.GetAsync(request.DiscussionId, ctx.RequestAborted);
-                if (discussion == null)
-                    return Results.Json(new
+            request.ProjectPath ??= ws.WorkspacePath;
+            request.Provider ??= resolvedAgent.Provider;
+            if (string.IsNullOrWhiteSpace(request.Model)
+                && string.IsNullOrWhiteSpace(request.QualityTier)
+                && string.IsNullOrWhiteSpace(request.QualityMode))
+                request.QualityTier = resolvedAgent.QualityTier;
+        }
+
+        if (!isContinuation && string.IsNullOrWhiteSpace(request.ProjectPath))
+            return Results.BadRequest(new { error = "Either sessionId, repository, projectPath, or agent is required" });
+
+        DiscussionRead? discussion = null;
+        if (!string.IsNullOrWhiteSpace(request.DiscussionId))
+        {
+            discussion = await discussions.GetAsync(request.DiscussionId, ctx.RequestAborted);
+            if (discussion == null)
+                return Results.Json(new
+                {
+                    error = "discussion_not_found",
+                    message = $"Discussion '{request.DiscussionId}' not found",
+                }, statusCode: StatusCodes.Status404NotFound);
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx))
+                return discussion.Confidential
+                    ? Results.Json(new
                     {
                         error = "discussion_not_found",
                         message = $"Discussion '{request.DiscussionId}' not found",
-                    }, statusCode: StatusCodes.Status404NotFound);
-                if (!DiscussionAccessPolicy.CanRead(discussion, ctx))
-                    return discussion.Confidential
-                        ? Results.Json(new
-                        {
-                            error = "discussion_not_found",
-                            message = $"Discussion '{request.DiscussionId}' not found",
-                        }, statusCode: StatusCodes.Status404NotFound)
-                        : Results.Json(new
-                        {
-                            error = "forbidden",
-                            message = "You do not have access to this discussion",
-                        }, statusCode: StatusCodes.Status403Forbidden);
-            }
-            resolvedAgent ??= discussion?.AgentId != null
-                ? await agentDir.GetAgentAsync(discussion.AgentId, ctx.RequestAborted)
-                : agentDir.NovaAgentId != null
-                    ? await agentDir.GetAgentAsync(agentDir.NovaAgentId, ctx.RequestAborted)
-                    : null;
-            if (resolvedAgent == null)
-                return Results.Json(new { error = "agent_not_found", message = "No linked Agent entity is available for delegation" }, statusCode: 422);
-
-            if (!isContinuation)
-                request.Provider = EffectiveProvider(request, discussion, resolvedAgent);
-
-            var ownerId = discussion?.OwnerId ?? callerId;
-            var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ctx.RequestAborted);
-            var baseContext = new List<ComputeContextReference>();
-            if (request.DiscussionId != null)
-                baseContext.Add(new("discussion", request.DiscussionId));
-            if (resolvedRepository != null)
-                baseContext.Add(new ComputeContextReference(
-                    "repository",
-                    Id: resolvedRepository.Slug,
-                    EntityId: resolvedRepository.Id.ToString(),
-                    NameSnapshot: resolvedRepository.Name));
-
-            // 1. Create session on RedCompute (skip if continuing an existing session)
-            string sessionId;
-            if (isContinuation)
-            {
-                sessionId = request.SessionId!;
-                using var raw = await redCompute.GetSessionRawAsync(sessionId);
-                if (raw == null)
-                    return Results.Json(new { error = "session_not_found", message = $"Session '{sessionId}' not found on RedCompute" }, statusCode: 404);
-
-                var status = raw.RootElement.TryGetProperty("session", out var s)
-                    && s.TryGetProperty("status", out var st) ? st.GetString() : null;
-                if (status is "Stopped" or "Error")
-                {
-                    var resumeProvenance = await NovaComputeProvenance.CreateAsync(entities, resolvedAgent, beneficiary,
-                        "/api/apps/nova/delegate",
-                        [.. baseContext, new ComputeContextReference("session", sessionId)],
-                        method: "POST", ct: ctx.RequestAborted);
-                    if (!await redCompute.ResumeAsync(sessionId, resumeProvenance, ctx.RequestAborted))
-                        return Results.Json(new { error = "resume_failed", message = $"Session '{sessionId}' could not be resumed" }, statusCode: 502);
-                }
-            }
-            else
-            {
-                try
-                {
-                    var createBody = new Dictionary<string, object?> { ["projectPath"] = request.ProjectPath };
-                    if (resolvedRepository is not null)
-                        createBody["repositoryId"] = resolvedRepository.Id;
-                    if (!string.IsNullOrWhiteSpace(request.Provider))
-                        createBody["provider"] = request.Provider;
-                    if (!string.IsNullOrWhiteSpace(request.Model))
-                        createBody["model"] = request.Model;
-                    else
-                        createBody["qualityTier"] = request.QualityTier
-                            ?? request.QualityMode
-                            ?? "standard";
-
-                    var createProvenance = await NovaComputeProvenance.CreateAsync(
-                        entities, resolvedAgent, beneficiary,
-                        "/api/apps/nova/delegate", baseContext, method: "POST", ct: ctx.RequestAborted);
-                    var created = await redCompute.CreateSessionAsync(createBody,
-                        createProvenance, ctx.RequestAborted);
-                    if (created == null)
-                        return Results.Json(new { error = "session_create_failed", message = "RedCompute refused to create the session" }, statusCode: 502);
-                    sessionId = created;
-                }
-                catch (Exception ex) when (IsExecutionIdentityFailure(ex))
-                {
-                    return Results.Json(new
+                    }, statusCode: StatusCodes.Status404NotFound)
+                    : Results.Json(new
                     {
-                        error = "execution_identity_rejected",
-                        message = ex.Message,
+                        error = "forbidden",
+                        message = "You do not have access to this discussion",
                     }, statusCode: StatusCodes.Status403Forbidden);
-                }
-                catch (TaskCanceledException ex)
-                {
-                    return Results.Json(new
-                    {
-                        error = "redcompute_timeout",
-                        message = ex.Message,
-                    }, statusCode: StatusCodes.Status504GatewayTimeout);
-                }
-                catch (HttpRequestException ex)
-                {
-                    return Results.Json(new { error = "redcompute_unavailable", message = ex.Message }, statusCode: 502);
-                }
-                catch (Exception ex)
-                {
-                    return Results.Json(new { error = "delegation_failed", message = ex.Message }, statusCode: 500);
-                }
-            }
+        }
+        resolvedAgent ??= discussion?.AgentId != null
+            ? await agentDir.GetAgentAsync(discussion.AgentId, ctx.RequestAborted)
+            : agentDir.NovaAgentId != null
+                ? await agentDir.GetAgentAsync(agentDir.NovaAgentId, ctx.RequestAborted)
+                : null;
+        if (resolvedAgent == null)
+            return Results.Json(new { error = "agent_not_found", message = "No linked Agent entity is available for delegation" }, statusCode: 422);
 
-            // 2. Send prompt and verify delivery
-            bool promptSent = false;
-            bool admissionUncertain = false;
-            RedComputeClient.SendMessageResult? lastPromptResult = null;
-            var promptMessageUid = Guid.NewGuid().ToString("N");
-            var promptIdempotencyKey = $"nova-delegate:{sessionId}:{promptMessageUid}";
-            // Subscribe before dispatch so a fast prompt completion cannot outrun registration.
-            // Compute binds this exact UID to its durable accepted input; no queued input means no completion.
-            if (!string.IsNullOrWhiteSpace(request.DiscussionId))
+        if (!isContinuation)
+            request.Provider = EffectiveProvider(request, discussion, resolvedAgent);
+
+        var ownerId = discussion?.OwnerId ?? callerId;
+        var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ctx.RequestAborted);
+        var baseContext = new List<ComputeContextReference>();
+        if (request.DiscussionId != null)
+            baseContext.Add(new("discussion", request.DiscussionId));
+        if (resolvedRepository != null)
+            baseContext.Add(new ComputeContextReference(
+                "repository",
+                Id: resolvedRepository.Slug,
+                EntityId: resolvedRepository.Id.ToString(),
+                NameSnapshot: resolvedRepository.Name));
+
+        // 1. Create session on RedCompute (skip if continuing an existing session)
+        string sessionId;
+        if (isContinuation)
+        {
+            sessionId = request.SessionId!;
+            using var raw = await redCompute.GetSessionRawAsync(sessionId);
+            if (raw == null)
+                return Results.Json(new { error = "session_not_found", message = $"Session '{sessionId}' not found on RedCompute" }, statusCode: 404);
+
+            var status = raw.RootElement.TryGetProperty("session", out var s)
+                && s.TryGetProperty("status", out var st) ? st.GetString() : null;
+            if (status is "Stopped" or "Error")
             {
-                try
-                {
-                    var (completionUrl, questionUrl) = CallbackUrls(request.DiscussionId);
-                    await redCompute.RegisterCallbackAsync(sessionId, completionUrl, force: true, callbackId: promptMessageUid, promptMessageUid: promptMessageUid,
-                        questionUrl: questionUrl);
-                }
-                catch { /* The post-admission registration below retries the same identity. */ }
+                var resumeProvenance = await NovaComputeProvenance.CreateAsync(entities, resolvedAgent, beneficiary,
+                    "/api/apps/nova/delegate",
+                    [.. baseContext, new ComputeContextReference("session", sessionId)],
+                    method: "POST", ct: ctx.RequestAborted);
+                if (!await redCompute.ResumeAsync(sessionId, resumeProvenance, ctx.RequestAborted))
+                    return Results.Json(new { error = "resume_failed", message = $"Session '{sessionId}' could not be resumed" }, statusCode: 502);
             }
-            for (int attempt = 0; attempt < 3 && !promptSent; attempt++)
+        }
+        else
+        {
+            try
             {
-                try
-                {
-                    var messageProvenance = await NovaComputeProvenance.CreateAsync(
-                        entities, resolvedAgent, beneficiary,
-                        "/api/apps/nova/delegate",
-                        [.. baseContext, new ComputeContextReference("session", sessionId)],
-                        method: "POST", ct: ctx.RequestAborted);
-                    var result = await redCompute.SendMessageDetailedAsync(sessionId,
-                        request.DeploymentVerificationTarget is null
-                            ? (object)new { content = request.Prompt, messageUid = promptMessageUid }
-                            : new { content = request.Prompt, messageUid = promptMessageUid, deploymentVerificationTarget = request.DeploymentVerificationTarget },
-                        messageProvenance, ctx.RequestAborted,
-                        idempotencyKey: promptIdempotencyKey);
-                    lastPromptResult = result;
-                    if (result.StatusCode >= 500 || result.Success && !IsPromptAccepted(result.Payload)) admissionUncertain = true;
-                    if (result.Success && IsPromptAccepted(result.Payload))
-                    {
-                        promptSent = true;
-                        break;
-                    }
-                    if (result.ErrorCode == "execution_identity_rejected") break;
-                }
-                catch { admissionUncertain = true; }
+                var createBody = new Dictionary<string, object?> { ["projectPath"] = request.ProjectPath };
+                if (resolvedRepository is not null)
+                    createBody["repositoryId"] = resolvedRepository.Id;
+                if (!string.IsNullOrWhiteSpace(request.Provider))
+                    createBody["provider"] = request.Provider;
+                if (!string.IsNullOrWhiteSpace(request.Model))
+                    createBody["model"] = request.Model;
+                else
+                    createBody["qualityTier"] = request.QualityTier
+                        ?? request.QualityMode
+                        ?? "standard";
 
-                if (!promptSent)
-                    await Task.Delay(500);
+                var createProvenance = await NovaComputeProvenance.CreateAsync(
+                    entities, resolvedAgent, beneficiary,
+                    "/api/apps/nova/delegate", baseContext, method: "POST", ct: ctx.RequestAborted);
+                var created = await redCompute.CreateSessionAsync(createBody,
+                    createProvenance, ctx.RequestAborted);
+                if (created == null)
+                    return Results.Json(new { error = "session_create_failed", message = "RedCompute refused to create the session" }, statusCode: 502);
+                sessionId = created;
             }
-
-            if (!promptSent)
+            catch (Exception ex) when (IsExecutionIdentityFailure(ex))
             {
-                var definitivelyRejected = IsAdmissionDefinitivelyRejected(lastPromptResult, admissionUncertain);
-                var unacceptedConfirmed = false;
-                if (definitivelyRejected && request.DiscussionId is not null)
-                {
-                    try { unacceptedConfirmed = await redCompute.RemoveUnacceptedCallbackAsync(sessionId, promptMessageUid, promptMessageUid, ctx.RequestAborted); }
-                    catch { }
-                }
-                // A lost admission response must never cancel accepted work.
-                if (!isContinuation && unacceptedConfirmed)
-                {
-                    try
-                    {
-                        await redCompute.StopAsync(sessionId);
-                        await redCompute.DismissAsync(sessionId);
-                    }
-                    catch { }
-                }
-
-                if (lastPromptResult is { ErrorCode: "execution_identity_rejected" })
-                    return Results.Json(new
-                    {
-                        error = lastPromptResult.ErrorCode,
-                        message = lastPromptResult.ErrorMessage,
-                    }, statusCode: StatusCodes.Status403Forbidden);
-
-                if (lastPromptResult is { ErrorCode: "redcompute_timeout" })
-                    return Results.Json(new
-                    {
-                        error = lastPromptResult.ErrorCode,
-                        message = lastPromptResult.ErrorMessage,
-                    }, statusCode: StatusCodes.Status504GatewayTimeout);
-
                 return Results.Json(new
                 {
-                    error = "prompt_send_failed",
-                    message = isContinuation
-                        ? $"Prompt could not be delivered to session '{sessionId}' after 3 attempts."
-                        : unacceptedConfirmed ? "Session created but prompt admission was rejected. Session cleaned up." : "Prompt acceptance could not be confirmed. Session retained for inspection.",
-                    upstreamError = lastPromptResult?.ErrorCode,
-                }, statusCode: 502);
+                    error = "execution_identity_rejected",
+                    message = ex.Message,
+                }, statusCode: StatusCodes.Status403Forbidden);
             }
+            catch (TaskCanceledException ex)
+            {
+                return Results.Json(new
+                {
+                    error = "redcompute_timeout",
+                    message = ex.Message,
+                }, statusCode: StatusCodes.Status504GatewayTimeout);
+            }
+            catch (HttpRequestException ex)
+            {
+                return Results.Json(new { error = "redcompute_unavailable", message = ex.Message }, statusCode: 502);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = "delegation_failed", message = ex.Message }, statusCode: 500);
+            }
+        }
 
-            // 3. Record the delegation where it was requested. This is a system
-            // event: it belongs in the visible discussion timeline but must not
-            // become another model-facing user turn.
-            bool delegationEventRecorded = false;
-            if (discussion is not null)
+        // 2. Send prompt and verify delivery
+        bool promptSent = false;
+        bool admissionUncertain = false;
+        RedComputeClient.SendMessageResult? lastPromptResult = null;
+        var promptMessageUid = Guid.NewGuid().ToString("N");
+        var promptIdempotencyKey = $"nova-delegate:{sessionId}:{promptMessageUid}";
+        // Subscribe before dispatch so a fast prompt completion cannot outrun registration.
+        // Compute binds this exact UID to its durable accepted input; no queued input means no completion.
+        if (!string.IsNullOrWhiteSpace(request.DiscussionId))
+        {
+            try
+            {
+                var (completionUrl, questionUrl) = CallbackUrls(request.DiscussionId);
+                await redCompute.RegisterCallbackAsync(sessionId, completionUrl, force: true, callbackId: promptMessageUid, promptMessageUid: promptMessageUid,
+                    questionUrl: questionUrl);
+            }
+            catch { /* The post-admission registration below retries the same identity. */ }
+        }
+        for (int attempt = 0; attempt < 3 && !promptSent; attempt++)
+        {
+            try
+            {
+                var messageProvenance = await NovaComputeProvenance.CreateAsync(
+                    entities, resolvedAgent, beneficiary,
+                    "/api/apps/nova/delegate",
+                    [.. baseContext, new ComputeContextReference("session", sessionId)],
+                    method: "POST", ct: ctx.RequestAborted);
+                var result = await redCompute.SendMessageDetailedAsync(sessionId,
+                    request.DeploymentVerificationTarget is null
+                        ? (object)new { content = request.Prompt, messageUid = promptMessageUid }
+                        : new { content = request.Prompt, messageUid = promptMessageUid, deploymentVerificationTarget = request.DeploymentVerificationTarget },
+                    messageProvenance, ctx.RequestAborted,
+                    idempotencyKey: promptIdempotencyKey);
+                lastPromptResult = result;
+                if (result.StatusCode >= 500 || result.Success && !IsPromptAccepted(result.Payload)) admissionUncertain = true;
+                if (result.Success && IsPromptAccepted(result.Payload))
+                {
+                    promptSent = true;
+                    break;
+                }
+                if (result.ErrorCode == "execution_identity_rejected") break;
+            }
+            catch { admissionUncertain = true; }
+
+            if (!promptSent)
+                await Task.Delay(500);
+        }
+
+        if (!promptSent)
+        {
+            var definitivelyRejected = IsAdmissionDefinitivelyRejected(lastPromptResult, admissionUncertain);
+            var unacceptedConfirmed = false;
+            if (definitivelyRejected && request.DiscussionId is not null)
+            {
+                try { unacceptedConfirmed = await redCompute.RemoveUnacceptedCallbackAsync(sessionId, promptMessageUid, promptMessageUid, ctx.RequestAborted); }
+                catch { }
+            }
+            // A lost admission response must never cancel accepted work.
+            if (!isContinuation && unacceptedConfirmed)
             {
                 try
                 {
-                    var eventData = JsonSerializer.SerializeToElement(new
-                    {
-                        sessionId,
-                        repositoryId = resolvedRepository?.Id,
-                        repository = resolvedRepository?.Name,
-                        continued = isContinuation,
-                        agent = resolvedAgent.Name,
-                        agentId = resolvedAgent.Id,
-                        promptMessageUid,
-                        status = "started",
-                    });
-                    await injector.InjectAsync(
-                        discussion,
-                        $"Delegated to Code session {sessionId}",
-                        "system",
-                        "delegation",
-                        metadata: eventData,
-                        idempotencyKey: $"delegation:{sessionId}:{promptMessageUid}",
-                        ct: ctx.RequestAborted);
-                    delegationEventRecorded = true;
+                    await redCompute.StopAsync(sessionId);
+                    await redCompute.DismissAsync(sessionId);
                 }
                 catch { }
             }
 
-            // Navigation is a client concern. A global plugin event would route
-            // every connected Leaf window, including windows that did not make
-            // this request. Explicit human callers can follow this returned path
-            // locally; Agent executions never receive a navigation instruction.
-            var navigationPath = RequestedNavigationPath(
-                ctx.User, request.Navigate, sessionId);
-
-            // 4. Register completion callback with RedCompute
-            bool callbackRegistered = false;
-            if (request.DiscussionId != null)
-            {
-                try
+            if (lastPromptResult is { ErrorCode: "execution_identity_rejected" })
+                return Results.Json(new
                 {
-                    var (callbackUrl, questionUrl) = CallbackUrls(request.DiscussionId);
-                    callbackRegistered = await redCompute.RegisterCallbackAsync(sessionId, callbackUrl, callbackId: promptMessageUid, promptMessageUid: promptMessageUid,
-                        questionUrl: questionUrl);
-                }
-                catch { }
-            }
+                    error = lastPromptResult.ErrorCode,
+                    message = lastPromptResult.ErrorMessage,
+                }, statusCode: StatusCodes.Status403Forbidden);
 
-            return Results.Ok(new
+            if (lastPromptResult is { ErrorCode: "redcompute_timeout" })
+                return Results.Json(new
+                {
+                    error = lastPromptResult.ErrorCode,
+                    message = lastPromptResult.ErrorMessage,
+                }, statusCode: StatusCodes.Status504GatewayTimeout);
+
+            return Results.Json(new
             {
-                sessionId,
-                promptSent,
-                callbackRegistered,
-                continued = isContinuation,
-                agent = resolvedAgent?.Name,
-                repository = resolvedRepository?.Id,
-                delegationEventRecorded,
-                navigationPath,
-            });
+                error = "prompt_send_failed",
+                message = isContinuation
+                    ? $"Prompt could not be delivered to session '{sessionId}' after 3 attempts."
+                    : unacceptedConfirmed ? "Session created but prompt admission was rejected. Session cleaned up." : "Prompt acceptance could not be confirmed. Session retained for inspection.",
+                upstreamError = lastPromptResult?.ErrorCode,
+            }, statusCode: 502);
+        }
+
+        // 3. Record the delegation where it was requested. This is a system
+        // event: it belongs in the visible discussion timeline but must not
+        // become another model-facing user turn.
+        bool delegationEventRecorded = false;
+        if (discussion is not null)
+        {
+            try
+            {
+                var eventData = JsonSerializer.SerializeToElement(new
+                {
+                    sessionId,
+                    repositoryId = resolvedRepository?.Id,
+                    repository = resolvedRepository?.Name,
+                    continued = isContinuation,
+                    agent = resolvedAgent.Name,
+                    agentId = resolvedAgent.Id,
+                    promptMessageUid,
+                    status = "started",
+                });
+                await injector.InjectAsync(
+                    discussion,
+                    $"Delegated to Code session {sessionId}",
+                    "system",
+                    "delegation",
+                    metadata: eventData,
+                    idempotencyKey: $"delegation:{sessionId}:{promptMessageUid}",
+                    ct: ctx.RequestAborted);
+                delegationEventRecorded = true;
+            }
+            catch { }
+        }
+
+        // Navigation is a client concern. A global plugin event would route
+        // every connected Leaf window, including windows that did not make
+        // this request. Explicit human callers can follow this returned path
+        // locally; Agent executions never receive a navigation instruction.
+        var navigationPath = RequestedNavigationPath(
+            ctx.User, request.Navigate, sessionId);
+
+        // 4. Register completion callback with RedCompute
+        bool callbackRegistered = false;
+        if (request.DiscussionId != null)
+        {
+            try
+            {
+                var (callbackUrl, questionUrl) = CallbackUrls(request.DiscussionId);
+                callbackRegistered = await redCompute.RegisterCallbackAsync(sessionId, callbackUrl, callbackId: promptMessageUid, promptMessageUid: promptMessageUid,
+                    questionUrl: questionUrl);
+            }
+            catch { }
+        }
+
+        return Results.Ok(new
+        {
+            sessionId,
+            promptSent,
+            callbackRegistered,
+            continued = isContinuation,
+            agent = resolvedAgent?.Name,
+            repository = resolvedRepository?.Id,
+            delegationEventRecorded,
+            navigationPath,
         });
     }
 
