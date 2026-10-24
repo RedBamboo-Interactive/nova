@@ -61,6 +61,10 @@ public static class CallbackEndpoints
         var pendingInputs = body.TryGetProperty("pendingInputs", out var pendingValue)
             && pendingValue.ValueKind == JsonValueKind.Number && pendingValue.TryGetInt32(out var pendingCount) && pendingCount > 0 ? pendingCount : 0;
         var backgroundTurn = status == "Idle" && workState == "background";
+        // A turn the session started without a queued prompt (a peer message, a self-wake), reported
+        // through the discussion's session-scoped question subscription: no prompt of ours ran it.
+        var unprompted = body.TryGetProperty("trigger", out var trigger) && trigger.ValueKind == JsonValueKind.String
+            && trigger.GetString() == "unprompted";
         var provenEndedCompletion = status == "Ended" && reason == "completed"
             && promptMessageUid is not null && deliveredMessageUid is not null && executionObserved;
 
@@ -77,6 +81,7 @@ public static class CallbackEndpoints
             : status == "Error" || reason == "failed" ? "failed"
             : status == "Ended" ? "ended"
             : status == "Stopped" ? "stopped" : "status";
+        var unpromptedTurn = unprompted && outcome == "completed";
         // "Completed" alone reads as "all done" while the session still has prompts to run.
         var queuedNext = outcome == "completed" && pendingInputs > 0;
 
@@ -86,6 +91,8 @@ public static class CallbackEndpoints
             _ when resumablePause => $"Session {shownSession} paused for restart; awaiting recovery, completion has not been reported",
             (_, "usage_limit") => $"Session {shownSession} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
             _ when backgroundTurn => $"Session {shownSession} ended its turn{(title != null ? $" ({title})" : "")} with {BackgroundTasks(backgroundTasksRunning)} still running; it is not finished and will report again when that work wakes it",
+            _ when unpromptedTurn => $"Session {shownSession} finished a turn it started on its own{(title != null ? $" ({title})" : "")}"
+                + (pendingInputs > 0 ? $"; it has {QueuedPrompts(pendingInputs)}, which it will run next" : ""),
             _ when queuedNext => $"Session {shownSession} completed this turn{(title != null ? $" ({title})" : "")} and has {QueuedPrompts(pendingInputs)}, which it will run next",
             _ when provenEndedCompletion => $"Session {shownSession} completed{(title != null ? $": {title}" : "")}",
             ("Idle", _) => $"Session {shownSession} completed{(title != null ? $": {title}" : "")}",
@@ -94,8 +101,10 @@ public static class CallbackEndpoints
             ("Error" or "Ended", _) => $"Session {shownSession} ended with status: {NovaEventText.Field(status, MaxIdentity)}",
             _ => $"Session {shownSession} status: {NovaEventText.Field(status, MaxIdentity)}",
         };
+        if (unprompted && !unpromptedTurn) summary += " (in a turn it started on its own)";
 
-        var eventKind = outcome switch { "paused" => "paused", "background" => "turn-ended", _ => "complete" };
+        var eventKind = unpromptedTurn ? "unprompted-turn"
+            : outcome switch { "paused" => "paused", "background" => "turn-ended", _ => "complete" };
         var eventContent = backgroundTurn
             ? $"""
             <nova-event source="callback:session-{eventKind}" type="session-{eventKind}" stopReason="{NovaEventText.Attribute(stopReason ?? "unknown")}" backgroundTasksRunning="{backgroundTasksRunning}">
@@ -136,6 +145,7 @@ public static class CallbackEndpoints
         var metadata = JsonSerializer.SerializeToElement(new {
             sessionId, callbackId, promptMessageUid, status, stopReason, reason, deliveredMessageUid, executionObserved, outcome,
             backgroundTasksRunning, deliverySequence, workState, pendingInputs, title = rawTitle,
+            trigger = unprompted ? "unprompted" : null,
         });
         var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
             metadata: metadata,
@@ -149,6 +159,8 @@ public static class CallbackEndpoints
         if (!discussion.Confidential)
             await live.PostAsync("callback", backgroundTurn
                     ? $"Delegated session turn ended with {BackgroundTasks(backgroundTasksRunning)} still running{(title != null ? $": {title}" : "")}"
+                    : unpromptedTurn
+                    ? $"Delegated session finished a turn it started on its own{(title != null ? $": {title}" : "")}"
                     : queuedNext
                     ? $"Delegated session completed this turn and has {QueuedPrompts(pendingInputs)}, which it will run next{(title != null ? $": {title}" : "")}"
                     : $"Delegated session {outcome}{(title != null ? $": {title}" : "")}{pauseSuffix}",
