@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -18,7 +19,8 @@ public enum EventDelivery
     Reused,
     /// <summary>The session exists but RedCompute did not admit it; retrying may succeed.</summary>
     Failed,
-    /// <summary>It can never be delivered (refused permanently, no Agent).</summary>
+    /// <summary>It can never be delivered (refused permanently, attempts exhausted, dropped from a
+    /// full queue, expired, no Agent). The discussion shows a notice saying so.</summary>
     Undeliverable,
     /// <summary>The target refused the write (closed, or scoped LIVE checks failed).</summary>
     Denied,
@@ -27,7 +29,7 @@ public enum EventDelivery
 public sealed record EventInjectionResult(
     EventDelivery Delivery, string? MessageUid, string? ErrorCode = null, string? ErrorMessage = null);
 
-public enum EventDrainStatus { Drained, WaitingForSession, Failed }
+public enum EventDrainStatus { Drained, WaitingForSession, Failed, Busy }
 
 public sealed record EventDrainResult(
     EventDrainStatus Status, int Delivered, string? ErrorCode = null, string? ErrorMessage = null);
@@ -38,7 +40,29 @@ public sealed record EventDrainResult(
 /// its uid and fixes the RedCompute admission key, so a repeated drain can't admit it twice.
 /// </summary>
 internal sealed record PendingEventDelivery(
-    string Uid, string AdmissionKey, bool Framed, string? ReplyToDiscussionId);
+    string Uid, string AdmissionKey, bool Framed, string? ReplyToDiscussionId,
+    DateTimeOffset? QueuedAt = null, int Attempts = 0);
+
+/// <summary>
+/// How long and how many events a discussion keeps for a session that isn't there, and how often
+/// one event is tried before it is given up.
+/// </summary>
+internal sealed record EventQueuePolicy(int MaxQueued, TimeSpan MaxAge, int MaxAttempts)
+{
+    /// <summary>
+    /// LIVE's queueable traffic is automation outcomes and heartbeat whispers: stale within hours,
+    /// and the last 15 LIVE events reach Nova's message context anyway. Its display-only events
+    /// (presence, camera, media, device, activity, callback summaries) are never queued.
+    /// </summary>
+    public static readonly EventQueuePolicy Live = new(20, TimeSpan.FromHours(2), 5);
+
+    /// <summary>Chats, including deferred delivery discussions and per-item app discussions.</summary>
+    public static readonly EventQueuePolicy Default = new(50, TimeSpan.FromHours(6), 5);
+
+    public static EventQueuePolicy For(DiscussionRead discussion) => discussion.Type == "live" ? Live : Default;
+
+    public string Age => MaxAge.TotalHours >= 1 ? $"{MaxAge.TotalHours:0.#} h" : $"{MaxAge.TotalMinutes:0} min";
+}
 
 /// <summary>
 /// The durable per-discussion event queue, stored on the discussion entity. Read and written
@@ -50,6 +74,8 @@ internal static class PendingEventDeliveries
     /// <summary>Queryable flag: true while the queue holds an entry (startup sweep).</summary>
     public const string PendingFlagKey = "event_delivery_pending";
     public const string UndeliverableKey = "undeliverable_events";
+    /// <summary>Events dropped (overflow, expired) since the last count shown in the discussion.</summary>
+    public const string DropsKey = "event_queue_drops";
     private const int MaxUndeliverable = 20;
 
     /// <summary>The RedCompute admission key for an event, the same on every delivery attempt.</summary>
@@ -67,7 +93,10 @@ internal static class PendingEventDeliveries
             var key = Text(item, "admission_key");
             if (uid is null || key is null) continue;
             entries.Add(new(uid, key, item["framed"] is JsonValue framed && framed.TryGetValue<bool>(out var f) && f,
-                Text(item, "reply_to_discussion_id")));
+                Text(item, "reply_to_discussion_id"),
+                DateTimeOffset.TryParse(Text(item, "queued_at"), CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind, out var at) ? at : null,
+                item["attempts"] is JsonValue attempts && attempts.TryGetValue<int>(out var n) ? n : 0));
         }
         return entries;
     }
@@ -80,21 +109,37 @@ internal static class PendingEventDeliveries
             ["admission_key"] = entry.AdmissionKey,
             ["framed"] = entry.Framed,
             ["reply_to_discussion_id"] = entry.ReplyToDiscussionId,
+            ["queued_at"] = entry.QueuedAt?.ToString("O"),
+            ["attempts"] = entry.Attempts,
         }).ToArray()),
         [PendingFlagKey] = entries.Count > 0,
     };
 
     /// <summary>Records why an event left the queue without being delivered, newest last, bounded.</summary>
-    public static JsonArray WithUndeliverable(JsonObject data, string uid, string error)
+    public static JsonArray WithUndeliverable(JsonObject data, IEnumerable<(string Uid, string Error)> events)
     {
         var kept = (data[UndeliverableKey] as JsonArray)?.Select(node => node?.DeepClone()).ToList() ?? [];
-        kept.Add(new JsonObject { ["uid"] = uid, ["error"] = error, ["at"] = DateTimeOffset.UtcNow.ToString("O") });
+        foreach (var (uid, error) in events)
+            kept.Add(new JsonObject { ["uid"] = uid, ["error"] = error, ["at"] = DateTimeOffset.UtcNow.ToString("O") });
         return new JsonArray(kept.Skip(Math.Max(0, kept.Count - MaxUndeliverable)).ToArray());
     }
 
     public static string? UndeliverableError(JsonObject data, string uid)
         => (data[UndeliverableKey] as JsonArray)?.OfType<JsonObject>()
             .LastOrDefault(item => Text(item, "uid") == uid) is { } item ? Text(item, "error") ?? "undeliverable" : null;
+
+    /// <summary>Drop counters awaiting their count in the discussion: overflow, expired, and whether
+    /// the discussion was already told that dropping started.</summary>
+    public static (int Overflow, int Expired, bool Notified) Drops(JsonObject data)
+        => data[DropsKey] is JsonObject drops
+            ? (Int(drops, "overflow"), Int(drops, "expired"), drops["notified"] is JsonValue v && v.TryGetValue<bool>(out var b) && b)
+            : (0, 0, false);
+
+    public static JsonObject DropsNode(int overflow, int expired, bool notified)
+        => new() { ["overflow"] = overflow, ["expired"] = expired, ["notified"] = notified };
+
+    private static int Int(JsonObject item, string key)
+        => item[key] is JsonValue value && value.TryGetValue<int>(out var n) ? n : 0;
 
     private static string? Text(JsonObject item, string key)
         => item[key] is JsonValue value && value.TryGetValue<string>(out var text) && !string.IsNullOrWhiteSpace(text)

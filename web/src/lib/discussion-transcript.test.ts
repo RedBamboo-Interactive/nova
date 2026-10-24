@@ -478,3 +478,25 @@ test("background records attach to their launching call across an overlay bounda
   assert.equal(square?.children?.[0]?.toolUseId, "toolu_child")
   assert.equal(square?.task?.status, "completed")
 })
+
+test("an event delivered after a user turn keeps its posted place in the discussion", () => {
+  // 258167da: a queued event that failed was overtaken by the user's message and delivered later.
+  const event: MessageBlock = {
+    id: "queued-event",
+    role: "user",
+    parts: [{ type: "text", content: "Story update" }],
+    timestamp: "2026-10-25T09:00:00Z",
+    metadata: { source: "event:insights", messageUid: "queued-event" },
+  }
+  const userTurn = transcriptRecord("record-user", "2026-10-25T09:00:05Z", "hello", 1,
+    { role: "user", messageUid: "user-turn", phase: null })
+  const firstReply = transcriptRecord("record-reply", "2026-10-25T09:00:06Z", "hi", 2, { messageUid: "reply-1" })
+  const lateCopy = transcriptRecord("record-late", "2026-10-25T09:00:30Z", "<nova-event>Story update</nova-event>", 3,
+    { role: "user", messageUid: "queued-event", phase: null })
+  const eventReply = transcriptRecord("record-event-reply", "2026-10-25T09:00:31Z", "noted", 4, { messageUid: "reply-2" })
+
+  const merged = mergePagedDiscussionRecordsAndOverlays(
+    [event], [userTurn, firstReply, lateCopy, eventReply], rebuildTestRecords)
+
+  assert.deepEqual(merged.map(block => block.id), ["queued-event", "user-turn", "reply-1", "reply-2"])
+})

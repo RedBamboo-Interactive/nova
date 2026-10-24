@@ -139,7 +139,7 @@ public sealed class EventInjector(
         // (the caller's delivery key, else the persisted uid), never one attempt.
         PendingEventDelivery QueueEntry(string eventUid) => new(eventUid,
             PendingEventDeliveries.AdmissionKey(deliveryIdempotencyKey ?? "uid:" + eventUid),
-            framed, replyToDiscussionId);
+            framed, replyToDiscussionId, Clock());
         var admissionDenied = false;
         DiscussionMessage? stored = null;
         QueueDecision? decision = null;
@@ -217,32 +217,12 @@ public sealed class EventInjector(
             uid = StoredUid(stored) ?? uid;
         }
 
+        // Scoped projections always invalidate for authoritative retrieval, even
+        // when an owner-approved summary is admitted to a non-confidential LIVE.
+        // Do not mirror that summary/evidence link into the public plugin bus.
         if (persisted)
-        {
-            var timestamp = DateTimeOffset.UtcNow.ToString("O");
-            // Scoped projections always invalidate for authoritative retrieval, even
-            // when an owner-approved summary is admitted to a non-confidential LIVE.
-            // Do not mirror that summary/evidence link into the public plugin bus.
-            if (discussion.Confidential || recipient is not null)
-                await events.PublishAsync("discussion.changed", new JsonObject
-                {
-                    ["discussionId"] = discussion.Id,
-                    ["timestamp"] = timestamp,
-                    ["confidential"] = discussion.Confidential,
-                }, ct);
-            else
-                await events.PublishAsync("discussion.event", new JsonObject
-                {
-                    ["discussionId"] = discussion.Id,
-                    ["sessionId"] = discussion.SessionId,
-                    ["messageUid"] = uid,
-                    ["content"] = content,
-                    ["source"] = source ?? "automation",
-                    ["senderAgentId"] = senderAgentId,
-                    ["metadata"] = metadata is { } m ? JsonNode.Parse(m.GetRawText()) : null,
-                    ["timestamp"] = timestamp,
-                }, ct);
-        }
+            await PublishEventAsync(discussion, discussion.Confidential || recipient is not null,
+                uid, content, source, senderAgentId, metadata, ct);
 
         if (role == "system") return new(EventDelivery.Recorded, uid);
 
@@ -272,6 +252,30 @@ public sealed class EventInjector(
         if (forwarded.Success) return new(EventDelivery.Delivered, uid);
         return new(IsPermanentRefusal(forwarded.StatusCode) ? EventDelivery.Undeliverable : EventDelivery.Failed,
             uid, forwarded.ErrorCode ?? "event_delivery_failed", forwarded.ErrorMessage);
+    }
+
+    private Task PublishEventAsync(DiscussionRead discussion, bool changedOnly, string uid, string content,
+        string? source, string? senderAgentId, JsonElement? metadata, CancellationToken ct)
+    {
+        var timestamp = DateTimeOffset.UtcNow.ToString("O");
+        return changedOnly
+            ? events.PublishAsync("discussion.changed", new JsonObject
+            {
+                ["discussionId"] = discussion.Id,
+                ["timestamp"] = timestamp,
+                ["confidential"] = discussion.Confidential,
+            }, ct)
+            : events.PublishAsync("discussion.event", new JsonObject
+            {
+                ["discussionId"] = discussion.Id,
+                ["sessionId"] = discussion.SessionId,
+                ["messageUid"] = uid,
+                ["content"] = content,
+                ["source"] = source ?? "automation",
+                ["senderAgentId"] = senderAgentId,
+                ["metadata"] = metadata is { } m ? JsonNode.Parse(m.GetRawText()) : null,
+                ["timestamp"] = timestamp,
+            }, ct);
     }
 
     private static string? StoredUid(DiscussionMessage? stored)
@@ -343,10 +347,23 @@ public sealed class EventInjector(
 
     private sealed record QueueDecision(DiscussionRead? Current, bool Queued);
 
+    private const string QueueNoticeSource = "event-queue";
+
+    /// <summary>Clock for queue ages (tests move it).</summary>
+    internal Func<DateTimeOffset> Clock { get; set; } = () => DateTimeOffset.UtcNow;
+
+    /// <summary>Delay before the scheduled retry that follows a given failed attempt: 15, 30, 60, 120 s.</summary>
+    internal Func<int, TimeSpan> RetryBackoff { get; set; } =
+        attempt => TimeSpan.FromSeconds(15 * Math.Pow(2, Math.Clamp(attempt - 1, 0, 3)));
+
+    /// <summary>How long a user's send waits for a drain already in progress before it goes ahead.</summary>
+    internal TimeSpan UserSendDrainWait { get; set; } = TimeSpan.FromSeconds(5);
+
     /// <summary>
     /// Under <see cref="DiscussionEntityGate"/>: queues the event when the discussion has no
     /// session, or when earlier events are still queued (so it cannot overtake them). An entry
-    /// already queued under the same uid is not added twice.
+    /// already queued under the same uid is not added twice. Expired entries and, past the
+    /// discussion's cap, the oldest ones leave the queue and are counted in the discussion.
     /// </summary>
     private async Task<QueueDecision> EnqueueIfWaitingAsync(Guid entityId, PendingEventDelivery entry, CancellationToken ct)
     {
@@ -355,27 +372,110 @@ public sealed class EventInjector(
         if (current is null) return new(null, false);
         var queue = PendingEventDeliveries.Read(entity!.Data);
         if (current.SessionId is not null && queue.Count == 0) return new(current, false);
-        if (queue.All(item => item.Uid != entry.Uid))
-        {
-            queue.Add(entry);
-            await entities.PatchAsync(entityId, PendingEventDeliveries.Patch(queue), null, ct);
-        }
+        if (queue.Any(item => item.Uid == entry.Uid)) return new(current, true);
+
+        var policy = EventQueuePolicy.For(current);
+        var expired = Expired(queue, policy);
+        queue.RemoveAll(expired.Contains);
+        queue.Add(entry);
+        // Newest first matters most (a LIVE fills with automation outcomes and whispers): drop the oldest.
+        var overflow = queue.Take(Math.Max(0, queue.Count - policy.MaxQueued)).ToList();
+        queue.RemoveAll(overflow.Contains);
+        var patch = PendingEventDeliveries.Patch(queue);
+        await RecordDropsAsync(entity, current, patch, overflow, expired, policy, ct);
+        await entities.PatchAsync(entityId, patch, null, ct);
         return new(current, true);
     }
 
+    private List<PendingEventDelivery> Expired(List<PendingEventDelivery> queue, EventQueuePolicy policy)
+    {
+        var now = Clock();
+        return queue.Where(item => item.QueuedAt is { } at && now - at > policy.MaxAge).ToList();
+    }
+
+    /// <summary>
+    /// Under the gate: counts dropped events into <paramref name="patch"/> and tells the discussion.
+    /// Without a session it says once that dropping started; when the session is there it shows the
+    /// full count and starts over. Nothing leaves the queue unrecorded.
+    /// </summary>
+    private async Task RecordDropsAsync(LeafEntity entity, DiscussionRead current, JsonObject patch,
+        IReadOnlyCollection<PendingEventDelivery> overflow, IReadOnlyCollection<PendingEventDelivery> expired,
+        EventQueuePolicy policy, CancellationToken ct)
+    {
+        var (overflowed, expiredCount, notified) = PendingEventDeliveries.Drops(entity.Data);
+        if (overflow.Count + expired.Count > 0)
+        {
+            logger?.LogWarning("Dropped {Overflow} queued event(s) over the limit and {Expired} expired one(s) for discussion {DiscussionId}",
+                overflow.Count, expired.Count, current.Id);
+            patch[PendingEventDeliveries.UndeliverableKey] = PendingEventDeliveries.WithUndeliverable(entity.Data,
+                overflow.Select(item => (item.Uid, "queue_overflow")).Concat(expired.Select(item => (item.Uid, "expired"))));
+            overflowed += overflow.Count;
+            expiredCount += expired.Count;
+        }
+        var total = overflowed + expiredCount;
+        if (total == 0) return;
+
+        if (current.SessionId is not null)
+        {
+            var parts = new List<string>();
+            if (overflowed > 0) parts.Add($"{overflowed} over the limit of {policy.MaxQueued} waiting events");
+            if (expiredCount > 0) parts.Add($"{expiredCount} older than {policy.Age}");
+            await PostQueueNoticeAsync(current,
+                $"{Events(total)} for Nova {(total == 1 ? "was" : "were")} dropped before Nova's session started: {string.Join(", ", parts)}.",
+                new { kind = "event-queue-dropped", dropped = total, overflow = overflowed, expired = expiredCount,
+                    maxQueued = policy.MaxQueued, maxAgeHours = policy.MaxAge.TotalHours }, ct);
+            patch[PendingEventDeliveries.DropsKey] = null;
+            return;
+        }
+        if (!notified)
+            await PostQueueNoticeAsync(current,
+                $"Nova's session isn't running, so events for Nova wait in a queue of at most {policy.MaxQueued}, for up to {policy.Age}. Older ones are dropped; {total} so far. The full count follows when the session starts.",
+                new { kind = "event-queue-dropping", dropped = total, overflow = overflowed, expired = expiredCount,
+                    maxQueued = policy.MaxQueued, maxAgeHours = policy.MaxAge.TotalHours }, ct);
+        patch[PendingEventDeliveries.DropsKey] = PendingEventDeliveries.DropsNode(overflowed, expiredCount, notified: true);
+    }
+
+    private static string Events(int count) => count == 1 ? "1 event" : $"{count} events";
+
+    /// <summary>Under the gate: a display-only notice in the discussion (system role, never queued).</summary>
+    private async Task PostQueueNoticeAsync(DiscussionRead discussion, string content, object data, CancellationToken ct)
+    {
+        var uid = Guid.NewGuid().ToString("N");
+        var metadata = JsonSerializer.SerializeToElement(data);
+        await discussions.PostAsync(discussion.EntityId, "system", content, new JsonObject
+        {
+            ["parts_json"] = JsonSerializer.Serialize(new object[]
+            {
+                new { type = "text", content },
+                new { type = "event_data", source = QueueNoticeSource, data = metadata },
+            }, JsonOptions),
+            ["source"] = $"event:{QueueNoticeSource}",
+            ["uid"] = uid,
+        }, null, ct);
+        await PublishEventAsync(discussion, discussion.Confidential, uid, content, QueueNoticeSource, null, metadata, ct);
+    }
+
     private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> DeliveryLocks = new();
+    private readonly ConcurrentDictionary<Guid, byte> scheduledRetries = new();
 
     /// <summary>
     /// Delivers a discussion's queued events into its session, oldest first, each under its fixed
     /// admission key, and removes each once RedCompute admitted it. A crash or a concurrent drain
     /// between admission and removal resends under the same key, which RedCompute deduplicates.
-    /// Stops at the first transient failure so nothing overtakes it. Without a session it leaves
-    /// the queue untouched.
+    /// A transient failure counts an attempt, schedules a retry and stops the drain so later events
+    /// keep their order; the last allowed attempt or a refusal gives the event up, visibly. Without
+    /// a session the queue stays. With <paramref name="lockWait"/>, a drain already running for
+    /// longer than that is left to finish on its own (<see cref="EventDrainStatus.Busy"/>).
     /// </summary>
-    public async Task<EventDrainResult> DeliverPendingAsync(Guid discussionEntityId, CancellationToken ct = default)
+    public async Task<EventDrainResult> DeliverPendingAsync(Guid discussionEntityId, CancellationToken ct = default,
+        TimeSpan? lockWait = null)
     {
         var drainLock = DeliveryLocks.GetOrAdd(discussionEntityId, _ => new SemaphoreSlim(1, 1));
-        await drainLock.WaitAsync(ct);
+        if (lockWait is { } wait)
+        {
+            if (!await drainLock.WaitAsync(wait, ct)) return new(EventDrainStatus.Busy, 0);
+        }
+        else await drainLock.WaitAsync(ct);
         try
         {
             var delivered = 0;
@@ -390,9 +490,11 @@ public sealed class EventInjector(
                 {
                     if (!records.TryGetValue(entry.Uid, out var record))
                     {
+                        // Queued, then the process stopped before the stream post: the caller never
+                        // saw a success and nothing was shown, so there is nothing to deliver.
                         logger?.LogWarning("Queued event {Uid} for discussion {DiscussionId} has no stream record; discarded",
                             entry.Uid, current.Id);
-                        await SettleAsync(discussionEntityId, entry.Uid, "event_record_missing", ct);
+                        await RemoveAsync(discussionEntityId, entry.Uid, ct);
                         continue;
                     }
                     var source = record.Metadata["source"]?.GetValue<string>() is { } tag && tag.StartsWith("event:", StringComparison.Ordinal)
@@ -400,28 +502,47 @@ public sealed class EventInjector(
                     var result = await ForwardAsync(current, sessionId, record.Content, entry.Uid, source,
                         record.Metadata["sender_agent_id"]?.GetValue<string>(), entry.ReplyToDiscussionId,
                         entry.Framed, entry.AdmissionKey, ct);
+                    var error = result.ErrorCode ?? $"http_{result.StatusCode}";
                     // A conflict on this event's own key means RedCompute already holds it.
                     if (result.Success || result.ErrorCode == "idempotency_conflict")
                     {
-                        await SettleAsync(discussionEntityId, entry.Uid, null, ct);
+                        await RemoveAsync(discussionEntityId, entry.Uid, ct);
                         delivered++;
                         continue;
                     }
                     if (IsPermanentRefusal(result.StatusCode))
                     {
                         logger?.LogError("RedCompute refused queued event {Uid} for discussion {DiscussionId}: {Error}",
-                            entry.Uid, current.Id, result.ErrorCode ?? result.StatusCode.ToString());
-                        await SettleAsync(discussionEntityId, entry.Uid, result.ErrorCode ?? $"http_{result.StatusCode}", ct);
+                            entry.Uid, current.Id, error);
+                        await FailAttemptAsync(discussionEntityId, entry.Uid, source, error, permanent: true, ct);
                         continue;
                     }
                     logger?.LogWarning("Queued event {Uid} for discussion {DiscussionId} not delivered yet: {Error}",
-                        entry.Uid, current.Id, result.ErrorCode ?? result.StatusCode.ToString());
-                    return new(EventDrainStatus.Failed, delivered,
-                        result.ErrorCode ?? "event_delivery_failed", result.ErrorMessage);
+                        entry.Uid, current.Id, error);
+                    var (givenUp, attempts) = await FailAttemptAsync(discussionEntityId, entry.Uid, source, error, permanent: false, ct);
+                    if (givenUp) continue;
+                    ScheduleRetry(discussionEntityId, attempts);
+                    return new(EventDrainStatus.Failed, delivered, error, result.ErrorMessage);
                 }
             }
         }
         finally { drainLock.Release(); }
+    }
+
+    /// <summary>One in-memory retry per discussion; after a restart the startup sweep takes over.</summary>
+    private void ScheduleRetry(Guid discussionEntityId, int attempts)
+    {
+        if (!scheduledRetries.TryAdd(discussionEntityId, 0)) return;
+        _ = Task.Run(async () =>
+        {
+            try { await Task.Delay(RetryBackoff(attempts)); }
+            finally { scheduledRetries.TryRemove(discussionEntityId, out _); }
+            try { await DeliverPendingAsync(discussionEntityId); }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Retrying queued events failed for discussion entity {EntityId}", discussionEntityId);
+            }
+        });
     }
 
     /// <summary>
@@ -470,7 +591,7 @@ public sealed class EventInjector(
         }
     }
 
-    /// <summary>Where one event stands after a drain: still queued, refused, or delivered.</summary>
+    /// <summary>Where one event stands after a drain: still queued, given up, or delivered.</summary>
     public async Task<EventInjectionResult> QueuedStateAsync(Guid discussionEntityId, string uid, CancellationToken ct = default)
     {
         var entity = await entities.GetAsync(discussionEntityId, ct);
@@ -479,10 +600,12 @@ public sealed class EventInjector(
         if (PendingEventDeliveries.Read(entity.Data).Any(entry => entry.Uid == uid))
             return new(EventDelivery.Queued, uid);
         return PendingEventDeliveries.UndeliverableError(entity.Data, uid) is { } error
-            ? new(EventDelivery.Undeliverable, uid, error, "RedCompute refused the event.")
+            ? new(EventDelivery.Undeliverable, uid, error, "The event was not delivered; the discussion shows why.")
             : new(EventDelivery.Delivered, uid);
     }
 
+    /// <summary>Under the gate: the queue as it should be delivered now, expired entries removed and
+    /// counted, and the drop count shown once the session is there.</summary>
     private async Task<(DiscussionRead? Current, List<PendingEventDelivery> Queue, Dictionary<string, DiscussionMessage> Records)>
         ReadQueueAsync(Guid entityId, CancellationToken ct)
     {
@@ -491,6 +614,16 @@ public sealed class EventInjector(
         var current = entity is { TypeSlug: "discussion" } ? DiscussionStore.Map(entity) : null;
         if (current is null) return (null, [], records);
         var queue = PendingEventDeliveries.Read(entity!.Data);
+        var policy = EventQueuePolicy.For(current);
+        var expired = Expired(queue, policy);
+        var (overflowed, expiredCount, _) = PendingEventDeliveries.Drops(entity.Data);
+        if (expired.Count > 0 || (current.SessionId is not null && overflowed + expiredCount > 0))
+        {
+            queue.RemoveAll(expired.Contains);
+            var patch = PendingEventDeliveries.Patch(queue);
+            await RecordDropsAsync(entity, current, patch, [], expired, policy, ct);
+            await entities.PatchAsync(entityId, patch, null, ct);
+        }
         if (queue.Count == 0) return (current, queue, records);
 
         var wanted = queue.Select(entry => entry.Uid).ToHashSet(StringComparer.Ordinal);
@@ -510,16 +643,49 @@ public sealed class EventInjector(
         return (current, queue, records);
     }
 
-    private Task SettleAsync(Guid entityId, string uid, string? error, CancellationToken ct)
+    private Task RemoveAsync(Guid entityId, string uid, CancellationToken ct)
         => DiscussionEntityGate.RunAsync(entityId, async () =>
         {
             var entity = await entities.GetAsync(entityId, ct);
             if (entity is null) return;
             var queue = PendingEventDeliveries.Read(entity.Data);
-            var patch = PendingEventDeliveries.Patch(queue.Where(entry => entry.Uid != uid).ToList());
-            if (error is not null)
-                patch[PendingEventDeliveries.UndeliverableKey] = PendingEventDeliveries.WithUndeliverable(entity.Data, uid, error);
+            await entities.PatchAsync(entityId,
+                PendingEventDeliveries.Patch(queue.Where(entry => entry.Uid != uid).ToList()), null, ct);
+        }, ct);
+
+    /// <summary>
+    /// Under the gate: counts a failed attempt. A refusal, or the policy's last attempt, gives the
+    /// event up: it leaves the queue and the discussion says it was not delivered.
+    /// </summary>
+    private Task<(bool GivenUp, int Attempts)> FailAttemptAsync(Guid entityId, string uid, string? source,
+        string error, bool permanent, CancellationToken ct)
+        => DiscussionEntityGate.RunAsync(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            var current = entity is { TypeSlug: "discussion" } ? DiscussionStore.Map(entity) : null;
+            if (current is null) return (true, 0);
+            var queue = PendingEventDeliveries.Read(entity!.Data);
+            var index = queue.FindIndex(entry => entry.Uid == uid);
+            if (index < 0) return (true, 0);
+            var attempts = queue[index].Attempts + 1;
+            var policy = EventQueuePolicy.For(current);
+            if (!permanent && attempts < policy.MaxAttempts)
+            {
+                queue[index] = queue[index] with { Attempts = attempts };
+                await entities.PatchAsync(entityId, PendingEventDeliveries.Patch(queue), null, ct);
+                return (false, attempts);
+            }
+
+            queue.RemoveAt(index);
+            var patch = PendingEventDeliveries.Patch(queue);
+            patch[PendingEventDeliveries.UndeliverableKey] = PendingEventDeliveries.WithUndeliverable(entity.Data, [(uid, error)]);
             await entities.PatchAsync(entityId, patch, null, ct);
+            var from = string.IsNullOrWhiteSpace(source) ? "an event" : $"an event from {source}";
+            await PostQueueNoticeAsync(current, permanent
+                    ? $"Nova did not receive {from}: the session refused it ({error}). It was dropped."
+                    : $"Nova did not receive {from}: delivery still failed after {attempts} attempts ({error}). It was dropped.",
+                new { kind = "event-undeliverable", messageUid = uid, source, error, attempts }, ct);
+            return (true, attempts);
         }, ct);
 }
 

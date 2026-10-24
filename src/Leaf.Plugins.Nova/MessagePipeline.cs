@@ -77,7 +77,7 @@ public sealed class MessagePipeline(
                     await store.PatchAsync(current.EntityId, new JsonObject { ["session_id"] = sessionId });
                 // Events posted while the session was being created waited for it. This runs
                 // before the entry leaves _pendingSessions, so a waiter sees them delivered.
-                await DeliverQueuedEventsAsync(discussion, CancellationToken.None);
+                await DeliverQueuedEventsAsync(discussion, CancellationToken.None, userSend: false);
                 return sessionId;
             }
             catch (ComputeMaintenanceException)
@@ -305,10 +305,9 @@ public sealed class MessagePipeline(
 
         // Events accepted before this message reach the session first: those posted before a
         // deferred discussion's first reply, or while its session was being created or reset.
-        var queued = await DeliverQueuedEventsAsync(discussion, ct);
-        if (queued?.Status == EventDrainStatus.Failed)
-            return new(false, sessionId, queued.ErrorCode ?? "event_delivery_failed",
-                "Earlier events in this discussion could not be delivered yet, so this message was not sent ahead of them. Try again shortly.");
+        // A person talking outranks them: an event that fails now, or a drain still busy, never
+        // holds this message back. That event stays queued and is retried after this turn.
+        await DeliverQueuedEventsAsync(discussion, ct, userSend: true);
 
         var priorMessage = discussion.InjectedContext;
         var now = DateTime.UtcNow;
@@ -566,12 +565,14 @@ public sealed class MessagePipeline(
             disposition, queueItemId, queue, item);
     }
 
-    private async Task<EventDrainResult?> DeliverQueuedEventsAsync(DiscussionRead discussion, CancellationToken ct)
+    private async Task<EventDrainResult?> DeliverQueuedEventsAsync(DiscussionRead discussion, CancellationToken ct,
+        bool userSend)
     {
         if (eventInjector is null) return null;
         try
         {
-            return await eventInjector.DeliverPendingAsync(discussion.EntityId, ct);
+            return await eventInjector.DeliverPendingAsync(discussion.EntityId, ct,
+                userSend ? eventInjector.UserSendDrainWait : null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

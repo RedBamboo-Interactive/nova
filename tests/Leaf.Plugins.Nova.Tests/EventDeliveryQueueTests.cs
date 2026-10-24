@@ -236,25 +236,134 @@ public sealed class EventDeliveryQueueTests
         var state = await w.Injector.QueuedStateAsync(w.Entity.Id, queued.GetProperty("messageUid").GetString()!);
         Assert.Equal(EventDelivery.Undeliverable, state.Delivery);
         Assert.Contains("hello", Assert.Single(w.Gateway.Messages).Text);
+        var notice = Assert.Single(w.Notices("event-undeliverable"));
+        Assert.Equal("system", notice.Role);
+        Assert.Contains("refused", notice.Content);
     }
 
     [Fact]
-    public async Task User_message_is_not_sent_ahead_of_an_event_that_could_not_be_delivered_yet()
+    public async Task An_event_stuck_at_502_does_not_block_a_user_message_and_is_retried_afterwards()
     {
         using var w = new World(sessionId: null);
-        Assert.Equal(202, (await w.PostEventAsync("Must go first")).Status);
+        Assert.Equal(202, (await w.PostEventAsync("Stuck at 502")).Status);
         w.Store.SetSession("session-2");
-        w.Gateway.FailNextMessages = 1;
+        w.Gateway.FailEvents = true;
+        w.Injector.RetryBackoff = _ => TimeSpan.FromMilliseconds(300);
 
-        var sent = await w.SendAsync("after the event");
+        var sent = await w.SendAsync("Laurent first");
 
-        Assert.False(sent.Success);
-        Assert.Empty(w.Gateway.Messages);
-        Assert.Single(w.Queue());
+        Assert.True(sent.Success, sent.ErrorMessage);
+        Assert.Contains("Laurent first", Assert.Single(w.Gateway.Messages).Text);
+        Assert.Equal(1, Assert.Single(w.Queue()).Attempts);
 
-        Assert.True((await w.SendAsync("after the event")).Success);
-        Assert.Equal("Must go first", w.Gateway.Messages[0].Text);
-        Assert.Contains("after the event", w.Gateway.Messages[1].Text);
+        w.Gateway.FailEvents = false;
+        await w.WaitUntilAsync(() => w.Queue().Count == 0);
+
+        Assert.Equal(2, w.Gateway.Messages.Count);
+        Assert.Equal("Stuck at 502", w.Gateway.Messages[1].Text);
+        Assert.Empty(w.Notices("event-undeliverable"));
+        // The discussion keeps the event where it was posted, ahead of the message that overtook it.
+        var stream = w.Stream.Snapshot();
+        Assert.True(stream.Single(r => r.Content == "Stuck at 502").Id < stream.Single(r => r.Content == "Laurent first").Id);
+    }
+
+    [Fact]
+    public async Task An_event_still_failing_after_five_attempts_is_dropped_and_the_discussion_says_so()
+    {
+        using var w = new World(sessionId: null);
+        var (_, queued) = await w.PostEventAsync("Never arrives");
+        w.Store.SetSession("session-2");
+        w.Gateway.FailEvents = true;
+        w.Injector.RetryBackoff = _ => TimeSpan.FromMilliseconds(10);
+
+        Assert.True((await w.SendAsync("hello")).Success);
+        await w.WaitUntilAsync(() => w.Queue().Count == 0);
+
+        Assert.Equal(5, w.Gateway.Attempts.Count(attempt => attempt.Key is not null));
+        var notice = Assert.Single(w.Notices("event-undeliverable"));
+        Assert.Equal("system", notice.Role);
+        Assert.Contains("after 5 attempts", notice.Content);
+        var state = await w.Injector.QueuedStateAsync(w.Entity.Id, queued.GetProperty("messageUid").GetString()!);
+        Assert.Equal(EventDelivery.Undeliverable, state.Delivery);
+        Assert.Contains("hello", Assert.Single(w.Gateway.Messages).Text);
+    }
+
+    [Fact]
+    public async Task A_full_queue_drops_its_oldest_events_and_counts_them_in_the_discussion()
+    {
+        using var w = new World(sessionId: null);
+        for (var i = 1; i <= 53; i++)
+            Assert.Equal(202, (await w.PostEventAsync($"event {i}")).Status);
+
+        var posted = w.PostedEvents().Select(r => r.Metadata["uid"]!.GetValue<string>()).ToList();
+        Assert.Equal(posted.Skip(3), w.Queue().Select(entry => entry.Uid));
+        // Told once that dropping started, not once per dropped event.
+        Assert.Contains("at most 50", Assert.Single(w.Notices("event-queue-dropping")).Content);
+
+        Assert.True((await w.SendAsync("hello")).Success);
+
+        var summary = Assert.Single(w.Notices("event-queue-dropped"));
+        Assert.Contains("3 events for Nova were dropped", summary.Content);
+        Assert.Contains("3 over the limit of 50", summary.Content);
+        Assert.Equal(51, w.Gateway.Messages.Count);
+        Assert.Equal("event 4", w.Gateway.Messages[0].Text);
+        Assert.Contains("hello", w.Gateway.Messages[50].Text);
+        Assert.Equal(EventDelivery.Undeliverable, (await w.Injector.QueuedStateAsync(w.Entity.Id, posted[0])).Delivery);
+        Assert.Null(w.Entity.Data[PendingEventDeliveries.DropsKey]);
+
+        // The count was shown; the next message does not repeat it.
+        Assert.True((await w.SendAsync("again")).Success);
+        Assert.Single(w.Notices("event-queue-dropped"));
+    }
+
+    [Fact]
+    public async Task Live_keeps_a_smaller_queue_and_display_only_events_never_enter_it()
+    {
+        using var w = new World(sessionId: null, type: "live");
+        for (var i = 1; i <= 22; i++)
+            Assert.Equal(202, (await w.PostEventAsync($"automation outcome {i}")).Status);
+        Assert.Equal(200, (await w.PostEventAsync("Presence: arrived home", type: "system")).Status);
+
+        Assert.Equal(20, w.Queue().Count);
+        Assert.Equal(EventQueuePolicy.Live, EventQueuePolicy.For(w.Discussion()));
+        Assert.Contains("at most 20, for up to 2 h", Assert.Single(w.Notices("event-queue-dropping")).Content);
+
+        Assert.True((await w.SendAsync("hi")).Success);
+        Assert.Equal("automation outcome 3", w.Gateway.Messages[0].Text);
+        // 20 queued events, then the message; the presence note reaches Nova only in that message's LIVE context digest.
+        Assert.Equal(21, w.Gateway.Messages.Count);
+        Assert.DoesNotContain(w.Gateway.Messages.Take(20), m => m.Text.Contains("Presence"));
+        Assert.Contains("Presence: arrived home", w.Gateway.Messages[20].Text);
+        Assert.Contains("2 over the limit of 20", Assert.Single(w.Notices("event-queue-dropped")).Content);
+    }
+
+    [Fact]
+    public async Task Events_older_than_the_queue_age_expire_and_are_counted_in_the_discussion()
+    {
+        using var w = new World(sessionId: null);
+        var start = DateTimeOffset.UtcNow;
+        var now = start;
+        w.Injector.Clock = () => now;
+        Assert.Equal(202, (await w.PostEventAsync("stale")).Status);
+        now = start.AddHours(5);
+        Assert.Equal(202, (await w.PostEventAsync("recent")).Status);
+        now = start.AddHours(6).AddMinutes(1);
+
+        // Expiry is noticed on the next write while the session is still missing...
+        Assert.Equal(202, (await w.PostEventAsync("fresh")).Status);
+        Assert.Equal(2, w.Queue().Count);
+        Assert.Contains("1 so far", Assert.Single(w.Notices("event-queue-dropping")).Content);
+
+        // ...and counted when it starts. Expired events are never delivered.
+        now = start.AddHours(11).AddMinutes(30);
+        Assert.True((await w.SendAsync("hello")).Success);
+
+        Assert.Equal("fresh", w.Gateway.Messages[0].Text);
+        Assert.Contains("hello", w.Gateway.Messages[1].Text);
+        Assert.Equal(2, w.Gateway.Messages.Count);
+        var summary = Assert.Single(w.Notices("event-queue-dropped"));
+        Assert.Contains("2 events for Nova were dropped", summary.Content);
+        Assert.Contains("2 older than 6 h", summary.Content);
     }
 
     [Fact]
@@ -314,7 +423,8 @@ public sealed class EventDeliveryQueueTests
         public MessagePipeline Pipeline { get; }
         public LeafEntity Entity => Store.Get(Store.DiscussionId);
 
-        public World(string? sessionId) : this(EntityStore.Create(sessionId), new MessageStream(), new Gateway(), null) { }
+        public World(string? sessionId, string type = "chat")
+            : this(EntityStore.Create(sessionId, type), new MessageStream(), new Gateway(), null) { }
 
         private World(EntityStore store, MessageStream stream, Gateway gateway, string? sharedScratch)
         {
@@ -329,7 +439,11 @@ public sealed class EventDeliveryQueueTests
             var client = new RedComputeClient(gateway);
             Discussions = new DiscussionStore(store, stream);
             var unread = new ConversationUnread(Discussions, stream, client);
-            Injector = new EventInjector(stream, events, client, agents, store, unread);
+            // Scheduled retries stay out of the way unless a test asks for them.
+            Injector = new EventInjector(stream, events, client, agents, store, unread)
+            {
+                RetryBackoff = _ => TimeSpan.FromHours(1),
+            };
             var extensions = CallbackDeliveryTests.Proxy.Create<IPluginExtensions>((method, _) => method switch
             {
                 "CollectContextAsync" => Task.FromResult<IReadOnlyList<PluginContextFragment>>([]),
@@ -347,6 +461,15 @@ public sealed class EventDeliveryQueueTests
         public DiscussionRead Discussion() => DiscussionStore.Map(Entity)!;
 
         public List<PendingEventDelivery> Queue() => PendingEventDeliveries.Read(Entity.Data);
+
+        public IEnumerable<DiscussionMessage> PostedEvents()
+            => Stream.Snapshot().Where(r => r.Metadata["source"]?.GetValue<string>() == "event:insights");
+
+        /// <summary>Display-only queue notices of one kind (event-queue-dropping, -dropped, event-undeliverable).</summary>
+        public IEnumerable<DiscussionMessage> Notices(string kind)
+            => Stream.Snapshot().Where(r => r.Metadata["source"]?.GetValue<string>() == "event:event-queue"
+                && JsonNode.Parse(r.Metadata["parts_json"]!.GetValue<string>())!.AsArray()
+                    .Any(part => part?["data"]?["kind"]?.GetValue<string>() == kind));
 
         public IEnumerable<DiscussionMessage> EventRecords()
             => Stream.Snapshot().Where(r => r.Metadata["source"]?.GetValue<string>()?.StartsWith("event:") == true);
@@ -398,12 +521,12 @@ public sealed class EventDeliveryQueueTests
             DiscussionId = discussionId;
         }
 
-        public static EntityStore Create(string? sessionId)
+        public static EntityStore Create(string? sessionId, string type = "chat")
         {
             var agent = New("agent", "nova", new JsonObject());
             var discussion = New("discussion", DiscussionStore.Slug("race1234"), new JsonObject
             {
-                ["discussion_id"] = "race1234", ["app"] = "nova", ["type"] = "chat", ["status"] = "idle",
+                ["discussion_id"] = "race1234", ["app"] = "nova", ["type"] = type, ["status"] = "idle",
                 ["agent"] = agent.Id.ToString(), ["owner_id"] = "local-user", ["session_id"] = sessionId,
                 ["conversation_revision"] = 0, ["read_conversation_revision"] = 0,
                 ["last_processed_session_assistant_uid"] = "",
@@ -494,6 +617,8 @@ public sealed class EventDeliveryQueueTests
         public bool AdmitBeforeFailure { get; set; }
         public bool RefuseMessages { get; set; }
         public bool RefuseOnlyEvents { get; set; }
+        /// <summary>Every event send fails as unreachable (502) until cleared; user messages pass.</summary>
+        public bool FailEvents { get; set; }
         public List<Admitted> Messages { get; } = [];
         public List<(string Session, string? Key)> Attempts { get; } = [];
 
@@ -525,6 +650,7 @@ public sealed class EventDeliveryQueueTests
                     Attempts.Add((session, key));
                     if (RefuseMessages && (isEvent || !RefuseOnlyEvents))
                         return Json(HttpStatusCode.UnprocessableEntity, """{"error":"content_too_large","message":"refused"}""");
+                    if (FailEvents && isEvent) throw new HttpRequestException("Simulated unreachable session for events");
                     var fail = FailNextMessages > 0;
                     if (fail) FailNextMessages--;
                     if (!fail || AdmitBeforeFailure)
