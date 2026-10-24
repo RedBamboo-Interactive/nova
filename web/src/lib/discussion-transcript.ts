@@ -120,7 +120,11 @@ export function mergeDiscussionAndSessionBlocks(
 
   return [...discussionOnly, ...sessionBlocks]
     .filter((message) => {
-      if (message.role === "user" && representedInputs.has(message.id) && !sessionBlocks.includes(message)) return false
+      // A canonical batch replaces its user bridges, but an event keeps Nova's richer projection,
+      // as in the paged merges. The raw copy of a batched event delivery carries the first
+      // event's id, so the identity check below drops it instead.
+      if (message.role === "user" && representedInputs.has(message.id) && !sessionBlocks.includes(message)
+        && !isEventSource(message)) return false
       const idKey = message.id == null ? null : `id:${message.id}`
       const content = message.parts[0]?.content ?? ""
       const dedupContent = message.role === "user" ? normalizeUserContent(content) : content
@@ -132,6 +136,11 @@ export function mergeDiscussionAndSessionBlocks(
       return true
     })
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+}
+
+function isEventSource(block: MessageBlock): boolean {
+  const source = block.metadata?.source
+  return typeof source === "string" && source.startsWith("event:")
 }
 
 /** Stable identity for a V2 overlay. Content and timestamp are never identity. */

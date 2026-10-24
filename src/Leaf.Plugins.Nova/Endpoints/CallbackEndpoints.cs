@@ -57,6 +57,9 @@ public static class CallbackEndpoints
             && sequence.ValueKind == JsonValueKind.Number && sequence.TryGetInt32(out var parsedSequence) ? parsedSequence : (int?)null;
         // RedCompute derives what the session is doing; Nova only reads it.
         var workState = body.TryGetProperty("workState", out var work) && work.ValueKind == JsonValueKind.String ? work.GetString() : null;
+        // Inputs still queued on the session when RedCompute built this payload (absent from older senders).
+        var pendingInputs = body.TryGetProperty("pendingInputs", out var pendingValue)
+            && pendingValue.ValueKind == JsonValueKind.Number && pendingValue.TryGetInt32(out var pendingCount) && pendingCount > 0 ? pendingCount : 0;
         var backgroundTurn = status == "Idle" && workState == "background";
         var provenEndedCompletion = status == "Ended" && reason == "completed"
             && promptMessageUid is not null && deliveredMessageUid is not null && executionObserved;
@@ -74,6 +77,8 @@ public static class CallbackEndpoints
             : status == "Error" || reason == "failed" ? "failed"
             : status == "Ended" ? "ended"
             : status == "Stopped" ? "stopped" : "status";
+        // "Completed" alone reads as "all done" while the session still has prompts to run.
+        var queuedNext = outcome == "completed" && pendingInputs > 0;
 
         var summary = (status, stopReason) switch
         {
@@ -81,6 +86,7 @@ public static class CallbackEndpoints
             _ when resumablePause => $"Session {shownSession} paused for restart; awaiting recovery, completion has not been reported",
             (_, "usage_limit") => $"Session {shownSession} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
             _ when backgroundTurn => $"Session {shownSession} ended its turn{(title != null ? $" ({title})" : "")} with {BackgroundTasks(backgroundTasksRunning)} still running; it is not finished and will report again when that work wakes it",
+            _ when queuedNext => $"Session {shownSession} completed this turn{(title != null ? $" ({title})" : "")} and has {QueuedPrompts(pendingInputs)}, which it will run next",
             _ when provenEndedCompletion => $"Session {shownSession} completed{(title != null ? $": {title}" : "")}",
             ("Idle", _) => $"Session {shownSession} completed{(title != null ? $": {title}" : "")}",
             ("Cancelled", _) => $"Session {shownSession} input was {(reason == "superseded" ? "superseded" : "cancelled")}; it did not complete",
@@ -106,9 +112,20 @@ public static class CallbackEndpoints
         if (discussion is null)
             return Results.Json(new { error = "event_injection_failed", message = "Discussion not found" }, statusCode: 502);
 
+        // One provider turn can resolve several registrations: RedCompute merges queued prompts into
+        // one delivery, and each prompt's registration reports that same turn under its own
+        // callbackId. A delivered, observed turn is therefore keyed on the turn itself, which
+        // RedCompute reports identically to all of them (deliveredMessageUid, the merged batch's
+        // first prompt, plus the deliverySequence below for a turn woken by background work).
+        // A later turn of the same session has a new deliveredMessageUid and still arrives.
+        // Pause, cancellation and supersession are per-prompt outcomes and keep the callbackId key.
+        var turnIdentity = callbackId is not null && executionObserved
+            && deliveredMessageUid is { Length: > 0 and <= MaxIdentity }
+            && outcome is not ("paused" or "cancelled" or "superseded");
         // Legacy senders remain compatible. A session ID alone cannot identify a
         // completion: later continuations of that same session must still arrive.
-        var key = callbackId is null ? null : $"session-complete:{sessionId}:{discussionId}:{callbackId}";
+        var key = turnIdentity ? $"session-turn:{sessionId}:{discussionId}:{deliveredMessageUid}"
+            : callbackId is null ? null : $"session-complete:{sessionId}:{discussionId}:{callbackId}";
         // Pause and eventual terminal delivery share prompt correlation, but not
         // deduplication identity. A pause must never swallow the later completion.
         if (key is not null && outcome == "paused") key += $":paused:{stopReason}";
@@ -116,7 +133,7 @@ public static class CallbackEndpoints
         if (key is not null && deliverySequence > 1) key += $":turn:{deliverySequence}";
         var metadata = JsonSerializer.SerializeToElement(new {
             sessionId, callbackId, promptMessageUid, status, stopReason, reason, deliveredMessageUid, executionObserved, outcome,
-            backgroundTasksRunning, deliverySequence, workState, title = rawTitle,
+            backgroundTasksRunning, deliverySequence, workState, pendingInputs, title = rawTitle,
         });
         var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
             metadata: metadata,
@@ -130,12 +147,15 @@ public static class CallbackEndpoints
         if (!discussion.Confidential)
             await live.PostAsync("callback", backgroundTurn
                     ? $"Delegated session turn ended with {BackgroundTasks(backgroundTasksRunning)} still running{(title != null ? $": {title}" : "")}"
+                    : queuedNext
+                    ? $"Delegated session completed this turn and has {QueuedPrompts(pendingInputs)}, which it will run next{(title != null ? $": {title}" : "")}"
                     : $"Delegated session {outcome}{(title != null ? $": {title}" : "")}{pauseSuffix}",
                 idempotencyKey: key is null ? null : $"{key}:live", ct: ctx.RequestAborted);
         return Results.Ok(new { handled = true, sessionId, discussionId, status });
     }
 
     private static string BackgroundTasks(int count) => count == 1 ? "1 background task" : $"{count} background tasks";
+    private static string QueuedPrompts(int count) => count == 1 ? "1 more queued prompt" : $"{count} more queued prompts";
 
     // Bounds for worker-authored values rendered into an event; metadata keeps them whole.
     internal const int MaxTitle = 200;

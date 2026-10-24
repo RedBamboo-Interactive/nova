@@ -305,7 +305,7 @@ public sealed class CallbackDeliveryTests
         public async Task<int> Complete(string? id, string status = "Idle", string? stopReason = null,
             string? reason = null, string? deliveredMessageUid = null, string? promptMessageUid = null, bool executionObserved = false,
             int? backgroundTasksRunning = null, int? deliverySequence = null, string? workState = null,
-            string? title = "same title")
+            string? title = "same title", int? pendingInputs = null)
         {
             var ctx = new DefaultHttpContext();
             ctx.Connection.RemoteIpAddress = IPAddress.Loopback;
@@ -320,6 +320,7 @@ public sealed class CallbackDeliveryTests
             if (backgroundTasksRunning is not null) body["backgroundTasksRunning"] = backgroundTasksRunning;
             if (deliverySequence is not null) body["deliverySequence"] = deliverySequence;
             if (workState is not null) body["workState"] = workState;
+            if (pendingInputs is not null) body["pendingInputs"] = pendingInputs;
             ctx.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body.ToJsonString()));
             var result = await CallbackEndpoints.HandleSessionCompleteAsync(ctx, Store, Injector, liveEvents);
             return ((IStatusCodeHttpResult)result).StatusCode ?? 200;
