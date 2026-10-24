@@ -223,6 +223,7 @@ public sealed class ExternalAgentConversationProviderTests
 
             using var body = JsonDocument.Parse(gateway.SessionCreateBody!);
             Assert.False(body.RootElement.GetProperty("confidential").GetBoolean());
+            Assert.False(body.RootElement.TryGetProperty("keepResident", out _));
             var projectPath = body.RootElement.GetProperty("projectPath").GetString();
             Assert.NotNull(projectPath);
             var harness = await File.ReadAllTextAsync(Path.Combine(projectPath!, "AGENTS.md"));
@@ -235,6 +236,52 @@ public sealed class ExternalAgentConversationProviderTests
         {
             Directory.Delete(scratchPath, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task Presence_session_creation_asks_RedCompute_to_keep_the_process_resident()
+    {
+        var scratchPath = Path.Combine(
+            Path.GetTempPath(), $"nova-resident-session-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(scratchPath);
+        try
+        {
+            var agentId = Guid.NewGuid();
+            var entities = new FakeEntityStore(
+                Entity(agentId, "agent", "nova", "Nova", new JsonObject()),
+                Entity(Guid.NewGuid(), "plugin", NovaAppPlugin.PluginId, "Nova"));
+            using var agents = new AgentDirectory(entities, new NoOpPluginEvents());
+            var gateway = new RecordingComputeGateway();
+            var pipeline = new MessagePipeline(
+                null!, null!, entities, null!, new RedComputeClient(gateway), agents,
+                new AgentWorkspaces(agents, new NoWorkspacePathResolver()),
+                new FixedScratchSpace(scratchPath), null!, null!,
+                NullLogger<MessagePipeline>.Instance);
+
+            await pipeline.TryCreateSessionAsync(agentId.ToString(), "owner-1",
+                discussionId: "live-1", keepResident: true);
+
+            using var body = JsonDocument.Parse(gateway.SessionCreateBody!);
+            Assert.True(body.RootElement.GetProperty("keepResident").GetBoolean());
+        }
+        finally
+        {
+            Directory.Delete(scratchPath, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("live", true)]
+    [InlineData(HeartbeatService.DiscussionType, true)]
+    [InlineData("chat", false)]
+    [InlineData("discord", false)]
+    public void Only_LIVE_and_heartbeat_discussions_keep_their_session_resident(string type, bool expected)
+    {
+        var discussion = new DiscussionRead(
+            "discussion-1", null, null, "idle", DateTime.UtcNow, DateTime.UtcNow, 0, null,
+            "owner-1", Guid.NewGuid(), "agent-1", Type: type);
+
+        Assert.Equal(expected, MessagePipeline.KeepsSessionResident(discussion));
     }
 
     [Fact]

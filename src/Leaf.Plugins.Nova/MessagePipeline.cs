@@ -60,7 +60,8 @@ public sealed class MessagePipeline(
             {
                 var sessionId = await TryCreateSessionAsync(discussion.AgentId, discussion.OwnerId,
                     discussion.QualityTier, discussion.Provider,
-                    discussionId: discussion.Id, confidential: discussion.Confidential);
+                    discussionId: discussion.Id, confidential: discussion.Confidential,
+                    keepResident: KeepsSessionResident(discussion));
                 if (sessionId is null)
                 {
                     await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped);
@@ -88,13 +89,20 @@ public sealed class MessagePipeline(
         }));
     }
 
+    /// <summary>
+    /// LIVE and heartbeat are always-on presence sessions; RedCompute's idle parking must
+    /// leave their provider process resident. Every other discussion keeps the default policy.
+    /// </summary>
+    internal static bool KeepsSessionResident(DiscussionRead discussion)
+        => discussion.Type is "live" or HeartbeatService.DiscussionType;
+
     public async Task<string?> TryCreateSessionAsync(string? agentId, string? ownerId,
         string? qualityTierOverride = null, string? providerOverride = null, CancellationToken ct = default,
         string? discussionId = null, string entrypointRoute = "/api/apps/nova/discussions/{id}/messages",
         IReadOnlyList<ComputeContextReference>? additionalContext = null,
         string? correlationId = null, string? parentJobId = null,
         bool confidential = false, string? developerInstructions = null,
-        string? modelOverride = null, string? effortOverride = null)
+        string? modelOverride = null, string? effortOverride = null, bool keepResident = false)
     {
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
         if (agent == null)
@@ -124,6 +132,8 @@ public sealed class MessagePipeline(
         if (!string.IsNullOrWhiteSpace(effortOverride))
             body["effort"] = effortOverride;
         body["confidential"] = confidential;
+        if (keepResident)
+            body["keepResident"] = true;
         if (!string.IsNullOrWhiteSpace(developerInstructions))
             body["developerInstructions"] = developerInstructions;
 
@@ -226,7 +236,8 @@ public sealed class MessagePipeline(
             {
                 sessionId = await TryCreateSessionAsync(discussion.AgentId, computeOwnerId,
                     discussion.QualityTier, discussion.Provider, ct, discussion.Id,
-                    confidential: discussion.Confidential);
+                    confidential: discussion.Confidential,
+                    keepResident: KeepsSessionResident(discussion));
             }
             catch (ComputeMaintenanceException ex)
             {

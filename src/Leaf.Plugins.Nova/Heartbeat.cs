@@ -790,7 +790,8 @@ public sealed class HeartbeatService(
                 new ComputeContextReference("heartbeat", discussion.Id),
             ],
             correlationId: correlationId,
-            parentJobId: parentJobId?.ToString())
+            parentJobId: parentJobId?.ToString(),
+            keepResident: true)
             ?? throw new InvalidOperationException("RedCompute refused to create a heartbeat session");
 
         await store.PatchAsync(discussion.EntityId, new JsonObject
