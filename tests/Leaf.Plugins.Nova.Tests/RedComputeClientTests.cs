@@ -186,6 +186,18 @@ public sealed class RedComputeClientTests
         Assert.Equal("thread-1", probe.ProviderSessionId);
     }
 
+    [Fact]
+    public async Task ResumeProbeReportsTheLiveStatusSoAResumeOfARunningSessionCanBeSkipped()
+    {
+        var gateway = new StaticComputeGateway(
+            """{"session":{"status":"Idle","providerSessionId":"thread-1"}}""");
+        var probe = await new RedComputeClient(gateway).ProbeSessionForResumeAsync("session-1");
+
+        Assert.True(probe.Exists);
+        Assert.Equal("Idle", probe.Status);
+        Assert.Equal("thread-1", probe.ProviderSessionId);
+    }
+
     [Theory]
     [InlineData("Stopped", "maintenance_restart", true)]
     [InlineData("Stopped", "orphaned_on_restart", true)]

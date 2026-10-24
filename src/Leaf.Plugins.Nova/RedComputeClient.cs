@@ -544,7 +544,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     /// conversation/thread; <c>ProviderSessionId</c> is the contract-level signal
     /// that distinguishes the two.
     /// </summary>
-    public sealed record SessionResumeProbe(bool Reachable, bool Exists, string? ProviderSessionId);
+    public sealed record SessionResumeProbe(bool Reachable, bool Exists, string? ProviderSessionId, string? Status = null);
 
     public async Task<SessionResumeProbe> ProbeSessionForResumeAsync(string sessionId, CancellationToken ct = default)
     {
@@ -566,7 +566,11 @@ public sealed class RedComputeClient(IComputeGateway gateway)
                 && providerId.ValueKind == JsonValueKind.String
                     ? providerId.GetString()
                     : null;
-            return new(true, true, providerSessionId);
+            var status = session.TryGetProperty("status", out var statusValue)
+                && statusValue.ValueKind == JsonValueKind.String
+                    ? statusValue.GetString()
+                    : null;
+            return new(true, true, providerSessionId, status);
         }
         catch
         {

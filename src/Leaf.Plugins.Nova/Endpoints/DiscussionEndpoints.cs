@@ -1249,6 +1249,16 @@ public static class DiscussionEndpoints
                 return Results.Ok(new { sessionId = (string?)null, status = DiscussionStatus.Idle, initialized = false });
             }
 
+            // A send from a stale client view can land on a session that is already
+            // running; RedCompute answers that resume with a 500. Resume is idempotent
+            // here: a live session is the outcome the caller wanted.
+            if (probe.Status is "Active" or "Idle" or "Starting")
+            {
+                var liveStatus = await store.TrySetStatusAsync(discussion.EntityId,
+                    DiscussionStatus.FromSessionStatus(probe.Status, discussion.Type) ?? DiscussionStatus.Idle);
+                return Results.Ok(new { sessionId = discussion.SessionId, status = liveStatus ?? discussion.Status, initialized = true });
+            }
+
             var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ctx.RequestAborted) : null;
             if (agent == null)
                 return Results.Json(new { error = "missing_agent", message = "The discussion has no linked Agent entity" }, statusCode: 422);
