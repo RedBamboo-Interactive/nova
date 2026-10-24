@@ -14,7 +14,8 @@ public sealed class ExternalAgentConversationProvider(
     AgentDirectory agents,
     IEntityStore entities,
     DiscordPromptInjectionVerifier verifier,
-    ILogger<ExternalAgentConversationProvider> logger) : IExternalAgentConversationProvider
+    ILogger<ExternalAgentConversationProvider> logger,
+    IAssets? assets = null) : IExternalAgentConversationProvider
 {
     internal static string DiscordDeveloperInstructions(string agentName) => $$"""
         You are {{agentName}} in a Discord conversation with participants explicitly authorized by your installation owner. Be your normal capable self: help deeply, troubleshoot issues, inspect relevant evidence, discuss and challenge ideas, brainstorm, and allow natural off-topic banter. This is a persistent provider-backed Agent session in your real workspace with your normal tools.
@@ -154,13 +155,21 @@ public sealed class ExternalAgentConversationProvider(
         var outboundNotice = string.Equals(transport, "discord", StringComparison.OrdinalIgnoreCase)
             ? OutboundSentinelReview(input.Metadata?["outbound_sentinel_notice"] as JsonObject)
             : null;
+        // Leaf Community images reach the model as images. They are reviewed with the message
+        // and attached to the session turn; an image that cannot be read refuses the message
+        // like an unavailable review, so it is never reviewed or admitted as text alone.
+        var images = string.Equals(transport, "leaf-commons", StringComparison.OrdinalIgnoreCase)
+            ? await LoadCommonsImagesAsync(input, ct)
+            : [];
         var review = outboundNotice is not null
             ? new DiscordInjectionReview("not_applicable", [], "Discord bridge notice, not participant content.", true)
+            : images is null
+            ? DiscordInjectionReview.Unavailable
             : RequiresSentinelReview(transport)
             ? await verifier.ReviewAsync(
                 sentinelAgentId,
                 ownerId, handle.BindingId, handle.Generation, InboundReviewSample(input),
-                transport, input.RequestId, ct)
+                transport, input.RequestId, ct, images.Select(image => image.Review).ToArray())
             : new DiscordInjectionReview("not_applicable", [], "Use the application-scoped Agent instructions.", true);
         var messageUid = StableUid(handle, input.RequestId);
         // Fail closed (Laurent, 2026-10-23): bridge content without a Sentinel verdict never
@@ -219,23 +228,41 @@ public sealed class ExternalAgentConversationProvider(
             logger.LogWarning(
                 "Could not renew external-conversation completion callback for session {SessionId}",
                 handle.SessionId);
-        var response = await redCompute.SendMessageDetailedAsync(handle.SessionId, new
+        var messageMetadata = new
         {
-            content,
-            displayContent = input.Content,
-            delivery = "after-current",
-            messageUid,
-            metadata = new
+            app = string.Equals(transport, "discord", StringComparison.OrdinalIgnoreCase)
+                ? "leaf-discord"
+                : input.Metadata?["application_id"]?.GetValue<string>() ?? "external",
+            bindingId = handle.BindingId,
+            generation = handle.Generation,
+            externalRequestId = input.RequestId,
+            sentinel = sentinelMetadata,
+        };
+        object message = images is not { Count: > 0 }
+            ? new
             {
-                app = string.Equals(transport, "discord", StringComparison.OrdinalIgnoreCase)
-                    ? "leaf-discord"
-                    : input.Metadata?["application_id"]?.GetValue<string>() ?? "external",
-                bindingId = handle.BindingId,
-                generation = handle.Generation,
-                externalRequestId = input.RequestId,
-                sentinel = sentinelMetadata,
-            },
-        }, provenance, ct, idempotencyKey: $"{transport}:{handle.BindingId}:{handle.Generation}:{input.RequestId}");
+                content,
+                displayContent = input.Content,
+                delivery = "after-current",
+                messageUid,
+                metadata = messageMetadata,
+            }
+            : new
+            {
+                content,
+                // RedCompute decodes, bounds and re-encodes these before the model sees them.
+                images = images.Select(image => new ImageAttachmentDto
+                {
+                    MediaType = image.MediaType,
+                    Base64 = Convert.ToBase64String(image.Bytes),
+                }).ToArray(),
+                displayContent = input.Content,
+                delivery = "after-current",
+                messageUid,
+                metadata = messageMetadata,
+            };
+        var response = await redCompute.SendMessageDetailedAsync(handle.SessionId, message,
+            provenance, ct, idempotencyKey: $"{transport}:{handle.BindingId}:{handle.Generation}:{input.RequestId}");
         if (!response.Success)
             throw new InvalidOperationException(
                 response.ErrorMessage ?? "RedCompute did not admit the external conversation message");
@@ -256,6 +283,52 @@ public sealed class ExternalAgentConversationProvider(
     internal static bool RequiresResume(RedComputeClient.SessionProbe session)
         => session.Status is "Stopped" or "Error"
            && !string.IsNullOrWhiteSpace(session.ProviderSessionId);
+
+    internal sealed record CommonsImage(UntrustedContentImage Review, string MediaType, byte[] Bytes);
+
+    /// <summary>
+    /// The images of a Leaf Community message, read from the RedLeaf Assets the Leaf Community
+    /// connector stored after fetching and checking them. Null when any attachment is not such an
+    /// image (an unknown reference, a missing Asset, another media type, too large, or more than
+    /// the Sentinel reviews): the caller then refuses the whole message.
+    /// </summary>
+    private async Task<IReadOnlyList<CommonsImage>?> LoadCommonsImagesAsync(
+        ExternalConversationInput input, CancellationToken ct)
+    {
+        if (input.Attachments.Count == 0) return [];
+        if (assets is null || input.Attachments.Count > UntrustedContentReviewRequest.MaxImages)
+        {
+            logger.LogWarning("Refused Leaf Community message {RequestId}: its {Count} images cannot be reviewed",
+                input.RequestId, input.Attachments.Count);
+            return null;
+        }
+        var images = new List<CommonsImage>(input.Attachments.Count);
+        foreach (var attachment in input.Attachments)
+        {
+            var assetId = CommonsAssetId(attachment.ScopeToken);
+            var file = assetId is null ? null : await assets.ReadAsync(assetId, ct);
+            if (assetId is null || file is null || file.Bytes.Length > UntrustedContentReviewRequest.MaxImageBytes
+                || file.ContentType is not ("image/png" or "image/jpeg" or "image/webp" or "image/gif"))
+            {
+                logger.LogWarning("Refused Leaf Community message {RequestId}: attachment {AttachmentId} is not a readable image",
+                    input.RequestId, attachment.Id);
+                return null;
+            }
+            images.Add(new(new UntrustedContentImage(assetId, file.ContentType), file.ContentType, file.Bytes));
+        }
+        return images;
+    }
+
+    /// <summary>The Asset id of a <c>/api/assets/{id}</c> reference, or null for anything else.</summary>
+    internal static string? CommonsAssetId(string? scopeToken)
+    {
+        const string prefix = "/api/assets/";
+        if (scopeToken is null || !scopeToken.StartsWith(prefix, StringComparison.Ordinal)) return null;
+        var id = scopeToken[prefix.Length..];
+        return id.Length is > 0 and <= 200 && !id.Contains("..", StringComparison.Ordinal)
+               && id.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_' or '.')
+            ? id : null;
+    }
 
     internal static bool RequiresSentinelReview(string transport)
         => string.Equals(transport, "discord", StringComparison.OrdinalIgnoreCase)
@@ -560,6 +633,7 @@ public sealed class ExternalAgentConversationProvider(
                 requestor = input.Requestor,
                 verifiedRelaySender = RelaySenderContext(input.Metadata),
                 attachments = input.Attachments,
+                omittedAttachments = OmittedAttachments(input.Metadata),
                 message = input.Content,
             });
             return $$"""
@@ -627,6 +701,12 @@ public sealed class ExternalAgentConversationProvider(
     }
 
     public const int MaxOutboundSentinelReviews = 5;
+
+    /// <summary>How many of the participant's attachments the Leaf Community bridge could not pass
+    /// on (not an image, or one that failed its checks). Bridge-counted, bounded to 0..100.</summary>
+    private static int OmittedAttachments(JsonObject? metadata)
+        => metadata?["omitted_attachments"] is JsonValue value && value.TryGetValue<int>(out var count)
+            ? Math.Clamp(count, 0, 100) : 0;
 
     private static string OutboundReviewsBlock(JsonObject? metadata)
         => OutboundSentinelReviews(metadata) is { } outboundReviews

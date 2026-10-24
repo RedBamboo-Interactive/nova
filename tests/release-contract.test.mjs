@@ -84,7 +84,7 @@ test("automated version stamping permits only the three exact version fields", (
 test("release input records only Leaf.Sdk and Nova's four actual shared package sources", () => {
   assert.deepEqual(producer.leafSdk, {
     repository: "RedBamboo-Interactive/redleaf",
-    commit: "68eb8e60646437d84c8bf2df43dc86b5226a9a48",
+    commit: "e5a243a70ec18dcc4c5cab0c35ebffdfb01067be",
     sourcePath: "src/Leaf.Sdk",
   })
   assert.equal(producer.redleafReleaseToolCommit, "21e6fd393196fbe2179293ff3f05cb3501ebeaed")

@@ -8,7 +8,7 @@ using Xunit;
 
 namespace Leaf.Plugins.Nova.Tests;
 
-public sealed class ExternalAgentConversationProviderTests
+public sealed partial class ExternalAgentConversationProviderTests
 {
     [Fact]
     public void Assistant_asset_markdown_has_a_delivery_projection_without_changing_canonical_content()
@@ -1192,6 +1192,8 @@ public sealed class ExternalAgentConversationProviderTests
         public object? Log { get; init; }
         public UntrustedContentVerdict Verdict { get; init; } =
             new("none", [], "normal", true, UntrustedContentIsolation.VerifiedToolFree);
+        /// <summary>False acts like a reviewer that predates images: it reports none reviewed.</summary>
+        public bool EchoImages { get; init; } = true;
 
         public Task<UntrustedContentReviewResult> ReviewAsync(
             UntrustedContentReviewRequest request, CancellationToken ct = default)
@@ -1208,7 +1210,10 @@ public sealed class ExternalAgentConversationProviderTests
             }
             return Task.FromResult(new UntrustedContentReviewResult(
                 Verdict, null, [], new UntrustedContentScreening(0, [], [], request.Content, []),
-                "job-1", "trace-1"));
+                "job-1", "trace-1")
+            {
+                ImagesReviewed = EchoImages ? request.Images?.Count ?? 0 : 0,
+            });
         }
 
         public UntrustedContentScreening Screen(

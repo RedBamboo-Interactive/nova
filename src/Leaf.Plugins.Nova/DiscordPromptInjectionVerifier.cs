@@ -42,7 +42,8 @@ public sealed class DiscordPromptInjectionVerifier(
         string content,
         string transport = "discord",
         string? requestId = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlyList<UntrustedContentImage>? images = null)
     {
         if (sentinel is null)
         {
@@ -83,10 +84,16 @@ public sealed class DiscordPromptInjectionVerifier(
                     : $"sentinel:{source}:{bindingId}:{generation}:{requestId}",
                 ComputeProvenance = provenance,
                 JobName = "Discord prompt-injection review",
+                // The Sentinel reads the Asset bytes and reviews them with the text on a vision
+                // model; an image it cannot review makes the verdict unavailable.
+                Images = images is { Count: > 0 } ? images : null,
             }, ct);
             logger.LogInformation(
                 "Sentinel review {TraceId} for {BindingId} generation {Generation}: {Isolation}, available {Available}",
                 result.TraceId, bindingId, generation, result.Verdict.Isolation, result.Verdict.Available);
+            // A verdict covers the images only when the reviewer says it saw every one; an older
+            // reviewer reports none, so content with images fails closed.
+            if ((images?.Count ?? 0) != result.ImagesReviewed) return DiscordInjectionReview.Unavailable;
             return ToDiscordReview(result.Verdict);
         }
         catch (Exception ex)

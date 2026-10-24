@@ -71,11 +71,12 @@ public sealed class DiscordServiceRegistrationTests
         // A missing, disabled or incompatible cap-sentinel must not disable Nova, and with it
         // leaf-discord and leaf-commons, which require nova.
         Assert.DoesNotContain("sentinel", manifest.Requires);
-        // Nova references IUntrustedContentReview, which first ships in kernel API 0.1.2.
-        Assert.Equal("^0.1.2", manifest.KernelApi);
+        // Nova references IUntrustedContentReview (kernel API 0.1.2) and reviews Leaf Community
+        // images with UntrustedContentReviewRequest.Images and ImagesReviewed (0.1.4).
+        Assert.Equal("^0.1.4", manifest.KernelApi);
         Assert.True(KernelApi.Satisfies(manifest.KernelApi));
-        Assert.True(SemverRange.Satisfies("0.1.2", manifest.KernelApi));
-        Assert.False(SemverRange.Satisfies("0.1.1", manifest.KernelApi));
+        Assert.True(SemverRange.Satisfies("0.1.4", manifest.KernelApi));
+        Assert.False(SemverRange.Satisfies("0.1.3", manifest.KernelApi));
     }
 
     private static T Uninitialized<T>() where T : class
