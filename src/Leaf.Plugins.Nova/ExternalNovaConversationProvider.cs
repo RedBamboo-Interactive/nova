@@ -155,12 +155,11 @@ public sealed class ExternalAgentConversationProvider(
         var outboundNotice = string.Equals(transport, "discord", StringComparison.OrdinalIgnoreCase)
             ? OutboundSentinelReview(input.Metadata?["outbound_sentinel_notice"] as JsonObject)
             : null;
-        // Leaf Community images reach the model as images. They are reviewed with the message
-        // and attached to the session turn; an image that cannot be read refuses the message
-        // like an unavailable review, so it is never reviewed or admitted as text alone.
-        var images = string.Equals(transport, "leaf-commons", StringComparison.OrdinalIgnoreCase)
-            ? await LoadCommonsImagesAsync(input, ct)
-            : [];
+        // Images reach the model as images. They are reviewed with the message and attached to
+        // the session turn. A Leaf Community image that cannot be read refuses the message like an
+        // unavailable review; a native Discord attachment that is not a showable image stays
+        // metadata only, as before. Either way no image is shown without the review seeing it.
+        var images = outboundNotice is null ? await LoadImagesAsync(input, transport, ct) : [];
         var review = outboundNotice is not null
             ? new DiscordInjectionReview("not_applicable", [], "Discord bridge notice, not participant content.", true)
             : images is null
@@ -184,7 +183,8 @@ public sealed class ExternalAgentConversationProvider(
         }
         var content = outboundNotice is not null
             ? BuildOutboundSentinelNotice(outboundNotice)
-            : BuildSessionInput(handle, input, review, transport);
+            : BuildSessionInput(handle, input, review, transport,
+                images?.Select(image => image.AttachmentId).ToArray());
         object sentinelMetadata = outboundNotice is not null
             ? new
             {
@@ -261,8 +261,25 @@ public sealed class ExternalAgentConversationProvider(
                 messageUid,
                 metadata = messageMetadata,
             };
+        var idempotencyKey = $"{transport}:{handle.BindingId}:{handle.Generation}:{input.RequestId}";
         var response = await redCompute.SendMessageDetailedAsync(handle.SessionId, message,
-            provenance, ct, idempotencyKey: $"{transport}:{handle.BindingId}:{handle.Generation}:{input.RequestId}");
+            provenance, ct, idempotencyKey: idempotencyKey);
+        if (!response.Success && images is { Count: > 0 } && IsImageRefusal(response))
+        {
+            // The session's model cannot take these images (no vision, or RedCompute refused
+            // them). The turn still goes in, reviewed, with the attachments as metadata only.
+            logger.LogWarning(
+                "RedCompute refused the images of {Transport} message {RequestId} ({Error}); sending it without them",
+                transport, input.RequestId, response.ErrorCode);
+            response = await redCompute.SendMessageDetailedAsync(handle.SessionId, new
+            {
+                content = BuildSessionInput(handle, input, review, transport, []),
+                displayContent = input.Content,
+                delivery = "after-current",
+                messageUid,
+                metadata = messageMetadata,
+            }, provenance, ct, idempotencyKey: idempotencyKey);
+        }
         if (!response.Success)
             throw new InvalidOperationException(
                 response.ErrorMessage ?? "RedCompute did not admit the external conversation message");
@@ -284,43 +301,66 @@ public sealed class ExternalAgentConversationProvider(
         => session.Status is "Stopped" or "Error"
            && !string.IsNullOrWhiteSpace(session.ProviderSessionId);
 
-    internal sealed record CommonsImage(UntrustedContentImage Review, string MediaType, byte[] Bytes);
+    internal sealed record SessionImage(
+        string AttachmentId, UntrustedContentImage Review, string MediaType, byte[] Bytes);
+
+    private static readonly HashSet<string> ImageRefusals = new(StringComparer.Ordinal)
+    {
+        "image_attachments_not_supported", "vision_unavailable", "invalid_images", "invalid_image",
+        "unsupported_image_type",
+    };
+
+    internal static bool IsImageRefusal(RedComputeClient.SendMessageResult response)
+        => response.StatusCode is 400 or 422 && response.ErrorCode is { } code && ImageRefusals.Contains(code);
 
     /// <summary>
-    /// The images of a Leaf Community message, read from the RedLeaf Assets the Leaf Community
-    /// connector stored after fetching and checking them. Null when any attachment is not such an
-    /// image (an unknown reference, a missing Asset, another media type, too large, or more than
-    /// the Sentinel reviews): the caller then refuses the whole message.
+    /// The images to review and show with a message, read from their RedLeaf Assets and checked
+    /// from the bytes (type, 5 MiB, 4096 px, still). Leaf Community attachments are always images
+    /// its connector fetched and checked, so any that fails here, or more than the Sentinel's
+    /// four, returns null and the caller refuses the message. Native Discord attachments are any
+    /// files: the first four that are showable images are used and the rest stay metadata.
     /// </summary>
-    private async Task<IReadOnlyList<CommonsImage>?> LoadCommonsImagesAsync(
-        ExternalConversationInput input, CancellationToken ct)
+    private async Task<IReadOnlyList<SessionImage>?> LoadImagesAsync(
+        ExternalConversationInput input, string transport, CancellationToken ct)
     {
-        if (input.Attachments.Count == 0) return [];
-        if (assets is null || input.Attachments.Count > UntrustedContentReviewRequest.MaxImages)
+        var commons = string.Equals(transport, "leaf-commons", StringComparison.OrdinalIgnoreCase);
+        var discord = string.Equals(transport, "discord", StringComparison.OrdinalIgnoreCase);
+        if (input.Attachments.Count == 0 || !(commons || discord)) return [];
+        if (commons && (assets is null || input.Attachments.Count > ExternalConversationImages.MaxImages))
         {
             logger.LogWarning("Refused Leaf Community message {RequestId}: its {Count} images cannot be reviewed",
                 input.RequestId, input.Attachments.Count);
             return null;
         }
-        var images = new List<CommonsImage>(input.Attachments.Count);
+        if (assets is null) return [];
+        var images = new List<SessionImage>();
         foreach (var attachment in input.Attachments)
         {
-            var assetId = CommonsAssetId(attachment.ScopeToken);
+            if (images.Count == ExternalConversationImages.MaxImages) break;
+            if (discord && !attachment.MediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) continue;
+            var assetId = AssetIdFromReference(attachment.ScopeToken);
             var file = assetId is null ? null : await assets.ReadAsync(assetId, ct);
-            if (assetId is null || file is null || file.Bytes.Length > UntrustedContentReviewRequest.MaxImageBytes
-                || file.ContentType is not ("image/png" or "image/jpeg" or "image/webp" or "image/gif"))
+            // The Sentinel checks the media type against the stored Asset, so the bytes must agree.
+            var mediaType = file is null ? null : ExternalConversationImages.Displayable(file.Bytes);
+            if (assetId is null || file is null || mediaType is null || mediaType != file.ContentType)
             {
-                logger.LogWarning("Refused Leaf Community message {RequestId}: attachment {AttachmentId} is not a readable image",
-                    input.RequestId, attachment.Id);
-                return null;
+                if (commons)
+                {
+                    logger.LogWarning("Refused Leaf Community message {RequestId}: attachment {AttachmentId} is not a readable image",
+                        input.RequestId, attachment.Id);
+                    return null;
+                }
+                continue;
             }
-            images.Add(new(new UntrustedContentImage(assetId, file.ContentType), file.ContentType, file.Bytes));
+            images.Add(new(attachment.Id, new UntrustedContentImage(assetId, mediaType), mediaType, file.Bytes));
         }
         return images;
     }
 
+    internal static string? CommonsAssetId(string? scopeToken) => AssetIdFromReference(scopeToken);
+
     /// <summary>The Asset id of a <c>/api/assets/{id}</c> reference, or null for anything else.</summary>
-    internal static string? CommonsAssetId(string? scopeToken)
+    internal static string? AssetIdFromReference(string? scopeToken)
     {
         const string prefix = "/api/assets/";
         if (scopeToken is null || !scopeToken.StartsWith(prefix, StringComparison.Ordinal)) return null;
@@ -616,7 +656,8 @@ public sealed class ExternalAgentConversationProvider(
         ExternalConversationHandle handle,
         ExternalConversationInput input,
         DiscordInjectionReview review,
-        string transport = "discord")
+        string transport = "discord",
+        IReadOnlyList<string>? shownImageIds = null)
     {
         if (string.Equals(transport, "leaf-commons", StringComparison.OrdinalIgnoreCase))
         {
@@ -683,6 +724,8 @@ public sealed class ExternalAgentConversationProvider(
             verifiedLeafIdentity,
             guildContext,
             attachments = input.Attachments,
+            // Which attachments are attached to this turn as images the model can see.
+            shownImageIds = shownImageIds ?? [],
             message = input.Content,
         });
         return $$"""
