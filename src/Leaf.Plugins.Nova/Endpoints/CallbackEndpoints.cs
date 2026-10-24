@@ -38,7 +38,11 @@ public static class CallbackEndpoints
         if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(discussionId))
             return Results.BadRequest(new { error = "sessionId and discussionId are required" });
 
-        var title = body.TryGetProperty("title", out var t) ? t.GetString() : null;
+        var rawTitle = body.TryGetProperty("title", out var t) ? t.GetString() : null;
+        // The title is written by the worker model and the ids come over HTTP: render them inert
+        // and bounded. The event's metadata keeps the raw title.
+        var title = NovaEventText.Field(rawTitle, MaxTitle);
+        var shownSession = NovaEventText.Field(sessionId, MaxIdentity);
         var stopReason = body.TryGetProperty("stopReason", out var sr) ? sr.GetString() : null;
         var reason = body.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
         var deliveredMessageUid = body.TryGetProperty("deliveredMessageUid", out var delivered)
@@ -73,27 +77,27 @@ public static class CallbackEndpoints
 
         var summary = (status, stopReason) switch
         {
-            _ when idleParking => $"Session {sessionId} parked after inactivity; it will resume on the next message",
-            _ when resumablePause => $"Session {sessionId} paused for restart; awaiting recovery, completion has not been reported",
-            (_, "usage_limit") => $"Session {sessionId} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
-            _ when backgroundTurn => $"Session {sessionId} ended its turn{(title != null ? $" ({title})" : "")} with {BackgroundTasks(backgroundTasksRunning)} still running; it is not finished and will report again when that work wakes it",
-            _ when provenEndedCompletion => $"Session {sessionId} completed{(title != null ? $": {title}" : "")}",
-            ("Idle", _) => $"Session {sessionId} completed{(title != null ? $": {title}" : "")}",
-            ("Cancelled", _) => $"Session {sessionId} input was {(reason == "superseded" ? "superseded" : "cancelled")}; it did not complete",
-            ("Stopped", _) => $"Session {sessionId} was stopped",
-            ("Error" or "Ended", _) => $"Session {sessionId} ended with status: {status}",
-            _ => $"Session {sessionId} status: {status}",
+            _ when idleParking => $"Session {shownSession} parked after inactivity; it will resume on the next message",
+            _ when resumablePause => $"Session {shownSession} paused for restart; awaiting recovery, completion has not been reported",
+            (_, "usage_limit") => $"Session {shownSession} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
+            _ when backgroundTurn => $"Session {shownSession} ended its turn{(title != null ? $" ({title})" : "")} with {BackgroundTasks(backgroundTasksRunning)} still running; it is not finished and will report again when that work wakes it",
+            _ when provenEndedCompletion => $"Session {shownSession} completed{(title != null ? $": {title}" : "")}",
+            ("Idle", _) => $"Session {shownSession} completed{(title != null ? $": {title}" : "")}",
+            ("Cancelled", _) => $"Session {shownSession} input was {(reason == "superseded" ? "superseded" : "cancelled")}; it did not complete",
+            ("Stopped", _) => $"Session {shownSession} was stopped",
+            ("Error" or "Ended", _) => $"Session {shownSession} ended with status: {NovaEventText.Field(status, MaxIdentity)}",
+            _ => $"Session {shownSession} status: {NovaEventText.Field(status, MaxIdentity)}",
         };
 
         var eventKind = outcome switch { "paused" => "paused", "background" => "turn-ended", _ => "complete" };
         var eventContent = backgroundTurn
             ? $"""
-            <nova-event source="callback:session-{eventKind}" type="session-{eventKind}" stopReason="{stopReason ?? "unknown"}" backgroundTasksRunning="{backgroundTasksRunning}">
+            <nova-event source="callback:session-{eventKind}" type="session-{eventKind}" stopReason="{NovaEventText.Attribute(stopReason ?? "unknown")}" backgroundTasksRunning="{backgroundTasksRunning}">
             {summary}
             </nova-event>
             """
             : $"""
-            <nova-event source="callback:session-{eventKind}" type="session-{eventKind}" stopReason="{stopReason ?? "unknown"}">
+            <nova-event source="callback:session-{eventKind}" type="session-{eventKind}" stopReason="{NovaEventText.Attribute(stopReason ?? "unknown")}">
             {summary}
             </nova-event>
             """;
@@ -112,7 +116,7 @@ public static class CallbackEndpoints
         if (key is not null && deliverySequence > 1) key += $":turn:{deliverySequence}";
         var metadata = JsonSerializer.SerializeToElement(new {
             sessionId, callbackId, promptMessageUid, status, stopReason, reason, deliveredMessageUid, executionObserved, outcome,
-            backgroundTasksRunning, deliverySequence, workState,
+            backgroundTasksRunning, deliverySequence, workState, title = rawTitle,
         });
         var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
             metadata: metadata,
@@ -132,6 +136,15 @@ public static class CallbackEndpoints
     }
 
     private static string BackgroundTasks(int count) => count == 1 ? "1 background task" : $"{count} background tasks";
+
+    // Bounds for worker-authored values rendered into an event; metadata keeps them whole.
+    internal const int MaxTitle = 200;
+    internal const int MaxIdentity = 200;
+    internal const int MaxHeader = 80;
+    internal const int MaxQuestion = 1000;
+    internal const int MaxLabel = 200;
+    internal const int MaxDescription = 500;
+    internal const int MaxQuestionSection = 6000;
 
     /// <summary>
     /// A delegated session parked on a structured question (Claude AskUserQuestion, Codex
@@ -155,7 +168,9 @@ public static class CallbackEndpoints
         var discussionId = ctx.Request.Query["discussionId"].ToString();
         if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(requestId) || string.IsNullOrEmpty(discussionId))
             return Results.BadRequest(new { error = "sessionId, requestId and discussionId are required" });
-        if (sessionId.Length > 200 || requestId.Length > 200)
+        // The session id builds the answer URL, so it must be a real session id; the request id is
+        // provider-chosen and only ever rendered escaped.
+        if (!DelegationActivity.ValidSessionId(sessionId) || requestId.Length > MaxIdentity)
             return Results.BadRequest(new { error = "invalid_identity" });
 
         var discussion = await store.GetAsync(discussionId);
@@ -187,43 +202,56 @@ public static class CallbackEndpoints
             return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
 
         if (!discussion.Confidential)
-            await live.PostAsync("callback", $"Delegated session is waiting on a question{(title != null ? $": {title}" : "")}",
+        {
+            var shownTitle = NovaEventText.Field(title, MaxTitle);
+            await live.PostAsync("callback", $"Delegated session is waiting on a question{(shownTitle != null ? $": {shownTitle}" : "")}",
                 idempotencyKey: $"{key}:live", ct: ctx.RequestAborted);
+        }
         return Results.Ok(new { handled = true, sessionId, discussionId, requestId });
     }
 
+    /// <summary>
+    /// The model-facing question event. Everything the worker wrote (title, headers, questions,
+    /// option labels and descriptions) is rendered through <see cref="NovaEventText"/>: frame tags
+    /// neutralized, one line each, bounded per field, and the whole question section bounded. The
+    /// fixed answer contract follows outside that bound, so it is always complete.
+    /// </summary>
     internal static string SessionQuestionEvent(string sessionId, string? title, string requestId,
         JsonElement questions, string? expiresAt, string answerUrl)
     {
+        var shownTitle = NovaEventText.Field(title, MaxTitle);
+        var shownExpiry = NovaEventText.Field(expiresAt, MaxIdentity);
         var text = new System.Text.StringBuilder();
-        text.Append($"Delegated session {sessionId}{(title != null ? $" ({title})" : "")} is blocked on a question and waits for an answer");
-        text.AppendLine(expiresAt != null
-            ? $" until {expiresAt}. If nobody answers by then it proceeds with its own best judgement."
+        text.Append($"Delegated session {sessionId}{(shownTitle != null ? $" ({shownTitle})" : "")} is blocked on a question and waits for an answer");
+        text.AppendLine(shownExpiry != null
+            ? $" until {shownExpiry}. If nobody answers by then it proceeds with its own best judgement."
             : ". It has no deadline: it waits until answered or stopped.");
+        var section = new NovaEventText.Bounded(MaxQuestionSection);
         var index = 0;
         foreach (var question in questions.EnumerateArray())
         {
             index++;
-            var header = Text(question, "header");
+            var header = NovaEventText.Field(Text(question, "header"), MaxHeader);
             var multi = question.TryGetProperty("multiSelect", out var m) && m.ValueKind == JsonValueKind.True;
-            text.AppendLine();
-            text.AppendLine($"Question {index}{(header != null ? $" [{header}]" : "")}{(multi ? " (multi-select)" : "")}: {Text(question, "question")}");
+            section.AppendLine();
+            section.AppendLine($"Question {index}{(header != null ? $" [{header}]" : "")}{(multi ? " (multi-select)" : "")}: {NovaEventText.Field(Text(question, "question"), MaxQuestion)}");
             if (question.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Array)
                 foreach (var option in options.EnumerateArray())
                 {
-                    var description = Text(option, "description");
-                    text.AppendLine($"- {Text(option, "label")}{(string.IsNullOrWhiteSpace(description) ? "" : $": {description}")}");
+                    var description = NovaEventText.Field(Text(option, "description"), MaxDescription);
+                    section.AppendLine($"- {NovaEventText.Field(Text(option, "label"), MaxLabel)}{(description is null ? "" : $": {description}")}");
                 }
         }
+        text.Append(section.ToString().TrimEnd('\n')).AppendLine();
         text.AppendLine();
-        text.AppendLine($"Answer contract: POST {answerUrl} with your execution bearer and a JSON body carrying \"requestId\": \"{requestId}\" plus one of:");
+        text.AppendLine($"Answer contract: POST {answerUrl} with your execution bearer and a JSON body carrying \"requestId\": {JsonSerializer.Serialize(NovaEventText.Field(requestId, MaxIdentity))} plus one of:");
         text.AppendLine("- \"answers\": an object keyed by the exact question text, valued with the chosen option label (multi-select: labels comma-separated in one string), or an array of those values in question order;");
         text.AppendLine("- \"response\": free text in your own words instead of picking options;");
         text.AppendLine("- \"decline\": true (optional \"reason\") to dismiss the question.");
         text.AppendLine("Send answers or response, not both: response outranks answers (it replaces every selection), so RedCompute forwards response only when no answers are given.");
         text.Append("409 request_not_pending means it was already answered, expired or cancelled.");
         return $"""
-            <nova-event source="callback:session-question" type="session-question" sessionId="{sessionId}" requestId="{requestId}" expiresAt="{expiresAt ?? "none"}">
+            <nova-event source="callback:session-question" type="session-question" sessionId="{NovaEventText.Attribute(sessionId)}" requestId="{NovaEventText.Attribute(requestId)}" expiresAt="{NovaEventText.Attribute(expiresAt ?? "none")}">
             {text}
             </nova-event>
             """;

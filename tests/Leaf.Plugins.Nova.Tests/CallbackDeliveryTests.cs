@@ -304,13 +304,14 @@ public sealed class CallbackDeliveryTests
 
         public async Task<int> Complete(string? id, string status = "Idle", string? stopReason = null,
             string? reason = null, string? deliveredMessageUid = null, string? promptMessageUid = null, bool executionObserved = false,
-            int? backgroundTasksRunning = null, int? deliverySequence = null, string? workState = null)
+            int? backgroundTasksRunning = null, int? deliverySequence = null, string? workState = null,
+            string? title = "same title")
         {
             var ctx = new DefaultHttpContext();
             ctx.Connection.RemoteIpAddress = IPAddress.Loopback;
             ctx.Request.QueryString = new("?discussionId=target");
             ctx.Request.ContentType = "application/json";
-            var body = new JsonObject { ["sessionId"] = "delegated-session", ["status"] = status, ["title"] = "same title", ["stopReason"] = stopReason };
+            var body = new JsonObject { ["sessionId"] = "delegated-session", ["status"] = status, ["title"] = title, ["stopReason"] = stopReason };
             body["reason"] = reason;
             body["deliveredMessageUid"] = deliveredMessageUid;
             body["promptMessageUid"] = promptMessageUid;
