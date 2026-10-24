@@ -5,6 +5,7 @@ import { agentNoteLabel, parseAgentNote, parseAgentNoteSource } from "./agent-no
 test("an instance source names the sending Agent and its discussion", () => {
   assert.deepEqual(parseAgentNoteSource("event:nova-855ddaca"), { agent: "nova", discussionId: "855ddaca" })
   assert.deepEqual(parseAgentNoteSource("Nova-855DDACA"), { agent: "nova", discussionId: "855ddaca" })
+  assert.deepEqual(parseAgentNoteSource("event:leni-b863d153-855ddaca"), { agent: "leni-b863d153", discussionId: "855ddaca" })
 })
 
 test("registered and ordinary sources are not instance notes", () => {

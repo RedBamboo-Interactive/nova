@@ -10,7 +10,9 @@
  */
 export const AGENT_NOTE_KEY = "agent-note"
 
-const NOTE_SOURCE = /^(?:event:)?([a-z][a-z0-9]*)-([0-9a-f]{8})$/i
+// Agent slugs may themselves contain hyphens and hex (`leni-b863d153`); the
+// discussion is always the final eight hex digits.
+const NOTE_SOURCE = /^(?:event:)?([a-z][a-z0-9-]*?)-([0-9a-f]{8})$/i
 const NOTE_LEAD = /^\[internal\]\s*(?:From\s+[0-9a-f]{8}\b\s*(?:\(([^)\n]*)\))?\s*:\s*)?/i
 
 export interface AgentNote {

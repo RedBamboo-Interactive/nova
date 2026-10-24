@@ -1155,11 +1155,13 @@ export function ChatView({
     <NovaStatusLine isStreaming={isStreaming} isReconnecting={isReconnecting} messages={messages} />
   ), [])
 
-  const resolveAgentInfo = useCallback((agentId: string) => {
-    const agent = getAgent(agentId)
+  // Message senders carry the Agent id; Agent notes know their sender only by
+  // the slug in their source, and slugs never take the shape of an id.
+  const resolveAgentInfo = useCallback((agentRef: string) => {
+    const agent = getAgent(agentRef) ?? agents.find(candidate => candidate.slug === agentRef)
     if (!agent) return undefined
     return { name: agent.name, avatarUrl: agent.avatarUrl }
-  }, [getAgent])
+  }, [agents, getAgent])
 
   const { reactions, react, unreact } = useReactions(activeDiscussionId)
 
