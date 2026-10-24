@@ -33,6 +33,26 @@ export function shouldRequestSessionTitleSync(
   return discussion?.type === "chat" && !!pushedTitle?.trim()
 }
 /**
+ * Stop reasons RedCompute resumes on its own when a prompt arrives.
+ * Mirrors SessionStopReasons.IsAutoResumable in
+ * redcompute/src/RedCompute.Core/Sessions/SessionStopReasons.cs
+ * (restart-recoverable + IdleTimeout + LegacyIdleTtlExpired). Keep in sync.
+ */
+const REDCOMPUTE_AUTO_RESUMABLE_STOP_REASONS: ReadonlySet<string> = new Set([
+  "maintenance_restart",
+  "orphaned_on_restart",
+  "idle_timeout",
+  "idle_ttl_expired",
+])
+
+/** Whether a send needs an explicit resume first: false when RedCompute resumes the session itself. */
+export function sendNeedsExplicitResume(sessionStatus: string | undefined, stopReason?: string | null): boolean {
+  if (sessionStatus === "Active" || sessionStatus === "Idle" || sessionStatus === "Starting") return false
+  if (sessionStatus !== "Stopped" && sessionStatus !== "Error") return true
+  return !(stopReason && REDCOMPUTE_AUTO_RESUMABLE_STOP_REASONS.has(stopReason))
+}
+
+/**
  * Project RedCompute's provider-neutral session lifecycle onto the smaller
  * discussion lifecycle used by the list indicator.
  */

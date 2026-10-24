@@ -19,7 +19,6 @@ function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: st
     activeDiscussionId,
     isStreaming,
     archiveDiscussion,
-    resumeDiscussion,
     interruptDiscussion,
   } = useDisc()
   const { agentFilter } = useLocalSettings()
@@ -71,19 +70,6 @@ function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: st
       const id = activeDiscussionId
       archiveDiscussion(id, { onUndo: () => navigate(`/apps/nova/chat/${id}`) })
       navigate("/apps/nova/chat")
-    },
-  })
-
-  useCommand("nova-resume-discussion", {
-    label: "Resume Discussion",
-    description: "Restart the stopped session behind the active discussion",
-    group: "Discussions",
-    keywords: ["resume", "restart", "continue"],
-    enabled: activeDiscussion?.status === "stopped",
-    action: async () => {
-      if (!activeDiscussionId) return
-      await resumeDiscussion(activeDiscussionId)
-      navigate(`/apps/nova/chat/${activeDiscussionId}`)
     },
   })
 

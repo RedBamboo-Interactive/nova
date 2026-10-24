@@ -191,7 +191,6 @@ export function ChatView({
     renameDiscussion,
     updateDiscussionTitle,
     setConfidential,
-    resumeDiscussion,
     reopenDiscussion,
     loadEarlierMessages,
     retryHistoryLoad,
@@ -442,7 +441,7 @@ export function ChatView({
     if (!discussionId || !activeDiscussion) {
       return { ok: false, state: "open", error: { code: "discussion_required", message: "Select a discussion before attaching foreground context." } }
     }
-    if (activeDiscussion.type === "heartbeat" || activeDiscussion.ownedBy || activeDiscussion.status === "archived" || activeDiscussion.status === "archiving" || activeDiscussion.status === "stopped") {
+    if (activeDiscussion.type === "heartbeat" || activeDiscussion.ownedBy || activeDiscussion.status === "archived" || activeDiscussion.status === "archiving") {
       return { ok: false, state: "open", error: { code: "discussion_read_only", message: "This discussion cannot accept a context attachment." } }
     }
     if (capturingContextRef.current) {
@@ -476,7 +475,7 @@ export function ChatView({
   const captureMonitor = useCallback(async (sourceId: string): Promise<void> => {
     const discussionId = activeDiscussionId
     if (!discussionId || !activeDiscussion || capturingContextRef.current) return
-    if (activeDiscussion.type === "heartbeat" || activeDiscussion.ownedBy || activeDiscussion.status === "archived" || activeDiscussion.status === "archiving" || activeDiscussion.status === "stopped") return
+    if (activeDiscussion.type === "heartbeat" || activeDiscussion.ownedBy || activeDiscussion.status === "archived" || activeDiscussion.status === "archiving") return
 
     capturingContextRef.current = true
     setCapturingContext(true)
@@ -585,11 +584,6 @@ export function ChatView({
     if (!activeDiscussionId) return
     answerQuestion(activeDiscussionId, answer, payload)
   }, [activeDiscussionId, answerQuestion])
-
-  const handleResume = useCallback(async () => {
-    if (!activeDiscussionId) return
-    await resumeDiscussion(activeDiscussionId)
-  }, [activeDiscussionId, resumeDiscussion])
 
   const handleLoadEarlier = useCallback(() => {
     if (!activeDiscussionId) return
@@ -1398,12 +1392,11 @@ export function ChatView({
         sessionId={activeDiscussionId}
         autoFocusMode={autoFocusMode}
         draftStorageKey="nova-drafts"
-        disabled={discussionClosed || !!owningApp || activeDiscussion.status === "stopped"}
+        disabled={discussionClosed || !!owningApp}
         hideComposer={activeDiscussion.type === "heartbeat" || discussionClosed || !!owningApp}
         pendingQuestion={pendingQuestion}
         questionOutcome={questionOutcome}
         onAnswerQuestion={handleAnswerQuestion}
-        onResume={activeDiscussion.status === "stopped" ? handleResume : undefined}
         hasEarlierMessages={hasEarlierMessages && !earlierHistoryLoadFailure}
         onLoadEarlier={handleLoadEarlier}
         isLoadingEarlier={isLoadingEarlier}

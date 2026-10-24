@@ -89,10 +89,9 @@ interface LiveTimelineProps {
   sessionId?: string | null
   pendingQuestion?: PendingQuestion | null
   onAnswerQuestion?: (answer: string, payload?: QuestionAnswerPayload) => void
-  onResume?: () => void | Promise<void>
 }
 
-export function LiveTimeline({ messages, isStreaming, onSend, onInterrupt, resolveEventType, assistantAvatar, resolveImageSrc, header, disabled, placeholder, sessionId, pendingQuestion, onAnswerQuestion, onResume }: LiveTimelineProps) {
+export function LiveTimeline({ messages, isStreaming, onSend, onInterrupt, resolveEventType, assistantAvatar, resolveImageSrc, header, disabled, placeholder, sessionId, pendingQuestion, onAnswerQuestion }: LiveTimelineProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const entries = useMemo(() => buildEntries(messages, isStreaming, resolveEventType), [messages, isStreaming, resolveEventType])
 
@@ -200,7 +199,6 @@ export function LiveTimeline({ messages, isStreaming, onSend, onInterrupt, resol
         sessionId={sessionId}
         pendingQuestion={!!pendingQuestion}
         onAnswerQuestion={onAnswerQuestion}
-        onResume={onResume}
         draftStorageKey="nova-drafts"
       />
     </div>

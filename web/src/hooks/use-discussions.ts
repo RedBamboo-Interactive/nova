@@ -7,7 +7,7 @@ import { canonicalUserMessageUids, DeferredInvalidationCoordinator, DurableTrans
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
 import { accumulateHistoryOverlays, coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeNovaMessageArrival, mergePagedDiscussionRecordsAndOverlays } from "../lib/discussion-transcript"
-import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch, sessionStreamEffects, shouldRequestSessionTitleSync } from "../lib/discussion-runtime"
+import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch, sendNeedsExplicitResume, sessionStreamEffects, shouldRequestSessionTitleSync } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
 import { HistoryLifecycleTombstones, historyRevalidationDirection, invalidateHistoryGeneration, isCurrentHistoryGeneration, shouldAccumulatePushedHistoryOverlay, shouldCatchUpHistory } from "../lib/discussion-history-page"
@@ -944,7 +944,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           // A failed history read says nothing about provider lifecycle. Auth,
           // network, and overloaded-store failures must not fan out into
           // session resumes. Fall through to Nova's durable projection;
-          // stopped sessions resume only through the explicit lifecycle action.
+          // stopped sessions resume only on the user's own send.
         }
       }
 
@@ -1216,6 +1216,22 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
   }, [])
 
+  /**
+   * Resume a stopped discussion's session ahead of a user send. Skipped when the
+   * live session is already running or RedCompute auto-resumes it on send; the
+   * server resume is idempotent for a session a stale view still shows stopped.
+   */
+  const resumeForSend = useCallback(async (disc: DiscussionInfo) => {
+    const live = await api.get<{ session?: { status?: string; stopReason?: string | null } }>(
+      `/ai-session/sessions/${disc.sessionId}?tail=1`,
+    ).catch(() => null)
+    if (live?.session && !sendNeedsExplicitResume(live.session.status, live.session.stopReason)) return
+    const result = await api.post<{ sessionId: string | null; status: DiscussionInfo["status"] }>(
+      `/api/apps/nova/discussions/${disc.id}/resume`,
+    )
+    upsertDiscussion({ ...disc, sessionId: result.sessionId, status: result.status })
+  }, [upsertDiscussion])
+
   const deliverMessage = useCallback(async (
     discussionId: string,
     content: string,
@@ -1241,6 +1257,20 @@ export function useDiscussions(eventResolver?: EventResolver) {
       )
     }
     const admissionRead = captureRuntimeRead(discussionId)
+
+    // A stopped session resumes on the user's own send, never on an automated
+    // injection. Failure throws so the shared queue keeps the message as failed.
+    if (disc.status === "stopped" && disc.sessionId) {
+      try {
+        await resumeForSend(disc)
+      } catch (error) {
+        if (locallyStartedTurn && runtimeReadIsCurrent(discussionId, admissionRead)) clearStreamingLatch(discussionId)
+        setDiscussions((prev) =>
+          prev.map((d) => d.id === discussionId && d.status === "thinking" ? { ...d, status: "stopped" as const } : d)
+        )
+        throw error
+      }
+    }
 
     const displayContent = options?.displayContent ?? (
       content
@@ -1353,7 +1383,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       }).catch(() => { /* Unavailable lifecycle evidence cannot establish Idle. */ })
     }
     return res
-  }, [discussions, clearStreamingLatch, latchStreaming, captureRuntimeRead, runtimeReadIsCurrent, hydrateRuntime])
+  }, [discussions, clearStreamingLatch, latchStreaming, captureRuntimeRead, runtimeReadIsCurrent, hydrateRuntime, resumeForSend])
 
   const sendMessage = useCallback((discussionId: string, content: string, images?: ImageAttachment[], options?: SendOptions) =>
     deliverMessage(discussionId, content, images, options), [deliverMessage])
@@ -1432,23 +1462,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
     }
   }, [discussions, clearQuestion])
-
-  const resumeDiscussion = useCallback(async (discussionId: string) => {
-    const disc = resolveKnownDiscussion(discussions, archiveState.knownItems, discussionId)
-    if (!disc) return
-    try {
-      const result = await api.post<{ sessionId: string | null; status: "idle" }>(
-        `/api/apps/nova/discussions/${discussionId}/resume`
-      )
-      upsertDiscussion({ ...disc, sessionId: result.sessionId, status: result.status })
-    } catch (err) {
-      toast({
-        variant: "error",
-        title: "Failed to restart discussion",
-        description: err instanceof Error ? err.message : "Unknown error",
-      })
-    }
-  }, [discussions, archiveState.knownItems, toast])
 
   const reopenDiscussion = useCallback(async (discussionId: string): Promise<boolean> => {
     try {
@@ -2111,7 +2124,6 @@ export function useDiscussions(eventResolver?: EventResolver) {
     renameDiscussion,
     updateDiscussionTitle,
     setConfidential,
-    resumeDiscussion,
     reopenDiscussion,
     loadEarlierMessages,
     refreshDiscussions,

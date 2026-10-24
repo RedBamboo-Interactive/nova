@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { applySessionStatus, applySettledSessionStatus, discussionStatusForSession, preservesRecentStreamingLatch, shouldRequestSessionTitleSync } from "./discussion-runtime.ts"
+import { applySessionStatus, applySettledSessionStatus, discussionStatusForSession, preservesRecentStreamingLatch, sendNeedsExplicitResume, shouldRequestSessionTitleSync } from "./discussion-runtime.ts"
 import type { DiscussionInfo } from "./types.ts"
 
 function discussion(status: DiscussionInfo["status"] = "idle", type: DiscussionInfo["type"] = "chat"): DiscussionInfo {
@@ -118,4 +118,21 @@ test("background stream events never touch the turn state", async () => {
     { applyTurnState: true, settleIdle: true, forceActive: false })
   assert.deepEqual(sessionStreamEffects({ type: "status", content: "killed" }, { isStreaming: false, resumePending: true }),
     { applyTurnState: true, settleIdle: false, forceActive: true })
+})
+
+test("every non-restart stop projects to the one grey stopped state", () => {
+  for (const reason of ["user_stopped", "idle_timeout", "idle_ttl_expired", "usage_limit", undefined])
+    assert.equal(discussionStatusForSession("Stopped", "chat", reason), "stopped")
+  assert.equal(discussionStatusForSession("Error", "chat"), "stopped")
+})
+
+test("a send resumes explicitly unless the session runs or RedCompute auto-resumes it", () => {
+  for (const reason of ["maintenance_restart", "orphaned_on_restart", "idle_timeout", "idle_ttl_expired"])
+    assert.equal(sendNeedsExplicitResume("Stopped", reason), false)
+  for (const reason of ["user_stopped", "usage_limit", "dismissed", null, undefined])
+    assert.equal(sendNeedsExplicitResume("Stopped", reason), true)
+  assert.equal(sendNeedsExplicitResume("Error", null), true)
+  assert.equal(sendNeedsExplicitResume("Error", "idle_timeout"), false)
+  for (const status of ["Active", "Idle", "Starting"])
+    assert.equal(sendNeedsExplicitResume(status, null), false)
 })
