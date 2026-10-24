@@ -114,12 +114,14 @@ public static class CallbackEndpoints
 
         // One provider turn can resolve several registrations: RedCompute merges queued prompts into
         // one delivery, and each prompt's registration reports that same turn under its own
-        // callbackId. A delivered, observed turn is therefore keyed on the turn itself, which
-        // RedCompute reports identically to all of them (deliveredMessageUid, the merged batch's
-        // first prompt, plus the deliverySequence below for a turn woken by background work).
+        // callbackId. A delivered turn is therefore keyed on the turn itself, which RedCompute
+        // reports identically to all of them (deliveredMessageUid, the merged batch's first
+        // prompt, plus the deliverySequence below for a turn woken by background work). That holds
+        // whether or not activity was observed: a background turn that never woke reports on
+        // settle without it, and so can a member whose earlier delivery was still retrying.
         // A later turn of the same session has a new deliveredMessageUid and still arrives.
         // Pause, cancellation and supersession are per-prompt outcomes and keep the callbackId key.
-        var turnIdentity = callbackId is not null && executionObserved
+        var turnIdentity = callbackId is not null
             && deliveredMessageUid is { Length: > 0 and <= MaxIdentity }
             && outcome is not ("paused" or "cancelled" or "superseded");
         // Legacy senders remain compatible. A session ID alone cannot identify a

@@ -113,6 +113,7 @@ public sealed class EventInjector(
             ? Guid.NewGuid().ToString("N")
             : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey)));
         var admissionDenied = false;
+        DiscussionMessage? stored = null;
         var persisted = await DiscussionEntityGate.RunAsync(discussion.EntityId, async () =>
         {
             if (requireOpen)
@@ -146,10 +147,10 @@ public sealed class EventInjector(
                 while (true)
                 {
                     var existing = await discussions.GetMessagesAsync(discussion.EntityId, limit: 1000, afterId: afterId, ct: ct);
-                    if (existing.Any(message => message.Metadata["idempotency_key"] is JsonValue value
+                    stored = existing.FirstOrDefault(message => message.Metadata["idempotency_key"] is JsonValue value
                         && value.TryGetValue<string>(out var key)
-                        && string.Equals(key, idempotencyKey, StringComparison.Ordinal)))
-                        return false;
+                        && string.Equals(key, idempotencyKey, StringComparison.Ordinal));
+                    if (stored is not null) return false;
                     if (existing.Count < 1000) break;
                     var nextId = existing.Max(message => message.Id);
                     if (nextId <= afterId) throw new InvalidOperationException("Discussion event lookup did not advance");
@@ -172,6 +173,17 @@ public sealed class EventInjector(
         // after persistence but before the session accepted the tick; that path is
         // explicitly classified at-least-once.
         if (!persisted && !redeliverOnReuse) return true;
+        // The key names one logical event, so what was persisted under it is the event. A
+        // redelivery forwards that, never this call's rendering: two callers sharing a key (one
+        // turn reported by several registrations) may render different text, and resending the
+        // new text under the same admission key would be refused as a conflict on every retry.
+        if (stored is not null)
+        {
+            content = stored.Content;
+            if (stored.Metadata["uid"] is JsonValue storedUid && storedUid.TryGetValue<string>(out var value)
+                && !string.IsNullOrWhiteSpace(value))
+                uid = value;
+        }
 
         if (persisted)
         {

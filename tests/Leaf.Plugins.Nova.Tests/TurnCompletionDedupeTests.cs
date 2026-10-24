@@ -4,8 +4,8 @@ namespace Leaf.Plugins.Nova.Tests;
 
 // Discussion 258167da: RedCompute merged five queued continuations of worker 8d9d5930dd14 into one
 // turn. When it ended, each prompt's registration reported that turn under its own callbackId, and
-// Nova keyed on the callbackId: five events, five LIVE posts, five parent turns. A delivered,
-// observed turn is now keyed on the turn (deliveredMessageUid [+ deliverySequence]); per-prompt
+// Nova keyed on the callbackId: five events, five LIVE posts, five parent turns. A delivered turn,
+// observed or not, is now keyed on the turn (deliveredMessageUid [+ deliverySequence]); per-prompt
 // outcomes (pause, cancellation, supersession) and legacy senders keep the callbackId key.
 public sealed class TurnCompletionDedupeTests
 {
@@ -19,8 +19,9 @@ public sealed class TurnCompletionDedupeTests
     private const string NextPrompt = "0e2aad778fe84e738e914d0e719ed3ab";
 
     private static Task<int> TurnEnded(CallbackDeliveryTests.Fixture f, string callbackId, string delivered,
-        int? pendingInputs = 1, int? backgroundTasksRunning = null, int? deliverySequence = null, string workState = "idle")
-        => f.Complete(callbackId, "Idle", deliveredMessageUid: delivered, promptMessageUid: callbackId, executionObserved: true,
+        int? pendingInputs = 1, int? backgroundTasksRunning = null, int? deliverySequence = null, string workState = "idle",
+        bool executionObserved = true)
+        => f.Complete(callbackId, "Idle", deliveredMessageUid: delivered, promptMessageUid: callbackId, executionObserved: executionObserved,
             backgroundTasksRunning: backgroundTasksRunning, deliverySequence: deliverySequence, workState: workState,
             pendingInputs: pendingInputs);
 
@@ -133,20 +134,81 @@ public sealed class TurnCompletionDedupeTests
         Assert.Equal(2, f.Gateway.Admitted.Count);
     }
 
-    // No execution evidence (for instance a never-woken turn reported on settle) is not keyed on
-    // the turn: the brief's contract keeps those on the per-registration identity.
+    // Two registrations of one turn whose payloads were built in different observation passes can
+    // render different text. The first rendering is the event; the second redelivers it, so the
+    // shared admission key never sees a different body and RedCompute never refuses it.
     [Fact]
-    public async Task Unobserved_or_legacy_completions_keep_the_callback_identity()
+    public async Task Callbacks_of_one_turn_with_different_text_give_one_event_without_a_conflict()
     {
         using var f = new CallbackDeliveryTests.Fixture();
-        Assert.Equal(200, await f.Complete(Batch[0], deliveredMessageUid: Head, promptMessageUid: Batch[0]));
-        Assert.Equal(200, await f.Complete(Batch[1], deliveredMessageUid: Head, promptMessageUid: Batch[1]));
-        Assert.Equal(2, f.TargetMessages.Count());
-        Assert.StartsWith("session-complete:", f.TargetMessages.First().Metadata["idempotency_key"]!.GetValue<string>());
+        Assert.Equal(200, await TurnEnded(f, Batch[0], Head, pendingInputs: 1));
+        Assert.Equal(200, await TurnEnded(f, Batch[1], Head, pendingInputs: 0));
 
-        // An oversized delivery identity is not trusted as a turn key either.
-        Assert.Equal(200, await TurnEnded(f, Batch[2], new string('x', 201)));
+        var record = Assert.Single(f.TargetMessages);
+        Assert.Contains("1 more queued prompt", record.Content);
+        Assert.Single(f.LiveMessages);
+        Assert.Single(f.Gateway.Admitted);
+        Assert.Equal(0, f.Gateway.Conflicts);
+        Assert.Equal(2, f.Gateway.Attempts);
+        Assert.Equal(f.Gateway.Bodies[0], f.Gateway.Bodies[1]);
+    }
+
+    // RedCompute's settle report for a background turn that never woke carries no execution
+    // evidence; every member of the batch reports it, and it is still one turn.
+    [Fact]
+    public async Task A_settled_batch_whose_background_turn_never_woke_reports_once()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        foreach (var callbackId in Batch.Take(3))
+            Assert.Equal(200, await TurnEnded(f, callbackId, Head, pendingInputs: 0, backgroundTasksRunning: 1,
+                deliverySequence: 1, workState: "background"));
+        foreach (var callbackId in Batch.Take(3))
+            Assert.Equal(200, await TurnEnded(f, callbackId, Head, pendingInputs: 0, deliverySequence: 2,
+                executionObserved: false));
+
+        Assert.Equal(2, f.TargetMessages.Count());
+        Assert.Equal($"session-turn:delegated-session:target:{Head}:turn:2",
+            f.TargetMessages.Last().Metadata["idempotency_key"]!.GetValue<string>());
+        Assert.Equal(2, f.LiveMessages.Count());
+        Assert.Equal(2, f.Gateway.Admitted.Count);
+        Assert.Equal(0, f.Gateway.Conflicts);
+    }
+
+    // One member's first delivery was still retrying while the woken turn ran: it missed that
+    // turn's activity and reports it later, on settle, without execution evidence.
+    [Fact]
+    public async Task A_member_whose_first_delivery_was_still_retrying_joins_its_siblings_events()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        foreach (var callbackId in Batch.Take(2))
+            await TurnEnded(f, callbackId, Head, pendingInputs: 0, backgroundTasksRunning: 1, deliverySequence: 1, workState: "background");
+        foreach (var callbackId in Batch.Take(2))
+            await TurnEnded(f, callbackId, Head, pendingInputs: 0, deliverySequence: 2);
+
+        Assert.Equal(200, await TurnEnded(f, Batch[2], Head, pendingInputs: 0, backgroundTasksRunning: 1,
+            deliverySequence: 1, workState: "background"));
+        Assert.Equal(200, await TurnEnded(f, Batch[2], Head, pendingInputs: 0, deliverySequence: 2, executionObserved: false));
+
+        Assert.Equal(2, f.TargetMessages.Count());
+        Assert.Equal(2, f.LiveMessages.Count());
+        Assert.Equal(2, f.Gateway.Admitted.Count);
+        Assert.Equal(0, f.Gateway.Conflicts);
+    }
+
+    [Fact]
+    public async Task Legacy_and_untrusted_delivery_identities_keep_the_callback_identity()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        // An oversized delivery identity is not trusted as a turn key.
+        Assert.Equal(200, await TurnEnded(f, Batch[0], new string('x', 201)));
         Assert.StartsWith("session-complete:", f.TargetMessages.Last().Metadata["idempotency_key"]!.GetValue<string>());
+        // Without a delivery identity, each registration stays its own completion.
+        Assert.Equal(200, await f.Complete(Batch[1]));
+        Assert.Equal(200, await f.Complete(Batch[2]));
+        Assert.Equal(3, f.TargetMessages.Count());
+        // A legacy sender without a callbackId stays unkeyed, delivery fields or not.
+        Assert.Equal(200, await f.Complete(null, deliveredMessageUid: Head, promptMessageUid: Head, executionObserved: true));
+        Assert.Null(f.TargetMessages.Last().Metadata["idempotency_key"]?.GetValue<string>());
     }
 
     [Theory]

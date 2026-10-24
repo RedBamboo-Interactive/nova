@@ -97,6 +97,21 @@ public sealed class CallbackDeliveryTests
         Assert.All(f.Gateway.Keys, key => Assert.Null(key));
     }
 
+    // A redelivery under an existing key forwards what was persisted under it, never the new call's text.
+    [Fact]
+    public async Task KeyedRedeliveryForwardsThePersistedEventNotTheNewRendering()
+    {
+        using var f = new Fixture();
+        var discussion = (await f.Store.GetAsync("target"))!;
+        Assert.True(await f.Injector.InjectAsync(discussion, "tick at 09:00", null, "heartbeat", idempotencyKey: "tick", redeliverOnReuse: true));
+        Assert.True(await f.Injector.InjectAsync(discussion, "tick rendered again at 09:01", null, "heartbeat", idempotencyKey: "tick", redeliverOnReuse: true));
+        Assert.Equal("tick at 09:00", Assert.Single(f.TargetMessages).Content);
+        Assert.Equal(2, f.Gateway.Bodies.Count);
+        Assert.Equal(f.Gateway.Bodies[0], f.Gateway.Bodies[1]);
+        Assert.Contains("tick at 09:00", f.Gateway.Bodies[1]);
+        Assert.Contains(f.TargetMessages.Single().Metadata["uid"]!.GetValue<string>(), f.Gateway.Bodies[1]);
+    }
+
     [Theory]
     [InlineData("maintenance_restart")]
     [InlineData("orphaned_on_restart")]
@@ -335,6 +350,9 @@ public sealed class CallbackDeliveryTests
         public bool FailNext { get; set; }
         public bool AcceptBeforeFailure { get; set; }
         public List<string?> Keys { get; } = [];
+        public List<string> Bodies { get; } = [];
+        // RedCompute refuses a reused admission key whose body differs (idempotency_conflict).
+        public int Conflicts { get; private set; }
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
             Assert.EndsWith("/message", request.RequestUri!.ToString());
@@ -344,13 +362,18 @@ public sealed class CallbackDeliveryTests
             Keys.Add(key);
             if (key is not null) Assert.InRange(key.Length, 1, 256);
             var body = await request.Content!.ReadAsStringAsync(ct);
+            Bodies.Add(body);
             var fail = FailNext;
             FailNext = false;
             if (!fail || AcceptBeforeFailure)
             {
                 var admission = key ?? Guid.NewGuid().ToString();
-                if (Admitted.TryGetValue(admission, out var original)) Assert.Equal(original, body);
-                else Admitted.Add(admission, body);
+                if (!Admitted.TryGetValue(admission, out var original)) Admitted.Add(admission, body);
+                else if (original != body)
+                {
+                    Conflicts++;
+                    return new(HttpStatusCode.Conflict) { Content = new StringContent("{\"error\":\"idempotency_conflict\"}") };
+                }
             }
             if (fail) throw new HttpRequestException("Simulated lost acknowledgement");
             return new(HttpStatusCode.OK) { Content = new StringContent("{\"accepted\":true}") };
