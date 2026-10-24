@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Leaf.Plugins.Nova.Endpoints;
 using Leaf.Sdk.Services;
 using Leaf.Sdk;
 
@@ -59,9 +60,9 @@ public sealed class EventInjector(
         string? senderAgentId = null, string? replyToDiscussionId = null,
         JsonElement? metadata = null, string? userId = null,
         string? idempotencyKey = null, bool redeliverOnReuse = false,
-        CancellationToken ct = default, string? deliveryIdempotencyKey = null)
+        CancellationToken ct = default, string? deliveryIdempotencyKey = null, bool framed = false)
         => InjectCoreAsync(discussion, content, type, source, senderAgentId, replyToDiscussionId,
-            metadata, userId, idempotencyKey, redeliverOnReuse, ct, deliveryIdempotencyKey, null);
+            metadata, userId, idempotencyKey, redeliverOnReuse, ct, deliveryIdempotencyKey, null, framed: framed);
 
     /// <summary>
     /// Like <see cref="InjectAsync"/>, for unsolicited external notices that must never
@@ -73,9 +74,9 @@ public sealed class EventInjector(
     public Task<bool> InjectIfOpenAsync(
         DiscussionRead discussion, string content, string? source,
         JsonElement? metadata, string? userId, string idempotencyKey,
-        CancellationToken ct = default)
+        CancellationToken ct = default, bool framed = false)
         => InjectCoreAsync(discussion, content, null, source, null, null,
-            metadata, userId, idempotencyKey, false, ct, idempotencyKey, null, requireOpen: true);
+            metadata, userId, idempotencyKey, false, ct, idempotencyKey, null, requireOpen: true, framed: framed);
 
     // Additive scoped entry point. Legacy injection signature, event identity, persistence,
     // delivery and reconciliation remain unchanged.
@@ -92,7 +93,7 @@ public sealed class EventInjector(
         string? senderAgentId, string? replyToDiscussionId, JsonElement? metadata, string? userId,
         string? idempotencyKey, bool redeliverOnReuse, CancellationToken ct,
         string? deliveryIdempotencyKey, PluginLiveEventRecipient? recipient,
-        bool requireOpen = false)
+        bool requireOpen = false, bool framed = false)
     {
         var role = type is "assistant" or "system" ? type : "user";
         var sourceTag = $"event:{source ?? "automation"}";
@@ -220,9 +221,15 @@ public sealed class EventInjector(
             // indistinguishable from the local owner typing. Tag the session copy so Nova can
             // tell an internal note from a person talking.
             // The discussion-stream copy posted above stays untagged, so the UI is unaffected.
-            var taggedContent = content.TrimStart().StartsWith("<nova-event", StringComparison.Ordinal)
+            //
+            // Only a producer that builds its own frame from escaped values (NovaEventText) passes
+            // framed: true. Everything else is untrusted text framed here, with any Nova frame tag
+            // inside it made inert, so an agent reply, automation output or posted event cannot
+            // close this frame or open a forged one. Content is never trusted for how it starts:
+            // text opening with "<nova-event" is framed and neutralized like any other.
+            var taggedContent = framed
                 ? content
-                : $"<nova-event source=\"{source ?? "automation"}\">\n{content}\n</nova-event>";
+                : $"<nova-event source=\"{NovaEventText.SourceAttribute(source ?? "automation")}\">\n{NovaEventText.Neutralize(content)}\n</nova-event>";
 
             // The transcript copy carries the same uid as the stream record —
             // one logical event, one identity.

@@ -121,7 +121,7 @@ public static class CallbackEndpoints
         var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
             metadata: metadata,
             idempotencyKey: key, redeliverOnReuse: key is not null,
-            deliveryIdempotencyKey: key, ct: ctx.RequestAborted);
+            deliveryIdempotencyKey: key, ct: ctx.RequestAborted, framed: true);
         // Do not introduce extra unkeyed retries from an older sender. Recovery
         // is safe only when the callback carries its stable delivery identity.
         if (key is not null && !forwarded && discussion.SessionId is not null)
@@ -197,7 +197,7 @@ public static class CallbackEndpoints
         var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
             metadata: metadata,
             idempotencyKey: key, redeliverOnReuse: true,
-            deliveryIdempotencyKey: key, ct: ctx.RequestAborted);
+            deliveryIdempotencyKey: key, ct: ctx.RequestAborted, framed: true);
         if (!forwarded && discussion.SessionId is not null)
             return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
 

@@ -42,11 +42,22 @@ public sealed class NovaEventFrameTests
     {
         var safe = NovaEventText.Field($"before {tag} after", 500)!;
 
-        Assert.DoesNotMatch(new Regex(@"[<\uFF1C\uFE64]\s*/?\s*nova\s*-", RegexOptions.IgnoreCase), safe);
-        Assert.False(safe.Contains(Zw, StringComparison.Ordinal));
+        // No bracket before a nova- tag remains, even with invisible characters inside the tag.
+        Assert.DoesNotMatch(new Regex(@"[<\uFF1C\uFE64][\s\p{Cf}]*/?[\s\p{Cf}]*n\p{Cf}*o\p{Cf}*v\p{Cf}*a[\s\p{Cf}]*-", RegexOptions.IgnoreCase), safe);
         Assert.Contains("&lt;", safe);
         Assert.StartsWith("before ", safe);
         Assert.EndsWith(" after", safe);
+    }
+
+    [Fact]
+    public void Text_outside_a_tag_is_kept_byte_for_byte()
+    {
+        // Emoji joiners and right-to-left marks are invisible format characters too.
+        var family = "Family: " + char.ConvertFromUtf32(0x1F468) + (char)0x200D + char.ConvertFromUtf32(0x1F469)
+            + (char)0x200D + char.ConvertFromUtf32(0x1F467);
+        var hebrew = (char)0x200F + "shalom" + (char)0x200E + " a < b && c > d, <b>x</b>, nova-event, <novak>";
+        Assert.Equal(family, NovaEventText.Neutralize(family));
+        Assert.Equal(hebrew, NovaEventText.Neutralize(hebrew));
     }
 
     [Fact]

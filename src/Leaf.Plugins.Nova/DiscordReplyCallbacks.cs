@@ -72,7 +72,7 @@ public sealed class DiscordReplyCallbacks(
                 requestor = reply.RequestorDisplayName,
                 injectionSuspected = reply.InjectionSuspected,
             }),
-            reply.OwnerUserId, key, ct);
+            reply.OwnerUserId, key, ct, framed: true);
     }
 
     /// <summary>

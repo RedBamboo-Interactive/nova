@@ -13,16 +13,13 @@ namespace Leaf.Plugins.Nova.Endpoints;
 /// </summary>
 internal static class NovaEventText
 {
-    // Format characters (zero-width, bidi controls) and control characters other than tab,
-    // line feed and carriage return: invisible, so they can hide a tag from a reader.
-    private static readonly Regex Invisible = new(@"[\p{Cf}\p{Cc}-[\t\n\r]]", RegexOptions.Compiled);
-
     private static readonly Regex LineBreaks = new(@"\s*[\r\n\p{Zl}\p{Zp}]+\s*", RegexOptions.Compiled);
 
-    // "<", full-width or small-form less-than, optional "/", spacing, then "nova-": the start of
-    // any opening or closing Nova frame tag, in any case.
+    // "<", full-width or small-form less-than, optional "/", then "nova-": the start of any opening
+    // or closing Nova frame tag, in any case, with whitespace or invisible format characters
+    // (zero-width, bidi controls) anywhere inside it.
     private static readonly Regex FrameTag = new(
-        $@"[<{(char)0xFF1C}{(char)0xFE64}]\s*/?\s*nova\s*-",
+        $@"[<{(char)0xFF1C}{(char)0xFE64}][\s\p{{Cf}}]*/?[\s\p{{Cf}}]*n\p{{Cf}}*o\p{{Cf}}*v\p{{Cf}}*a[\s\p{{Cf}}]*-",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>Appended where a bounded section stops; everything after it is omitted.</summary>
@@ -47,6 +44,15 @@ internal static class NovaEventText
         return safe[..cut] + TruncationMarker(safe.Length - cut);
     }
 
+    /// <summary>
+    /// An event source for the frame's source attribute: tags neutralized and the characters that
+    /// could end the attribute or the tag escaped. Ordinary sources ("heartbeat-tick",
+    /// "automation:Backup &amp; Sync", "agent-response:abc") render exactly as written.
+    /// </summary>
+    internal static string SourceAttribute(string source)
+        => Neutralize(source).Replace("\"", "&quot;").Replace("<", "&lt;").Replace(">", "&gt;")
+            .Replace("\r", " ").Replace("\n", " ");
+
     /// <summary>A Field that is also safe inside a double-quoted frame attribute.</summary>
     internal static string Attribute(string? value, int max = 200)
         => (Field(value, max) ?? "").Replace("&", "&amp;").Replace("\"", "&quot;")
@@ -54,11 +60,12 @@ internal static class NovaEventText
 
     /// <summary>
     /// Turns every opening or closing Nova frame tag (any case, spacing, full-width or small-form
-    /// bracket, invisible characters inside it) into inert text: its bracket becomes "&amp;lt;".
-    /// Other angle brackets, as in "a &lt; b" or code, are kept.
+    /// bracket, invisible characters inside it) into inert text: only its bracket changes, to
+    /// "&amp;lt;". Everything else is left byte for byte, including other angle brackets ("a &lt; b",
+    /// code) and invisible characters outside a tag (emoji joiners, bidi marks).
     /// </summary>
     internal static string Neutralize(string value)
-        => FrameTag.Replace(Invisible.Replace(value, ""), match => "&lt;" + match.Value[1..]);
+        => FrameTag.Replace(value, match => "&lt;" + match.Value[1..]);
 
     // Never split a surrogate pair.
     private static int Cut(string value, int max)
