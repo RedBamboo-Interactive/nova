@@ -45,6 +45,15 @@ public static class CallbackEndpoints
             && delivered.ValueKind == JsonValueKind.String ? delivered.GetString() : null;
         var promptMessageUid = body.TryGetProperty("promptMessageUid", out var prompt) && prompt.ValueKind == JsonValueKind.String ? prompt.GetString() : null;
         var executionObserved = body.TryGetProperty("executionObserved", out var observed) && observed.ValueKind == JsonValueKind.True;
+        // A turn that ended while its background work still runs: RedCompute keeps the registration
+        // and reports again when that work wakes the session, with the next deliverySequence.
+        var backgroundTasksRunning = body.TryGetProperty("backgroundTasksRunning", out var background)
+            && background.ValueKind == JsonValueKind.Number && background.TryGetInt32(out var running) ? running : 0;
+        var deliverySequence = body.TryGetProperty("deliverySequence", out var sequence)
+            && sequence.ValueKind == JsonValueKind.Number && sequence.TryGetInt32(out var parsedSequence) ? parsedSequence : (int?)null;
+        // RedCompute derives what the session is doing; Nova only reads it.
+        var workState = body.TryGetProperty("workState", out var work) && work.ValueKind == JsonValueKind.String ? work.GetString() : null;
+        var backgroundTurn = status == "Idle" && workState == "background";
         var provenEndedCompletion = status == "Ended" && reason == "completed"
             && promptMessageUid is not null && deliveredMessageUid is not null && executionObserved;
 
@@ -55,6 +64,7 @@ public static class CallbackEndpoints
             : idleParking ? " — parked; resumes on the next message"
             : " — waiting to resume after restart";
         var outcome = resumablePause || stopReason == "usage_limit" ? "paused"
+            : backgroundTurn ? "background"
             : status == "Idle" || provenEndedCompletion ? "completed"
             : status == "Cancelled" ? reason == "superseded" ? "superseded" : "cancelled"
             : status == "Error" || reason == "failed" ? "failed"
@@ -66,6 +76,7 @@ public static class CallbackEndpoints
             _ when idleParking => $"Session {sessionId} parked after inactivity; it will resume on the next message",
             _ when resumablePause => $"Session {sessionId} paused for restart; awaiting recovery, completion has not been reported",
             (_, "usage_limit") => $"Session {sessionId} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
+            _ when backgroundTurn => $"Session {sessionId} ended its turn{(title != null ? $" ({title})" : "")} with {BackgroundTasks(backgroundTasksRunning)} still running; it is not finished and will report again when that work wakes it",
             _ when provenEndedCompletion => $"Session {sessionId} completed{(title != null ? $": {title}" : "")}",
             ("Idle", _) => $"Session {sessionId} completed{(title != null ? $": {title}" : "")}",
             ("Cancelled", _) => $"Session {sessionId} input was {(reason == "superseded" ? "superseded" : "cancelled")}; it did not complete",
@@ -74,8 +85,15 @@ public static class CallbackEndpoints
             _ => $"Session {sessionId} status: {status}",
         };
 
-        var eventContent = $"""
-            <nova-event source="callback:session-{(outcome == "paused" ? "paused" : "complete")}" type="session-{(outcome == "paused" ? "paused" : "complete")}" stopReason="{stopReason ?? "unknown"}">
+        var eventKind = outcome switch { "paused" => "paused", "background" => "turn-ended", _ => "complete" };
+        var eventContent = backgroundTurn
+            ? $"""
+            <nova-event source="callback:session-{eventKind}" type="session-{eventKind}" stopReason="{stopReason ?? "unknown"}" backgroundTasksRunning="{backgroundTasksRunning}">
+            {summary}
+            </nova-event>
+            """
+            : $"""
+            <nova-event source="callback:session-{eventKind}" type="session-{eventKind}" stopReason="{stopReason ?? "unknown"}">
             {summary}
             </nova-event>
             """;
@@ -90,8 +108,11 @@ public static class CallbackEndpoints
         // Pause and eventual terminal delivery share prompt correlation, but not
         // deduplication identity. A pause must never swallow the later completion.
         if (key is not null && outcome == "paused") key += $":paused:{stopReason}";
+        // Each turn reported under one registration carries its own sequence; retries repeat it.
+        if (key is not null && deliverySequence > 1) key += $":turn:{deliverySequence}";
         var metadata = JsonSerializer.SerializeToElement(new {
             sessionId, callbackId, promptMessageUid, status, stopReason, reason, deliveredMessageUid, executionObserved, outcome,
+            backgroundTasksRunning, deliverySequence, workState,
         });
         var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
             metadata: metadata,
@@ -103,14 +124,119 @@ public static class CallbackEndpoints
             return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
 
         if (!discussion.Confidential)
-            await live.PostAsync("callback", $"Delegated session {outcome}{(title != null ? $": {title}" : "")}{pauseSuffix}",
+            await live.PostAsync("callback", backgroundTurn
+                    ? $"Delegated session turn ended with {BackgroundTasks(backgroundTasksRunning)} still running{(title != null ? $": {title}" : "")}"
+                    : $"Delegated session {outcome}{(title != null ? $": {title}" : "")}{pauseSuffix}",
                 idempotencyKey: key is null ? null : $"{key}:live", ct: ctx.RequestAborted);
         return Results.Ok(new { handled = true, sessionId, discussionId, status });
     }
 
+    private static string BackgroundTasks(int count) => count == 1 ? "1 background task" : $"{count} background tasks";
+
+    /// <summary>
+    /// A delegated session parked on a structured question (Claude AskUserQuestion, Codex
+    /// requestUserInput). RedCompute posts here once per requestId when the delegation opted in
+    /// with questionUrl. The discussion receives everything needed to answer, including the exact
+    /// answer contract, so the worker is not left waiting for its timeout. The later completion
+    /// callback is independent and still arrives on its own route.
+    /// </summary>
+    internal static async Task<IResult> HandleSessionQuestionAsync(
+        HttpContext ctx, DiscussionStore store, EventInjector injector, LiveEvents live)
+    {
+        if (!IsLoopback(ctx))
+            return Results.Json(new { error = "Local callers only" }, statusCode: 403);
+
+        JsonElement body;
+        try { body = await ctx.Request.ReadFromJsonAsync<JsonElement>(ctx.RequestAborted); }
+        catch { return Results.BadRequest(new { error = "invalid_body" }); }
+
+        var sessionId = Text(body, "sessionId");
+        var requestId = Text(body, "requestId");
+        var discussionId = ctx.Request.Query["discussionId"].ToString();
+        if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(requestId) || string.IsNullOrEmpty(discussionId))
+            return Results.BadRequest(new { error = "sessionId, requestId and discussionId are required" });
+        if (sessionId.Length > 200 || requestId.Length > 200)
+            return Results.BadRequest(new { error = "invalid_identity" });
+
+        var discussion = await store.GetAsync(discussionId);
+        if (discussion is null)
+            return Results.Json(new { error = "event_injection_failed", message = "Discussion not found" }, statusCode: 502);
+
+        var title = Text(body, "title");
+        var expiresAt = Text(body, "expiresAt");
+        var questions = body.TryGetProperty("questions", out var q) && q.ValueKind == JsonValueKind.Array
+            ? q : JsonSerializer.SerializeToElement(Array.Empty<object>());
+        var answerUrl = $"http://127.0.0.1:18800/ai-session/sessions/{sessionId}/question";
+        var eventContent = SessionQuestionEvent(sessionId, title, requestId, questions, expiresAt, answerUrl);
+
+        // One delivery per parked question, whichever registration or retry carried it.
+        var key = $"session-question:{sessionId}:{requestId}";
+        var metadata = JsonSerializer.SerializeToElement(new
+        {
+            sessionId, requestId, title,
+            toolName = Text(body, "toolName"), toolUseId = Text(body, "toolUseId"),
+            questions, askedAt = Text(body, "askedAt"), expiresAt,
+            answer = new { method = "POST", url = answerUrl },
+            outcome = "question",
+        });
+        var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
+            metadata: metadata,
+            idempotencyKey: key, redeliverOnReuse: true,
+            deliveryIdempotencyKey: key, ct: ctx.RequestAborted);
+        if (!forwarded && discussion.SessionId is not null)
+            return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
+
+        if (!discussion.Confidential)
+            await live.PostAsync("callback", $"Delegated session is waiting on a question{(title != null ? $": {title}" : "")}",
+                idempotencyKey: $"{key}:live", ct: ctx.RequestAborted);
+        return Results.Ok(new { handled = true, sessionId, discussionId, requestId });
+    }
+
+    internal static string SessionQuestionEvent(string sessionId, string? title, string requestId,
+        JsonElement questions, string? expiresAt, string answerUrl)
+    {
+        var text = new System.Text.StringBuilder();
+        text.Append($"Delegated session {sessionId}{(title != null ? $" ({title})" : "")} is blocked on a question and waits for an answer");
+        text.AppendLine(expiresAt != null
+            ? $" until {expiresAt}. If nobody answers by then it proceeds with its own best judgement."
+            : ". It has no deadline: it waits until answered or stopped.");
+        var index = 0;
+        foreach (var question in questions.EnumerateArray())
+        {
+            index++;
+            var header = Text(question, "header");
+            var multi = question.TryGetProperty("multiSelect", out var m) && m.ValueKind == JsonValueKind.True;
+            text.AppendLine();
+            text.AppendLine($"Question {index}{(header != null ? $" [{header}]" : "")}{(multi ? " (multi-select)" : "")}: {Text(question, "question")}");
+            if (question.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Array)
+                foreach (var option in options.EnumerateArray())
+                {
+                    var description = Text(option, "description");
+                    text.AppendLine($"- {Text(option, "label")}{(string.IsNullOrWhiteSpace(description) ? "" : $": {description}")}");
+                }
+        }
+        text.AppendLine();
+        text.AppendLine($"Answer contract: POST {answerUrl} with your execution bearer and a JSON body carrying \"requestId\": \"{requestId}\" plus one of:");
+        text.AppendLine("- \"answers\": an object keyed by the exact question text, valued with the chosen option label (multi-select: labels comma-separated in one string), or an array of those values in question order;");
+        text.AppendLine("- \"response\": free text in your own words instead of picking options;");
+        text.AppendLine("- \"decline\": true (optional \"reason\") to dismiss the question.");
+        text.AppendLine("Send answers or response, not both: response outranks answers (it replaces every selection), so RedCompute forwards response only when no answers are given.");
+        text.Append("409 request_not_pending means it was already answered, expired or cancelled.");
+        return $"""
+            <nova-event source="callback:session-question" type="session-question" sessionId="{sessionId}" requestId="{requestId}" expiresAt="{expiresAt ?? "none"}">
+            {text}
+            </nova-event>
+            """;
+    }
+
+    private static string? Text(JsonElement element, string name)
+        => element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value)
+            && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
     public static void Map(RouteGroupBuilder group)
     {
         group.MapPost("/callbacks/session-complete", HandleSessionCompleteAsync);
+        group.MapPost("/callbacks/session-question", HandleSessionQuestionAsync);
 
         group.MapPost("/callbacks/agent-response", async (HttpContext ctx, DiscussionStore store, EventInjector injector, RedComputeClient redCompute) =>
         {

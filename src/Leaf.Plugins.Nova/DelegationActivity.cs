@@ -254,6 +254,8 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
             return "queued";
         }
         if (session.Status == "Error" || session.QueueState == "failed") return "finished";
+        // The turn ended but its background work still runs and will wake the session again.
+        if (session.WorkState == "background") return "running";
         return session.Status is "Idle" or "Stopped" && session.QueueState == "empty" ? "finished" : "unavailable";
     }
 

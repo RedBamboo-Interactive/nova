@@ -450,11 +450,14 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     }
 
     public async Task<bool> RegisterCallbackAsync(string sessionId, string url, bool force = false,
-        CancellationToken ct = default, ComputeProvenance? provenance = null, string? callbackId = null, string? promptMessageUid = null)
+        CancellationToken ct = default, ComputeProvenance? provenance = null, string? callbackId = null, string? promptMessageUid = null,
+        string? questionUrl = null)
     {
+        // questionUrl is opt-in: without it RedCompute never sends question payloads.
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/ai-session/sessions/{sessionId}/callback")
         {
-            Content = JsonContent.Create(promptMessageUid is not null ? (object)new { url, force, callbackId, promptMessageUid } : callbackId is null ? new { url, force } : new { url, force, callbackId }, options: JsonOptions),
+            Content = JsonContent.Create(questionUrl is not null ? (object)new { url, force, callbackId, promptMessageUid, questionUrl }
+                : promptMessageUid is not null ? new { url, force, callbackId, promptMessageUid } : callbackId is null ? new { url, force } : new { url, force, callbackId }, options: JsonOptions),
         };
         using var resp = await gateway.SendAsync(request, provenance, ct);
         return resp.IsSuccessStatusCode;
@@ -615,7 +618,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     public sealed record DelegationSnapshot(
         string Status, string? StopReason, string? Title, string? OwnerId, string? AgentId,
         bool Confidential, string? RepositoryId, int? QueueDepth, string? QueueState,
-        string? QueueBlockedReason, string? QueueErrorCode = null);
+        string? QueueBlockedReason, string? QueueErrorCode = null, string? WorkState = null);
 
     public sealed record DelegationSnapshotResult(DelegationSnapshot? Value, bool Denied = false);
 
@@ -655,7 +658,10 @@ public sealed class RedComputeClient(IComputeGateway gateway)
             return new(new(status, DelegationActivity.String(session, "stopReason"),
                 DelegationActivity.String(session, "title"), DelegationActivity.String(session, "userId"),
                 DelegationActivity.String(session, "ownerAgentId"), confidential,
-                DelegationActivity.String(session, "repositoryId"), depth, queueState, blocked, queueError));
+                DelegationActivity.String(session, "repositoryId"), depth, queueState, blocked, queueError,
+                // What the session is doing, as RedCompute derives it (working, awaiting_answer,
+                // background, idle). Nova reads it rather than re-deriving from tasks or questions.
+                DelegationActivity.String(session, "workState")));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { return new(null); }

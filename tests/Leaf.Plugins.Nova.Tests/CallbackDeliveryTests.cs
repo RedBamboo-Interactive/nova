@@ -248,6 +248,7 @@ public sealed class CallbackDeliveryTests
         public Guid AgentId { get; }
         public EventInjector Injector { get; }
         private readonly LiveEvents liveEvents;
+        public LiveEvents Live => liveEvents;
         public IEnumerable<DiscussionMessage> TargetMessages => Records.Where(m => m.DiscussionId == Target.Id);
         public IEnumerable<DiscussionMessage> LiveMessages => Records.Where(m => m.DiscussionId == live.Id);
 
@@ -302,7 +303,8 @@ public sealed class CallbackDeliveryTests
         }
 
         public async Task<int> Complete(string? id, string status = "Idle", string? stopReason = null,
-            string? reason = null, string? deliveredMessageUid = null, string? promptMessageUid = null, bool executionObserved = false)
+            string? reason = null, string? deliveredMessageUid = null, string? promptMessageUid = null, bool executionObserved = false,
+            int? backgroundTasksRunning = null, int? deliverySequence = null, string? workState = null)
         {
             var ctx = new DefaultHttpContext();
             ctx.Connection.RemoteIpAddress = IPAddress.Loopback;
@@ -314,6 +316,9 @@ public sealed class CallbackDeliveryTests
             body["promptMessageUid"] = promptMessageUid;
             body["executionObserved"] = executionObserved;
             if (id is not null) body["callbackId"] = id;
+            if (backgroundTasksRunning is not null) body["backgroundTasksRunning"] = backgroundTasksRunning;
+            if (deliverySequence is not null) body["deliverySequence"] = deliverySequence;
+            if (workState is not null) body["workState"] = workState;
             ctx.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body.ToJsonString()));
             var result = await CallbackEndpoints.HandleSessionCompleteAsync(ctx, Store, Injector, liveEvents);
             return ((IStatusCodeHttpResult)result).StatusCode ?? 200;

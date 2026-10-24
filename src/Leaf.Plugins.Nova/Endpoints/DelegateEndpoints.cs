@@ -285,8 +285,9 @@ public static class DelegateEndpoints
             {
                 try
                 {
-                    var completionUrl = $"http://127.0.0.1:18804/api/apps/nova/callbacks/session-complete?discussionId={request.DiscussionId}";
-                    await redCompute.RegisterCallbackAsync(sessionId, completionUrl, force: true, callbackId: promptMessageUid, promptMessageUid: promptMessageUid);
+                    var (completionUrl, questionUrl) = CallbackUrls(request.DiscussionId);
+                    await redCompute.RegisterCallbackAsync(sessionId, completionUrl, force: true, callbackId: promptMessageUid, promptMessageUid: promptMessageUid,
+                        questionUrl: questionUrl);
                 }
                 catch { /* The post-admission registration below retries the same identity. */ }
             }
@@ -409,8 +410,9 @@ public static class DelegateEndpoints
             {
                 try
                 {
-                    var callbackUrl = $"http://127.0.0.1:18804/api/apps/nova/callbacks/session-complete?discussionId={request.DiscussionId}";
-                    callbackRegistered = await redCompute.RegisterCallbackAsync(sessionId, callbackUrl, callbackId: promptMessageUid, promptMessageUid: promptMessageUid);
+                    var (callbackUrl, questionUrl) = CallbackUrls(request.DiscussionId);
+                    callbackRegistered = await redCompute.RegisterCallbackAsync(sessionId, callbackUrl, callbackId: promptMessageUid, promptMessageUid: promptMessageUid,
+                        questionUrl: questionUrl);
                 }
                 catch { }
             }
@@ -428,6 +430,14 @@ public static class DelegateEndpoints
             });
         });
     }
+
+    /// <summary>
+    /// The webhooks a delegation registers for its discussion: completion, and the opt-in question
+    /// notification so a worker parked on a question is surfaced instead of timing out.
+    /// </summary>
+    internal static (string Completion, string Question) CallbackUrls(string discussionId)
+        => ($"http://127.0.0.1:18804/api/apps/nova/callbacks/session-complete?discussionId={discussionId}",
+            $"http://127.0.0.1:18804/api/apps/nova/callbacks/session-question?discussionId={discussionId}");
 
     /// <summary>
     /// Provider for a new delegated session. An explicit provider (or one supplied by an
