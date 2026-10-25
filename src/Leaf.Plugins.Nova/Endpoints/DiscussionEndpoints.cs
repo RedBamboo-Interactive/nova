@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Leaf.Sdk.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -1354,7 +1355,7 @@ public static class DiscussionEndpoints
         });
 
         // Detaching only forgets the attachment; the worktree and its branch stay untouched.
-        group.MapDelete("/discussions/{id}/worktrees", async (string id, DetachWorktreeRequest request,
+        group.MapDelete("/discussions/{id}/worktrees", async (string id, [FromBody] DetachWorktreeRequest request,
             HttpContext ctx, DiscussionStore store,
             [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
         {
