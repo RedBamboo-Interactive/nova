@@ -60,6 +60,24 @@ public sealed class DelegationActivityTests
     }
 
     [Fact]
+    public async Task ABranchSessionKeepsItsBranchAndWorktreeAcrossContinuations()
+    {
+        var f = new Fixture();
+        f.AddMarker("worker", repository: "Songes", branch: "laurent/x", worktreePath: "L:/songes.worktrees/laurent-x");
+        f.AddMarker("worker", repository: null); // A continuation names neither.
+        f.AddMarker("checkout", repository: "Songes", branch: "main");
+        f.Gateway.Set("worker", "Active");
+        f.Gateway.Set("checkout", "Active");
+
+        var sessions = (await f.Read())[f.Parent.Id].Sessions.ToDictionary(s => s.SessionId);
+
+        Assert.Equal("laurent/x", sessions["worker"].Branch);
+        Assert.Equal("L:/songes.worktrees/laurent-x", sessions["worker"].WorktreePath);
+        Assert.Equal("main", sessions["checkout"].Branch);
+        Assert.Null(sessions["checkout"].WorktreePath);
+    }
+
+    [Fact]
     public async Task DuplicateContinuationsCountOnceAndOldCompletionCannotClearNewWork()
     {
         var f = new Fixture();
@@ -349,10 +367,10 @@ public sealed class DelegationActivityTests
             Advance(31);
             return Activity.ReadAsync([Parent], Human());
         }
-        public void AddMarker(string id, string? repository = "Nova")
+        public void AddMarker(string id, string? repository = "Nova", string? branch = null, string? worktreePath = null)
         {
             Gateway.EnsureMetadata(id);
-            Records.Add(Marker(Records.Count + 1, Parent.EntityId, id, repository));
+            Records.Add(Marker(Records.Count + 1, Parent.EntityId, id, repository, branch, worktreePath));
             Parent = Parent with { MessageCount = Parent.MessageCount + 1, LastActivity = DateTime.UtcNow };
         }
         public void AddRecord(string role, string source, string content, object data)
@@ -399,9 +417,9 @@ public sealed class DelegationActivityTests
     }
 
     private static string Parts(object data) => JsonSerializer.Serialize(new[] { new { type = "event_data", data } });
-    private static DiscussionMessage Marker(long id, Guid parent, string session, string? repository = "Nova")
+    private static DiscussionMessage Marker(long id, Guid parent, string session, string? repository = "Nova", string? branch = null, string? worktreePath = null)
         => new(id, parent, "system", "delegated", new() { ["source"] = "event:delegation",
-            ["parts_json"] = Parts(new { sessionId = session, repository, status = "started" }) }, DateTimeOffset.UtcNow);
+            ["parts_json"] = Parts(new { sessionId = session, repository, branch, worktreePath, status = "started" }) }, DateTimeOffset.UtcNow);
     private static DiscussionRead Parent(string id) => new(id, "Parent", "parent-session", "idle",
         DateTime.UtcNow, DateTime.UtcNow, 0, null, "owner", Guid.NewGuid(), "agent");
     private static DefaultHttpContext Human(string owner = "owner", string auth = "test")

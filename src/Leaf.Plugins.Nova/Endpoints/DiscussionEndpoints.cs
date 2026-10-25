@@ -30,6 +30,18 @@ public class DiscussionConfidentialRequest
     public bool Confidential { get; set; }
 }
 
+public class AttachWorktreeRequest
+{
+    public string? Repository { get; set; }
+    public string? Branch { get; set; }
+    public string? Base { get; set; }
+}
+
+public class DetachWorktreeRequest
+{
+    public string? Path { get; set; }
+}
+
 public class DiscussionReadRequest
 {
     public long? ConversationRevision { get; set; }
@@ -179,6 +191,94 @@ public static class DiscussionEndpoints
         }
 
         return EventResponse(result);
+    }
+
+    internal static async Task<IResult> AttachWorktreeAsync(DiscussionRead discussion, AttachWorktreeRequest request,
+        HttpContext ctx, DiscussionStore store, CodeWorktreeClient code, IEntityStore entities,
+        IPluginEvents? events = null)
+    {
+        if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+        if (DiscussionApplicationOwner.IsForeign(discussion)) return DiscussionApplicationOwner.Refusal(discussion);
+        if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
+        if (string.IsNullOrWhiteSpace(request.Repository) || string.IsNullOrWhiteSpace(request.Branch))
+            return Results.BadRequest(new { error = "invalid_request", message = "repository and branch are required" });
+
+        var (repository, repositoryError) = await DelegateEndpoints.ResolveRepositoryAsync(
+            entities, request.Repository, ctx.RequestAborted);
+        if (repositoryError is not null) return repositoryError;
+
+        var outcome = await code.ResolveAsync(ctx, repository!, request.Branch, request.Base, ctx.RequestAborted);
+        if (outcome.Failure is { } failure)
+            return Results.Json(new { error = failure.Error, message = failure.Message }, statusCode: failure.StatusCode);
+        var worktree = outcome.Worktree!;
+
+        var attached = await store.AttachWorktreeAsync(discussion.EntityId,
+            new WorktreeAttachment(worktree.RepositoryId, worktree.RepositoryName, worktree.Branch,
+                worktree.Path.Replace('\\', '/'), DateTimeOffset.UtcNow), ctx.RequestAborted);
+        if (attached is not var (items, added)) return NotFound();
+        if (added) await PublishChangedAsync(events, discussion, ctx.RequestAborted);
+        return Results.Ok(new
+        {
+            attached = added,
+            created = worktree.Created,
+            isCheckout = worktree.IsCheckout,
+            items,
+        });
+    }
+
+    internal static async Task<IResult> DetachWorktreeAsync(DiscussionRead discussion, DetachWorktreeRequest request,
+        HttpContext ctx, DiscussionStore store, IPluginEvents? events = null)
+    {
+        if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+        if (DiscussionApplicationOwner.IsForeign(discussion)) return DiscussionApplicationOwner.Refusal(discussion);
+        if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
+        if (string.IsNullOrWhiteSpace(request.Path))
+            return Results.BadRequest(new { error = "invalid_request", message = "path is required" });
+
+        var detached = await store.DetachWorktreeAsync(discussion.EntityId, request.Path, ctx.RequestAborted);
+        if (detached is not var (items, removed)) return NotFound();
+        if (removed) await PublishChangedAsync(events, discussion, ctx.RequestAborted);
+        return Results.Ok(new { detached = removed, items });
+    }
+
+    // The header chips read the discussion record; this is the event that makes clients re-read it.
+    private static async Task PublishChangedAsync(IPluginEvents? events, DiscussionRead discussion, CancellationToken ct)
+    {
+        if (events is null) return;
+        try
+        {
+            await events.PublishAsync("discussion.changed", new JsonObject
+            {
+                ["discussionId"] = discussion.Id,
+                ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
+                ["confidential"] = discussion.Confidential,
+            }, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { }
+    }
+
+    internal static async Task<IResult> WorktreeAttachmentsAsync(string? repositoryId, HttpContext ctx, DiscussionStore store)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryId))
+            return Results.BadRequest(new { error = "invalid_request", message = "repositoryId is required" });
+        var matches = (await store.ListOpenAsync(ct: ctx.RequestAborted))
+            .Where(d => DiscussionAccessPolicy.CanRead(d, ctx))
+            .SelectMany(d => (d.Worktrees ?? [])
+                .Where(a => string.Equals(a.RepositoryId, repositoryId, StringComparison.OrdinalIgnoreCase))
+                .Select(a => new
+                {
+                    discussionId = d.Id,
+                    title = d.Title,
+                    status = d.Status,
+                    agentId = d.AgentId,
+                    repositoryId = a.RepositoryId,
+                    repositoryName = a.RepositoryName,
+                    branch = a.Branch,
+                    path = a.Path,
+                    attachedAt = a.AttachedAt,
+                }))
+            .ToList();
+        return Results.Ok(new { repositoryId, items = matches });
     }
 
     public static void Map(RouteGroupBuilder group)
@@ -1232,6 +1332,38 @@ public static class DiscussionEndpoints
             await store.PatchAsync(discussion.EntityId, new JsonObject { ["confidential"] = request.Confidential });
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Confidential = request.Confidential }));
         });
+
+        // Worktree attachments: where a discussion works inside a repository. The discussion keeps
+        // its Agent-workspace cwd; this records the folders it touches so every turn can say so.
+        group.MapGet("/discussions/{id}/worktrees", async (string id, HttpContext ctx, DiscussionStore store) =>
+        {
+            var discussion = await store.GetAsync(id, ctx.RequestAborted);
+            if (discussion is null) return NotFound();
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+            return Results.Ok(new { items = discussion.Worktrees ?? [] });
+        });
+
+        group.MapPost("/discussions/{id}/worktrees", async (string id, AttachWorktreeRequest request,
+            HttpContext ctx, DiscussionStore store, CodeWorktreeClient code,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
+        {
+            var discussion = await store.GetAsync(id, ctx.RequestAborted);
+            return discussion is null ? NotFound() : await AttachWorktreeAsync(discussion, request, ctx, store, code, entities, events);
+        });
+
+        // Detaching only forgets the attachment; the worktree and its branch stay untouched.
+        group.MapDelete("/discussions/{id}/worktrees", async (string id, DetachWorktreeRequest request,
+            HttpContext ctx, DiscussionStore store,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
+        {
+            var discussion = await store.GetAsync(id, ctx.RequestAborted);
+            return discussion is null ? NotFound() : await DetachWorktreeAsync(discussion, request, ctx, store, events);
+        });
+
+        // Every open discussion the caller can read that works in one of the repository's worktrees.
+        group.MapGet("/worktree-attachments", (HttpContext ctx, DiscussionStore store) =>
+            WorktreeAttachmentsAsync(ctx.Request.Query["repositoryId"].FirstOrDefault(), ctx, store));
 
         group.MapPut("/discussions/{id}/read", async (string id, HttpContext ctx, DiscussionStore store) =>
         {

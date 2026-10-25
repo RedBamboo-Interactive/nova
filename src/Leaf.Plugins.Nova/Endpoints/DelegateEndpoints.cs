@@ -15,6 +15,10 @@ public class DelegateRequest
     public string? SessionId { get; set; }
     public string? ProjectPath { get; set; }
     public string? Repository { get; set; }
+    // A new repository session may work on a branch: Code finds or creates the worktree for it.
+    public string? Branch { get; set; }
+    // Where a branch that does not exist yet starts from (default: the repository's default branch).
+    public string? Base { get; set; }
     public string? Agent { get; set; }
     public string Prompt { get; set; } = "";
     public string? DiscussionId { get; set; }
@@ -50,7 +54,7 @@ public static class DelegateEndpoints
     internal static async Task<IResult> HandleDelegateAsync(HttpContext ctx, DelegateRequest request, RedComputeClient redCompute,
         AgentDirectory agentDir, AgentWorkspaces workspaces, DiscussionStore discussions,
         [FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities,
-        EventInjector injector)
+        EventInjector injector, CodeWorktreeClient? worktrees = null)
     {
         bool isContinuation = !string.IsNullOrWhiteSpace(request.SessionId);
         if (string.IsNullOrWhiteSpace(request.Prompt))
@@ -71,37 +75,18 @@ public static class DelegateEndpoints
                 message = "Delegation requires a signed user or execution identity; local-user is not delegated authority",
             }, statusCode: StatusCodes.Status401Unauthorized);
 
+        if (BranchError(request, isContinuation) is { } branchError)
+            return Results.BadRequest(branchError);
+
         var hasExplicitProjectPath = !isContinuation
             && !string.IsNullOrWhiteSpace(request.ProjectPath);
         LeafEntity? resolvedRepository = null;
         if (!isContinuation && !string.IsNullOrWhiteSpace(request.Repository))
         {
-            resolvedRepository = Guid.TryParse(request.Repository, out var repositoryId)
-                ? await entities.GetAsync(repositoryId, ctx.RequestAborted)
-                : await entities.GetBySlugAsync("repository", request.Repository, ctx.RequestAborted);
-            if (resolvedRepository is not { TypeSlug: "repository" })
-                return Results.Json(new
-                {
-                    error = "repository_not_found",
-                    message = $"Repository '{request.Repository}' not found",
-                }, statusCode: 404);
-
-            var status = StringValue(resolvedRepository.Data, "status", "active");
-            if (!string.Equals(status, "active", StringComparison.OrdinalIgnoreCase))
-                return Results.Json(new
-                {
-                    error = "repository_inactive",
-                    message = $"Repository '{resolvedRepository.Name}' is not active",
-                }, statusCode: 409);
-
-            var repositoryPath = StringValue(resolvedRepository.Data, "local_path");
-            if (string.IsNullOrWhiteSpace(repositoryPath) || !Directory.Exists(repositoryPath))
-                return Results.Json(new
-                {
-                    error = "repository_checkout_unavailable",
-                    message = $"Repository '{resolvedRepository.Name}' has no available local checkout",
-                }, statusCode: 409);
-
+            var (repositoryEntity, repositoryError) = await ResolveRepositoryAsync(entities, request.Repository, ctx.RequestAborted);
+            if (repositoryError is not null) return repositoryError;
+            resolvedRepository = repositoryEntity;
+            var repositoryPath = StringValue(resolvedRepository!.Data, "local_path");
             request.ProjectPath = Path.GetFullPath(repositoryPath);
         }
 
@@ -197,6 +182,27 @@ public static class DelegateEndpoints
 
         if (!isContinuation)
             request.Provider = EffectiveProvider(request, discussion, resolvedAgent);
+
+        // A branch is resolved last among the checks and first among the effects: nothing is
+        // created in Code before the request is otherwise known to be good, and a Code that
+        // cannot answer stops the delegation before any session exists.
+        ResolvedWorktree? branchWorktree = null;
+        if (!isContinuation && !string.IsNullOrWhiteSpace(request.Branch))
+        {
+            if (worktrees is null)
+                return Results.Json(new
+                {
+                    error = "code_unavailable",
+                    message = "Code is not available, so branches and worktrees cannot be resolved.",
+                }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            var outcome = await worktrees.ResolveAsync(ctx, resolvedRepository!, request.Branch, request.Base, ctx.RequestAborted);
+            if (outcome.Failure is { } failure)
+                return Results.Json(new { error = failure.Error, message = failure.Message }, statusCode: failure.StatusCode);
+            branchWorktree = outcome.Worktree;
+            request.ProjectPath = branchWorktree!.Path;
+        }
+        var branch = branchWorktree?.Branch;
+        var worktreePath = branchWorktree is { IsCheckout: false } ? branchWorktree.Path.Replace('\\', '/') : null;
 
         var ownerId = discussion?.OwnerId ?? callerId;
         var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ctx.RequestAborted);
@@ -416,6 +422,8 @@ public static class DelegateEndpoints
                     sessionId,
                     repositoryId = resolvedRepository?.Id,
                     repository = resolvedRepository?.Name,
+                    branch,
+                    worktreePath,
                     continued = isContinuation,
                     agent = resolvedAgent.Name,
                     agentId = resolvedAgent.Id,
@@ -428,8 +436,8 @@ public static class DelegateEndpoints
                 await injector.InjectAsync(
                     discussion,
                     delivery == AfterCurrent
-                        ? $"Delegated to Code session {sessionId}"
-                        : $"Delegated to Code session {sessionId} ({delivery} requested)",
+                        ? $"Delegated to Code session {sessionId}{PlacementText(resolvedRepository?.Name, branch, worktreePath)}"
+                        : $"Delegated to Code session {sessionId}{PlacementText(resolvedRepository?.Name, branch, worktreePath)} ({delivery} requested)",
                     "system",
                     "delegation",
                     metadata: eventData,
@@ -469,10 +477,75 @@ public static class DelegateEndpoints
             continued = isContinuation,
             agent = resolvedAgent?.Name,
             repository = resolvedRepository?.Id,
+            branch,
+            worktreePath,
             delegationEventRecorded,
             navigationPath,
             delivery = deliveryReport,
         });
+    }
+
+    /// <summary>
+    /// Null when the branch fields are acceptable. A branch needs a new repository session: a
+    /// continuation keeps its original folder, and a physical path already names its folder.
+    /// </summary>
+    internal static object? BranchError(DelegateRequest request, bool isContinuation)
+    {
+        var hasBranch = !string.IsNullOrWhiteSpace(request.Branch);
+        if (!hasBranch && string.IsNullOrWhiteSpace(request.Base)) return null;
+        if (!hasBranch)
+            return new { error = "base_requires_branch", message = "base only applies together with branch" };
+        if (isContinuation)
+            return new
+            {
+                error = "branch_requires_new_session",
+                message = "branch applies to a new session; a continued session keeps the folder it started in",
+            };
+        if (!string.IsNullOrWhiteSpace(request.ProjectPath))
+            return new
+            {
+                error = "branch_conflicts_with_project_path",
+                message = "Send repository with branch; projectPath already names a folder and cannot be combined with a branch",
+            };
+        if (string.IsNullOrWhiteSpace(request.Repository))
+            return new { error = "branch_requires_repository", message = "branch needs the repository it belongs to" };
+        return null;
+    }
+
+    private static string PlacementText(string? repository, string? branch, string? worktreePath)
+        => branch is null ? ""
+            : $" on {(repository is null ? "" : repository + " · ")}{branch}{(worktreePath is null ? "" : " (worktree)")}";
+
+    /// <summary>An active repository by entity id or slug, with a usable local checkout.</summary>
+    internal static async Task<(LeafEntity? Repository, IResult? Error)> ResolveRepositoryAsync(
+        IEntityStore entities, string repository, CancellationToken ct)
+    {
+        var entity = Guid.TryParse(repository, out var repositoryId)
+            ? await entities.GetAsync(repositoryId, ct)
+            : await entities.GetBySlugAsync("repository", repository, ct);
+        if (entity is not { TypeSlug: "repository" })
+            return (null, Results.Json(new
+            {
+                error = "repository_not_found",
+                message = $"Repository '{repository}' not found",
+            }, statusCode: 404));
+
+        var status = StringValue(entity.Data, "status", "active");
+        if (!string.Equals(status, "active", StringComparison.OrdinalIgnoreCase))
+            return (null, Results.Json(new
+            {
+                error = "repository_inactive",
+                message = $"Repository '{entity.Name}' is not active",
+            }, statusCode: 409));
+
+        var repositoryPath = StringValue(entity.Data, "local_path");
+        if (string.IsNullOrWhiteSpace(repositoryPath) || !Directory.Exists(repositoryPath))
+            return (null, Results.Json(new
+            {
+                error = "repository_checkout_unavailable",
+                message = $"Repository '{entity.Name}' has no available local checkout",
+            }, statusCode: 409));
+        return (entity, null);
     }
 
     internal const string AfterCurrent = "after-current";

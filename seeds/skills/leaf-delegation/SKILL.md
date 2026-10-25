@@ -85,6 +85,53 @@ Prefer the installation's abstract quality tier. Set `model` or `provider` only 
 one or verified provider-specific behavior is required. Do not send `dockerImage`; it is not part of
 the delegate request.
 
+## Work on a branch
+
+A new repository session can work on a branch instead of the repository's checkout. Add `branch`
+(and, for a branch that does not exist yet, `base`) next to `repository`:
+
+```json
+{
+  "repository": "<repository entity id or slug>",
+  "branch": "laurent/outils-mj",
+  "base": "main",
+  "prompt": "<bounded outcome and acceptance criteria>",
+  "discussionId": "<current discussion id>"
+}
+```
+
+Nova asks Code for the branch's worktree: the existing one is reused, a missing one is created at
+`<checkout>.worktrees/<branch with "/" replaced by "-">` (from `base`, default the repository's
+default branch), and a branch already checked out in the repository's own checkout uses the
+checkout. The session starts in that folder. Never create worktrees yourself with `git worktree add`
+or a provider's `--worktree` flag; Code owns them.
+
+Rules:
+
+- `branch` is for a **new session with `repository`**. With `sessionId` (a continuation keeps the
+  folder it started in) or with `projectPath` the request is refused with 400
+  (`branch_requires_new_session`, `branch_conflicts_with_project_path`); `base` without `branch`
+  is 400 `base_requires_branch`.
+- A repository can be **main-only**, meaning its sessions work in the checkout, never in branches
+  or worktrees. Then `branch` is refused with 409 `main_only` and Code's message, and nothing is
+  created. Do not retry with another branch; delegate without `branch`, or ask the user.
+- If Code is not installed or not reachable the call fails with 503 `code_unavailable` before any
+  session exists. A worktree git still records but whose folder is gone is 409 `worktree_missing`:
+  ask the user to clean it up in Code.
+- Without `branch` nothing changes: the session runs in the checkout.
+
+The response and the delegation marker in the discussion add `branch` (what was asked for, else
+`null`) and `worktreePath` (the worktree folder, `null` when the session runs in the repository
+checkout). The marker text reads `… on <repository> · <branch> (worktree)`. Continuations keep the
+session's original folder, so report them from the first response.
+
+A discussion can also record the worktrees it works in, without moving its own folder. Attach with
+`POST /api/apps/nova/discussions/{id}/worktrees` `{ "repository", "branch", "base"? }` (same
+resolution and the same `main_only` / 503 rules; attaching twice changes nothing), detach with
+`DELETE` on the same route and `{ "path" }` (it forgets the attachment and never removes the
+worktree), and list with `GET`. Each turn's context then carries
+`Working in worktree: <repository> · <branch> at <path>`, so edit files at that path.
+
 ## Continue existing work
 
 Continue the same session so its transcript and context remain intact:

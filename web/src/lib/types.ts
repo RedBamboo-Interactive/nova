@@ -3,6 +3,10 @@ export interface DelegationSessionActivity {
   title: string | null
   repositoryId: string | null
   repository: string | null
+  /** The branch the session was started on; null for a plain checkout session. */
+  branch?: string | null
+  /** The worktree folder the session runs in; null when it runs in the repository checkout. */
+  worktreePath?: string | null
   status: "running" | "queued" | "starting" | "waiting_to_resume" | "blocked" | "failed" | "unavailable"
   available: boolean
   lastKnownStatus?: Exclude<DelegationSessionActivity["status"], "unavailable"> | null
@@ -19,6 +23,15 @@ export interface DiscussionDelegationActivity {
 }
 
 export type DelegationActivitySnapshot = Record<string, DiscussionDelegationActivity>
+
+/** A repository worktree (or checkout) a discussion works in; the discussion itself stays in its Agent workspace. */
+export interface WorktreeAttachment {
+  repositoryId: string
+  repositoryName: string
+  branch: string
+  path: string
+  attachedAt: string
+}
 
 export interface DiscussionInfo {
   id: string
@@ -42,6 +55,8 @@ export interface DiscussionInfo {
   qualityTier?: string | null
   provider?: string | null
   confidential?: boolean
+  /** Worktrees this discussion works in, newest last. */
+  worktrees?: WorktreeAttachment[]
   /** Internal first-turn identity. Raw RedCompute history includes this turn;
    * clients hide it while retaining the real session and its tool trace. */
   setupBootstrapMessageUid?: string | null

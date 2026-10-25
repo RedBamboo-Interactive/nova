@@ -10,13 +10,16 @@ namespace Leaf.Plugins.Nova;
 
 public sealed record DelegationSessionActivity(
     string SessionId, string? Title, string? RepositoryId, string? Repository,
-    string Status, bool Available, string? LastKnownStatus = null, string? BlockedReason = null, string? ErrorCode = null);
+    string Status, bool Available, string? LastKnownStatus = null, string? BlockedReason = null, string? ErrorCode = null,
+    string? Branch = null, string? WorktreePath = null);
 
 public sealed record DiscussionDelegationActivity(
     int OngoingCount, IReadOnlyList<DelegationSessionActivity> Sessions, bool Available,
     int UnknownCount, IReadOnlyList<string> LinkedSessionIds);
 
-internal sealed record DelegationLink(string SessionId, long MarkerId, string? RepositoryId, string? Repository);
+internal sealed record DelegationLink(
+    string SessionId, long MarkerId, string? RepositoryId, string? Repository,
+    string? Branch = null, string? WorktreePath = null);
 
 /// <summary>
 /// Product-only read projection. Durable system markers establish membership;
@@ -133,7 +136,8 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
                     ongoingCount++;
                     ongoing.Add(new(link.SessionId, state.Title,
                         state.RepositoryId ?? link.RepositoryId, link.Repository, status, true,
-                        BlockedReason: state.QueueBlockedReason, ErrorCode: state.QueueErrorCode));
+                        BlockedReason: state.QueueBlockedReason, ErrorCode: state.QueueErrorCode,
+                        Branch: link.Branch, WorktreePath: link.WorktreePath));
                 }
 
                 void AddUnavailable()
@@ -142,7 +146,8 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
                     if (prior == "finished") return;
                     if (IsOutstanding(prior)) ongoingCount++;
                     else unknownCount++;
-                    ongoing.Add(new(link.SessionId, null, link.RepositoryId, link.Repository, "unavailable", false, prior));
+                    ongoing.Add(new(link.SessionId, null, link.RepositoryId, link.Repository, "unavailable", false, prior,
+                        Branch: link.Branch, WorktreePath: link.WorktreePath));
                 }
             }
             result[discussion.Id] = new(ongoingCount, ongoing, available, unknownCount,
@@ -283,7 +288,9 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
                     if (link is null) continue;
                     if (index.Links.TryGetValue(link.SessionId, out var previous))
                         link = link with { RepositoryId = link.RepositoryId ?? previous.RepositoryId,
-                            Repository = link.Repository ?? previous.Repository };
+                            Repository = link.Repository ?? previous.Repository,
+                            Branch = link.Branch ?? previous.Branch,
+                            WorktreePath = link.WorktreePath ?? previous.WorktreePath };
                     index.Links[link.SessionId] = link;
                 }
                 if (page.Count == 0) break;
@@ -314,7 +321,8 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
                     || data.ValueKind != JsonValueKind.Object || String(data, "status") != "started") continue;
                 var sessionId = String(data, "sessionId");
                 if (!ValidSessionId(sessionId)) continue;
-                return new(sessionId!, message.Id, String(data, "repositoryId"), String(data, "repository"));
+                return new(sessionId!, message.Id, String(data, "repositoryId"), String(data, "repository"),
+                    String(data, "branch"), String(data, "worktreePath"));
             }
         }
         catch (JsonException) { }

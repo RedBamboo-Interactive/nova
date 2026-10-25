@@ -11,6 +11,7 @@ import { AgentPicker } from "../components/agent-picker"
 import { TransitioningAgentAvatar } from "../components/transitioning-agent-avatar"
 import { NovaStatusLine } from "../components/nova-status-line"
 import { DelegationsInfo, delegationActivityGroup } from "../components/delegation-activity"
+import { WorktreeChips } from "../components/discussion/worktree-chips"
 import { ReactionPills, AddReactionButton } from "../components/discussion/reactions"
 import { createNovaSpeechBackend } from "../lib/speech"
 import { useLocalSettings } from "../hooks/use-local-settings"
@@ -1023,6 +1024,7 @@ export function ChatView({
         </SessionInfoButton>
       )}
     </PanelHeader>
+      <WorktreeChips worktrees={activeDiscussion.worktrees} />
       {earlierHistoryLoadFailure && (
         <div
           role="alert"

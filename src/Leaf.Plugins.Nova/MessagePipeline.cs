@@ -391,9 +391,9 @@ public sealed class MessagePipeline(
 
         string contextBlock;
         if (previousSnapshot == null || discussion.MessageCount == 0)
-            contextBlock = NovaContextBuilder.BuildFullContext(currentSnapshot, discussion.Id, now, device, input, agentName, reactionLines);
+            contextBlock = NovaContextBuilder.BuildFullContext(currentSnapshot, discussion.Id, now, device, input, agentName, reactionLines, discussion.Worktrees);
         else
-            contextBlock = NovaContextBuilder.BuildDeltaContext(currentSnapshot, previousSnapshot, discussion.Id, now, device, input, agentName, reactionLines);
+            contextBlock = NovaContextBuilder.BuildDeltaContext(currentSnapshot, previousSnapshot, discussion.Id, now, device, input, agentName, reactionLines, discussion.Worktrees);
 
         var metadata = NovaContextBuilder.BuildMetadata(currentSnapshot, now, device, input, discussion.Id, agentName);
 

@@ -156,7 +156,7 @@ public static class NovaContextBuilder
     public static string BuildFullContext(
         ContextSnapshot snapshot,
         string currentId, DateTime now, ResolvedDevice device, string input, string? agentName,
-        List<string>? reactionLines = null)
+        List<string>? reactionLines = null, IReadOnlyList<WorktreeAttachment>? worktrees = null)
     {
         var sb = new StringBuilder();
 
@@ -224,6 +224,8 @@ public static class NovaContextBuilder
         if (snapshot.Outfit != null)
             sb.Append($"\n\n{snapshot.Outfit}");
 
+        AppendWorktrees(sb, worktrees, leadingBlankLine: true);
+
         return Frame(sb, now, device, input, currentId, agentName);
     }
 
@@ -241,7 +243,7 @@ public static class NovaContextBuilder
     public static string BuildDeltaContext(
         ContextSnapshot current, ContextSnapshot previous,
         string currentId, DateTime now, ResolvedDevice device, string input, string? agentName,
-        List<string>? reactionLines = null)
+        List<string>? reactionLines = null, IReadOnlyList<WorktreeAttachment>? worktrees = null)
     {
         var changes = new List<string>();
 
@@ -351,7 +353,21 @@ public static class NovaContextBuilder
             sb.Append("\nNo context changes since last message.");
         }
 
+        AppendWorktrees(sb, worktrees, leadingBlankLine: false);
+
         return Frame(sb, now, device, input, currentId, agentName);
+    }
+
+    /// <summary>
+    /// Where this discussion works, stated on every turn (not only when it changes) so a model
+    /// resumed from any point still knows which folders are its working tree.
+    /// </summary>
+    private static void AppendWorktrees(StringBuilder sb, IReadOnlyList<WorktreeAttachment>? worktrees, bool leadingBlankLine)
+    {
+        if (worktrees is not { Count: > 0 }) return;
+        if (leadingBlankLine) sb.Append('\n');
+        foreach (var worktree in worktrees)
+            sb.Append('\n').Append(worktree.ContextLine());
     }
 
     public static string SerializeSnapshot(ContextSnapshot snapshot)

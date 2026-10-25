@@ -101,7 +101,8 @@ public sealed record DiscussionRead(
     string? SetupBootstrapMessageUid = null,
     string? TitleSource = null,
     string? OwnerPlugin = null,
-    string? OwnerApp = null);
+    string? OwnerApp = null,
+    IReadOnlyList<WorktreeAttachment>? Worktrees = null);
 
 public sealed record ArchivedDiscussionPage(
     IReadOnlyList<DiscussionRead> Items,
@@ -528,6 +529,38 @@ public sealed class DiscussionStore(
         {
             await RequireNovaOwnedAsync(entityId, ct);
             await entities.PatchAsync(entityId, patch, name, ct);
+        }, ct);
+
+    /// <summary>
+    /// Records that the discussion works in a worktree. Idempotent per path: attaching it again
+    /// changes nothing and keeps the first <c>attachedAt</c>.
+    /// </summary>
+    public Task<(IReadOnlyList<WorktreeAttachment> Items, bool Added)?> AttachWorktreeAsync(
+        Guid entityId, WorktreeAttachment attachment, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<(IReadOnlyList<WorktreeAttachment>, bool)?>(entityId, async () =>
+        {
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
+            if (entity is null || Map(entity) is null) return null;
+            var items = WorktreeAttachment.Read(entity.Data) ?? [];
+            if (items.Any(a => WorktreeAttachment.SamePath(a.Path, attachment.Path)))
+                return (items, false);
+            var updated = items.Append(attachment).ToList();
+            await entities.PatchAsync(entityId, new JsonObject { [WorktreeAttachment.DataKey] = WorktreeAttachment.ToJson(updated) }, null, ct);
+            return (updated, true);
+        }, ct);
+
+    /// <summary>Forgets an attachment by path. It never touches the worktree itself.</summary>
+    public Task<(IReadOnlyList<WorktreeAttachment> Items, bool Removed)?> DetachWorktreeAsync(
+        Guid entityId, string path, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<(IReadOnlyList<WorktreeAttachment>, bool)?>(entityId, async () =>
+        {
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
+            if (entity is null || Map(entity) is null) return null;
+            var items = WorktreeAttachment.Read(entity.Data) ?? [];
+            var kept = items.Where(a => !WorktreeAttachment.SamePath(a.Path, path)).ToList();
+            if (kept.Count == items.Count) return (items, false);
+            await entities.PatchAsync(entityId, new JsonObject { [WorktreeAttachment.DataKey] = WorktreeAttachment.ToJson(kept) }, null, ct);
+            return (kept, true);
         }, ct);
 
     public Task TouchAsync(Guid entityId, CancellationToken ct = default)
@@ -999,7 +1032,8 @@ public sealed class DiscussionStore(
             Str(d, "setup_bootstrap_message_uid"),
             Str(d, "title_source"),
             Str(d, "owner_plugin"),
-            Str(d, "source_app"));
+            Str(d, "source_app"),
+            WorktreeAttachment.Read(d));
     }
 
     public static object ToInfo(DiscussionRead d) => new
@@ -1022,6 +1056,7 @@ public sealed class DiscussionStore(
         provider = d.Provider,
         confidential = d.Confidential,
         setupBootstrapMessageUid = d.SetupBootstrapMessageUid,
+        worktrees = d.Worktrees ?? [],
         ownedBy = DiscussionApplicationOwner.IsForeign(d)
             ? new { app = d.OwnerApp }
             : null,

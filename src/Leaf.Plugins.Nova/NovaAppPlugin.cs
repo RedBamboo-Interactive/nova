@@ -42,6 +42,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<ILogger<NovaAgentWelcomeProvider>>(),
                 sp.GetRequiredService<HeartbeatService>()));
         services.AddSingleton<RedComputeClient>();
+        services.AddSingleton<CodeWorktreeClient>();
         services.AddSingleton(sp =>
             new DiscordPromptInjectionVerifier(
                 // Optional: provided by cap-sentinel when installed. Without it every review is

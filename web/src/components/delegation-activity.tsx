@@ -4,6 +4,7 @@ import type { ActivityStatusGroup } from "@redbamboo/chat"
 import type { DelegationSessionActivity, DiscussionDelegationActivity } from "../lib/types"
 import { delegationActivityLabel, delegationSessionLabel } from "../lib/delegation-activity"
 import { delegationSessionPath } from "../lib/delegation-session-link"
+import { delegationPlacement } from "../lib/worktree-attachments"
 import { BUILTIN_EVENTS } from "../lib/event-type-resolution"
 
 // Older hosts have no accent-magenta token. Reuse the established delegation
@@ -19,11 +20,21 @@ const isLive = (session: DelegationSessionActivity) => ["running", "queued", "st
 /** One delegated Code session: what it is, where it runs, and its state. */
 function DelegationSessionDetails({ session, onNavigate }: { session: DelegationSessionActivity; onNavigate: () => void }) {
   const path = delegationSessionPath({ sessionId: session.sessionId })
+  const placement = delegationPlacement({ repository: session.repository || session.repositoryId, branch: session.branch, worktreePath: session.worktreePath })
   return (
     <div data-slot="delegation-session-details" className="space-y-3">
       <div className="min-w-0">
         <p className="break-words text-sm text-contrast">{session.title || `Code session ${session.sessionId}`}</p>
-        <p className="mt-0.5 break-words text-xs text-text-muted">{session.repository || session.repositoryId || "Agent workspace"}</p>
+        <p className="mt-0.5 flex flex-wrap items-center gap-1.5 break-words text-xs text-text-muted">
+          <span>{placement?.label ?? "Agent workspace"}</span>
+          {placement?.worktree && (
+            <span data-slot="delegation-worktree-badge" title={session.worktreePath ?? undefined}
+              className="inline-flex items-center gap-1 rounded bg-overlay-6 px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+              <i aria-hidden="true" className="ph-bold ph-git-branch text-[10px]" />
+              worktree
+            </span>
+          )}
+        </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${isLive(session) ? "bg-pink-500/15 text-pink-300" : "bg-overlay-6 text-text-muted"}`}>

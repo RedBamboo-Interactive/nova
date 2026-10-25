@@ -263,6 +263,9 @@ public sealed class CallbackDeliveryTests
         public Gateway Gateway { get; } = new();
         public LeafEntity Target { get; }
         private readonly LeafEntity live;
+        private readonly LeafEntity[] all;
+        /// <summary>The target discussion's stored data as the entity store holds it now.</summary>
+        public JsonObject TargetData { get { lock (all) return all.First(e => e.Id == Target.Id).Data.DeepClone().AsObject(); } }
         private readonly AgentDirectory agents;
         public AgentDirectory Agents => agents;
         public IEntityStore Entities { get; }
@@ -275,7 +278,7 @@ public sealed class CallbackDeliveryTests
         public IEnumerable<DiscussionMessage> LiveMessages => Records.Where(m => m.DiscussionId == live.Id);
 
         public Fixture(bool confidential = false, bool sessionless = false,
-            AgentActivitySignals? activity = null, string type = "chat")
+            AgentActivitySignals? activity = null, string type = "chat", IReadOnlyList<LeafEntity>? extraEntities = null)
         {
             var agent = Entity("agent", "nova", new());
             AgentId = agent.Id;
@@ -287,9 +290,11 @@ public sealed class CallbackDeliveryTests
             live = Entity("discussion", DiscussionStore.Slug("live"), new() {
                 ["discussion_id"] = "live", ["app"] = "nova", ["type"] = "live", ["status"] = "idle", ["agent"] = agent.Id.ToString(),
             });
-            var all = new[] { Target, live, agent, Entity("plugin", "nova", new()) };
+            all = new[] { Target, live, agent, Entity("plugin", "nova", new()) }.Concat(extraEntities ?? []).ToArray();
             var entities = Proxy.Create<IEntityStore>((method, args) => method switch {
-                "GetBySlugAsync" => Task.FromResult(all.FirstOrDefault(e => e.Slug == (string)args[0]!)),
+                "GetBySlugAsync" => Task.FromResult(args.Length > 1 && args[1] is string typedSlug
+                    ? all.FirstOrDefault(e => e.TypeSlug == (string)args[0]! && e.Slug == typedSlug)
+                    : all.FirstOrDefault(e => e.Slug == (string)args[0]!)),
                 "GetAsync" => Task.FromResult(all.FirstOrDefault(e => e.Id == (Guid)args[0]!)),
                 "QueryAsync" => Task.FromResult<IReadOnlyList<LeafEntity>>(all.Where(e => e.TypeSlug == ((EntityQuery)args[0]!).TypeSlug).ToArray()),
                 "PatchAsync" => Task.FromResult(Patch((Guid)args[0]!, (JsonObject)args[1]!)),
