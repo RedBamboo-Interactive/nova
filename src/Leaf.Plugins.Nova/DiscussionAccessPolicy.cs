@@ -81,6 +81,21 @@ public static class DiscussionAccessPolicy
                 && execution.HasBrowserContext);
     }
 
+    /// <summary>
+    /// Who a signed execution says is acting (an Agent, an automation, an app at a browser), or
+    /// null for a request without a verified execution identity. The id is the actor's entity id
+    /// when it has one, as Nova stores Agent ids.
+    /// </summary>
+    public static SignedActor? ReadSignedActor(ClaimsPrincipal principal)
+        => IsExecution(principal) && TryReadExecution(principal, out var execution) && execution is not null
+            ? new SignedActor(execution.ActorKind, execution.ActorId, execution.ActorName)
+            : null;
+
+    public sealed record SignedActor(string Kind, string Id, string? Name)
+    {
+        public bool IsAgent => Kind.Equals("agent", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsExecution(ClaimsPrincipal principal)
         => string.Equals(principal.FindFirstValue(TokenUseClaim), ExecutionTokenUse,
             StringComparison.OrdinalIgnoreCase);
@@ -148,7 +163,8 @@ public static class DiscussionAccessPolicy
             execution = new ParsedExecution(
                 appId, actorKind, actorStableId, actorId,
                 beneficiaryKind, beneficiaryId, hasNovaBrowserContext,
-                String(root, "parentExecutionId"), browserRoutes.Count > 0);
+                String(root, "parentExecutionId"), browserRoutes.Count > 0,
+                String(actor, "name"));
             return true;
         }
         catch (JsonException)
@@ -176,5 +192,6 @@ public static class DiscussionAccessPolicy
         string? BeneficiaryId,
         bool HasNovaBrowserContext,
         string? ParentExecutionId,
-        bool HasBrowserContext);
+        bool HasBrowserContext,
+        string? ActorName = null);
 }

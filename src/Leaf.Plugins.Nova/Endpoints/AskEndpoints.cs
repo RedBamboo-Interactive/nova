@@ -131,7 +131,9 @@ public static class AskEndpoints
         }
         if (current.Length > 0) blocks.Add(current.ToString());
 
-        var reply = string.Join("\n\n", blocks.Where(b => !string.IsNullOrWhiteSpace(b)).Select(b => b.Trim()));
+        var reply = string.Join("\n\n", blocks
+            .Where(b => !string.IsNullOrWhiteSpace(b) && !NovaNoReply.IsMarker(b))
+            .Select(b => b.Trim()));
         return reply.Length > 0 ? reply : null;
     }
 

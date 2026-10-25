@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Leaf.Sdk;
 
 namespace Leaf.Plugins.Nova.Endpoints;
@@ -1924,11 +1925,11 @@ public static class DiscussionEndpoints
 
         // ── Reactions ──────────────────────────────────────────────────
 
-        group.MapPost("/discussions/{id}/reactions", async (string id, ReactionRequest request, HttpContext ctx, DiscussionStore store, IDiscussions discussions, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
-            await SetReactionAsync(id, request, ctx, store, discussions, events, remove: false));
+        group.MapPost("/discussions/{id}/reactions", async (string id, ReactionRequest request, HttpContext ctx, DiscussionStore store, IDiscussions discussions, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, DeviceResolver devices, ReactionTriggers triggers, ILogger<ReactionTriggers> logger) =>
+            await SetReactionAsync(id, request, ctx, store, discussions, events, devices, triggers, logger, remove: false));
 
-        group.MapPost("/discussions/{id}/reactions/remove", async (string id, ReactionRequest request, HttpContext ctx, DiscussionStore store, IDiscussions discussions, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
-            await SetReactionAsync(id, request, ctx, store, discussions, events, remove: true));
+        group.MapPost("/discussions/{id}/reactions/remove", async (string id, ReactionRequest request, HttpContext ctx, DiscussionStore store, IDiscussions discussions, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, DeviceResolver devices, ReactionTriggers triggers, ILogger<ReactionTriggers> logger) =>
+            await SetReactionAsync(id, request, ctx, store, discussions, events, devices, triggers, logger, remove: true));
 
         group.MapGet("/discussions/{id}/reactions", async (string id, HttpContext ctx, DiscussionStore store, IDiscussions discussions) =>
         {
@@ -2075,8 +2076,30 @@ public static class DiscussionEndpoints
         return Results.Content(result.Content, result.ContentType, statusCode: result.StatusCode);
     }
 
+    /// <summary>
+    /// Who is reacting. A signed Agent execution is that Agent, whatever the body says, so an Agent
+    /// needs no hand-passed id. Without one, a body agentId still names the Agent (older recipes).
+    /// A person is the caller. Anything else signed (an automation, a derived worker) is recorded
+    /// as itself, never as the person, so it cannot pass for them or trigger a turn.
+    /// Removes resolve the same way: the aggregation key is (messageKey, emoji, actorId), so an
+    /// Agent's remove attributed to the user would never cancel its add.
+    /// </summary>
+    internal static (string Type, string Id, string Name) ResolveReactionActor(
+        ReactionRequest request, ClaimsPrincipal user, string? userId)
+    {
+        var signed = DiscussionAccessPolicy.ReadSignedActor(user);
+        if (signed is { IsAgent: true })
+            return ("agent", signed.Id, signed.Name ?? request.AgentName ?? "Agent");
+        if (!string.IsNullOrEmpty(request.AgentId))
+            return ("agent", request.AgentId, request.AgentName ?? "Agent");
+        if (signed is null || DiscussionAccessPolicy.IsHumanInitiated(user))
+            return ("user", userId ?? "anonymous", user.FindFirstValue("name") ?? "User");
+        return ("automation", signed.Id, signed.Name ?? "Automation");
+    }
+
     private static async Task<IResult> SetReactionAsync(string id, ReactionRequest request, HttpContext ctx,
-        DiscussionStore store, IDiscussions discussions, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, bool remove)
+        DiscussionStore store, IDiscussions discussions, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events,
+        DeviceResolver devices, ReactionTriggers triggers, ILogger logger, bool remove)
     {
         var discussion = await store.GetAsync(id);
         if (discussion is null) return NotFound();
@@ -2086,16 +2109,27 @@ public static class DiscussionEndpoints
         if (string.IsNullOrWhiteSpace(request.Emoji) || string.IsNullOrWhiteSpace(request.MessageKey))
             return Results.BadRequest(new { error = "Emoji and messageKey are required" });
 
-        // Applies to removes too: the aggregation key is (messageKey, emoji,
-        // actorId), so attributing an agent's remove to the user would never
-        // cancel its add and agent reactions would be permanent.
-        var isAgent = !string.IsNullOrEmpty(request.AgentId);
-        var actorId = isAgent ? request.AgentId! : userId ?? "anonymous";
-        var actorName = isAgent ? (request.AgentName ?? "Agent") : (ctx.User.FindFirstValue("name") ?? "User");
-        var actorType = isAgent ? "agent" : "user";
+        var (actorType, actorId, actorName) = ResolveReactionActor(request, ctx.User, userId);
+        var humanInitiated = actorType == "user" && DiscussionAccessPolicy.IsHumanInitiated(ctx.User);
 
         await discussions.SetReactionAsync(discussion.EntityId,
             new ReactionChange(request.MessageKey!, request.Emoji.Trim(), remove, actorType, actorId, actorName));
+
+        // Steering or starting a turn reads RedCompute and may wait out a debounce: never hold the
+        // response for it, and never let the work inherit this request (its HTTP context and
+        // execution scope end with it). The send carries its own Agent provenance.
+        if (actorType == "user" && humanInitiated)
+        {
+            var device = await devices.ResolveAsync(ctx.Request.Headers.UserAgent.ToString(), null);
+            var signal = new ReactionSignal(discussion, new ReactionEntry(0, request.MessageKey!,
+                request.Emoji.Trim(), remove, actorType, actorId, actorName, DateTimeOffset.UtcNow), true, device);
+            using (ExecutionContext.SuppressFlow())
+                _ = Task.Run(async () =>
+                {
+                    try { await triggers.OnReactionAsync(signal); }
+                    catch (Exception ex) { logger.LogWarning(ex, "Reaction trigger for discussion {DiscussionId} failed", id); }
+                });
+        }
 
         await events.PublishAsync("discussion.reaction", new JsonObject
         {
@@ -2512,7 +2546,8 @@ public static class DiscussionEndpoints
     internal static bool IsVisibleSessionMessage(ConversationExporter.CollapsedMessage message)
         => message.EventType switch
         {
-            "text" => !string.IsNullOrWhiteSpace(message.Content),
+            // A silent settle is no message (the paged V2 path keeps its record; the client hides it).
+            "text" => !string.IsNullOrWhiteSpace(message.Content) && !NovaNoReply.IsMarker(message.Content),
             "tool_use" => !string.IsNullOrWhiteSpace(message.ToolName),
             "tool_result" => !string.IsNullOrWhiteSpace(message.ToolResult)
                 || !string.IsNullOrWhiteSpace(message.Content)

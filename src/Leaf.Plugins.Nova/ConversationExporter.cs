@@ -66,22 +66,27 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         var localEvents = records
             .Where(m => (m.Metadata["source"]?.GetValue<string>() ?? "").StartsWith("event:"))
             .ToList();
+        // What dreaming reads: the reactions still standing on each message, removals applied.
+        var reactions = ReactionContext.Standing(
+            (await discussions.GetReactionsAsync(disc.EntityId, ct: ct)).Select(ReactionEntry.Read));
 
         if (snapshot is { Messages.Count: > 0 })
-            AppendSessionExport(sb, disc, heading, snapshot.Messages, records, localEvents);
+            AppendSessionExport(sb, disc, heading, snapshot.Messages, records, localEvents, reactions);
         else
-            AppendLocalExport(sb, disc, heading, records);
+            AppendLocalExport(sb, disc, heading, records, reactions);
     }
 
     private static void AppendSessionExport(StringBuilder sb, DiscussionRead disc, string heading,
         List<SessionMessage> raw, IReadOnlyList<DiscussionMessage> records,
-        List<DiscussionMessage> localEvents)
+        List<DiscussionMessage> localEvents, IReadOnlyDictionary<string, List<ReactionEntry>> reactions)
     {
         var collapsed = CollapseMessages(raw)
             .Where(message => !(message.Role == "user"
                 && message.MessageUid == disc.SetupBootstrapMessageUid))
             .ToList();
-        var textMessages = collapsed.Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content)).ToList();
+        // A silent settle said nothing; a pure context envelope (a reaction note) was never authored.
+        var textMessages = collapsed.Where(m => m.EventType == "text" && !string.IsNullOrWhiteSpace(m.Content)
+            && !NovaNoReply.IsMarker(m.Content)).ToList();
         var userAttachmentsByUid = records
             .Where(m => m.Metadata["source"]?.GetValue<string>() is "user-message" or "queued-user-message")
             .Where(m => !string.IsNullOrWhiteSpace(m.Metadata["uid"]?.GetValue<string>()))
@@ -121,6 +126,12 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
 
         var merged = textMessages.Concat(pendingNovaMessages).Concat(eventEntries)
             .OrderBy(m => m.Timestamp).ToList();
+        // Commentary and final answer of one turn share its uid: the reactions follow the last.
+        var reactionsAfter = merged
+            .Select((message, index) => (message.MessageUid, index))
+            .Where(item => item.MessageUid is not null && reactions.ContainsKey(item.MessageUid))
+            .GroupBy(item => item.MessageUid!)
+            .ToDictionary(group => group.Max(item => item.index), group => group.Key);
 
         var visibleMessageCount = textMessages.Count + pendingNovaMessages.Count;
         var countLabel = eventEntries.Count > 0
@@ -131,8 +142,9 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
         sb.AppendLine($"Created: {disc.CreatedAt:yyyy-MM-dd HH:mm} — {countLabel}");
         sb.AppendLine();
 
-        foreach (var msg in merged)
+        for (var index = 0; index < merged.Count; index++)
         {
+            var msg = merged[index];
             if (msg.EventType == "event")
             {
                 var source = msg.Source?.Replace("event:", "") ?? "system";
@@ -151,11 +163,18 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
                     && userAttachmentsByUid.TryGetValue(msg.MessageUid, out var saved))
                     AppendImageParts(sb, saved.Metadata["parts_json"]?.GetValue<string>());
             }
+            if (reactionsAfter.TryGetValue(index, out var reactedUid))
+                AppendReactions(sb, reactions[reactedUid]);
             sb.AppendLine();
         }
     }
 
-    private static void AppendLocalExport(StringBuilder sb, DiscussionRead disc, string heading, IReadOnlyList<DiscussionMessage> messages)
+    internal static void AppendReactions(StringBuilder sb, IReadOnlyList<ReactionEntry> standing)
+        => sb.AppendLine("Reactions: " + string.Join(", ", standing.Select(reaction =>
+            $"{reaction.Emoji} {(string.IsNullOrWhiteSpace(reaction.ActorName) ? reaction.ActorType : reaction.ActorName)} ({reaction.At.UtcDateTime:HH:mm})")));
+
+    private static void AppendLocalExport(StringBuilder sb, DiscussionRead disc, string heading,
+        IReadOnlyList<DiscussionMessage> messages, IReadOnlyDictionary<string, List<ReactionEntry>> reactions)
     {
         messages = messages
             .Where(message => message.Metadata["source"]?.GetValue<string>() != "queued-user-message")
@@ -181,6 +200,8 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
             else
                 sb.AppendLine(msg.Content);
 
+            if (msg.Metadata["uid"]?.GetValue<string>() is { } uid && reactions.TryGetValue(uid, out var standing))
+                AppendReactions(sb, standing);
             sb.AppendLine();
         }
     }

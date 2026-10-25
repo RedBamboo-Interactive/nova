@@ -69,6 +69,8 @@ public sealed class ConversationUnread(
             .Where(message => message.Role == "assistant"
                 && message.EventType == "text"
                 && !string.IsNullOrWhiteSpace(message.Content)
+                // A silent settle shows nothing, so nothing is unread.
+                && !NovaNoReply.IsMarker(message.Content)
                 && !string.IsNullOrWhiteSpace(message.MessageUid)
                 && !directMessageUids.Contains(message.MessageUid))
             .OrderBy(message => message.Timestamp)

@@ -51,6 +51,22 @@ public sealed class ConversationUnreadTests
     }
 
     [Fact]
+    public void Silent_settle_is_not_unread_even_when_the_marker_streamed_in_pieces()
+    {
+        // Claude persists one completed final; an older transcript can hold the marker in fragments.
+        var messages = new List<SessionMessage>
+        {
+            Message("assistant", "text", "a visible answer", "turn-1", 1),
+            Message("assistant", "text", "<nova-", "turn-2", 2),
+            Message("assistant", "text", "no-re", "turn-2", 2),
+            Message("assistant", "text", "ply/>\n", "turn-2", 2),
+            Message("assistant", "text", NovaNoReply.Marker, "turn-3", 3),
+        };
+
+        Assert.Equal("turn-1", ConversationUnread.FindLatestAssistantUid(messages, new HashSet<string>()));
+    }
+
+    [Fact]
     public void Injected_proactive_message_is_not_counted_again()
     {
         var messages = new List<SessionMessage>

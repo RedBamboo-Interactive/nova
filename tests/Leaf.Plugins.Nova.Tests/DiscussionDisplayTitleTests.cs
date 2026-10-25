@@ -109,9 +109,12 @@ public sealed class DiscussionDisplayTitleTests
     {
         var exporter = new ConversationExporter(
             new RedComputeClient(CallbackDeliveryTests.Proxy.Create<IComputeGateway>((_, _) => throw new NotSupportedException())),
-            CallbackDeliveryTests.Proxy.Create<IDiscussions>((name, _) => name == nameof(IDiscussions.GetMessagesAsync)
-                ? Task.FromResult<IReadOnlyList<DiscussionMessage>>([])
-                : throw new NotSupportedException(name)));
+            CallbackDeliveryTests.Proxy.Create<IDiscussions>((name, _) => name switch
+            {
+                nameof(IDiscussions.GetMessagesAsync) => Task.FromResult<IReadOnlyList<DiscussionMessage>>([]),
+                nameof(IDiscussions.GetReactionsAsync) => Task.FromResult<IReadOnlyList<Leaf.Sdk.LeafRecord>>([]),
+                _ => throw new NotSupportedException(name),
+            }));
         var rotated = Discussion("12f2f6c1", "live", Utc("2026-10-08T03:30:00Z"));
         var refreshed = Discussion("3b71ed33", "live", Utc("2026-10-08T20:37:00Z"));
         var chat = Discussion("chat1", "chat", Utc("2026-10-08T08:00:00Z"));

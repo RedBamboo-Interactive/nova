@@ -26,6 +26,17 @@ public sealed class VoiceBackendForwarderTests
     }
 
     [Fact]
+    public async Task A_silent_settle_is_never_spoken()
+    {
+        var (forwarder, sent) = Open(Snapshot("Idle", Assistant(1, "a1", "Ready.")));
+
+        await forwarder.OnSettledAsync(Discussion, AiSession,
+            Snapshot("Idle", Assistant(1, "a1", "Ready."), Assistant(2, "a2", NovaNoReply.Marker + "\n")));
+
+        Assert.Empty(sent);
+    }
+
+    [Fact]
     public async Task History_the_voice_already_received_is_never_spoken_even_beyond_the_admission_tail()
     {
         var (forwarder, sent) = Open(Snapshot("Idle", Assistant(50, "a50", "Recent.")));

@@ -156,7 +156,8 @@ public static class NovaContextBuilder
     public static string BuildFullContext(
         ContextSnapshot snapshot,
         string currentId, DateTime now, ResolvedDevice device, string input, string? agentName,
-        List<string>? reactionLines = null, IReadOnlyList<WorktreeAttachment>? worktrees = null)
+        List<string>? reactionLines = null, IReadOnlyList<WorktreeAttachment>? worktrees = null,
+        string? messageUid = null)
     {
         var sb = new StringBuilder();
 
@@ -198,7 +199,8 @@ public static class NovaContextBuilder
         sb.Append($"\n\nRecall any discussion: curl -s {ApiBase}/discussions/{{id}}/export");
         sb.Append($"\nSearch all discussions: curl -s \"{ApiBase}/discussions/search?q={{query}}\"");
         sb.Append($"\nGet full context snapshot: curl -s {ApiBase}/discussions/{{id}}/context");
-        sb.Append($"\nReact to a message: curl -s -X POST {ApiBase}/discussions/{{id}}/reactions -H \"Content-Type: application/json\" -d '{{\"emoji\":\"...\",\"messageKey\":\"...\",\"agentId\":\"...\",\"agentName\":\"...\"}}'");
+        // The emoji is a JSON escape: a cp1252 shell turns a literal emoji into "??".
+        sb.Append($"\nReact to a message (messageKey: the message=\"...\" uid on a context tag): curl -s -X POST {ApiBase}/discussions/{currentId}/reactions -H \"Authorization: Bearer $REDLEAF_EXECUTION_TOKEN\" -H \"Content-Type: application/json\" -d '{{\"emoji\":\"\\u2764\\ufe0f\",\"messageKey\":\"<message uid>\"}}'");
 
         var liveDisc = active.FirstOrDefault(d => d.Type == "live");
         if (liveDisc != null)
@@ -221,29 +223,66 @@ public static class NovaContextBuilder
                 sb.Append($"\n- [{context.Source}] {context.Content}");
         }
 
+        if (reactionLines is { Count: > 0 })
+        {
+            sb.Append("\n\nReactions since your last message:");
+            foreach (var r in reactionLines)
+                sb.Append($"\n- {r}");
+        }
+
         if (snapshot.Outfit != null)
             sb.Append($"\n\n{snapshot.Outfit}");
 
         AppendWorktrees(sb, worktrees, leadingBlankLine: true);
 
-        return Frame(sb, now, device, input, currentId, agentName);
+        return Frame(sb, now, device, input, currentId, agentName, messageUid, NoReplyHint);
     }
 
-    // The opening tag, the neutralized body, the closing tag.
+    // Constant text appended after neutralization: inside the body the marker would be made inert
+    // like any other Nova tag, and no externally sourced value can produce it out here.
+    internal const string NoReplyHint =
+        "\n\nWhen a reaction or nothing at all says it better than words, make your entire reply exactly "
+        + NovaNoReply.Marker + ": the turn then ends with no visible message.";
+
+    internal const string TriggeredNoteHint =
+        "\nNo one wrote anything. A reaction-only or silent reply (exactly " + NovaNoReply.Marker
+        + ") is fine when words would add nothing.";
+
+    internal const string SteeredNoteHint =
+        "\nThis arrived while you were working; take it into account, it needs no reply of its own.";
+
+    // The opening tag, the neutralized body, any constant trusted text, the closing tag.
     private static string Frame(StringBuilder body, DateTime now, ResolvedDevice device,
-        string input, string currentId, string? agentName)
+        string input, string currentId, string? agentName, string? messageUid = null, string? trusted = null)
     {
         var sb = new StringBuilder();
-        AppendOpenTag(sb, now, device, input, currentId, agentName);
+        AppendOpenTag(sb, now, device, input, currentId, agentName, messageUid);
         sb.Append(NovaEventText.Neutralize(body.ToString()));
+        sb.Append(trusted);
         sb.Append("\n</nova-context>");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// A reaction note: the envelope alone, so the chat view shows nothing for it. Its own turn when
+    /// the person reacted to the agent's latest message while it was idle, or folded into the
+    /// running turn (<paramref name="steered"/>).
+    /// </summary>
+    public static string BuildReactionNote(IReadOnlyList<string> reactionLines, DateTime now,
+        ResolvedDevice device, string currentId, string? agentName, bool steered)
+    {
+        var sb = new StringBuilder("\nReactions since your last message:");
+        foreach (var r in reactionLines)
+            sb.Append($"\n- {r}");
+        return Frame(sb, now, device, "reaction", currentId, agentName,
+            trusted: steered ? SteeredNoteHint : TriggeredNoteHint);
     }
 
     public static string BuildDeltaContext(
         ContextSnapshot current, ContextSnapshot previous,
         string currentId, DateTime now, ResolvedDevice device, string input, string? agentName,
-        List<string>? reactionLines = null, IReadOnlyList<WorktreeAttachment>? worktrees = null)
+        List<string>? reactionLines = null, IReadOnlyList<WorktreeAttachment>? worktrees = null,
+        string? messageUid = null)
     {
         var changes = new List<string>();
 
@@ -355,7 +394,7 @@ public static class NovaContextBuilder
 
         AppendWorktrees(sb, worktrees, leadingBlankLine: false);
 
-        return Frame(sb, now, device, input, currentId, agentName);
+        return Frame(sb, now, device, input, currentId, agentName, messageUid);
     }
 
     /// <summary>
@@ -407,14 +446,15 @@ public static class NovaContextBuilder
     }
 
     private static void AppendOpenTag(StringBuilder sb, DateTime now, ResolvedDevice device,
-        string input, string currentId, string? agentName)
+        string input, string currentId, string? agentName, string? messageUid)
     {
         // Device name, type and platform come from the client's User-Agent; the agent name and room
-        // are user-editable entities.
+        // are user-editable entities; a caller can choose the message uid.
         static string A(string value) => NovaEventText.AttributeText(value);
+        var messageAttr = messageUid != null ? $" message=\"{A(messageUid)}\"" : "";
         var agentAttr = agentName != null ? $" agent=\"{A(agentName)}\"" : "";
         var roomAttr = device.Room != null ? $" room=\"{A(device.Room)}\"" : "";
-        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{A(device.ShortLabel)}\" device_type=\"{A(device.Type)}\" platform=\"{A(device.Platform)}\" input=\"{A(input)}\" discussion=\"{A(currentId)}\"{agentAttr}{roomAttr}>");
+        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{A(device.ShortLabel)}\" device_type=\"{A(device.Type)}\" platform=\"{A(device.Platform)}\" input=\"{A(input)}\" discussion=\"{A(currentId)}\"{messageAttr}{agentAttr}{roomAttr}>");
     }
 
     private static string FormatRelativeTime(TimeSpan elapsed)

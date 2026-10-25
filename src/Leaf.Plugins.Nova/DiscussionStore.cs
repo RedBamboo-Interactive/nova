@@ -102,7 +102,8 @@ public sealed record DiscussionRead(
     string? TitleSource = null,
     string? OwnerPlugin = null,
     string? OwnerApp = null,
-    IReadOnlyList<WorktreeAttachment>? Worktrees = null);
+    IReadOnlyList<WorktreeAttachment>? Worktrees = null,
+    ReactionCursor? ReactionsNoted = null);
 
 public sealed record ArchivedDiscussionPage(
     IReadOnlyList<DiscussionRead> Items,
@@ -1033,7 +1034,8 @@ public sealed class DiscussionStore(
             Str(d, "title_source"),
             Str(d, "owner_plugin"),
             Str(d, "source_app"),
-            WorktreeAttachment.Read(d));
+            WorktreeAttachment.Read(d),
+            ReactionCursor.Read(d));
     }
 
     public static object ToInfo(DiscussionRead d) => new

@@ -206,6 +206,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<MessagePipeline>>(),
                 sp.GetRequiredService<AgentActivitySignals>(),
                 sp.GetRequiredService<EventInjector>()));
+        services.AddSingleton<ReactionTriggers>();
     }
 
     public void MapEndpoints(RouteGroupBuilder group)

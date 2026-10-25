@@ -51,6 +51,7 @@ import {
   type ArchiveContentResult,
 } from "../lib/archive-discussion-store"
 import { unwrapApplicationEnvelope } from "../lib/application-envelope"
+import { hideSilentSettle } from "../lib/silent-settle"
 
 function isClosed(status: string | undefined): boolean {
   return status === "archived" || status === "archiving"
@@ -312,7 +313,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const activeDiscussion = activeDiscussionId
     ? resolveKnownDiscussion(discussions, archiveState.knownItems, activeDiscussionId) ?? null
     : null
-  const activeMessages = activeDiscussionId ? messages[activeDiscussionId] ?? [] : []
+  const storedActiveMessages = activeDiscussionId ? messages[activeDiscussionId] : undefined
+  // Product projection only: the stored blocks stay exactly what the shared reconciler holds.
+  const activeMessages = useMemo(() => hideSilentSettle(storedActiveMessages ?? []), [storedActiveMessages])
   const isStreaming = activeDiscussionId ? streaming[activeDiscussionId] ?? false : false
   const supportsSteering = activeDiscussionId ? steeringSupport[activeDiscussionId] ?? false : false
   const backgroundTasks = useMemo(

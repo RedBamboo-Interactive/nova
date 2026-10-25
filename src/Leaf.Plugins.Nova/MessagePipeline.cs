@@ -386,14 +386,17 @@ public sealed class MessagePipeline(
             extensionContexts: extensionContexts);
         var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
 
-        var reactionLines = await GetRecentReactionLinesAsync(
-            discussion, discussion.LastContextJson != null ? discussion.LastActivity : DateTime.MinValue, ct);
+        var reactions = await GetReactionNotesAsync(discussion, ct);
+
+        // The uid goes into the context tag, so the agent can react to the message it answers.
+        // RedCompute echoes a caller's uid, so the tag and the transcript record agree.
+        requestedMessageUid ??= Guid.NewGuid().ToString("N");
 
         string contextBlock;
         if (previousSnapshot == null || discussion.MessageCount == 0)
-            contextBlock = NovaContextBuilder.BuildFullContext(currentSnapshot, discussion.Id, now, device, input, agentName, reactionLines, discussion.Worktrees);
+            contextBlock = NovaContextBuilder.BuildFullContext(currentSnapshot, discussion.Id, now, device, input, agentName, reactions.Lines, discussion.Worktrees, requestedMessageUid);
         else
-            contextBlock = NovaContextBuilder.BuildDeltaContext(currentSnapshot, previousSnapshot, discussion.Id, now, device, input, agentName, reactionLines, discussion.Worktrees);
+            contextBlock = NovaContextBuilder.BuildDeltaContext(currentSnapshot, previousSnapshot, discussion.Id, now, device, input, agentName, reactions.Lines, discussion.Worktrees, requestedMessageUid);
 
         var metadata = NovaContextBuilder.BuildMetadata(currentSnapshot, now, device, input, discussion.Id, agentName);
 
@@ -506,6 +509,8 @@ public sealed class MessagePipeline(
         };
         if (discussion.InjectedContext != null)
             patch["injected_context"] = null;
+        if (reactions.Through is { } noted)
+            patch[ReactionCursor.DataKey] = noted.ToJson();
         if (sessionIsNew)
             patch["session_id"] = sessionId;
         await store.PatchAsync(discussion.EntityId, patch, ct: ct);
@@ -627,117 +632,119 @@ public sealed class MessagePipeline(
         }
     }
 
-    internal async Task<List<string>> GetRecentReactionLinesAsync(
-        DiscussionRead discussion, DateTime since, CancellationToken ct)
+    internal sealed record ReactionNotes(
+        List<string> Lines, ReactionCursor? Through, List<ReactionEntry> Net, ReactionTranscript? Transcript)
     {
-        var lines = new List<string>();
+        public static ReactionNotes None(ReactionCursor? through) => new([], through, [], null);
+    }
+
+    /// <summary>
+    /// The reaction changes the agent has not been told about, net of add/remove pairs, rendered
+    /// for its context. The discussion's <see cref="ReactionCursor"/> marks what earlier contexts
+    /// and reaction notes already carried; before the first one, reactions since the last activity.
+    /// </summary>
+    internal async Task<ReactionNotes> GetReactionNotesAsync(DiscussionRead discussion, CancellationToken ct)
+    {
+        var cursor = discussion.ReactionsNoted;
         try
         {
-            var sinceOffset = since == DateTime.MinValue
-                ? (DateTimeOffset?)null
-                : new DateTimeOffset(DateTime.SpecifyKind(since, DateTimeKind.Utc));
-            var records = await discussions.GetReactionsAsync(discussion.EntityId, sinceOffset, 50, ct);
-            if (records.Count == 0) return lines;
+            var since = cursor?.At ?? new DateTimeOffset(DateTime.SpecifyKind(discussion.LastActivity, DateTimeKind.Utc));
+            var records = await discussions.GetReactionsAsync(discussion.EntityId, since, 1000, ct);
+            var entries = records.Select(ReactionEntry.Read)
+                .Where(entry => entry.Id > (cursor?.Id ?? 0) && !string.IsNullOrWhiteSpace(entry.MessageKey))
+                .ToList();
+            if (entries.Count == 0) return ReactionNotes.None(cursor);
 
-            var messages = await discussions.GetMessagesAsync(discussion.EntityId, ct: ct);
-            var msgByUid = new Dictionary<string, string>();
-            foreach (var m in messages)
-                AddReactionPreview(
-                    msgByUid,
-                    m.Metadata["uid"]?.GetValue<string>(),
-                    m.Content);
+            var last = entries.MaxBy(entry => entry.Id)!;
+            var through = new ReactionCursor(last.Id, last.At);
+            var net = ReactionContext.Net(entries);
+            if (net.Count == 0) return ReactionNotes.None(through);
 
-            var targetMessageUids = records
-                .Where(record => (record.Data["action"]?.GetValue<string>() ?? "add") == "add")
-                .Select(record => record.Data["message_key"]?.GetValue<string>())
-                .Where(messageKey => !string.IsNullOrWhiteSpace(messageKey))
-                .Select(messageKey => messageKey!)
-                .ToHashSet(StringComparer.Ordinal);
-            var unresolved = targetMessageUids.Any(messageKey => !msgByUid.ContainsKey(messageKey));
-
-            if (unresolved && !string.IsNullOrWhiteSpace(discussion.SessionId))
-            {
-                var snapshot = await redCompute.GetSessionAsync(
-                    discussion.SessionId, ct, tail: 500);
-                if (snapshot != null)
-                    AddSessionReactionPreviews(msgByUid, snapshot.Messages, targetMessageUids);
-
-                unresolved = targetMessageUids.Any(messageKey => !msgByUid.ContainsKey(messageKey));
-                if (unresolved && snapshot?.Messages.Count == 500)
-                {
-                    snapshot = await redCompute.GetSessionAsync(discussion.SessionId, ct);
-                    if (snapshot != null)
-                        AddSessionReactionPreviews(msgByUid, snapshot.Messages, targetMessageUids);
-                }
-            }
-
-            foreach (var rec in records)
-            {
-                var d = rec.Data;
-                if ((d["action"]?.GetValue<string>() ?? "add") != "add") continue;
-
-                var emoji = d["emoji"]?.GetValue<string>() ?? "";
-                var actorName = d["actor_name"]?.GetValue<string>() ?? "";
-                var msgKey = d["message_key"]?.GetValue<string>() ?? "";
-
-                var preview = msgByUid.GetValueOrDefault(msgKey);
-                lines.Add(preview != null
-                    ? $"{actorName} reacted {emoji} to: \"{preview}\""
-                    : $"{actorName} reacted {emoji}");
-            }
+            var transcript = await LoadReactionTranscriptAsync(
+                discussion, net.Select(entry => entry.TargetUid).ToHashSet(StringComparer.Ordinal), ct);
+            var ownerName = entries.LastOrDefault(entry => entry.ActorType == "user"
+                && string.Equals(entry.ActorId, discussion.OwnerId, StringComparison.OrdinalIgnoreCase))?.ActorName;
+            return new(net.Select(entry => ReactionContext.Line(entry, transcript, discussion.AgentId, ownerName)).ToList(),
+                through, net, transcript);
         }
-        catch { }
-        return lines;
-    }
-
-    internal static void AddReactionPreview(
-        IDictionary<string, string> previews,
-        string? messageUid,
-        string? content)
-    {
-        if (string.IsNullOrWhiteSpace(messageUid)
-            || string.IsNullOrWhiteSpace(content)
-            || previews.ContainsKey(messageUid))
-            return;
-
-        var preview = content.Replace("\r", "").Replace("\n", " ");
-        if (preview.Length > 60) preview = preview[..57] + "...";
-        previews[messageUid] = preview;
-    }
-
-    internal static void AddSessionReactionPreviews(
-        IDictionary<string, string> previews,
-        IEnumerable<SessionMessage> messages,
-        IReadOnlySet<string>? targetMessageUids = null)
-    {
-        var candidates = ConversationExporter.CollapseMessages(messages.ToList())
-            .Where(message => message.EventType == "text"
-                && message.Role is "user" or "assistant"
-                && !string.IsNullOrWhiteSpace(message.MessageUid)
-                && !string.IsNullOrWhiteSpace(message.Content)
-                && (targetMessageUids is null || targetMessageUids.Contains(message.MessageUid!)))
-            .GroupBy(message => message.MessageUid!, StringComparer.Ordinal);
-
-        foreach (var turn in candidates)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            var selected = turn
-                .Select((message, index) => new
-                {
-                    Message = message,
-                    Index = index,
-                    Priority = message.Phase switch
-                    {
-                        "final_answer" => 3,
-                        null or "" => 2,
-                        "commentary" => 1,
-                        _ => 0,
-                    },
-                })
-                .OrderByDescending(candidate => candidate.Priority)
-                .ThenByDescending(candidate => candidate.Index)
-                .First().Message;
-            AddReactionPreview(previews, turn.Key, selected.Content);
+            logger.LogWarning(ex, "Reaction context for discussion {DiscussionId} could not be read", discussion.Id);
+            return ReactionNotes.None(cursor);
         }
+    }
+
+    /// <summary>
+    /// What reactions can point at. The canonical transcript is read even when every target is in
+    /// the discussion stream: whether a message is the agent's latest depends on its later replies.
+    /// </summary>
+    internal async Task<ReactionTranscript> LoadReactionTranscriptAsync(
+        DiscussionRead discussion, IReadOnlySet<string> targetUids, CancellationToken ct)
+    {
+        var stream = await discussions.GetMessagesAsync(discussion.EntityId, ct: ct);
+        if (string.IsNullOrWhiteSpace(discussion.SessionId))
+            return ReactionTranscript.Build(stream, null, discussion.AgentId);
+
+        const int tail = 500;
+        var snapshot = await redCompute.GetSessionAsync(discussion.SessionId, ct, tail: tail);
+        var transcript = ReactionTranscript.Build(stream, snapshot?.Messages, discussion.AgentId);
+        if (snapshot?.Messages.Count == tail && targetUids.Any(uid => !transcript.Contains(uid)))
+        {
+            var full = await redCompute.GetSessionAsync(discussion.SessionId, ct);
+            if (full is not null)
+                transcript = ReactionTranscript.Build(stream, full.Messages, discussion.AgentId);
+        }
+        return transcript;
+    }
+
+    /// <summary>
+    /// Delivers reaction lines as an internal input: a pure &lt;nova-context&gt; envelope (which Nova's
+    /// chat view never shows), no Nova user-message record, never human-initiated. With
+    /// <paramref name="steer"/> it folds into the running turn; otherwise it starts one. Advances the
+    /// reaction cursor once RedCompute admitted it, so later contexts do not repeat these lines.
+    /// </summary>
+    internal async Task<SendMessageOutcome> SendReactionNoteAsync(
+        DiscussionRead discussion, ReactionNotes notes, ResolvedDevice device, bool steer, CancellationToken ct)
+    {
+        var current = await store.GetAsync(discussion.EntityId, ct);
+        if (current is null)
+            return new(false, discussion.SessionId, "discussion_not_found", "The discussion no longer exists.");
+        if (DiscussionMutationPolicy.RejectSend(current) || DiscussionApplicationOwner.IsForeign(current)
+            || current.SessionId is null)
+            return new(false, current.SessionId, "not_deliverable", "The discussion has no open Nova session.");
+        if (notes.Lines.Count == 0 || notes.Through is null)
+            return new(false, current.SessionId, "nothing_to_note", "No reaction change to deliver.");
+
+        var agent = current.AgentId != null ? await agents.GetAgentAsync(current.AgentId, ct) : null;
+        if (agent == null)
+            return new(false, current.SessionId, "missing_agent", "The discussion has no linked Agent entity.");
+        var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, current.OwnerId, ct);
+        var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
+            $"/api/apps/nova/discussions/{current.Id}/reactions",
+            [new ComputeContextReference("discussion", current.Id),
+             new ComputeContextReference("session", current.SessionId)], method: "POST", ct: ct);
+
+        var content = NovaContextBuilder.BuildReactionNote(notes.Lines, DateTime.UtcNow, device,
+            current.Id, agent.Name, steer);
+        var messageUid = Guid.NewGuid().ToString("N");
+        var result = await redCompute.SendMessageDetailedAsync(current.SessionId, new
+        {
+            content,
+            delivery = steer ? "steer-current" : null,
+            // The transcript copy is the envelope itself, which the chat view drops.
+            displayContent = content,
+            messageUid,
+            metadata = new { app = "nova", discussionId = current.Id, internalMessage = true, kind = "reaction-note" },
+        }, provenance, ct, idempotencyKey: $"reaction-note:{current.Id}:{notes.Through.Id}");
+        if (!result.Success)
+            return new(false, current.SessionId, result.ErrorCode ?? "redcompute_unavailable",
+                result.ErrorMessage ?? "RedCompute could not deliver the reaction note.");
+
+        await store.PatchAsync(current.EntityId,
+            new JsonObject { [ReactionCursor.DataKey] = notes.Through.ToJson() }, ct: ct);
+        // A turn it starts is work for the Agent, but nobody is talking.
+        if (!steer) activity?.TurnAdmitted(current, userFacing: false);
+        return new(true, current.SessionId, null, null, MessageUid: messageUid);
     }
 
     private static DateTime? ParseTimestamp(DiscussionMessage m)

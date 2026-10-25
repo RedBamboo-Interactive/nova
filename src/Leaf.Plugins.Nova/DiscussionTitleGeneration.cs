@@ -17,7 +17,8 @@ internal static partial class DiscussionTitleGeneration
                 && message.Role is "user" or "assistant"
                 && !(message.Role == "assistant"
                     && string.Equals(message.Phase, "commentary", StringComparison.OrdinalIgnoreCase))
-                && !string.IsNullOrWhiteSpace(message.Content))
+                && !string.IsNullOrWhiteSpace(message.Content)
+                && !NovaNoReply.IsMarker(message.Content))
             .ToList();
         if (visible.Count == 0) return null;
 

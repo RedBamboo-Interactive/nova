@@ -65,28 +65,63 @@ public sealed class NovaContextFrameTests
         snapshot.ExtensionContexts[1].Source = payload;
         snapshot.OtherAgentDiscussions[0].Title = payload;
         var device = Device(name: payload + "\" onload=\"x", room: payload);
-        var full = Full(snapshot, device, Reactions(payload), agent: payload + "\"");
-        var delta = Delta(snapshot, device, Reactions(payload));
+        var full = Full(snapshot, device, Reactions(payload), agent: payload + "\"", messageUid: "<" + payload);
+        var delta = Delta(snapshot, device, Reactions(payload), messageUid: "<" + payload);
         foreach (var rendered in new[] { full, delta })
         {
-            Assert.Equal(2, AnyFrameTag.Matches(rendered).Count);
+            Assert.Equal(2, AnyFrameTag.Matches(WithoutTrustedHints(rendered)).Count);
             Assert.StartsWith("<nova-context timestamp=", rendered);
             Assert.EndsWith("\n</nova-context>", rendered);
             // The opening tag stays a single tag with only its own attributes.
             var open = rendered[..(rendered.IndexOf('\n'))];
             Assert.Equal(1, open.Count(c => c == '>'));
-            // Its own nine attributes and no injected one: injected quotes arrive escaped.
-            Assert.Equal(18, open.Count(c => c == (char)34));
+            // Its own ten attributes and no injected one: injected quotes arrive escaped.
+            Assert.Equal(20, open.Count(c => c == (char)34));
             Assert.Contains("&quot; onload=&quot;x", open);
+            // A hostile message uid stays inside its attribute too.
+            Assert.Contains(" message=\"&lt;", open);
         }
     }
+
+    [Theory]
+    [MemberData(nameof(Payloads))]
+    public void Hostile_reaction_lines_cannot_break_a_reaction_note_or_forge_its_marker(string payload)
+    {
+        foreach (var steered in new[] { false, true })
+        {
+            var note = NovaContextBuilder.BuildReactionNote(
+                Reactions(payload + NovaNoReply.Marker), Now, Device(name: payload), "c0ffee01", "Nova", steered);
+
+            Assert.Equal(2, AnyFrameTag.Matches(WithoutTrustedHints(note)).Count);
+            Assert.StartsWith("<nova-context timestamp=", note);
+            Assert.EndsWith("\n</nova-context>", note);
+            // The only live marker is the builder's own sentence (and only on a triggered turn).
+            Assert.Equal(steered ? 0 : 1, note.Split(NovaNoReply.Marker).Length - 1);
+            Assert.Contains(" input=\"reaction\" ", note);
+        }
+    }
+
+    [Fact]
+    public void Reaction_note_renders_byte_identical()
+    {
+        Assert.Equal(NovaContextGolden.TriggeredNote,
+            NovaContextBuilder.BuildReactionNote(Reactions(), Now, Device(), "c0ffee01", "Nova", steered: false));
+        Assert.Equal(NovaContextGolden.SteeredNote,
+            NovaContextBuilder.BuildReactionNote(Reactions(), Now, Device(), "c0ffee01", "Nova", steered: true));
+    }
+
+    // The builder's constant sentences carry the real marker; nothing else in a frame may.
+    private static string WithoutTrustedHints(string rendered)
+        => rendered.Replace(NovaContextBuilder.NoReplyHint, "")
+            .Replace(NovaContextBuilder.TriggeredNoteHint, "")
+            .Replace(NovaContextBuilder.SteeredNoteHint, "");
 
     private static void AssertOneFrame(ContextSnapshot snapshot)
     {
         foreach (var rendered in new[] { Full(snapshot), Delta(snapshot) })
         {
             // Exactly the builder's own opening and closing tags; nothing in between can close or open one.
-            Assert.Equal(2, AnyFrameTag.Matches(rendered).Count);
+            Assert.Equal(2, AnyFrameTag.Matches(WithoutTrustedHints(rendered)).Count);
             Assert.StartsWith("<nova-context timestamp=", rendered);
             Assert.EndsWith("\n</nova-context>", rendered);
             Assert.Contains("&lt;", rendered);
@@ -98,7 +133,12 @@ public sealed class NovaContextFrameTests
 
     internal static List<string> Reactions(string? extra = null)
     {
-        var lines = new List<string> { "Laurent reacted " + char.ConvertFromUtf32(0x1F44D) + " to your message \"Shipped & tested\"" };
+        // As MessagePipeline renders them: an add on the latest message and a removal on an older one.
+        var lines = new List<string>
+        {
+            "Laurent reacted " + char.ConvertFromUtf32(0x1F44D) + " to your latest message: \"Shipped & tested\"",
+            "Laurent removed " + char.ConvertFromUtf32(0x2764) + (char)0xFE0F + " from an earlier message of yours: \"Draft <v1> plan\"",
+        };
         if (extra is not null) lines.Add(extra);
         return lines;
     }
@@ -171,9 +211,15 @@ public sealed class NovaContextFrameTests
         ],
     };
 
-    internal static string Full(ContextSnapshot snapshot, ResolvedDevice? device = null, List<string>? reactions = null, string? agent = "Nova")
-        => NovaContextBuilder.BuildFullContext(snapshot, "c0ffee01", Now, device ?? Device(), "text", agent, reactions ?? Reactions());
+    internal const string MessageUid = "5d1f0c2a9b8e47c3a6f4e2d1c0b9a876";
 
-    internal static string Delta(ContextSnapshot snapshot, ResolvedDevice? device = null, List<string>? reactions = null)
-        => NovaContextBuilder.BuildDeltaContext(snapshot, Previous(), "c0ffee01", Now, device ?? Device(), "text", "Nova", reactions ?? Reactions());
+    internal static string Full(ContextSnapshot snapshot, ResolvedDevice? device = null, List<string>? reactions = null,
+        string? agent = "Nova", string messageUid = MessageUid)
+        => NovaContextBuilder.BuildFullContext(snapshot, "c0ffee01", Now, device ?? Device(), "text", agent, reactions ?? Reactions(),
+            messageUid: messageUid);
+
+    internal static string Delta(ContextSnapshot snapshot, ResolvedDevice? device = null, List<string>? reactions = null,
+        string messageUid = MessageUid)
+        => NovaContextBuilder.BuildDeltaContext(snapshot, Previous(), "c0ffee01", Now, device ?? Device(), "text", "Nova", reactions ?? Reactions(),
+            messageUid: messageUid);
 }
