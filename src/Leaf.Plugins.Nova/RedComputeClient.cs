@@ -178,6 +178,22 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         return response.IsSuccessStatusCode;
     }
 
+    /// <summary>
+    /// Binds a delegated session to the session that waits on it. While the delegate works,
+    /// RedCompute's idle parking keeps the supervisor resident.
+    /// </summary>
+    public async Task<bool> SetSupervisorAsync(string sessionId, string? supervisorSessionId,
+        ComputeProvenance provenance, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Put,
+            $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}/supervisor")
+        {
+            Content = JsonContent.Create(new { supervisorSessionId }, options: JsonOptions),
+        };
+        using var response = await gateway.SendAsync(request, provenance, ct);
+        return response.IsSuccessStatusCode;
+    }
+
     public sealed record ExecuteResult(
         bool Success, string? Text, string? Error, string? SessionId, Guid? JobId);
 

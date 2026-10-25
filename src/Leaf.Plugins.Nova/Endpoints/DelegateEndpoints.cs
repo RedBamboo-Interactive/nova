@@ -282,6 +282,26 @@ public static class DelegateEndpoints
             }
         }
 
+        // The requesting discussion's session now waits on this one. Binding it before the prompt
+        // keeps idle parking from stopping the supervisor while the delegate works. A refusal
+        // only costs a cold resume when the completion arrives, so it never blocks delegation.
+        var supervisorBound = false;
+        if (discussion?.SessionId is { Length: > 0 } supervisorSessionId
+            && !string.Equals(supervisorSessionId, sessionId, StringComparison.Ordinal))
+        {
+            try
+            {
+                var supervisorProvenance = await NovaComputeProvenance.CreateAsync(
+                    entities, resolvedAgent, beneficiary,
+                    "/api/apps/nova/delegate",
+                    [.. baseContext, new ComputeContextReference("session", sessionId)],
+                    method: "POST", ct: ctx.RequestAborted);
+                supervisorBound = await redCompute.SetSupervisorAsync(
+                    sessionId, supervisorSessionId, supervisorProvenance, ctx.RequestAborted);
+            }
+            catch { }
+        }
+
         // 2. Send prompt and verify delivery
         bool promptSent = false;
         bool admissionUncertain = false;
@@ -445,6 +465,7 @@ public static class DelegateEndpoints
             sessionId,
             promptSent,
             callbackRegistered,
+            supervisorBound,
             continued = isContinuation,
             agent = resolvedAgent?.Name,
             repository = resolvedRepository?.Id,

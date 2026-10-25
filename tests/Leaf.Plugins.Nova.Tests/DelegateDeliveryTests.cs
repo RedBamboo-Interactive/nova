@@ -292,6 +292,49 @@ public sealed class DelegateDeliveryTests
         Assert.Equal(JsonValueKind.Null, delivery.GetProperty("interruptResult").ValueKind);
     }
 
+    [Fact]
+    public async Task A_delegation_binds_the_discussion_session_as_supervisor_before_the_prompt()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        var compute = new Compute();
+
+        var (status, body) = await Delegate(f, compute, new() { SessionId = "worker", Prompt = "build it", DiscussionId = "target" });
+
+        Assert.Equal(200, status);
+        Assert.True(body.GetProperty("supervisorBound").GetBoolean());
+        var binding = Assert.Single(compute.Requests, r => r.Path.EndsWith("/supervisor"));
+        Assert.Equal("PUT", binding.Method);
+        Assert.Equal("/ai-session/sessions/worker/supervisor", binding.Path);
+        Assert.Equal("target-session", binding.Body.GetProperty("supervisorSessionId").GetString());
+        Assert.True(compute.Requests.IndexOf(binding) < compute.Requests.IndexOf(compute.Messages[0]));
+    }
+
+    [Fact]
+    public async Task A_delegation_without_a_discussion_binds_no_supervisor()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        var compute = new Compute();
+
+        var (status, body) = await Delegate(f, compute, new() { SessionId = "worker", Prompt = "build it" });
+
+        Assert.Equal(200, status);
+        Assert.False(body.GetProperty("supervisorBound").GetBoolean());
+        Assert.DoesNotContain(compute.Requests, r => r.Path.EndsWith("/supervisor"));
+    }
+
+    [Fact]
+    public async Task A_refused_supervisor_binding_never_blocks_the_delegation()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        var compute = new Compute { SupervisorAccepted = false };
+
+        var (status, body) = await Delegate(f, compute, new() { SessionId = "worker", Prompt = "build it", DiscussionId = "target" });
+
+        Assert.Equal(200, status);
+        Assert.True(body.GetProperty("promptSent").GetBoolean());
+        Assert.False(body.GetProperty("supervisorBound").GetBoolean());
+    }
+
     private static string Admission(string delivery, string state, string? head = null, string? errorCode = null, bool existing = false)
         => JsonSerializer.Serialize(new
         {
@@ -332,6 +375,7 @@ public sealed class DelegateDeliveryTests
         public List<Sent> Messages => Requests.Where(r => r.Path.EndsWith("/message")).ToList();
         public string Admission { get; set; } = """{"accepted":true}""";
         public bool LoseFirstAcknowledgement { get; set; }
+        public bool SupervisorAccepted { get; set; } = true;
         public int FreshAdmissions { get; private set; }
         private readonly HashSet<string> admitted = [];
 
@@ -349,6 +393,11 @@ public sealed class DelegateDeliveryTests
                 return Json("""{"session":{"id":"worker","status":"Active"}}""");
             if (path.EndsWith("/callback"))
                 return Json("""{"registered":true}""");
+            if (path.EndsWith("/supervisor"))
+            {
+                Assert.NotNull(provenance);
+                return SupervisorAccepted ? Json(raw) : new(HttpStatusCode.NotFound);
+            }
             if (path.EndsWith("/message"))
             {
                 Assert.NotNull(provenance);
