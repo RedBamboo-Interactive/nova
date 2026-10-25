@@ -355,8 +355,9 @@ public sealed class HeartbeatLifecycleTests
         await fixture.BindStoppedSessionAsync(
             heartbeat, "heartbeat-session", "user_stopped", gateway);
         var automation = Assert.Single(fixture.Automations.Entities);
+        // Pinned to midday: the real clock between 02:00 and 03:00 takes the end-of-day rotation branch instead.
         var handler = new HeartbeatTickHandler(
-            fixture.Heartbeat, fixture.DiscussionStore, fixture.Entities, null!);
+            fixture.Heartbeat, fixture.DiscussionStore, fixture.Entities, null!, new MiddayClock());
 
         var result = await handler.ExecuteAsync(new AutomationActionContext
         {
@@ -711,4 +712,10 @@ public sealed class HeartbeatLifecycleTests
 
     private static LeafEntity Entity(string type, string slug, string name, JsonObject data) => new(
         Guid.NewGuid(), type, slug, name, data, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "test");
+}
+
+file sealed class MiddayClock : TimeProvider
+{
+    public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
+    public override DateTimeOffset GetUtcNow() => new(2026, 10, 25, 12, 0, 0, TimeSpan.Zero);
 }

@@ -962,7 +962,8 @@ public sealed class HeartbeatTickHandler(
     HeartbeatService heartbeat,
     DiscussionStore store,
     IEntityStore entities,
-    EventInjector injector) : IAutomationActionHandler
+    EventInjector injector,
+    TimeProvider? clock = null) : IAutomationActionHandler
 {
     public const string Type = "heartbeat-tick";
 
@@ -999,7 +1000,7 @@ public sealed class HeartbeatTickHandler(
         var raw = await entities.GetAsync(discussion.EntityId, ct)
             ?? throw new InvalidOperationException("Heartbeat discussion entity vanished");
 
-        var localNow = DateTimeOffset.Now;
+        var localNow = (clock ?? TimeProvider.System).GetLocalNow();
 
         // The 02:55 firing is the end-of-day fallback: rotate if no
         // goodnight/LIVE-rotation signal did. The fresh discussion won't have
