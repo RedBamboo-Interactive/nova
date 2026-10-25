@@ -28,7 +28,7 @@ internal static class NovaContextGolden
         Recall any discussion: curl -s http://127.0.0.1:18804/api/apps/nova/discussions/{id}/export
         Search all discussions: curl -s "http://127.0.0.1:18804/api/apps/nova/discussions/search?q={query}"
         Get full context snapshot: curl -s http://127.0.0.1:18804/api/apps/nova/discussions/{id}/context
-        React to a message (messageKey: the message="..." uid on a context tag): curl -s -X POST http://127.0.0.1:18804/api/apps/nova/discussions/c0ffee01/reactions -H "Authorization: Bearer $REDLEAF_EXECUTION_TOKEN" -H "Content-Type: application/json" -d '{"emoji":"\u2764\ufe0f","messageKey":"<message uid>"}'
+        React to a message (messageKey: the message="..." uid on a context tag): printf '%s' '{"emoji":"\u2764\ufe0f","messageKey":"<message uid>"}' | curl -s -X POST http://127.0.0.1:18804/api/apps/nova/discussions/c0ffee01/reactions -H "Authorization: Bearer $REDLEAF_EXECUTION_TOKEN" -H "Content-Type: application/json" --data-binary @-
         Post to LIVE timeline: curl -s -X POST http://127.0.0.1:18804/api/apps/nova/discussions/live0001/event -H "Content-Type: application/json" -d '{"content":"...","source":"..."}'
 
         Recent LIVE events:

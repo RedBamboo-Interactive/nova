@@ -200,7 +200,9 @@ public static class NovaContextBuilder
         sb.Append($"\nSearch all discussions: curl -s \"{ApiBase}/discussions/search?q={{query}}\"");
         sb.Append($"\nGet full context snapshot: curl -s {ApiBase}/discussions/{{id}}/context");
         // The emoji is a JSON escape: a cp1252 shell turns a literal emoji into "??".
-        sb.Append($"\nReact to a message (messageKey: the message=\"...\" uid on a context tag): curl -s -X POST {ApiBase}/discussions/{currentId}/reactions -H \"Authorization: Bearer $REDLEAF_EXECUTION_TOKEN\" -H \"Content-Type: application/json\" -d '{{\"emoji\":\"\\u2764\\ufe0f\",\"messageKey\":\"<message uid>\"}}'");
+        // The body goes through stdin: a Windows command line re-encodes argv through the ANSI code
+        // page, so an emoji passed with -d reaches the server as "??".
+        sb.Append($"\nReact to a message (messageKey: the message=\"...\" uid on a context tag): printf '%s' '{{\"emoji\":\"\\u2764\\ufe0f\",\"messageKey\":\"<message uid>\"}}' | curl -s -X POST {ApiBase}/discussions/{currentId}/reactions -H \"Authorization: Bearer $REDLEAF_EXECUTION_TOKEN\" -H \"Content-Type: application/json\" --data-binary @-");
 
         var liveDisc = active.FirstOrDefault(d => d.Type == "live");
         if (liveDisc != null)
