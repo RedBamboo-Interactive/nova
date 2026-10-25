@@ -142,6 +142,22 @@ public sealed class HeartbeatLifecycleTests
     }
 
     [Fact]
+    public async Task Reconcile_seeds_the_daily_live_rotation_once_beside_the_heartbeat()
+    {
+        var fixture = new Fixture(live: true, seedLiveRotation: true);
+
+        await fixture.Heartbeat.ReconcileAsync();
+        await fixture.Heartbeat.ReconcileAsync();
+
+        var rotation = Assert.Single(fixture.Automations.Entities, e => e.Slug == LiveRotationSeeder.Slug);
+        Assert.True(rotation.Data["enabled"]!.GetValue<bool>());
+        Assert.Single(fixture.Automations.Entities, e => e.Slug == "system-heartbeat-nova");
+        Assert.Equal(rotation.Id.ToString(),
+            fixture.Agent.Data[LiveRotationSeeder.ReferenceField]!.GetValue<string>());
+        Assert.Single(fixture.OpenDiscussions("live"));
+    }
+
+    [Fact]
     public async Task Reconcile_does_not_duplicate_presence_when_newer_archives_outrank_it()
     {
         var fixture = new Fixture(live: true);
@@ -393,7 +409,8 @@ public sealed class HeartbeatLifecycleTests
 
     private sealed class Fixture
     {
-        public Fixture(bool live, JsonObject? heartbeat = null, IComputeGateway? computeGateway = null)
+        public Fixture(bool live, JsonObject? heartbeat = null, IComputeGateway? computeGateway = null,
+            bool seedLiveRotation = false)
         {
             var deep = Entity("quality-tier", "deep", "Deep", new JsonObject());
             var standard = Entity("quality-tier", "standard", "Standard", new JsonObject());
@@ -401,6 +418,7 @@ public sealed class HeartbeatLifecycleTests
             var plugin = Entity("plugin", "nova", "Nova", new JsonObject());
             if (heartbeat != null) agent.Data["heartbeat"] = heartbeat;
             Entities = new InMemoryEntityStore(agent, deep, standard, plugin);
+            if (seedLiveRotation) Entities.Add(Entity("user", "owner", "Owner", new JsonObject()));
             Discussions = new InMemoryDiscussions(Entities);
             DiscussionStore = new DiscussionStore(Entities, Discussions);
             Automations = new InMemoryAutomations(Entities);
@@ -408,7 +426,10 @@ public sealed class HeartbeatLifecycleTests
             Lifecycle = new DiscussionLifecycle(DiscussionStore, compute);
             var directory = new AgentDirectory(Entities, new InMemoryPluginEvents());
             Heartbeat = new HeartbeatService(Entities, Automations, Discussions, DiscussionStore,
-                Lifecycle, null!, compute, null!, directory, null!, NullLogger<HeartbeatService>.Instance);
+                Lifecycle, null!, compute, null!, directory, null!, NullLogger<HeartbeatService>.Instance,
+                seedLiveRotation
+                    ? new LiveRotationSeeder(Entities, Automations, NullLogger<LiveRotationSeeder>.Instance)
+                    : null);
         }
 
         public LeafEntity Agent => Entities.All.Single(entity => entity.TypeSlug == "agent");
@@ -503,7 +524,7 @@ public sealed class HeartbeatLifecycleTests
             store.Add(workflow);
             var entity = Entity("automation", definition.Slug, definition.Slug, new JsonObject
             {
-                ["agent"] = definition.NodeContext["agent"]!.GetValue<string>(),
+                ["agent"] = definition.NodeContext["agent"]?.GetValue<string>(),
                 ["enabled"] = definition.Enabled,
                 ["trigger"] = definition.Trigger.DeepClone(),
                 ["workflow"] = new JsonObject { ["entity_id"] = workflow.Id.ToString() },

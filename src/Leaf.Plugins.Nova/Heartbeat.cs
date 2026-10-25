@@ -86,7 +86,8 @@ public sealed class HeartbeatService(
     EventInjector injector,
     AgentDirectory agents,
     ExtensionContributions extensions,
-    ILogger<HeartbeatService> logger)
+    ILogger<HeartbeatService> logger,
+    LiveRotationSeeder? liveRotation = null)
 {
     public const string DiscussionType = "heartbeat";
     public const string AutomationField = "heartbeat_automation";
@@ -160,6 +161,17 @@ public sealed class HeartbeatService(
                     && reason == "agent-live-disabled")
                 {
                     await ReactivateAutomationAsync(automation, ct);
+                }
+
+                // The daily LIVE rotation is seeded once, after the agent writes above
+                // (the marker lives on the agent) and never blocks presence provisioning.
+                if (liveRotation is not null && agent.Slug == "nova")
+                {
+                    try { await liveRotation.EnsureAsync(agent, ct); }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        logger.LogWarning(ex, "Seeding the daily LIVE rotation failed");
+                    }
                 }
 
                 // Reconciliation is serialized. Historic duplicates are collapsed

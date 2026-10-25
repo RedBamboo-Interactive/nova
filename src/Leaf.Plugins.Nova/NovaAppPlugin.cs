@@ -85,6 +85,10 @@ public sealed class NovaAppPlugin : ILeafPlugin
         services.AddSingleton<ConversationUnread>();
         services.AddSingleton(sp => new DelegationActivity(sp.GetRequiredService<IDiscussions>(),
             sp.GetRequiredService<RedComputeClient>(), sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
+        services.AddSingleton(sp => new LiveRotationSeeder(
+            sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+            sp.GetRequiredKeyedService<IWorkflowAutomations>(PluginId),
+            sp.GetRequiredService<ILogger<LiveRotationSeeder>>()));
         services.AddSingleton(sp => new DreamCycleProvisioner(
             sp.GetRequiredKeyedService<IEntityStore>(PluginId),
             sp.GetRequiredKeyedService<IWorkflowAutomations>(PluginId),
@@ -167,7 +171,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<EventInjector>(),
                 sp.GetRequiredService<AgentDirectory>(),
                 sp.GetRequiredService<ExtensionContributions>(),
-                sp.GetRequiredService<ILogger<HeartbeatService>>()));
+                sp.GetRequiredService<ILogger<HeartbeatService>>(),
+                sp.GetRequiredService<LiveRotationSeeder>()));
         // Automation action "heartbeat-tick" — one tick of the per-agent heartbeat.
         services.AddSingleton(sp =>
             new HeartbeatTickHandler(
