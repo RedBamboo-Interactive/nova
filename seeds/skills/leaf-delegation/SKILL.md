@@ -100,7 +100,14 @@ A new repository session can work on a branch instead of the repository's checko
 }
 ```
 
-Nova asks Code for the branch's worktree: the existing one is reused, a missing one is created at
+The branch is the user-facing and Agent-facing choice. A worktree is Code's storage mechanism, not
+a second choice: the branch in the repository checkout uses that checkout, a branch already held by
+an isolated workspace reuses it, and any other existing or new branch gets an isolated workspace.
+Code's Start Session dialog follows this model: choose or create a branch, then Code resolves the
+folder automatically. Worktrees remain visible in the Worktrees management screen because cleanup,
+missing folders and ownership are folder concerns.
+
+Nova asks Code to resolve the branch: an existing worktree is reused, a missing one is created at
 `<checkout>.worktrees/<branch with "/" replaced by "-">` (from `base`, default the repository's
 default branch), and a branch already checked out in the repository's own checkout uses the
 checkout. The session starts in that folder. Never create worktrees yourself with `git worktree add`
