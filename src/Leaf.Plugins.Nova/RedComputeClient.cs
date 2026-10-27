@@ -816,6 +816,43 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         return new SessionTranscriptPageResult((int)response.StatusCode, page, content, contentType);
     }
 
+    /// <summary>
+    /// Reads the session's derived artifact list through the kernel-authenticated gateway, with the
+    /// caller's derived identity like <see cref="GetTranscriptPageAsync"/>. Filters are forwarded
+    /// verbatim so RedCompute stays the only place that validates them; transport failures throw.
+    /// </summary>
+    public async Task<ProxyResult> GetSessionArtifactsAsync(
+        string sessionId,
+        string? kinds = null,
+        string? origins = null,
+        string? sinceSequence = null,
+        string? limit = null,
+        string? cursor = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            throw new ArgumentException("Session id is required", nameof(sessionId));
+
+        var query = new List<string>();
+        void Add(string name, string? value)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                query.Add($"{name}={Uri.EscapeDataString(value)}");
+        }
+        Add("kinds", kinds);
+        Add("origins", origins);
+        Add("sinceSequence", sinceSequence);
+        Add("limit", limit);
+        Add("cursor", cursor);
+
+        var url = $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}/artifacts"
+            + (query.Count > 0 ? $"?{string.Join("&", query)}" : "");
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        using var response = await gateway.SendAsync(request, provenance: null, ct);
+        return new((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct),
+            response.Content.Headers.ContentType?.ToString() ?? "application/json");
+    }
+
     internal static SessionMessage ParseSessionMessage(JsonElement el) => new()
     {
         Id = el.TryGetProperty("id", out var id) && id.TryGetInt64(out var parsedId) ? parsedId : 0,

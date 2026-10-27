@@ -15,7 +15,7 @@ import { formatOwningApp } from "../../lib/discussion-owner"
 import { createDiscussionTitleResolver } from "../../lib/discussion-display-title"
 
 /** Row actions that act through the open discussion's header, so they open it first. */
-export type DiscussionRowAction = "voice" | "info" | "rename" | "share"
+export type DiscussionRowAction = "voice" | "info" | "artifacts" | "rename" | "share"
 
 const statusColor: Record<string, string> = {
   thinking: "var(--color-accent-gold)",
@@ -172,6 +172,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                 onVoice={() => onRowAction(discussion.id, "voice")}
                 voiceDisabled={discussion.status === "stopped"}
                 onInfo={() => onRowAction(discussion.id, "info")}
+                onArtifacts={() => onRowAction(discussion.id, "artifacts")}
                 onShare={!discussion.confidential ? () => onRowAction(discussion.id, "share") : undefined}
                 onFloat={onFloat ? () => onFloat(discussion.id) : undefined}
                 onReset={() => onRotate(discussion.id)}
@@ -242,6 +243,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                   <DiscussionActionItems
                     showShortcuts={discussion.id === activeDiscussionId}
                     onInfo={() => onRowAction(discussion.id, "info")}
+                    onArtifacts={() => onRowAction(discussion.id, "artifacts")}
                     onFloat={onFloat ? () => onFloat(discussion.id) : undefined}
                   />
                 ) : (
@@ -250,6 +252,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                   onVoice={() => onRowAction(discussion.id, "voice")}
                   voiceDisabled={discussion.status === "stopped"}
                   onInfo={() => onRowAction(discussion.id, "info")}
+                  onArtifacts={() => onRowAction(discussion.id, "artifacts")}
                   onRename={() => onRowAction(discussion.id, "rename")}
                   onUpdateTitle={() => onUpdateTitle(discussion.id)}
                   onShare={!discussion.confidential ? () => onRowAction(discussion.id, "share") : undefined}

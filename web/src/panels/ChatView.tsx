@@ -7,6 +7,7 @@ import { DiscussionSidebar, type DiscussionRowAction } from "../components/discu
 import { isMobileClient } from "../components/floating-nova-support"
 import { EditableTitle } from "../components/discussion/editable-title"
 import { DISCUSSION_SHORTCUTS, DiscussionActionItems } from "../components/discussion/discussion-actions-menu"
+import { ArtifactsSurface } from "../components/discussion/artifacts-surface"
 import { AgentPicker } from "../components/agent-picker"
 import { TransitioningAgentAvatar } from "../components/transitioning-agent-avatar"
 import { NovaStatusLine } from "../components/nova-status-line"
@@ -24,6 +25,7 @@ import { useShare } from "../hooks/use-share"
 import { setSettings } from "../lib/settings-store"
 import { api, novaExecution } from "../lib/api"
 import { findLiveHeartbeatPair } from "../lib/live-heartbeat"
+import { GoToMessageController } from "../lib/go-to-message"
 import { getAdjacentSidebarDiscussion, getSidebarDiscussionOrder } from "../lib/discussion-navigation"
 import { createDiscussionTitleResolver } from "../lib/discussion-display-title"
 import {
@@ -592,6 +594,43 @@ export function ChatView({
     return loadEarlierMessages(activeDiscussionId)
   }, [activeDiscussionId, loadEarlierMessages])
 
+  // Artifacts: one panel per view that follows the open discussion. "Go to message" asks the chat
+  // to centre a message and, while it is not loaded, reads earlier history through the same pager
+  // that scrolling up uses.
+  const [artifactsOpen, setArtifactsOpen] = useState(false)
+  const [focusRequest, setFocusRequest] = useState<{ uid: string; nonce: number } | null>(null)
+  const [seekingEarlier, setSeekingEarlier] = useState(false)
+  const goToView = {
+    hasEarlier: () => hasEarlierMessages && !earlierHistoryLoadFailure,
+    isLoadingEarlier: () => isLoadingEarlier,
+    loadEarlier: () => handleLoadEarlier(),
+    focus: (request: { uid: string; nonce: number }) => setFocusRequest(request),
+    missing: () => toast({ variant: "error", title: "That message is no longer in this conversation" }),
+    seeking: (active: boolean) => setSeekingEarlier(active),
+  }
+  const goToViewRef = useRef(goToView)
+  goToViewRef.current = goToView
+  const goToMessage = useMemo(() => new GoToMessageController({
+    hasEarlier: () => goToViewRef.current.hasEarlier(),
+    isLoadingEarlier: () => goToViewRef.current.isLoadingEarlier(),
+    loadEarlier: () => goToViewRef.current.loadEarlier(),
+    focus: (request) => goToViewRef.current.focus(request),
+    missing: () => goToViewRef.current.missing(),
+    seeking: (active) => goToViewRef.current.seeking(active),
+  }), [])
+  useEffect(() => {
+    goToMessage.cancel()
+    setFocusRequest(null)
+  }, [activeDiscussionId, goToMessage])
+  useEffect(() => () => goToMessage.cancel(), [goToMessage])
+  const handleFocusMessageResult = useCallback((result: { uid: string; nonce: number; found: boolean }) => {
+    goToMessage.result(result)
+  }, [goToMessage])
+  const closeArtifacts = useCallback(() => setArtifactsOpen(false), [])
+  const openArtifacts = useCallback(() => setArtifactsOpen(true), [])
+  const toggleArtifacts = useCallback(() => setArtifactsOpen(open => !open), [])
+  const jumpToMessage = useCallback((uid: string) => goToMessage.go(uid), [goToMessage])
+
   const handleRetryHistory = useCallback(() => {
     if (!activeDiscussionId) return
     return retryHistoryLoad(activeDiscussionId)
@@ -780,10 +819,11 @@ export function ChatView({
     setPendingRowAction(null)
     setMobileTab(1)
     if (pendingRowAction.action === "info") openSessionInfo()
+    else if (pendingRowAction.action === "artifacts") openArtifacts()
     else if (pendingRowAction.action === "rename") setTitleEditing(true)
     else if (pendingRowAction.action === "voice") openVoice()
     else handleShare()
-  }, [activeDiscussion?.id, handleShare, openSessionInfo, openVoice, pendingRowAction])
+  }, [activeDiscussion?.id, handleShare, openArtifacts, openSessionInfo, openVoice, pendingRowAction])
 
   // Desktop shortcuts for the open discussion; the menus show the same keys.
   const canManageDiscussion = activeDiscussion?.type === "chat" && !discussionClosed && !owningApp
@@ -804,6 +844,16 @@ export function ChatView({
     shortcut: DISCUSSION_SHORTCUTS.info,
     enabled: docked,
     action: openSessionInfo,
+  })
+
+  useCommand("nova-discussion-artifacts", {
+    label: "Toggle Artifacts",
+    description: "Show or hide the media, documents, links and entities of the open discussion",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.artifacts,
+    keywords: ["images", "media", "files", "links", "gallery"],
+    enabled: docked,
+    action: toggleArtifacts,
   })
 
   useCommand("nova-discussion-rename", {
@@ -976,6 +1026,7 @@ export function ChatView({
                 onVoice={owningApp ? undefined : openVoice}
                 voiceDisabled={!voiceAvailable}
                 onInfo={openSessionInfo}
+                onArtifacts={openArtifacts}
                 onRename={canManageDiscussion ? () => setTitleEditing(true) : undefined}
                 onUpdateTitle={canManageDiscussion ? () => void handleUpdateTitle(activeDiscussion.id) : undefined}
                 updateTitlePending={titleUpdatePending}
@@ -1404,6 +1455,8 @@ export function ChatView({
         hasEarlierMessages={hasEarlierMessages && !earlierHistoryLoadFailure}
         onLoadEarlier={handleLoadEarlier}
         isLoadingEarlier={isLoadingEarlier}
+        focusMessageRequest={focusRequest}
+        onFocusMessageResult={handleFocusMessageResult}
         placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}
         header={chatHeader}
         speechBackend={speechBackend}
@@ -1576,6 +1629,25 @@ export function ChatView({
       }
       detail={chatArea}
     />
+    <ArtifactsSurface
+      discussionId={activeDiscussionId}
+      open={artifactsOpen && !!activeDiscussion}
+      onClose={closeArtifacts}
+      isStreaming={isStreaming}
+      resolveImageSrc={resolveImageSrc}
+      resolveFileLink={resolveFileLink}
+      onJumpToMessage={jumpToMessage}
+    />
+    {seekingEarlier && (
+      <div
+        role="status"
+        data-slot="go-to-message-status"
+        className="pointer-events-none absolute left-1/2 top-16 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-overlay-10 bg-popover px-3 py-1.5 text-xs text-text-muted shadow-md"
+      >
+        <i aria-hidden="true" className="ph-bold ph-spinner animate-spin" />
+        Loading earlier messages
+      </div>
+    )}
     <ShareDialog
       open={shareDialogOpen}
       onOpenChange={setShareDialogOpen}

@@ -1127,6 +1127,11 @@ public static class DiscussionEndpoints
             .WithSummary("Authorized transcript media output")
             .WithDescription("Streams one payload-backed RedCompute transcript output after enforcing access to its owning Nova discussion. Supports HTTP byte ranges.");
 
+        group.MapGet("/discussions/{id}/artifacts", GetArtifactsAsync)
+            .WithName("NovaDiscussionArtifacts")
+            .WithSummary("Artifacts of a discussion")
+            .WithDescription("Images, video, audio, documents, links and entity references the discussion shows, derived by RedCompute from the canonical transcript. Authorized like history-page; assistant-image targets are rewritten to this discussion's authorized output proxy. Query: kinds, origins, sinceSequence, limit, cursor.");
+
         group.MapGet("/discussions/{id}/images", async (string id, HttpContext ctx, DiscussionStore store, IDiscussions discussions) =>
         {
             var discussion = await store.GetAsync(id);
@@ -2194,6 +2199,93 @@ public static class DiscussionEndpoints
 
     private static IResult HistoryError(int status, string error, string message)
         => Results.Json(new { error, message }, statusCode: status);
+
+    /// <summary>The page a discussion without an AI session yet reports: nothing to list, not an error.</summary>
+    internal static readonly string EmptyArtifactsPageJson =
+        """{"sessionId":null,"epoch":null,"throughSequence":0,"extractorVersion":null,"items":[],"page":{"nextCursor":null}}""";
+
+    internal static async Task<IResult> GetArtifactsAsync(
+        string id,
+        HttpContext ctx,
+        DiscussionStore store,
+        RedComputeClient redCompute)
+    {
+        // Same resolution and access checks as history-page, confidential included.
+        var discussion = await store.GetAsync(id);
+        if (discussion is null) return NotFound();
+        if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+        if (string.IsNullOrWhiteSpace(discussion.SessionId))
+            return Results.Content(EmptyArtifactsPageJson, "application/json");
+
+        var query = ctx.Request.Query;
+        RedComputeClient.ProxyResult result;
+        try
+        {
+            result = await redCompute.GetSessionArtifactsAsync(
+                discussion.SessionId,
+                query["kinds"].FirstOrDefault(),
+                query["origins"].FirstOrDefault(),
+                query["sinceSequence"].FirstOrDefault(),
+                query["limit"].FirstOrDefault(),
+                query["cursor"].FirstOrDefault(),
+                ctx.RequestAborted);
+        }
+        catch (Exception ex) when (!ctx.RequestAborted.IsCancellationRequested)
+        {
+            return HistoryError(503, "redcompute_unavailable", ex.Message);
+        }
+
+        if (result.StatusCode == 200)
+        {
+            var rewritten = RewriteArtifactTargets(result.Content, discussion.Id, discussion.SessionId);
+            return rewritten is null
+                ? HistoryError(502, "invalid_artifacts_page", "RedCompute returned an invalid artifacts page")
+                : Results.Content(rewritten, "application/json");
+        }
+
+        var upstreamError = ReadErrorCode(result.Content);
+        // A 404 that names the session is a real refusal. Any other 404 is a RedCompute that does
+        // not serve the route yet; an empty panel would pass that off as "nothing was shared".
+        if (result.StatusCode == 404 && upstreamError != "not_found")
+            return HistoryError(503, "artifacts_unavailable", "RedCompute does not provide the artifacts endpoint yet");
+
+        if (result.StatusCode is 400 or 403 or 404 or 409 or 413 or 503)
+            return Results.Content(result.Content, result.ContentType, statusCode: result.StatusCode);
+
+        return HistoryError(502, "redcompute_error", $"RedCompute answered the artifacts read with HTTP {result.StatusCode}");
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex SessionOutputTarget = new(
+        @"^/ai-session/sessions/(?<session>[^/?#]+)/messages/(?<record>\d+)/output(?<rest>[?#].*)?$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// RedCompute addresses an assistant image by its own session route, which the browser cannot
+    /// call. Nova serves the same bytes behind the discussion's access check, so those targets move
+    /// to that route; every other field and target passes through untouched. Null when the body is
+    /// not an artifacts page.
+    /// </summary>
+    internal static string? RewriteArtifactTargets(string content, string discussionId, string sessionId)
+    {
+        JsonNode? root;
+        try { root = JsonNode.Parse(content); }
+        catch (JsonException) { return null; }
+        if (root is not JsonObject page || page["items"] is not JsonArray items) return null;
+
+        foreach (var item in items)
+        {
+            if (item is not JsonObject artifact
+                || artifact["target"] is not JsonValue targetValue
+                || !targetValue.TryGetValue<string>(out var target))
+                continue;
+            var match = SessionOutputTarget.Match(target);
+            if (!match.Success || Uri.UnescapeDataString(match.Groups["session"].Value) != sessionId)
+                continue;
+            artifact["target"] =
+                $"/api/apps/nova/discussions/{Uri.EscapeDataString(discussionId)}/messages/{match.Groups["record"].Value}/output{match.Groups["rest"].Value}";
+        }
+        return root.ToJsonString();
+    }
 
     private static string? ReadErrorCode(string content)
     {

@@ -6,6 +6,7 @@ import { FLOATING_NOVA_SHORTCUT } from "../../lib/floating-navigation"
 export const DISCUSSION_SHORTCUTS = {
   voice: "Alt+V",
   info: "Alt+I",
+  artifacts: "Alt+A",
   rename: "Alt+R",
   updateTitle: "Alt+T",
   share: "Alt+S",
@@ -18,6 +19,8 @@ export interface DiscussionActionHandlers {
   onVoice?: () => void
   voiceDisabled?: boolean
   onInfo: () => void
+  /** Opens the Artifacts panel for the discussion. */
+  onArtifacts?: () => void
   onRename?: () => void
   onUpdateTitle?: () => void
   updateTitlePending?: boolean
@@ -32,11 +35,12 @@ export interface DiscussionActionHandlers {
 }
 
 /** The conversation actions shared by the chat header menu and each sidebar row menu.
- *  Info leads and Close sits alone at the end so a one-handed tap cannot mistake them. */
+ *  Info leads, Artifacts follows it, and Close sits alone at the end so a one-handed tap cannot mistake them. */
 export function DiscussionActionItems({
   onVoice,
   voiceDisabled = false,
   onInfo,
+  onArtifacts,
   onRename,
   onUpdateTitle,
   updateTitlePending = false,
@@ -63,6 +67,13 @@ export function DiscussionActionItems({
         Info
         {shortcut(DISCUSSION_SHORTCUTS.info)}
       </DropdownMenuItem>
+      {onArtifacts && (
+        <DropdownMenuItem onClick={onArtifacts}>
+          <i aria-hidden="true" className="ph-bold ph-squares-four size-4" />
+          Artifacts
+          {shortcut(DISCUSSION_SHORTCUTS.artifacts)}
+        </DropdownMenuItem>
+      )}
       {onRename && (
         <DropdownMenuItem onClick={onRename}>
           <i aria-hidden="true" className="ph-bold ph-pen size-4" />
