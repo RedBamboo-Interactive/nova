@@ -1,21 +1,16 @@
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { useWsSubscribe } from "@redbamboo/utility"
+import { useToast } from "@redbamboo/ui"
 import { api } from "../lib/api"
+import {
+  overlayReactions, pendingKey, settlePending,
+  type PendingReactions, type ReactionMap,
+} from "../lib/reaction-overlay"
 
-export interface ReactionActor {
-  id: string
-  name: string
-  type: "user" | "agent"
-}
+// A confirmation that never arrives (a dropped socket) must not pin a click forever.
+const CONFIRMATION_TIMEOUT_MS = 10_000
 
-export interface ReactionGroup {
-  emoji: string
-  count: number
-  actors: ReactionActor[]
-  userReacted: boolean
-}
-
-export type ReactionMap = Record<string, ReactionGroup[]>
+export type { ReactionActor, ReactionGroup, ReactionMap } from "../lib/reaction-overlay"
 
 interface ReactionEvent {
   type: "discussion.reaction"
@@ -32,16 +27,28 @@ interface ReactionEvent {
 
 export function useReactions(discussionId: string | null) {
   const [reactions, setReactions] = useState<ReactionMap>({})
+  const [pending, setPending] = useState<PendingReactions>({})
+  const pendingRef = useRef(pending)
+  pendingRef.current = pending
   const loadedRef = useRef<string | null>(null)
+  const { toast } = useToast()
+
+  const load = useCallback((id: string) => {
+    api.get<{ reactions: ReactionMap }>(`/api/apps/nova/discussions/${id}/reactions`)
+      .then((data) => { if (loadedRef.current === id) setReactions(data.reactions ?? {}) })
+      .catch(() => { if (loadedRef.current === id) setReactions({}) })
+  }, [])
 
   useEffect(() => {
-    if (!discussionId) { setReactions({}); loadedRef.current = null; return }
+    if (!discussionId) { setReactions({}); setPending({}); loadedRef.current = null; return }
     if (loadedRef.current === discussionId) return
     loadedRef.current = discussionId
-    api.get<{ reactions: ReactionMap }>(`/api/apps/nova/discussions/${discussionId}/reactions`)
-      .then((data) => setReactions(data.reactions ?? {}))
-      .catch(() => setReactions({}))
-  }, [discussionId])
+    setPending({})
+    load(discussionId)
+  }, [discussionId, load])
+
+  // A click stays shown until the server's own event confirms it.
+  useEffect(() => { setPending((current) => settlePending(reactions, current)) }, [reactions])
 
   useWsSubscribe((event: unknown) => {
     const e = event as ReactionEvent
@@ -92,15 +99,36 @@ export function useReactions(discussionId: string | null) {
     })
   })
 
-  const react = useCallback(async (messageKey: string, emoji: string) => {
+  const send = useCallback(async (messageKey: string, emoji: string, action: "add" | "remove") => {
     if (!discussionId) return
-    await api.post(`/api/apps/nova/discussions/${discussionId}/reactions`, { messageKey, emoji })
-  }, [discussionId])
+    const key = pendingKey(messageKey, emoji)
+    const drop = () => setPending((current) => {
+      if (!(key in current)) return current
+      const { [key]: _, ...rest } = current
+      return rest
+    })
+    setPending((current) => ({ ...current, [key]: action }))
+    try {
+      await api.post(`/api/apps/nova/discussions/${discussionId}/reactions${action === "remove" ? "/remove" : ""}`, { messageKey, emoji })
+    } catch (err) {
+      drop()
+      toast({
+        variant: "error",
+        title: action === "add" ? "Reaction not saved" : "Reaction not removed",
+        description: err instanceof Error ? err.message : "Unknown error",
+      })
+      return
+    }
+    setTimeout(() => {
+      if (loadedRef.current !== discussionId || !(key in pendingRef.current)) return
+      drop()
+      load(discussionId)
+    }, CONFIRMATION_TIMEOUT_MS)
+  }, [discussionId, load, toast])
 
-  const unreact = useCallback(async (messageKey: string, emoji: string) => {
-    if (!discussionId) return
-    await api.post(`/api/apps/nova/discussions/${discussionId}/reactions/remove`, { messageKey, emoji })
-  }, [discussionId])
+  const react = useCallback((messageKey: string, emoji: string) => send(messageKey, emoji, "add"), [send])
+  const unreact = useCallback((messageKey: string, emoji: string) => send(messageKey, emoji, "remove"), [send])
 
-  return { reactions, react, unreact }
+  const shown = useMemo(() => overlayReactions(reactions, pending), [reactions, pending])
+  return { reactions: shown, react, unreact }
 }
