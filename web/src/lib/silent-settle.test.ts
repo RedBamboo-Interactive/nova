@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { MessageBlock, MessagePart } from "@redbamboo/chat"
-import { hideSilentSettle, isSilentSettleText, NO_REPLY_MARKER } from "./silent-settle.ts"
+import { hideSilentSettle, isSilentSettleText, markInternalInputs, NO_REPLY_MARKER } from "./silent-settle.ts"
 
 function block(id: string, role: MessageBlock["role"], ...parts: MessagePart[]): MessageBlock {
   return { id, role, parts, timestamp: "2026-10-25T14:00:00.000Z", metadata: { messageUid: id } }
@@ -58,4 +58,63 @@ test("a reaction note, live or from history, shows no bubble; a person's message
 test("nothing hidden returns the same array, so memoized consumers do not re-render", () => {
   const blocks = [question, answer]
   assert.equal(hideSilentSettle(blocks), blocks)
+})
+
+// Discussion ab7a1a07, 2026-10-27 07:35:33Z: a heart while Nova was mid-turn steered a reaction note into it.
+// RedCompute keeps the envelope; Nova's history page (which the client reads to fill the steer's sequence gap,
+// on settle and on reload) strips every <nova-context> from user text, so the note arrives as "".
+const { rebuildBlocks } = await import("../../node_modules/@redbamboo/chat/src/lib/rebuild-blocks.ts")
+const turn = "f830f7eed1e44752adeb2c7e3764623f"
+const noteUid = "5719a81603344454a7abadfcf6c3b216"
+const record = (sequence: number, role: string, eventType: string, extra: Record<string, unknown> = {}) => ({
+  id: 27773200 + sequence - 3476, role, eventType, content: "", messageUid: turn,
+  epoch: "11f733baaacbf45295dedb49b37f8f59", sequence, timestamp: `2026-10-27T07:35:${String(sequence - 3450).padStart(2, "0")}.000Z`, ...extra,
+})
+const steeredNote = record(3480, "user", "text", {
+  messageUid: noteUid,
+  attachmentsJson: JSON.stringify({
+    inputMessageUids: [noteUid], attachments: [],
+    metadata: { app: "nova", discussionId: "ab7a1a07", internalMessage: true, kind: "reaction-note" },
+  }),
+})
+const historyPage = [
+  record(3476, "assistant", "thinking", { content: "I should test reacting to his message." }),
+  record(3478, "assistant", "tool_use", { toolName: "Bash", toolInput: "{}", messageId: "toolu_1" }),
+  record(3479, "assistant", "tool_result", { toolResult: "{\"success\":true}", messageId: "toolu_1" }),
+  steeredNote,
+  record(3481, "assistant", "text", { content: "Your heart landed." }),
+]
+
+// What use-discussions does with every page of session records.
+const project = (records: typeof historyPage) => hideSilentSettle(markInternalInputs(rebuildBlocks(records), records))
+
+test("a reaction note steered mid-turn, as the history page returns it, shows no bubble", () => {
+  const visible = project(historyPage)
+
+  assert.equal(visible.filter(message => message.role === "user").length, 0)
+  // The accepted shape: the hidden note still splits the running turn into two segments of one uid.
+  assert.deepEqual(visible.map(message => message.id), [turn, `${turn}:segment:1`])
+})
+
+test("the same note read from raw session history, envelope intact, shows no bubble either", () => {
+  const raw = { ...steeredNote, content: "<nova-context timestamp=\"2026-10-27T07:35:28Z\" input=\"reaction\" discussion=\"ab7a1a07\">\nReactions since your last message:\n- Laurent reacted ❤️ to your latest message\n</nova-context>" }
+
+  assert.equal(project([...historyPage.slice(0, 3), raw, historyPage[4]]).filter(message => message.role === "user").length, 0)
+})
+
+test("internal metadata never hides what a person can see", () => {
+  const internal = (sequence: number, content: string, attachments: Record<string, unknown> = {}) => record(sequence, "user", "text", {
+    messageUid: `input-${sequence}`, content,
+    attachmentsJson: JSON.stringify({ ...attachments, metadata: { app: "nova", internalMessage: true } }),
+  })
+  const records = [
+    internal(3490, "<nova-event source=\"callback:session-complete\" type=\"session-complete\">Session worker done</nova-event>"),
+    internal(3491, "Typed after the context"),
+    internal(3492, "", { images: [{ mediaType: "image/png", base64: "AA==" }] }),
+    internal(3493, "", { attachments: [{ id: "a", kind: "file", name: "f.txt", mediaType: "text/plain", size: 1, downloadUrl: "/f" }] }),
+    // Not internal: Laurent's own message is never hidden on metadata grounds, even if it reached us empty.
+    record(3494, "user", "text", { messageUid: "laurent-1", attachmentsJson: JSON.stringify({ metadata: { app: "nova", internalMessage: false } }) }),
+  ]
+
+  assert.deepEqual(project(records).map(message => message.id), ["input-3490", "input-3491", "input-3492", "input-3493", "laurent-1"])
 })

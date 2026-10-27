@@ -51,7 +51,7 @@ import {
   type ArchiveContentResult,
 } from "../lib/archive-discussion-store"
 import { unwrapApplicationEnvelope } from "../lib/application-envelope"
-import { hideSilentSettle } from "../lib/silent-settle"
+import { hideSilentSettle, markInternalInputs } from "../lib/silent-settle"
 
 function isClosed(status: string | undefined): boolean {
   return status === "archived" || status === "archiving"
@@ -136,6 +136,11 @@ function stripContextBlocks(m: MessageBlock): MessageBlock | null {
   if (cleaned === textPart.content) return m
   if (!cleaned) return null
   return { ...m, parts: m.parts.map((p) => p === textPart ? { ...p, content: cleaned } : p) }
+}
+
+/** Canonical blocks, with each internal input (a reaction note) still marked as one. */
+function rebuildNovaBlocks(records: PersistedMessage[]): MessageBlock[] {
+  return markInternalInputs(rebuildBlocks(records), records)
 }
 
 /** Strip Nova's context wrappers, then apply the frieze ordering rule. */
@@ -707,7 +712,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       : result.records
     const overlayBlocks = toChatMessages([...overlays.values()])
     const authoritative = cleanMessages(
-      mergePagedDiscussionRecordsAndOverlays(overlayBlocks, sessionRecords, rebuildBlocks),
+      mergePagedDiscussionRecordsAndOverlays(overlayBlocks, sessionRecords, rebuildNovaBlocks),
       eventResolver,
     )
     const cursor: TranscriptCursor | null = result.epoch && result.throughSequence !== null
@@ -847,7 +852,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           if (isCurrentLoad()) hydrateRuntime(id, data.session, runtimeRead)
           if (data.messages?.length) {
             sessionMsgs = filterInternalBootstrapBlock(
-              rebuildBlocks(data.messages),
+              rebuildNovaBlocks(data.messages),
               disc.setupBootstrapMessageUid,
             )
             sessionHasEarlier = data.messages.length >= tail
@@ -891,7 +896,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
               if (isCurrentLoad()) hydrateRuntime(id, session.session, runtimeRead)
               if (session.messages?.length) {
                 sessionMsgs = filterInternalBootstrapBlock(
-                  rebuildBlocks(session.messages),
+                  rebuildNovaBlocks(session.messages),
                   disc.setupBootstrapMessageUid,
                 )
                 sessionHasEarlier = session.messages.length >= tail
@@ -921,7 +926,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           if (isCurrentLoad()) hydrateRuntime(id, data.session, runtimeRead)
           if (data.messages?.length) {
             const sessionMsgs = filterInternalBootstrapBlock(
-              rebuildBlocks(data.messages),
+              rebuildNovaBlocks(data.messages),
               disc.setupBootstrapMessageUid,
             )
             let discussionMsgs: MessageBlock[] = []
