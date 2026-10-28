@@ -56,6 +56,18 @@ public sealed class NovaContextFrameTests
 
     [Theory]
     [MemberData(nameof(Payloads))]
+    public void Hostile_extension_name_in_the_readiness_line_cannot_break_the_context(string payload)
+    {
+        // Extension names and next-step labels come from package manifests and guides.
+        var snapshot = Representative();
+        snapshot.ExtensionsAttention = ExtensionReadinessContextTests.Line(
+            ExtensionReadinessContextTests.Row(payload, "degraded", payload));
+        Assert.StartsWith(ExtensionReadinessContext.Prefix, snapshot.ExtensionsAttention);
+        AssertOneFrame(snapshot);
+    }
+
+    [Theory]
+    [MemberData(nameof(Payloads))]
     public void Hostile_mood_outfit_reaction_device_and_agent_cannot_break_the_context(string payload)
     {
         var snapshot = Representative();

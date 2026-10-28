@@ -205,7 +205,9 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<ConversationUnread>(),
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<MessagePipeline>>(),
                 sp.GetRequiredService<AgentActivitySignals>(),
-                sp.GetRequiredService<EventInjector>()));
+                sp.GetRequiredService<EventInjector>(),
+                sp.GetRequiredService<ExtensionReadinessContext>()));
+        services.AddSingleton<ExtensionReadinessContext>();
         services.AddSingleton<ReactionTriggers>();
     }
 

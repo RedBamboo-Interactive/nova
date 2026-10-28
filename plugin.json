@@ -76,7 +76,7 @@
   "permissions": [
     { "kind": "net", "target": "127.0.0.1:18800", "reason": "RedCompute AI sessions, TTS/STT, delegation" },
     { "kind": "net", "target": "localhost:5005", "reason": "Sonos bridge polling for LIVE timeline events" },
-    { "kind": "net", "target": "127.0.0.1:18804", "reason": "Smart-home plugin API polling (Spotify/Hue) for LIVE events" },
+    { "kind": "net", "target": "127.0.0.1:18804", "reason": "Kernel APIs on loopback: Smart Home polling (Spotify/Hue) for LIVE events, and the extension readiness line in Agent context" },
     { "kind": "fs", "target": "agent-workspaces", "reason": "Agent workspace markdown files (memory, CLAUDE.md generation, journal)" },
     { "kind": "fs", "target": "local-media", "reason": "Serve local image/video files referenced in chat (/file endpoint)" }
   ]

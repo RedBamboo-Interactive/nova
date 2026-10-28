@@ -30,6 +30,14 @@ public sealed class ContextSnapshot
     [JsonPropertyName("extensionContexts")]
     public List<ExtensionContextEntry> ExtensionContexts { get; set; } = [];
 
+    /// <summary>
+    /// The installed extensions that are not ready, as one line
+    /// (<see cref="ExtensionReadinessContext"/>); <c>""</c> when all are ready, null when unknown.
+    /// </summary>
+    [JsonPropertyName("extensionsAttention")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExtensionsAttention { get; set; }
+
     public sealed class ExtensionContextEntry
     {
         [JsonPropertyName("id")]
@@ -108,6 +116,9 @@ public static class NovaContextBuilder
 {
     private const string ApiBase = "http://127.0.0.1:18804/api/apps/nova";
 
+    // The delta line when extensions that needed attention are all ready again.
+    internal const string AllExtensionsReady = "Installed extensions are all ready now";
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -120,7 +131,8 @@ public static class NovaContextBuilder
         string? outfitAsset,
         string? mood = null,
         List<ContextSnapshot.LiveEventEntry>? liveEvents = null,
-        IReadOnlyList<PluginContextFragment>? extensionContexts = null)
+        IReadOnlyList<PluginContextFragment>? extensionContexts = null,
+        string? extensionsAttention = null)
     {
         return new ContextSnapshot
         {
@@ -138,6 +150,7 @@ public static class NovaContextBuilder
                 Revision = fragment.Revision,
                 Data = fragment.Data?.DeepClone() as JsonObject,
             }).ToList() ?? [],
+            ExtensionsAttention = extensionsAttention,
         };
 
         static ContextSnapshot.DiscussionEntry ToEntry(DiscussionRead d) => new()
@@ -224,6 +237,9 @@ public static class NovaContextBuilder
             foreach (var context in snapshot.ExtensionContexts)
                 sb.Append($"\n- [{context.Source}] {context.Content}");
         }
+
+        if (!string.IsNullOrEmpty(snapshot.ExtensionsAttention))
+            sb.Append($"\n\n{snapshot.ExtensionsAttention}");
 
         if (reactionLines is { Count: > 0 })
         {
@@ -375,6 +391,15 @@ public static class NovaContextBuilder
                 changes.Add($"Extension context [{before!.Source}] removed");
             else if (before == null || before.Revision != after.Revision || before.Content != after.Content)
                 changes.Add($"[{after.Source}] {after.Content}");
+        }
+
+        // Unknown (null) is never a change: a catalog read that failed must not read as "all ready".
+        if (current.ExtensionsAttention is { } attention && attention != previous.ExtensionsAttention)
+        {
+            if (attention.Length > 0)
+                changes.Add(attention);
+            else if (!string.IsNullOrEmpty(previous.ExtensionsAttention))
+                changes.Add(AllExtensionsReady);
         }
 
         var sb = new StringBuilder();

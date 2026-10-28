@@ -44,7 +44,8 @@ public sealed class MessagePipeline(
     ConversationUnread conversationUnread,
     ILogger<MessagePipeline> logger,
     AgentActivitySignals? activity = null,
-    EventInjector? eventInjector = null)
+    EventInjector? eventInjector = null,
+    ExtensionReadinessContext? extensionReadiness = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -379,12 +380,23 @@ public sealed class MessagePipeline(
                 .ToList();
         }
 
+        var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
+        var fullContext = previousSnapshot == null || discussion.MessageCount == 0;
+
+        // A Nova discussion is a private Leaf surface; external audiences never reach this builder.
+        // Unknown readiness keeps what the delta last said rather than reading as a change.
+        var extensionsAttention = extensionReadiness is null
+            ? null
+            : await extensionReadiness.GetAttentionAsync(ContextAudience.PrivateLeaf, ct);
+        if (extensionsAttention is null && !fullContext)
+            extensionsAttention = previousSnapshot!.ExtensionsAttention;
+
         var currentSnapshot = NovaContextBuilder.BuildSnapshot(
             ownDiscussions, otherAgentDiscussions, currentOutfit, currentOutfitAsset,
             mood: moodSummary,
             liveEvents: liveEvents,
-            extensionContexts: extensionContexts);
-        var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
+            extensionContexts: extensionContexts,
+            extensionsAttention: extensionsAttention);
 
         var reactions = await GetReactionNotesAsync(discussion, ct);
 
@@ -393,10 +405,10 @@ public sealed class MessagePipeline(
         requestedMessageUid ??= Guid.NewGuid().ToString("N");
 
         string contextBlock;
-        if (previousSnapshot == null || discussion.MessageCount == 0)
+        if (fullContext)
             contextBlock = NovaContextBuilder.BuildFullContext(currentSnapshot, discussion.Id, now, device, input, agentName, reactions.Lines, discussion.Worktrees, requestedMessageUid);
         else
-            contextBlock = NovaContextBuilder.BuildDeltaContext(currentSnapshot, previousSnapshot, discussion.Id, now, device, input, agentName, reactions.Lines, discussion.Worktrees, requestedMessageUid);
+            contextBlock = NovaContextBuilder.BuildDeltaContext(currentSnapshot, previousSnapshot!, discussion.Id, now, device, input, agentName, reactions.Lines, discussion.Worktrees, requestedMessageUid);
 
         var metadata = NovaContextBuilder.BuildMetadata(currentSnapshot, now, device, input, discussion.Id, agentName);
 
