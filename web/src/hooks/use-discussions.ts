@@ -1202,13 +1202,20 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
   }, [discussions, archiveState.knownItems, activeDiscussionId, loadMessages])
 
-  const createDiscussion = useCallback(async (agentId?: string, qualityTier?: string, provider?: string) => {
+  const createDiscussion = useCallback(async (
+    agentId?: string,
+    qualityTier?: string,
+    provider?: string,
+    options?: { idempotencyKey?: string },
+  ) => {
     setIsSpawning(true)
     try {
       const body: Record<string, string> = {}
       if (agentId) body.agentId = agentId
       if (qualityTier) body.qualityTier = qualityTier
       if (provider) body.provider = provider
+      // A repeated request with the same key returns the same discussion instead of a second one.
+      if (options?.idempotencyKey) body.idempotencyKey = options.idempotencyKey
       const d = await api.post<DiscussionInfo>("/api/apps/nova/discussions", Object.keys(body).length ? body : undefined)
       historyLifecycleRef.current.revive(d.id)
       // The creation websocket can beat the HTTP response and insert a sparse

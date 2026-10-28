@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type Ref } from "react"
-import { useParams, useNavigate } from "react-router-dom"
+import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type ProviderUsageSnapshot, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
@@ -40,6 +40,7 @@ import {
 } from "../lib/floating-context"
 import { applyPendingVisibleContext } from "../lib/pending-visible-context-store"
 import { isDiscussionSelectionCurrent, resolveRequestedDiscussionId } from "../lib/discussion-view-selection"
+import { NOVA_DRAFT_STORAGE_KEY, opensChat } from "../lib/new-discussion-draft"
 import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToContext, type MonitorVisualSource } from "../lib/visual-capture"
 import { delegationSessionPath } from "../lib/delegation-session-link"
 import { AGENT_NOTE_KEY } from "../lib/agent-note"
@@ -136,7 +137,8 @@ export function ChatView({
   const mobileClient = isMobileClient(environment.window.navigator)
   const requestedDiscussionId = floating ? selectedDiscussionId : (urlDiscussionId ?? null)
   const [pendingDiscussionId, setPendingDiscussionId] = useState<string | null>(null)
-  const [mobileTab, setMobileTab] = useState(0)
+  const location = useLocation()
+  const [mobileTab, setMobileTab] = useState(() => (!floating && opensChat(location.state) ? 1 : 0))
   const floatingSurface = useUiSurface("nova:floating-chat")
 
   // Intercept clicks on CodeRed links and navigate via API instead
@@ -1446,7 +1448,7 @@ export function ChatView({
         onInterrupt={handleInterrupt}
         sessionId={activeDiscussionId}
         autoFocusMode={autoFocusMode}
-        draftStorageKey="nova-drafts"
+        draftStorageKey={NOVA_DRAFT_STORAGE_KEY}
         disabled={discussionClosed || !!owningApp}
         hideComposer={activeDiscussion.type === "heartbeat" || discussionClosed || !!owningApp}
         pendingQuestion={pendingQuestion}
