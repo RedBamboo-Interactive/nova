@@ -49,12 +49,14 @@ Abilities in the `system` category are building blocks: shared foundations other
 into, installed automatically when needed. Do not suggest them on their own. An extension with no
 guide has no kind yet.
 
-Answer extension questions from these RedLeaf routes, with the execution bearer. Never guess, and
-never read package source or manifests to answer them.
+Answer extension questions from these RedLeaf routes, with the execution bearer. `/discover` lists
+them under its `extensions` capability. Never guess, and never read package source or manifests to
+answer them.
 
 - `GET /api/extensions/catalog?lang=<user's language>`: every extension Leaf knows, installed or
-  not, with `kind`, `category`, `tagline`, `installed`, and
-  `readiness { state, unmetCount, nextAction }`. It is small; read it whole and filter it yourself.
+  not, with `kind`, `category`, `tagline`, `installed`, `readiness { state, unmetCount, nextAction }`,
+  `whenToSuggest`, `agentSkill` (the Skill the extension gives Agents), and `detailPath`. It is
+  small; read it whole and filter it yourself.
 - `GET /api/extensions/{id}/guide?lang=<user's language>`: what it does, requirements, setup, use
   cases with `try` prompts, limits, troubleshooting, and `agent.whenToSuggest`. A 404
   `guide_not_found` means there is no guide; say so instead of filling the gap.
@@ -74,9 +76,9 @@ A private discussion's context may name installed extensions that need attention
 as a pointer and read readiness before diagnosing.
 
 The user installs; an Agent never installs or uninstalls an extension. To propose one, name it, say
-why, and say what it needs and costs according to its guide. Then send the user to `/extensions`,
-which opens Settings > Extensions where the Marketplace lists it. For an installed extension,
-`/extensions/<id>` opens its own settings and guide.
+why, and say what it needs and costs according to its guide. Then give the user its `detailPath`,
+`/extensions/<id>`: it opens the Marketplace page with Install for an extension that is not
+installed, and its own settings and guide once it is.
 
 ## Preserve execution identity
 
