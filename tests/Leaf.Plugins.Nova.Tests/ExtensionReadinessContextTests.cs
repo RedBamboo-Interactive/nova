@@ -1,31 +1,56 @@
-using System.Net;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
+using System.Reflection;
+using Leaf.Sdk.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Leaf.Plugins.Nova.Tests;
 
-// One <nova-context> line names the installed extensions that are not ready, read from the kernel
-// catalog's readiness summary. Ready extensions are never listed, a failed read omits the line and is
-// never mistaken for "all ready", an external audience gets nothing, and the line stays under 300 chars.
+// One <nova-context> line names the installed extensions that are not ready, read from the kernel's
+// in-process extension catalog. Ready and turned-off extensions are never listed, a failed read omits
+// the line and is never mistaken for "all ready", an external audience gets nothing, a kernel without
+// the catalog gets nothing, and the line stays under 300 chars.
 public sealed class ExtensionReadinessContextTests
 {
     private static readonly DateTime Now = NovaContextFrameTests.Now;
 
-    [Fact]
-    public void Live_catalog_shape_names_only_the_installed_extension_that_is_not_ready()
-    {
-        // As GET /api/extensions/catalog answered on 2026-10-28: Context Graph turned off, everything
-        // else ready (KEV included), plus a marketplace row that is not installed.
-        var line = Line(
-            Row("Gallery", "ready"),
-            Row("Context Graph", "needs-setup", "Turn it on"),
-            Row("KEV Local Quality", "ready"),
-            Row("Wallpaper", "needs-setup", "Pick an image generator", installed: false),
-            Row("Mystery", null));
+    // As IExtensionCatalog answered on this PC on 2026-10-28 (ExtensionCatalogService.Snapshot of the
+    // live catalog rows): Context Graph turned off, everything else ready (KEV included), plus
+    // marketplace rows that are not installed.
+    internal static ExtensionReadinessSnapshot[] LiveShape() =>
+    [
+        Snapshot("gallery", "Gallery", installed: true, "enabled", "ready"),
+        Snapshot("context-graph", "Context Graph", installed: true, "disabled", "needs-setup", 1, "Turn it on"),
+        Snapshot("provider-kev-local", "KEV Local Quality", installed: true, "enabled", "ready"),
+        Snapshot("nova", "Nova", installed: true, "enabled", "ready"),
+        Snapshot("provider-wallpaper-x", "Wallpaper X", installed: false, null, "installable", 1, "Install it"),
+    ];
 
-        Assert.Equal("Extensions needing attention: Context Graph (needs setup: Turn it on)", line);
+    [Fact]
+    public async Task Live_shape_through_the_sdk_service_omits_the_turned_off_extension()
+    {
+        var context = Context(new FakeCatalog(LiveShape()));
+
+        Assert.Equal("", await context.GetAttentionAsync(ContextAudience.PrivateLeaf, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Live_shape_with_a_failing_enabled_extension_names_only_that_one()
+    {
+        var rows = LiveShape();
+        rows[2] = Snapshot("provider-kev-local", "KEV Local Quality", installed: true, "enabled", "degraded", 1, "Start KEV Local Quality");
+        var context = Context(new FakeCatalog(rows));
+
+        Assert.Equal("Extensions needing attention: KEV Local Quality (needs attention: Start KEV Local Quality)",
+            await context.GetAttentionAsync(ContextAudience.PrivateLeaf, CancellationToken.None));
+    }
+
+    [Fact]
+    public void Turned_off_is_a_choice_but_an_errored_plugin_is_listed()
+    {
+        Assert.Equal("", Line(Row("Context Graph", "needs-setup", "Turn it on", pluginStatus: "disabled")));
+        Assert.Equal("", Line(Row("Context Graph", "needs-setup", "Turn it on", pluginStatus: "Disabled")));
+        Assert.Equal("Extensions needing attention: Mail (needs attention: Restart it)",
+            Line(Row("Mail", "degraded", "Restart it", pluginStatus: "error")));
     }
 
     [Fact]
@@ -34,16 +59,25 @@ public sealed class ExtensionReadinessContextTests
         var line = Line(
             Row("KEV Local Quality", "degraded", "Start it"),
             Row("Wallpaper", "needs-setup"),
-            Row("Speech", "unsupported", "Needs WSL"));
+            Row("Speech", "unsupported", "Needs WSL"),
+            Row("Mystery", null),
+            Row("Market only", "needs-setup", "Install", installed: false));
 
         Assert.Equal("Extensions needing attention: KEV Local Quality (needs attention: Start it), "
             + "Wallpaper (needs setup), Speech (not supported on this PC: Needs WSL)", line);
     }
 
     [Fact]
+    public void A_missing_name_falls_back_to_the_id()
+        => Assert.Equal("Extensions needing attention: cap-x (needs setup)",
+            ExtensionReadinessContext.Format([new ExtensionReadinessRow("cap-x", " ", true, "enabled", "needs-setup", null)]));
+
+    [Fact]
     public void All_ready_gives_an_empty_line_and_the_context_renders_exactly_as_before()
     {
         Assert.Equal("", Line(Row("Gallery", "ready"), Row("Nova", "ready")));
+        Assert.Equal("", ExtensionReadinessContext.Format([]));
+        Assert.Null(ExtensionReadinessContext.Format(null));
 
         var snapshot = NovaContextFrameTests.Representative();
         snapshot.ExtensionsAttention = "";
@@ -85,73 +119,112 @@ public sealed class ExtensionReadinessContextTests
     [Fact]
     public async Task External_audience_gets_nothing_and_the_catalog_is_not_read()
     {
-        var kernel = new FakeKernel(Catalog(Row("Context Graph", "needs-setup", "Turn it on")));
-        var context = new ExtensionReadinessContext(new HttpClient(kernel), new ManualClock());
+        var catalog = new FakeCatalog([Snapshot("x", "Context Graph", true, "enabled", "needs-setup", 1, "Turn it on")]);
+        var context = Context(catalog);
 
         Assert.Null(await context.GetAttentionAsync(ContextAudience.External, CancellationToken.None));
-        Assert.Equal(0, kernel.Requests);
+        Assert.Equal(0, catalog.Reads);
     }
 
     [Fact]
-    public async Task Private_audience_reads_the_catalog_with_english_text()
+    public async Task A_kernel_without_the_catalog_service_gives_no_line_and_no_error()
     {
-        var kernel = new FakeKernel(Catalog(Row("Context Graph", "needs-setup", "Turn it on")));
-        var context = new ExtensionReadinessContext(new HttpClient(kernel), new ManualClock());
+        var services = new ServiceCollection().BuildServiceProvider();
 
-        Assert.Equal("Extensions needing attention: Context Graph (needs setup: Turn it on)",
-            await context.GetAttentionAsync(ContextAudience.PrivateLeaf, CancellationToken.None));
-        Assert.Equal("http://127.0.0.1:18804/api/extensions/catalog?lang=en", kernel.LastUri);
-        Assert.Null(kernel.LastAuthorization);
+        var source = KernelExtensionCatalog.TryResolve(services);
+
+        Assert.Null(source);
+        Assert.Null(await new ExtensionReadinessContext(source).GetAttentionAsync(ContextAudience.PrivateLeaf, CancellationToken.None));
     }
 
-    public static TheoryData<string> Failures() => new() { "500", "404", "throw", "timeout", "not-json", "not-a-catalog" };
+    [Fact]
+    public async Task The_kernel_registration_is_resolved_as_an_optional_service()
+    {
+        var catalog = new FakeCatalog([Snapshot("mail", "Mail", true, "enabled", "degraded", 1, "Reconnect the account")]);
+        var services = new ServiceCollection().AddSingleton<IExtensionCatalog>(catalog).BuildServiceProvider();
+
+        var context = new ExtensionReadinessContext(KernelExtensionCatalog.TryResolve(services), new ManualClock());
+
+        Assert.Equal("Extensions needing attention: Mail (needs attention: Reconnect the account)",
+            await context.GetAttentionAsync(ContextAudience.PrivateLeaf, CancellationToken.None));
+        Assert.Equal(1, catalog.Reads);
+    }
+
+    [Fact]
+    public void Only_the_binder_names_the_sdk_catalog_type()
+    {
+        // On a kernel older than KernelApi 0.1.6 the type does not exist; a type Nova always loads must
+        // not mention it in a field, constructor or property, or Nova itself would fail to start.
+        var sdkType = typeof(IExtensionCatalog);
+        foreach (var type in new[] { typeof(ExtensionReadinessContext), typeof(MessagePipeline), typeof(NovaAppPlugin), typeof(ExtensionReadinessRow) })
+        {
+            const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+            Assert.DoesNotContain(type.GetFields(all), field => Mentions(field.FieldType, sdkType));
+            Assert.DoesNotContain(type.GetProperties(all), property => Mentions(property.PropertyType, sdkType));
+            Assert.DoesNotContain(type.GetConstructors(all).SelectMany(ctor => ctor.GetParameters()),
+                parameter => Mentions(parameter.ParameterType, sdkType));
+        }
+        Assert.DoesNotContain(typeof(KernelExtensionCatalog).GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly)
+            .Where(method => method.Name == nameof(KernelExtensionCatalog.TryResolve))
+            .SelectMany(method => method.GetParameters()), parameter => Mentions(parameter.ParameterType, sdkType));
+    }
+
+    public static TheoryData<string> Failures() => new() { "throw", "timeout", "null" };
 
     [Theory]
     [MemberData(nameof(Failures))]
     public async Task A_failed_read_omits_the_line(string failure)
     {
-        var kernel = new FakeKernel(Catalog(Row("Context Graph", "needs-setup", "Turn it on"))) { Failure = failure };
-        var context = new ExtensionReadinessContext(new HttpClient(kernel), new ManualClock());
+        var clock = new ManualClock();
+        var catalog = new FakeCatalog([Snapshot("x", "Context Graph", true, "enabled", "needs-setup", 1, "Turn it on")]) { Failure = failure };
+        var context = new ExtensionReadinessContext(KernelExtensionCatalog.From(catalog), clock);
 
-        Assert.Null(await context.GetAttentionAsync(ContextAudience.PrivateLeaf, CancellationToken.None));
+        var read = context.GetAttentionAsync(ContextAudience.PrivateLeaf, CancellationToken.None);
+        if (failure == "timeout")
+        {
+            await catalog.Started.Task;
+            clock.Advance(ExtensionReadinessContext.FetchTimeout + TimeSpan.FromMilliseconds(1));
+        }
+
+        Assert.Null(await read);
     }
 
     [Fact]
     public async Task Reads_are_cached_for_a_minute_failures_included()
     {
         var clock = new ManualClock();
-        var kernel = new FakeKernel(Catalog(Row("Context Graph", "needs-setup", "Turn it on"))) { Failure = "500" };
-        var context = new ExtensionReadinessContext(new HttpClient(kernel), clock);
+        var catalog = new FakeCatalog([Snapshot("x", "Context Graph", true, "enabled", "needs-setup", 1, "Turn it on")]) { Failure = "throw" };
+        var context = new ExtensionReadinessContext(KernelExtensionCatalog.From(catalog), clock);
 
         Assert.Null(await context.GetAttentionAsync(ContextAudience.PrivateLeaf, CancellationToken.None));
-        kernel.Failure = null;
+        catalog.Failure = null;
         clock.Advance(TimeSpan.FromSeconds(59));
         Assert.Null(await context.GetAttentionAsync(ContextAudience.PrivateLeaf, CancellationToken.None));
-        Assert.Equal(1, kernel.Requests);
+        Assert.Equal(1, catalog.Reads);
 
         clock.Advance(TimeSpan.FromSeconds(2));
         Assert.StartsWith(ExtensionReadinessContext.Prefix,
             await context.GetAttentionAsync(ContextAudience.PrivateLeaf, CancellationToken.None));
-        kernel.Body = Catalog(Row("Context Graph", "ready"));
+        catalog.Rows = [Snapshot("x", "Context Graph", true, "enabled", "ready")];
         clock.Advance(TimeSpan.FromSeconds(30));
         await Task.WhenAll(Enumerable.Range(0, 8)
             .Select(_ => context.GetAttentionAsync(ContextAudience.PrivateLeaf, CancellationToken.None)));
-        Assert.Equal(2, kernel.Requests);
+        Assert.Equal(2, catalog.Reads);
 
         clock.Advance(TimeSpan.FromSeconds(31));
         Assert.Equal("", await context.GetAttentionAsync(ContextAudience.PrivateLeaf, CancellationToken.None));
-        Assert.Equal(3, kernel.Requests);
+        Assert.Equal(3, catalog.Reads);
     }
 
     [Fact]
     public void Full_context_shows_the_line_once_after_extension_context()
     {
         var snapshot = NovaContextFrameTests.Representative();
-        snapshot.ExtensionsAttention = "Extensions needing attention: Context Graph (needs setup: Turn it on)";
+        snapshot.ExtensionsAttention = "Extensions needing attention: KEV Local Quality (needs attention: Start KEV Local Quality)";
 
         var full = NovaContextFrameTests.Full(snapshot);
 
-        Assert.Contains("- [presence] Laurent is home (Living room)\n\nExtensions needing attention: Context Graph (needs setup: Turn it on)\n\nReactions", full);
+        Assert.Contains("- [presence] Laurent is home (Living room)\n\nExtensions needing attention: KEV Local Quality (needs attention: Start KEV Local Quality)\n\nReactions", full);
         Assert.Single(full.Split("Extensions needing attention").Skip(1));
     }
 
@@ -210,66 +283,88 @@ public sealed class ExtensionReadinessContextTests
         Assert.Equal("", NovaContextBuilder.DeserializeSnapshot(json)!.ExtensionsAttention);
     }
 
-    internal static JsonObject Row(string name, string? state, string? nextAction = null, bool installed = true)
-    {
-        var row = new JsonObject { ["id"] = name.ToLowerInvariant(), ["name"] = name, ["installed"] = installed };
-        if (state is not null)
-        {
-            var readiness = new JsonObject { ["state"] = state, ["unmetCount"] = state == "ready" ? 0 : 1 };
-            readiness["nextAction"] = nextAction is null ? null : new JsonObject { ["label"] = nextAction, ["detail"] = "Detail." };
-            readiness["host"] = new JsonArray();
-            row["readiness"] = readiness;
-        }
-        else
-        {
-            row["readiness"] = null;
-        }
-        return row;
-    }
+    private static bool Mentions(Type type, Type sdkType)
+        => type == sdkType || (type.IsGenericType && type.GetGenericArguments().Any(argument => Mentions(argument, sdkType)))
+            || (type.HasElementType && Mentions(type.GetElementType()!, sdkType));
 
-    internal static string Catalog(params JsonObject[] rows)
-        => new JsonObject { ["items"] = new JsonArray(rows), ["marketplaceError"] = null }.ToJsonString();
+    private static ExtensionReadinessContext Context(IExtensionCatalog catalog)
+        => new(KernelExtensionCatalog.From(catalog), new ManualClock());
 
-    internal static string? Line(params JsonObject[] rows)
+    internal static ExtensionReadinessSnapshot Snapshot(string id, string name, bool installed, string? pluginStatus,
+        string? state, int unmet = 0, string? nextAction = null) => new()
     {
-        using var document = JsonDocument.Parse(Catalog(rows));
-        return ExtensionReadinessContext.Format(document.RootElement);
-    }
+        Id = id,
+        Name = name,
+        Installed = installed,
+        PluginStatus = pluginStatus,
+        State = state,
+        UnmetCount = unmet,
+        NextAction = nextAction,
+        DetailPath = "/extensions/" + id,
+    };
 
-    private sealed class FakeKernel(string body) : HttpMessageHandler
+    internal static ExtensionReadinessRow Row(string name, string? state, string? nextAction = null,
+        bool installed = true, string? pluginStatus = "enabled")
+        => new(name.ToLowerInvariant(), name, installed, pluginStatus, state, nextAction);
+
+    internal static string? Line(params ExtensionReadinessRow[] rows) => ExtensionReadinessContext.Format(rows);
+
+    private sealed class FakeCatalog(IReadOnlyList<ExtensionReadinessSnapshot> rows) : IExtensionCatalog
     {
-        public string Body { get; set; } = body;
+        public IReadOnlyList<ExtensionReadinessSnapshot> Rows { get; set; } = rows;
         public string? Failure { get; set; }
-        public int Requests { get; private set; }
-        public string? LastUri { get; private set; }
-        public string? LastAuthorization { get; private set; }
+        public int Reads { get; private set; }
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        public async Task<IReadOnlyList<ExtensionReadinessSnapshot>> GetReadinessAsync(CancellationToken ct = default)
         {
-            Requests++;
-            LastUri = request.RequestUri?.ToString();
-            LastAuthorization = request.Headers.Authorization?.ToString();
+            Reads++;
+            Started.TrySetResult();
             switch (Failure)
             {
-                case "500": return new HttpResponseMessage(HttpStatusCode.InternalServerError);
-                case "404": return new HttpResponseMessage(HttpStatusCode.NotFound);
-                case "throw": throw new HttpRequestException("connection refused");
-                case "timeout": throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout");
-                case "not-json": return Ok("<html>setup</html>");
-                case "not-a-catalog": return Ok("{\"error\":\"setup_required\"}");
+                case "throw": throw new InvalidOperationException("catalog unavailable");
+                case "timeout": await Task.Delay(Timeout.Infinite, ct); break;
+                case "null": return null!;
             }
             await Task.Yield();
-            return Ok(Body);
+            return Rows;
         }
-
-        private static HttpResponseMessage Ok(string content)
-            => new(HttpStatusCode.OK) { Content = new StringContent(content, Encoding.UTF8, "application/json") };
     }
 
     private sealed class ManualClock : TimeProvider
     {
+        private readonly object _gate = new();
+        private readonly List<(DateTimeOffset Due, Action Fire)> _timers = [];
         private DateTimeOffset _now = new(2026, 10, 28, 11, 30, 0, TimeSpan.Zero);
-        public override DateTimeOffset GetUtcNow() => _now;
-        public void Advance(TimeSpan by) => _now += by;
+
+        public override DateTimeOffset GetUtcNow() { lock (_gate) return _now; }
+
+        public void Advance(TimeSpan by)
+        {
+            List<Action> due;
+            lock (_gate)
+            {
+                _now += by;
+                due = _timers.Where(t => t.Due <= _now).Select(t => t.Fire).ToList();
+                _timers.RemoveAll(t => t.Due <= _now);
+            }
+            foreach (var fire in due) fire();
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new ManualTimer();
+            if (dueTime != Timeout.InfiniteTimeSpan)
+                lock (_gate) _timers.Add((_now + dueTime, () => { if (!timer.Disposed) callback(state); }));
+            return timer;
+        }
+
+        private sealed class ManualTimer : ITimer
+        {
+            public bool Disposed { get; private set; }
+            public bool Change(TimeSpan dueTime, TimeSpan period) => !Disposed;
+            public void Dispose() => Disposed = true;
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
     }
 }

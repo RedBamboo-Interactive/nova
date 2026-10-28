@@ -207,7 +207,12 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<AgentActivitySignals>(),
                 sp.GetRequiredService<EventInjector>(),
                 sp.GetRequiredService<ExtensionReadinessContext>()));
-        services.AddSingleton<ExtensionReadinessContext>();
+        // Soft dependency: kernels before KernelApi 0.1.6 have no extension catalog, and then no line.
+        services.AddSingleton(sp =>
+        {
+            var logger = sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<ExtensionReadinessContext>>();
+            return new ExtensionReadinessContext(KernelExtensionCatalog.TryResolve(sp, logger), TimeProvider.System, logger);
+        });
         services.AddSingleton<ReactionTriggers>();
     }
 

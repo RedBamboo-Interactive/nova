@@ -1,6 +1,8 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
-using System.Text.Json;
+using Leaf.Sdk.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Leaf.Plugins.Nova;
@@ -14,29 +16,35 @@ public enum ContextAudience
     External,
 }
 
+/// <summary>One catalog row as the readiness line needs it; Nova's own copy of the kernel's snapshot.</summary>
+public sealed record ExtensionReadinessRow(
+    string Id, string? Name, bool Installed, string? PluginStatus, string? State, string? NextAction);
+
+/// <summary>Reads every catalog row with its readiness on this PC.</summary>
+public delegate Task<IReadOnlyList<ExtensionReadinessRow>> ExtensionReadinessSource(CancellationToken ct);
+
 /// <summary>
 /// One short <c>&lt;nova-context&gt;</c> line naming the installed extensions that are not ready, so an
 /// Agent knows what is broken without pulling the whole catalog on every turn:
 /// <c>Extensions needing attention: Context Graph (needs setup: Turn it on)</c>.
 /// </summary>
 /// <remarks>
-/// The source is the kernel catalog's readiness summary (<c>GET /api/extensions/catalog</c>). It is read
-/// on loopback like <see cref="LivePoller"/>'s other kernel reads, cached for a minute, and bounded by a
-/// short timeout because it sits on the message-send path. Any failure yields "unknown", which omits the
-/// line; it never reads as "all ready". Installation state is the owner's private information, so an
-/// external audience always gets nothing.
+/// The source is the kernel's in-process extension catalog (<see cref="KernelExtensionCatalog"/>), the
+/// same rows and readiness as <c>GET /api/extensions/catalog</c>. It is cached for a minute and bounded
+/// by a short timeout because it sits on the message-send path (a marketplace miss can reach the
+/// network). No catalog, or any failure, yields "unknown", which omits the line; it never reads as "all
+/// ready". Installation state is the owner's private information, so an external audience always gets
+/// nothing. Extensions the person turned off are not listed: that is a choice, not a fault.
 /// </remarks>
 public sealed class ExtensionReadinessContext
 {
-    public const string KernelBase = "http://127.0.0.1:18804";
-    internal const string CatalogRoute = "/api/extensions/catalog?lang=en";
     internal const string Prefix = "Extensions needing attention: ";
     internal const int MaxLineLength = 300;
     private const int MaxPartLength = 60;
     internal static readonly TimeSpan CacheLifetime = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan FetchTimeout = TimeSpan.FromSeconds(2);
 
-    private readonly HttpClient _http;
+    private readonly ExtensionReadinessSource? _source;
     private readonly TimeProvider _time;
     private readonly ILogger? _logger;
     private readonly SemaphoreSlim _refresh = new(1, 1);
@@ -45,31 +53,28 @@ public sealed class ExtensionReadinessContext
     // "" when every installed extension is ready; null when the catalog could not be read.
     private sealed record Cached(string? Attention, DateTimeOffset ReadAt);
 
-    public ExtensionReadinessContext(ILogger<ExtensionReadinessContext> logger)
-        : this(new HttpClient { BaseAddress = new Uri(KernelBase), Timeout = FetchTimeout }, TimeProvider.System, logger) { }
-
-    internal ExtensionReadinessContext(HttpClient http, TimeProvider time, ILogger? logger = null)
+    public ExtensionReadinessContext(ExtensionReadinessSource? source, TimeProvider? time = null, ILogger? logger = null)
     {
-        _http = http;
-        _http.BaseAddress ??= new Uri(KernelBase);
-        _time = time;
+        _source = source;
+        _time = time ?? TimeProvider.System;
         _logger = logger;
     }
 
     /// <summary>
     /// The attention line for <paramref name="audience"/>: null when it must be omitted (external
-    /// audience, or the catalog could not be read), <c>""</c> when every installed extension is ready.
+    /// audience, no catalog on this kernel, or a failed read), <c>""</c> when every installed,
+    /// enabled extension is ready.
     /// </summary>
     public async Task<string?> GetAttentionAsync(ContextAudience audience, CancellationToken ct)
     {
-        if (audience != ContextAudience.PrivateLeaf) return null;
+        if (audience != ContextAudience.PrivateLeaf || _source is null) return null;
         if (Fresh() is { } hit) return hit.Attention;
 
         await _refresh.WaitAsync(ct);
         try
         {
             if (Fresh() is { } raced) return raced.Attention;
-            var attention = await ReadAsync(ct);
+            var attention = await ReadAsync(_source, ct);
             _cached = new Cached(attention, _time.GetUtcNow());
             return attention;
         }
@@ -82,21 +87,12 @@ public sealed class ExtensionReadinessContext
     private Cached? Fresh()
         => _cached is { } cached && _time.GetUtcNow() - cached.ReadAt < CacheLifetime ? cached : null;
 
-    private async Task<string?> ReadAsync(CancellationToken ct)
+    private async Task<string?> ReadAsync(ExtensionReadinessSource source, CancellationToken ct)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(FetchTimeout);
         try
         {
-            using var response = await _http.GetAsync(CatalogRoute, timeout.Token);
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger?.LogDebug("Extension catalog returned {Status}; readiness line omitted", (int)response.StatusCode);
-                return null;
-            }
-            await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: timeout.Token);
-            return Format(document.RootElement);
+            var rows = await source(ct).WaitAsync(FetchTimeout, _time, ct);
+            return Format(rows);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
@@ -106,32 +102,24 @@ public sealed class ExtensionReadinessContext
     }
 
     /// <summary>
-    /// The line for a catalog response: installed rows whose readiness was evaluated and is not
+    /// The line for the catalog rows: installed, enabled rows whose readiness was evaluated and is not
     /// <c>ready</c>, in catalog order, capped at <see cref="MaxLineLength"/>. <c>""</c> when none;
-    /// null when the response is not a catalog.
+    /// null when there are no rows to judge.
     /// </summary>
-    internal static string? Format(JsonElement catalog)
+    internal static string? Format(IReadOnlyList<ExtensionReadinessRow>? rows)
     {
-        if (catalog.ValueKind != JsonValueKind.Object
-            || !catalog.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
-            return null;
+        if (rows is null) return null;
 
         var entries = new List<string>();
-        foreach (var row in items.EnumerateArray())
+        foreach (var row in rows)
         {
-            if (row.ValueKind != JsonValueKind.Object
-                || !row.TryGetProperty("installed", out var installed) || installed.ValueKind != JsonValueKind.True
-                || !row.TryGetProperty("readiness", out var readiness) || readiness.ValueKind != JsonValueKind.Object)
-                continue;
-            var state = Text(readiness, "state");
-            if (state is null || state == "ready") continue;
+            if (row is null || !row.Installed || row.State is null || row.State == "ready") continue;
+            if (string.Equals(row.PluginStatus, "disabled", StringComparison.OrdinalIgnoreCase)) continue;
 
-            var name = Clean(Text(row, "name") ?? Text(row, "id"));
+            var name = Clean(string.IsNullOrWhiteSpace(row.Name) ? row.Id : row.Name);
             if (name.Length == 0) continue;
-            var detail = readiness.TryGetProperty("nextAction", out var next) && next.ValueKind == JsonValueKind.Object
-                ? Clean(Text(next, "label"))
-                : "";
-            var label = StateLabel(state);
+            var detail = Clean(row.NextAction);
+            var label = StateLabel(row.State);
             entries.Add(detail.Length > 0 ? $"{name} ({label}: {detail})" : $"{name} ({label})");
         }
 
@@ -160,11 +148,6 @@ public sealed class ExtensionReadinessContext
         _ => Clean(state.Replace('-', ' ')),
     };
 
-    private static string? Text(JsonElement element, string property)
-        => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
-
     // Names and labels come from package guides and manifests: keep each on one line, drop invisible
     // formatting characters (bidi overrides included), and bound its length.
     internal static string Clean(string? value)
@@ -191,4 +174,38 @@ public sealed class ExtensionReadinessContext
         if (char.IsHighSurrogate(sb[cut - 1])) cut--;
         return sb.ToString(0, cut) + "…";
     }
+}
+
+/// <summary>
+/// The kernel's optional <see cref="IExtensionCatalog"/> (Leaf.Sdk, KernelApi 0.1.6) as an
+/// <see cref="ExtensionReadinessSource"/>. Nova runs against the kernel's own Leaf.Sdk, and an older
+/// kernel's has no such type: naming it throws while the method that names it is compiled. So only the
+/// non-inlined methods below name it, and the binder turns that failure into "no catalog".
+/// </summary>
+public static class KernelExtensionCatalog
+{
+    public static ExtensionReadinessSource? TryResolve(IServiceProvider services, ILogger? logger = null)
+    {
+        try
+        {
+            return Bind(services);
+        }
+        catch (Exception ex) when (ex is TypeLoadException or MissingMemberException or FileNotFoundException
+                                       or FileLoadException or BadImageFormatException)
+        {
+            logger?.LogInformation("This kernel has no extension catalog service; the readiness line is off ({Error})",
+                ex.GetType().Name);
+            return null;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ExtensionReadinessSource? Bind(IServiceProvider services)
+        => services.GetService<IExtensionCatalog>() is { } catalog ? From(catalog) : null;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static ExtensionReadinessSource From(IExtensionCatalog catalog)
+        => async ct => (await catalog.GetReadinessAsync(ct))
+            .Select(row => new ExtensionReadinessRow(row.Id, row.Name, row.Installed, row.PluginStatus, row.State, row.NextAction))
+            .ToArray();
 }
