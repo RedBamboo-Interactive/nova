@@ -29,8 +29,10 @@
       "id": "open-nova",
       "title": "Open Nova",
       "body": "Open Nova from the Leaf menu. It opens on Chat, where your discussions are listed.",
-      "check": "capability:nova",
-      "action": { "kind": "open-app", "route": "/apps/nova/chat" }
+      "action": {
+        "kind": "open-app",
+        "route": "/apps/nova/chat"
+      }
     },
     {
       "id": "start-discussion",
