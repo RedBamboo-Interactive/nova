@@ -1,6 +1,6 @@
 ---
 name: leaf-foundations
-description: "Current Leaf platform architecture and safe operating contract: RedLeaf, RedCompute, plugins, discovery, entities, assets, workspaces, signed execution identity, confidentiality, and events. Use when inspecting a Leaf installation, choosing an API, operating entities or plugins, or reasoning about cross-service behavior."
+description: "Current Leaf platform architecture and safe operating contract: RedLeaf, RedCompute, plugins and extensions, discovery, entities, assets, workspaces, signed execution identity, confidentiality, and events. Use when inspecting a Leaf installation, choosing an API, operating entities or plugins, reasoning about cross-service behavior, or answering what Leaf can do, what to install, why an extension is not working, or how to use one."
 ---
 
 # Leaf foundations
@@ -35,6 +35,48 @@ instead of probing guessed URLs.
 
 Respect native transports. The shell is HTML; Assets and media are binary; selected operations use
 SSE or WebSocket rather than JSON polling.
+
+## Extensions
+
+Leaf grows through optional extensions. Their `kind` says what installing one changes:
+
+- `app`: adds a screen the user opens.
+- `ability`: no new screen; Agents gain a power.
+- `companion`: works in the background and feeds context.
+- `integration`: links Leaf to an outside service or device.
+
+Abilities in the `system` category are building blocks: shared foundations other extensions plug
+into, installed automatically when needed. Do not suggest them on their own. An extension with no
+guide has no kind yet.
+
+Answer extension questions from these RedLeaf routes, with the execution bearer. Never guess, and
+never read package source or manifests to answer them.
+
+- `GET /api/extensions/catalog?lang=<user's language>`: every extension Leaf knows, installed or
+  not, with `kind`, `category`, `tagline`, `installed`, and
+  `readiness { state, unmetCount, nextAction }`. It is small; read it whole and filter it yourself.
+- `GET /api/extensions/{id}/guide?lang=<user's language>`: what it does, requirements, setup, use
+  cases with `try` prompts, limits, troubleshooting, and `agent.whenToSuggest`. A 404
+  `guide_not_found` means there is no guide; say so instead of filling the gap.
+- `GET /api/extensions/{id}/readiness`: whether it works on this PC now (`ready`, `needs-setup`,
+  `degraded`, `unsupported`, `installable`), with evidence per requirement and the next action.
+
+- What can Leaf do, or what should I install for X: match the request against catalog taglines,
+  kinds and categories, then read the guide of the best one or two. Suggest one only when its
+  `whenToSuggest` fits, and check its readiness so you can say whether it will work on this PC.
+- Why isn't X working: read its readiness; give the unmet item, its evidence and the next action,
+  then the matching troubleshooting entry from its guide.
+- How do I use X: answer from its guide's use cases and setup steps.
+- Quote `try` prompts and `whenToSuggest` exactly as written; do not turn them into promises the
+  guide does not make.
+
+A private discussion's context may name installed extensions that need attention. Treat that line
+as a pointer and read readiness before diagnosing.
+
+The user installs; an Agent never installs or uninstalls an extension. To propose one, name it, say
+why, and say what it needs and costs according to its guide. Then send the user to `/extensions`,
+which opens Settings > Extensions where the Marketplace lists it. For an installed extension,
+`/extensions/<id>` opens its own settings and guide.
 
 ## Preserve execution identity
 
