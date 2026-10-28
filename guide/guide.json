@@ -1,0 +1,97 @@
+{
+  "schema": "leaf.extension-guide/1",
+  "id": "nova",
+  "kind": "app",
+  "category": "communication",
+  "tagline": "Chat with your Agents, talk to them by voice and keep every conversation in one place.",
+  "summary": "Nova is where you talk with your Agents. You can hold discussions with any of your Agents, speak instead of typing, search old conversations and read the notes your Agents keep. Nova is not an AI model itself: the thinking is done by the AI service each Agent is set up to use. It is part of Leaf's core.",
+  "whatYouGet": [
+    "A Nova screen with Chat, where you hold discussions with your Agents.",
+    "A Journal tab to read the notes and memory files your Agents keep.",
+    "Voice: hold a key to talk, plus an optional small always-on-top chat window (Float Nova, Ctrl+Alt+N on desktop)."
+  ],
+  "runsWhere": "hybrid",
+  "cost": {
+    "kind": "free",
+    "note": "Nova itself is free. The AI service your Agents use may have its own cost."
+  },
+  "privacy": "Your discussions are stored on this PC. When an Agent answers, your message goes to the AI service that Agent uses, so what leaves your PC depends on that choice.",
+  "requirements": [
+    {
+      "id": "agent",
+      "kind": "account",
+      "label": "At least one Agent",
+      "detail": "Nova is the place to talk to your Agents, so you need an Agent set up in Leaf."
+    }
+  ],
+  "setup": [
+    {
+      "id": "open-nova",
+      "title": "Open Nova",
+      "body": "Open Nova from the Leaf menu. It opens on Chat, where your discussions are listed.",
+      "check": "capability:nova",
+      "action": { "kind": "open-app", "route": "/apps/nova/chat" }
+    },
+    {
+      "id": "start-discussion",
+      "title": "Start a discussion",
+      "body": "Press the new discussion button, pick the Agent you want to talk to, then type in the message field."
+    },
+    {
+      "id": "try-voice",
+      "title": "Try your voice (optional)",
+      "body": "In Nova's settings you can choose your microphone and the key you hold to talk. Hold that key, speak, then let go."
+    }
+  ],
+  "useCases": [
+    {
+      "id": "daily-chat",
+      "title": "Talk through your day",
+      "story": "You sit down in the morning, tell your Agent what is on your plate and ask what to tackle first. Tomorrow, the conversation is still there.",
+      "try": "Good morning! Here is what I have today: dentist at 3, a report to finish, groceries. Help me order it."
+    },
+    {
+      "id": "find-old",
+      "title": "Find something you said before",
+      "story": "You remember discussing a gift idea weeks ago. Search all your discussions instead of scrolling for it.",
+      "try": "What gift ideas did we talk about for my sister's birthday?"
+    },
+    {
+      "id": "hands-busy",
+      "title": "Talk while your hands are busy",
+      "story": "You are cooking and want to ask a question. Hold the talk key, speak, and let go.",
+      "try": "Can I replace butter with olive oil in this cake recipe?"
+    },
+    {
+      "id": "read-journal",
+      "title": "See what your Agent remembers",
+      "story": "You are curious what your Agent keeps in its notes. Open the Journal tab and read the files.",
+      "try": "Summarize what you have written in your journal this week."
+    }
+  ],
+  "limitations": [
+    "Nova is the place to talk, not the AI itself: answers depend on the AI service behind each Agent.",
+    "Float Nova needs a desktop computer and does not work on phones or tablets.",
+    "Float Nova needs the main Leaf page to stay open in the background."
+  ],
+  "troubleshooting": [
+    {
+      "id": "no-float",
+      "symptom": "I cannot find Float Nova",
+      "fix": "It only appears on a desktop browser or app that supports a floating window. Phones and tablets are not supported."
+    },
+    {
+      "id": "no-journal",
+      "symptom": "Journal says there is no workspace",
+      "fix": "The Agent you picked has no workspace yet, so it has no notes to show. Choose another Agent in the Journal tab."
+    },
+    {
+      "id": "float-closed",
+      "symptom": "Float Nova closed by itself",
+      "fix": "It depends on the main Leaf page staying open. Keep Leaf open in its own window, then open Float Nova again with Ctrl+Alt+N."
+    }
+  ],
+  "agent": {
+    "whenToSuggest": "The user wants a place to talk with their Agents, use voice, search past conversations, or read an Agent's journal. Nova is part of Leaf's core and is already installed."
+  }
+}
