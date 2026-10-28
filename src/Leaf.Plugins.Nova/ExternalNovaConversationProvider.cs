@@ -469,7 +469,7 @@ public sealed class ExternalAgentConversationProvider(
                 role,
                 kind,
                 visibleContent,
-                new DateTimeOffset(DateTime.SpecifyKind(message.Timestamp, DateTimeKind.Utc)),
+                AsUtcOffset(message.Timestamp),
                 new JsonObject { ["phase"] = phase },
                 message.ToolName,
                 message.ToolInput,
@@ -1039,4 +1039,12 @@ public sealed class ExternalAgentConversationProvider(
         private Action? action = dispose;
         public void Dispose() => Interlocked.Exchange(ref action, null)?.Invoke();
     }
+
+    // System.Text.Json turns an offset timestamp ("...+00:00") into a Local DateTime, so
+    // relabelling it Utc without converting shifts it by the machine's UTC offset.
+    internal static DateTimeOffset AsUtcOffset(DateTime timestamp) => timestamp.Kind switch
+    {
+        DateTimeKind.Local => new DateTimeOffset(timestamp.ToUniversalTime()),
+        _ => new DateTimeOffset(DateTime.SpecifyKind(timestamp, DateTimeKind.Utc)),
+    };
 }
