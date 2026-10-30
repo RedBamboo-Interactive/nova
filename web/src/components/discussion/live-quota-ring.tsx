@@ -45,7 +45,7 @@ function QuotaRing({ remainingPercent, color, size }: { remainingPercent: number
       width={size}
       height={size}
       viewBox={`0 0 ${size} ${size}`}
-      className="pointer-events-none absolute inset-0 -rotate-90"
+      className="pointer-events-none absolute inset-0 size-full -rotate-90"
     >
       <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="currentColor" strokeWidth={RING_STROKE} className="text-overlay-10" />
       {remainingPercent > 0 && (
