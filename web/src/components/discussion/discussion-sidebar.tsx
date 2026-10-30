@@ -11,6 +11,7 @@ import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
 import { discussionActivityIndicator } from "../../lib/delegation-activity"
 import { DiscussionActionItems } from "./discussion-actions-menu"
+import { LiveQuotaRing } from "./live-quota-ring"
 import { formatOwningApp } from "../../lib/discussion-owner"
 import { createDiscussionTitleResolver } from "../../lib/discussion-display-title"
 
@@ -156,7 +157,9 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         ].filter(Boolean).join(" ")}
         title={
           <span className="flex items-center gap-1.5">
-            <i className={`ph-bold ph-broadcast text-[10px] text-status-live ${discussion.status === "thinking" ? "animate-pulse" : ""}`} />
+            <LiveQuotaRing discussion={discussion} size={16}>
+              <i className={`ph-bold ph-broadcast text-[10px] text-status-live ${discussion.status === "thinking" ? "animate-pulse" : ""}`} />
+            </LiveQuotaRing>
             <span style={{ color: "var(--color-status-live)" }}>Live</span>
           </span>
         }

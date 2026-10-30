@@ -18,6 +18,8 @@ import { createNovaSpeechBackend } from "../lib/speech"
 import { useLocalSettings } from "../hooks/use-local-settings"
 import { useAgents } from "../hooks/use-agents"
 import { versionedAvatarSrc } from "../lib/agent-directory-sync"
+import { recordingUsageLoader, resolveLiveProvider, usageKey } from "../lib/provider-usage-store"
+import { LiveQuotaContext, LiveQuotaRing, providerUsageStore, type LiveQuotaContextValue } from "../components/discussion/live-quota-ring"
 import { useReactions } from "../hooks/use-reactions"
 import { useDisc, useNovaPendingContext } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
@@ -365,6 +367,23 @@ export function ChatView({
   const [confidentialityPending, setConfidentialityPending] = useState(false)
   const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
+  const providersRef = useRef(providers)
+  providersRef.current = providers
+  // Session Info's own reads also feed the Live quota ring, so the ring adds no provider calls.
+  const recordedUsageLoader = useMemo(() => recordingUsageLoader(
+    providerUsageStore,
+    loadProviderUsage,
+    provider => usageKey(provider, providersRef.current),
+  ), [loadProviderUsage])
+  const liveQuota = useMemo<LiveQuotaContextValue>(() => ({
+    providers,
+    load: loadProviderUsage,
+    providerFor: live => resolveLiveProvider(
+      live,
+      getAgent(live.agentId)?.provider,
+      live.id === activeDiscussion?.id ? sessionStats?.provider : null,
+    ),
+  }), [activeDiscussion?.id, getAgent, loadProviderUsage, providers, sessionStats?.provider])
   const [capturingContext, setCapturingContext] = useState(false)
   const capturingContextRef = useRef(false)
   const [contextPickerOpen, setContextPickerOpen] = useState(false)
@@ -899,46 +918,51 @@ export function ChatView({
   const liveHeartbeatPair = findLiveHeartbeatPair(discussions, activeDiscussion)
 
   const liveHeartbeatTabs = liveHeartbeatPair && (
-    <Tabs
-      value={activeDiscussion?.type === "heartbeat" ? "heartbeat" : "live"}
-      onValueChange={(value) => handleSelectDiscussion(
-        value === "heartbeat" ? liveHeartbeatPair.heartbeat.id : liveHeartbeatPair.live.id,
-      )}
-      className="shrink-0"
-      style={{ height: "100%" }}
-    >
-      <TabsList
-        variant="line"
-        aria-label="Live views"
-        style={{ height: "100%", padding: 0 }}
+    <LiveQuotaContext.Provider value={liveQuota}>
+      <Tabs
+        value={activeDiscussion?.type === "heartbeat" ? "heartbeat" : "live"}
+        onValueChange={(value) => handleSelectDiscussion(
+          value === "heartbeat" ? liveHeartbeatPair.heartbeat.id : liveHeartbeatPair.live.id,
+        )}
+        className="shrink-0"
+        style={{ height: "100%" }}
       >
-        <TabsTrigger
-          value="live"
-          className="after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px]"
-          style={{ height: "100%" }}
+        <TabsList
+          variant="line"
+          aria-label="Live views"
+          style={{ height: "100%", padding: 0 }}
         >
-          <i
-            aria-hidden="true"
-            className={`ph-bold ph-broadcast text-[12px] ${liveHeartbeatPair.live.status === "thinking" ? "animate-pulse" : ""}`}
-            style={{ color: "var(--color-status-live)" }}
-          />
-          Live
-        </TabsTrigger>
-        <TabsTrigger
-          value="heartbeat"
-          aria-label={liveHeartbeatPair.heartbeat.status === "thinking" ? "Heartbeat, tick running" : "Heartbeat"}
-          className="after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px]"
-          style={{ height: "100%" }}
-        >
-          <i
-            aria-hidden="true"
-            className={`ph-bold ph-heartbeat text-[12px] ${liveHeartbeatPair.heartbeat.status === "thinking" ? "animate-pulse" : ""}`}
-            style={{ color: "var(--color-accent-gold)" }}
-          />
-          Heartbeat
-        </TabsTrigger>
-      </TabsList>
-    </Tabs>
+          <TabsTrigger
+            value="live"
+            aria-label="Live"
+            className="after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px]"
+            style={{ height: "100%" }}
+          >
+            <LiveQuotaRing discussion={liveHeartbeatPair.live} size={18}>
+              <i
+                aria-hidden="true"
+                className={`ph-bold ph-broadcast text-[12px] ${liveHeartbeatPair.live.status === "thinking" ? "animate-pulse" : ""}`}
+                style={{ color: "var(--color-status-live)" }}
+              />
+            </LiveQuotaRing>
+            Live
+          </TabsTrigger>
+          <TabsTrigger
+            value="heartbeat"
+            aria-label={liveHeartbeatPair.heartbeat.status === "thinking" ? "Heartbeat, tick running" : "Heartbeat"}
+            className="after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px]"
+            style={{ height: "100%" }}
+          >
+            <i
+              aria-hidden="true"
+              className={`ph-bold ph-heartbeat text-[12px] ${liveHeartbeatPair.heartbeat.status === "thinking" ? "animate-pulse" : ""}`}
+              style={{ color: "var(--color-accent-gold)" }}
+            />
+            Heartbeat
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+    </LiveQuotaContext.Provider>
   )
 
   const activeDelegations = activeDiscussion ? delegationActivity[activeDiscussion.id] : undefined
@@ -1007,7 +1031,7 @@ export function ChatView({
                 icon: p.icon,
                 iconSvgPath: p.iconSvgPath,
               }))}
-              loadProviderUsage={loadProviderUsage}
+              loadProviderUsage={recordedUsageLoader}
               open={sessionInfoOpen}
               onOpenChange={setSessionInfoOpen}
             >
@@ -1072,7 +1096,7 @@ export function ChatView({
             icon: p.icon,
             iconSvgPath: p.iconSvgPath,
           }))}
-          loadProviderUsage={loadProviderUsage}
+          loadProviderUsage={recordedUsageLoader}
         >
           {sessionInfoContent}
         </SessionInfoButton>
@@ -1580,30 +1604,32 @@ export function ChatView({
         <>
           {sidebarHeader}
           <div className="flex-1 overflow-hidden">
-            <DiscussionSidebar
-              discussions={archiveMode ? filteredArchivedDiscussions : filteredDiscussions}
-              loadState={archiveMode ? archiveListLoadState : discussionListLoadState}
-              onRetryLoad={handleRetryDiscussionList}
-              delegationActivity={delegationActivity}
-              backgroundTasks={backgroundTasksByDiscussion}
-              activeDiscussionId={synchronizedDiscussionId ?? activeDiscussionId}
-              onSelect={handleSelectDiscussion}
-              onArchive={handleCloseDiscussion}
-              onRotate={handleRotateDiscussion}
-              onDismiss={dismissDiscussion}
-              onRowAction={handleRowAction}
-              onUpdateTitle={handleUpdateTitle}
-              onFloat={floatingSurface?.supported && !floating ? handleFloatDiscussion : undefined}
-              onStop={stopDiscussion}
-              getAgent={getAgent}
-              multiAgent={multiAgent}
-              archiveMode={archiveMode}
-              archiveQuery={archiveQuery}
-              archiveHasMore={archiveHasMore}
-              onArchiveQueryChange={setArchiveQuery}
-              onExitArchiveMode={handleExitArchiveMode}
-              onLoadMoreArchived={handleLoadMoreArchived}
-            />
+            <LiveQuotaContext.Provider value={liveQuota}>
+              <DiscussionSidebar
+                discussions={archiveMode ? filteredArchivedDiscussions : filteredDiscussions}
+                loadState={archiveMode ? archiveListLoadState : discussionListLoadState}
+                onRetryLoad={handleRetryDiscussionList}
+                delegationActivity={delegationActivity}
+                backgroundTasks={backgroundTasksByDiscussion}
+                activeDiscussionId={synchronizedDiscussionId ?? activeDiscussionId}
+                onSelect={handleSelectDiscussion}
+                onArchive={handleCloseDiscussion}
+                onRotate={handleRotateDiscussion}
+                onDismiss={dismissDiscussion}
+                onRowAction={handleRowAction}
+                onUpdateTitle={handleUpdateTitle}
+                onFloat={floatingSurface?.supported && !floating ? handleFloatDiscussion : undefined}
+                onStop={stopDiscussion}
+                getAgent={getAgent}
+                multiAgent={multiAgent}
+                archiveMode={archiveMode}
+                archiveQuery={archiveQuery}
+                archiveHasMore={archiveHasMore}
+                onArchiveQueryChange={setArchiveQuery}
+                onExitArchiveMode={handleExitArchiveMode}
+                onLoadMoreArchived={handleLoadMoreArchived}
+              />
+            </LiveQuotaContext.Provider>
           </div>
           {showAvatar && (
             <div
