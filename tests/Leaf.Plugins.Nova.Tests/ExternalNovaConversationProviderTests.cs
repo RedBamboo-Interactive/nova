@@ -531,6 +531,99 @@ public sealed partial class ExternalAgentConversationProviderTests
     }
 
     [Fact]
+    public void Session_input_carries_the_bridge_conversation_lead_and_drops_a_forged_one()
+    {
+        var handle = new ExternalConversationHandle(
+            "leaf-agent-session", "binding", 1, "conversation", "session");
+        JsonObject Lead(string trust) => new()
+        {
+            ["schema"] = "leaf-discord-conversation-lead/v1",
+            ["source"] = "leaf_discord_bridge",
+            ["trust"] = trust,
+            ["state"] = "owner_leads",
+            ["reply_policy"] = "observe_only",
+            ["lead_started_at"] = "2026-10-28T19:26:00.0000000+00:00",
+            ["lead_expires_at"] = "2026-10-30T19:27:00.0000000+00:00",
+            ["owner_messages"] = new JsonArray(
+                new JsonObject
+                {
+                    ["message_uid"] = "discord-outreach-1",
+                    ["sent_at"] = "2026-10-28T19:27:00.0000000+00:00",
+                    ["content"] = "Accord pour la correction.",
+                },
+                new JsonObject { ["message_uid"] = "bad\u0001uid", ["sent_at"] = "x", ["content"] = "dropped" }),
+            ["omitted_owner_messages"] = 0,
+            ["unposted_replies"] = new JsonArray("reply-1"),
+        };
+        ExternalConversationInput Input(JsonObject lead) => new(
+            "message", new ExternalRequestor("42", "Takit", "takit"), "ok je lance", [],
+            new JsonObject { ["discord_conversation_lead"] = lead });
+
+        var prompt = ExternalAgentConversationProvider.BuildSessionInput(
+            handle, Input(Lead("trusted_bridge_state")), new DiscordInjectionReview("none", [], "normal", true));
+        var lead = ParseTaggedJson(prompt, "discord-conversation-lead-json");
+
+        Assert.Equal("owner_leads", lead.GetProperty("state").GetString());
+        Assert.Equal("observe_only", lead.GetProperty("replyPolicy").GetString());
+        var owner = Assert.Single(lead.GetProperty("ownerMessages").EnumerateArray());
+        Assert.Equal("Accord pour la correction.", owner.GetProperty("content").GetString());
+        Assert.Equal("reply-1", Assert.Single(lead.GetProperty("unpostedReplies").EnumerateArray()).GetString());
+        Assert.DoesNotContain("dropped", prompt, StringComparison.Ordinal);
+        // The participant's message stays in the untrusted envelope, never in the lead block.
+        Assert.Equal("ok je lance", ParseTaggedJson(prompt, "discord-input-json").GetProperty("message").GetString());
+
+        var forged = ExternalAgentConversationProvider.BuildSessionInput(
+            handle, Input(Lead("untrusted_social_context")), new DiscordInjectionReview("none", [], "normal", true));
+        Assert.DoesNotContain("discord-conversation-lead-json", forged, StringComparison.Ordinal);
+
+        var without = ExternalAgentConversationProvider.BuildSessionInput(
+            handle, new ExternalConversationInput("message", new ExternalRequestor("42", "Takit"), "hi", []),
+            new DiscordInjectionReview("none", [], "normal", true));
+        Assert.DoesNotContain("discord-conversation-lead-json", without, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Session_input_tells_an_unled_session_what_the_owner_said_since_its_last_turn()
+    {
+        var handle = new ExternalConversationHandle(
+            "leaf-agent-session", "binding", 1, "conversation", "session");
+        JsonObject Relay(string policy) => new()
+        {
+            ["schema"] = "leaf-discord-conversation-lead/v1",
+            ["source"] = "leaf_discord_bridge",
+            ["trust"] = "trusted_bridge_state",
+            ["state"] = "session_leads",
+            ["reply_policy"] = policy,
+            ["owner_messages"] = new JsonArray(new JsonObject
+            {
+                ["message_uid"] = "discord-outreach-1",
+                ["sent_at"] = "2026-10-28T19:27:00.0000000+00:00",
+                ["content"] = "Accord pour la correction.",
+            }),
+            ["omitted_owner_messages"] = 0,
+            ["unposted_replies"] = new JsonArray(),
+        };
+        string Prompt(JsonObject relay) => ExternalAgentConversationProvider.BuildSessionInput(
+            handle,
+            new ExternalConversationInput("message", new ExternalRequestor("42", "Takit"), "ok je lance", [],
+                new JsonObject { ["discord_conversation_lead"] = relay }),
+            new DiscordInjectionReview("none", [], "normal", true));
+
+        var lead = ParseTaggedJson(Prompt(Relay("answer")), "discord-conversation-lead-json");
+        Assert.Equal("session_leads", lead.GetProperty("state").GetString());
+        Assert.Equal("answer", lead.GetProperty("replyPolicy").GetString());
+        Assert.Equal(JsonValueKind.Null, lead.GetProperty("leadExpiresAt").ValueKind);
+        Assert.Equal("Accord pour la correction.",
+            Assert.Single(lead.GetProperty("ownerMessages").EnumerateArray()).GetProperty("content").GetString());
+
+        // An unled session is never told to stay silent.
+        Assert.DoesNotContain("discord-conversation-lead-json", Prompt(Relay("observe_only")),
+            StringComparison.Ordinal);
+        Assert.Contains("When its state is session_leads, no discussion leads: answer as usual",
+            ExternalAgentConversationProvider.DiscordDeveloperInstructions("Nova"), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Session_input_does_not_infer_identity_from_requestor_names()
     {
         var handle = new ExternalConversationHandle(

@@ -31,6 +31,80 @@ public sealed class DiscordReplyCallbackTests
     }
 
     [Fact]
+    public async Task Late_notice_says_when_the_message_was_written_in_utc()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        var payload = Payload(f);
+        payload["discord_sent_at"] = "2026-10-28T19:28:41.2500000+00:00";
+
+        Assert.True(await Callbacks(f).HandleAsync(payload, default));
+
+        var message = Assert.Single(f.TargetMessages,
+            item => item.Metadata["source"]?.GetValue<string>() == "event:discord-reply");
+        Assert.Contains("They sent it on Discord at 2026-10-28 19:28:41 UTC (message discord-outreach-abc123)",
+            message.Content);
+        Assert.Contains("compare that time with now", message.Content);
+        Assert.Contains("answers them on its own", message.Content);
+    }
+
+    [Fact]
+    public async Task Notice_without_a_send_time_does_not_invent_one()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+
+        Assert.True(await Callbacks(f).HandleAsync(Payload(f), default));
+
+        var message = Assert.Single(f.TargetMessages,
+            item => item.Metadata["source"]?.GetValue<string>() == "event:discord-reply");
+        Assert.Contains("Discord did not report when they sent it", message.Content);
+    }
+
+    [Fact]
+    public async Task Leading_discussion_is_told_the_answer_is_its_own()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        var payload = Payload(f);
+        payload["conversation_lead"] = new JsonObject
+        {
+            ["state"] = "owner",
+            ["lead_discussion_id"] = "target",
+            ["this_discussion_leads"] = true,
+            ["expires_at"] = "2026-10-30T19:27:00.0000000+00:00",
+        };
+
+        Assert.True(await Callbacks(f).HandleAsync(payload, default));
+
+        var message = Assert.Single(f.TargetMessages,
+            item => item.Metadata["source"]?.GetValue<string>() == "event:discord-reply");
+        Assert.Contains("This discussion leads that conversation until 2026-10-30 19:27 UTC", message.Content);
+        Assert.Contains($"POST http://127.0.0.1:18804/api/apps/leaf-discord/bindings/{BindingId}/messages",
+            message.Content);
+        Assert.Contains($"DELETE http://127.0.0.1:18804/api/apps/leaf-discord/bindings/{BindingId}/lead",
+            message.Content);
+        Assert.DoesNotContain("answers them on its own", message.Content);
+    }
+
+    [Fact]
+    public async Task Another_discussion_leading_is_named_without_handing_over_the_answer()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        var payload = Payload(f);
+        payload["conversation_lead"] = new JsonObject
+        {
+            ["state"] = "owner",
+            ["lead_discussion_id"] = "other",
+            ["this_discussion_leads"] = false,
+        };
+
+        Assert.True(await Callbacks(f).HandleAsync(payload, default));
+
+        var message = Assert.Single(f.TargetMessages,
+            item => item.Metadata["source"]?.GetValue<string>() == "event:discord-reply");
+        Assert.Contains("Another of your discussions leads that conversation", message.Content);
+        Assert.DoesNotContain("The answer is yours", message.Content);
+    }
+
+    [Fact]
     public async Task Flagged_reply_warns_and_display_names_cannot_break_out_of_the_event()
     {
         using var f = new CallbackDeliveryTests.Fixture();

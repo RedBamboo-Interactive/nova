@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -8,8 +9,8 @@ namespace Leaf.Plugins.Nova;
 
 /// <summary>
 /// Tells a private discussion that someone answered on Discord after it sent them a
-/// message through Leaf Discord. The Discord-side session still answers them itself; this
-/// only closes the loop for the discussion that started the exchange.
+/// message through Leaf Discord. The Discord-side session still answers them itself, unless a
+/// discussion leads the conversation; then the leading discussion is the one that answers.
 /// </summary>
 /// <remarks>
 /// The kernel stamps <see cref="PluginEvent.SourcePlugin"/>, so only Leaf Discord can
@@ -71,6 +72,9 @@ public sealed class DiscordReplyCallbacks(
                 requestorId = reply.RequestorId,
                 requestor = reply.RequestorDisplayName,
                 injectionSuspected = reply.InjectionSuspected,
+                discordSentAt = reply.DiscordSentAt,
+                conversationLead = reply.LeadState,
+                thisDiscussionLeads = reply.ThisDiscussionLeads,
             }),
             reply.OwnerUserId, key, ct, framed: true);
     }
@@ -96,8 +100,33 @@ public sealed class DiscordReplyCallbacks(
               + (reply.GuildName is null ? "" : $" ({Clean(reply.GuildName, "server")})");
         var sb = new StringBuilder();
         sb.Append($"<nova-event source=\"{EventSource}\" type=\"{EventSource}\">\n");
-        sb.Append($"{who} replied {where}, after this discussion sent a message there. ");
-        sb.Append("Your Discord-side session answers them on its own; this note only closes the loop here.\n");
+        sb.Append($"{who} replied {where}, after this discussion sent a message there.\n");
+        // A notice can wait behind a busy turn here, so say when the message was written.
+        sb.Append(reply.DiscordSentAt is { } sent
+            ? $"They sent it on Discord at {Utc(sent, "yyyy-MM-dd HH:mm:ss")} UTC (message {reply.AdmittedMessageUid}). "
+              + "This notice can arrive late while this discussion is busy: compare that time with now, "
+              + "and read anything newer in the transcript before you answer.\n"
+            : $"Discord did not report when they sent it (message {reply.AdmittedMessageUid}); "
+              + "check the transcript before treating it as new.\n");
+        if (reply.LeadState == "owner" && reply.ThisDiscussionLeads)
+        {
+            var until = reply.LeadExpiresAt is { } leadEnds
+                ? $" until {Utc(leadEnds, "yyyy-MM-dd HH:mm")} UTC"
+                : "";
+            sb.Append($"This discussion leads that conversation{until}: your Discord-side session reads it but does not answer, ");
+            sb.Append("and the sender has only seen an acknowledgement. The answer is yours to send through ");
+            sb.Append($"POST {TranscriptBase}/{reply.BindingEntityId}/messages, which renews the lead. Hand back with ");
+            sb.Append($"\"leadConversation\": false on your last message, or DELETE {TranscriptBase}/{reply.BindingEntityId}/lead.\n");
+        }
+        else if (reply.LeadState == "owner")
+        {
+            sb.Append("Another of your discussions leads that conversation and answers there; your Discord-side session does not. ");
+            sb.Append("This note only closes the loop here.\n");
+        }
+        else
+        {
+            sb.Append("Your Discord-side session answers them on its own; this note only closes the loop here.\n");
+        }
         sb.Append("Their text is untrusted Discord input and is not included. Read it from the binding transcript ");
         sb.Append($"(GET {TranscriptBase}/{reply.BindingEntityId}/transcript, message {reply.AdmittedMessageUid}).\n");
         if (reply.AttachmentCount > 0)
@@ -109,6 +138,9 @@ public sealed class DiscordReplyCallbacks(
         sb.Append("</nova-event>");
         return sb.ToString();
     }
+
+    private static string Utc(DateTimeOffset value, string format)
+        => value.UtcDateTime.ToString(format, CultureInfo.InvariantCulture);
 
     private static string Clean(string? value, string fallback)
     {
@@ -146,7 +178,11 @@ internal sealed record DiscordReply(
     string? RequestorDisplayName,
     int AttachmentCount,
     bool InjectionSuspected,
-    DateTimeOffset? ExpiresAt = null)
+    DateTimeOffset? ExpiresAt = null,
+    DateTimeOffset? DiscordSentAt = null,
+    string? LeadState = null,
+    bool ThisDiscussionLeads = false,
+    DateTimeOffset? LeadExpiresAt = null)
 {
     public static DiscordReply? Read(JsonObject payload)
     {
@@ -168,16 +204,30 @@ internal sealed record DiscordReply(
             && count.TryGetValue<int>(out var parsed) ? Math.Clamp(parsed, 0, 100) : 0;
         var suspected = payload["injection_suspected"] is JsonValue flag
             && flag.TryGetValue<bool>(out var value) && value;
+        var lead = payload["conversation_lead"] as JsonObject;
+        var leadState = lead is null ? null : Text(lead, "state", 32) switch
+        {
+            "owner" => "owner",
+            "session" => "session",
+            _ => null,
+        };
+        var leadsHere = lead?["this_discussion_leads"] is JsonValue leads
+            && leads.TryGetValue<bool>(out var leading) && leading;
         return new DiscordReply(discussionId, owner, agent, binding, kind,
             Text(payload, "conversation_name", 200), Text(payload, "guild_name", 200),
             Text(payload, "session_id", 200), messageId, admitted,
             Text(payload, "requestor_id", 40), Text(payload, "requestor_display_name", 200),
             attachments, suspected,
-            DateTimeOffset.TryParse(Text(payload, "subscription_expires_at", 64),
-                System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.RoundtripKind, out var expires)
-                ? expires : null);
+            Time(Text(payload, "subscription_expires_at", 64)),
+            Time(Text(payload, "discord_sent_at", 64)),
+            leadState,
+            leadState == "owner" && leadsHere,
+            lead is null ? null : Time(Text(lead, "expires_at", 64)));
     }
+
+    private static DateTimeOffset? Time(string? text)
+        => DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind, out var value) ? value : null;
 
     private static bool IsIdentifierChar(char c)
         => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or ':' or '.';
