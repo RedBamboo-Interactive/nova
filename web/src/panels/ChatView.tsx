@@ -17,6 +17,7 @@ import { ReactionPills, AddReactionButton } from "../components/discussion/react
 import { createNovaSpeechBackend } from "../lib/speech"
 import { useLocalSettings } from "../hooks/use-local-settings"
 import { useAgents } from "../hooks/use-agents"
+import { versionedAvatarSrc } from "../lib/agent-directory-sync"
 import { useReactions } from "../hooks/use-reactions"
 import { useDisc, useNovaPendingContext } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
@@ -267,7 +268,7 @@ export function ChatView({
         : activeDisplayTitle || "New Discussion",
   )
 
-  const { agents, getAgent, refreshAgents } = useAgents()
+  const { agents, getAgent, refreshAgents, avatarRevision } = useAgents()
   const multiAgent = agents.length > 1
   const settings = useLocalSettings()
   const pushToTalk = usePushToTalkSettings()
@@ -1362,16 +1363,8 @@ export function ChatView({
   const { autoFocusMode } = useComposerFocusSettings()
   const showAvatar = !floating && avatarEnabled && !!activeDiscussion
   const showFloatingTabAvatar = floating && avatarEnabled && !!activeDiscussion
-  const [avatarVersion, setAvatarVersion] = useState(0)
-  useEffect(() => {
-    const handler = () => setAvatarVersion(v => v + 1)
-    window.addEventListener("nova:avatar-changed", handler)
-    return () => window.removeEventListener("nova:avatar-changed", handler)
-  }, [])
   const avatarBase = activeAgent ? activeAgent.avatarUrl : "/api/apps/nova/avatar"
-  const avatarSrc = avatarVersion
-    ? `${avatarBase}${avatarBase.includes("?") ? "&" : "?"}v=${avatarVersion}`
-    : avatarBase
+  const avatarSrc = versionedAvatarSrc(avatarBase, avatarRevision)
 
   const chatArea = activeDiscussion && isDiscussionSelectionCurrent(synchronizedDiscussionId, activeDiscussionId) ? (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
