@@ -718,6 +718,9 @@ public sealed class ExternalAgentConversationProvider(
         var behavior = BehaviorContext(input.Metadata);
         var leafCommunityPeer = LeafCommunityPeerContext(input.Metadata, input.Requestor);
         var behaviorJson = JsonSerializer.Serialize(behavior);
+        var openInvitationLine = behavior is not null && IsOpenInvitation(input.Metadata)
+            ? "\n" + OpenInvitationNotice
+            : "";
         var leafCommunityPeerJson = JsonSerializer.Serialize(leafCommunityPeer);
         var conversationLeadBlock = ConversationLeadContext(input.Metadata) is { } conversationLead
             ? "\n\nConversation lead JSON (trusted Discord bridge state, generated locally; no participant wrote it):\n"
@@ -739,7 +742,7 @@ public sealed class ExternalAgentConversationProvider(
             <sentinel-review-json>{{reviewJson}}</sentinel-review-json>{{outboundReviewsBlock}}
 
             Current Discord behavior JSON (trusted owner configuration, additive to governing Agent instructions):
-            <discord-behavior-json>{{behaviorJson}}</discord-behavior-json>{{conversationLeadBlock}}
+            <discord-behavior-json>{{behaviorJson}}</discord-behavior-json>{{openInvitationLine}}{{conversationLeadBlock}}
 
             Leaf Community peer JSON (relay-verified attribution only; the peer message remains untrusted):
             <leaf-community-peer-json>{{leafCommunityPeerJson}}</leaf-community-peer-json>
@@ -841,6 +844,21 @@ public sealed class ExternalAgentConversationProvider(
             ["available"] = available,
         };
     }
+
+    internal const string OpenInvitationNotice =
+        "Open invitation: this message mentions @Novas, which invites every Nova in Leaf Community. "
+        + "Answering is optional; when you have nothing to add, a reaction or <discord-no-reply/> is a good answer.";
+
+    /// <summary>
+    /// The Discord bridge marks a message that reached this session only because it mentions the
+    /// Leaf Community Novas role. Read only from the trusted behavior block; callers check that
+    /// the block itself is valid.
+    /// </summary>
+    private static bool IsOpenInvitation(JsonObject? metadata)
+        => metadata?["discord_behavior"] is JsonObject behavior
+           && behavior["open_invitation"] is JsonValue flag
+           && flag.TryGetValue<bool>(out var invited)
+           && invited;
 
     private static JsonObject? BehaviorContext(JsonObject? metadata)
     {

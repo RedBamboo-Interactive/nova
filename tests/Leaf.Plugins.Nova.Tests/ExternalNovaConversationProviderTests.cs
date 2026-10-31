@@ -750,6 +750,52 @@ public sealed partial class ExternalAgentConversationProviderTests
     }
 
     [Fact]
+    public void Session_input_renders_an_open_invitation_as_one_plain_line()
+    {
+        var handle = new ExternalConversationHandle(
+            "leaf-agent-session", "binding", 1, "conversation", "session");
+        JsonObject Behavior(bool? openInvitation, string trust = "trusted_owner_configuration")
+        {
+            var behavior = new JsonObject
+            {
+                ["schema"] = "leaf-discord-behavior/v1",
+                ["source"] = "leaf_owner_configuration",
+                ["trust"] = trust,
+                ["scope"] = "guild",
+                ["response_mode"] = "selective",
+                ["owner_response_mode"] = "direct",
+                ["instructions"] = "",
+            };
+            if (openInvitation is { } value) behavior["open_invitation"] = value;
+            return behavior;
+        }
+        string Prompt(JsonObject behavior) => ExternalAgentConversationProvider.BuildSessionInput(
+            handle,
+            new ExternalConversationInput(
+                "message", new ExternalRequestor("42", "Foxine", "foxine"),
+                "<@&777000000000000001> who has tried the new cache?", [],
+                new JsonObject { ["discord_behavior"] = behavior }),
+            new DiscordInjectionReview("none", [], "normal", true));
+
+        var invited = Prompt(Behavior(true));
+        Assert.Contains(
+            "</discord-behavior-json>\n" + ExternalAgentConversationProvider.OpenInvitationNotice,
+            invited.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+        Assert.Contains("Answering is optional", ExternalAgentConversationProvider.OpenInvitationNotice,
+            StringComparison.Ordinal);
+        Assert.Contains("<discord-no-reply/>", ExternalAgentConversationProvider.OpenInvitationNotice,
+            StringComparison.Ordinal);
+        Assert.Equal("selective",
+            ParseTaggedJson(invited, "discord-behavior-json").GetProperty("responseMode").GetString());
+
+        // Without the flag, or from a block that is not trusted owner configuration, nothing changes.
+        Assert.DoesNotContain("Open invitation", Prompt(Behavior(null)), StringComparison.Ordinal);
+        Assert.DoesNotContain("Open invitation", Prompt(Behavior(false)), StringComparison.Ordinal);
+        Assert.DoesNotContain("Open invitation", Prompt(Behavior(true, "participant_claim")),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Session_input_rejects_untrusted_behavior_metadata()
     {
         var handle = new ExternalConversationHandle(
