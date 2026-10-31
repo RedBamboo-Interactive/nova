@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type Ref } from "react"
 import { useParams, useNavigate, useLocation } from "react-router-dom"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, useToast, useUiEnvironment } from "@redbamboo/ui"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type ProviderUsageSnapshot, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
@@ -13,7 +13,8 @@ import { TransitioningAgentAvatar } from "../components/transitioning-agent-avat
 import { NovaStatusLine } from "../components/nova-status-line"
 import { DelegationsInfo, delegationActivityGroup } from "../components/delegation-activity"
 import { WorktreeChips } from "../components/discussion/worktree-chips"
-import { ReactionPills, AddReactionButton } from "../components/discussion/reactions"
+import { ReactionPills, AddReactionButton, useReactionEmoji } from "../components/discussion/reactions"
+import { reactionMenuEntries } from "../components/discussion/reaction-actions"
 import { createNovaSpeechBackend } from "../lib/speech"
 import { useLocalSettings } from "../hooks/use-local-settings"
 import { useAgents } from "../hooks/use-agents"
@@ -1256,6 +1257,17 @@ export function ChatView({
     )
   }, [reactions, react, unreact])
 
+  // The same picker, as the message menu's React submenu (context menu, ⋮ and touch sheet).
+  const reactionEmoji = useReactionEmoji()
+  const reactionChoices = useMemo(
+    () => reactionEmoji.map(item => ({ emoji: item.emoji, icon: normalizeIcon(item.icon) })),
+    [reactionEmoji],
+  )
+  const getMessageActions = useCallback(
+    (block: MessageBlock) => reactionMenuEntries(reactionChoices, emoji => react(block.id, emoji)),
+    [reactionChoices, react],
+  )
+
   const renderWhatISeeAction = useCallback(({ disabled }: { disabled: boolean }) => {
     if (mobileClient) {
       return (
@@ -1488,6 +1500,7 @@ export function ChatView({
         renderComposerAttachments={renderWhatISeeAttachment}
         renderAttachmentActions={renderWhatISeeAction}
         renderSideActions={renderSideActions}
+        getMessageActions={getMessageActions}
       />
       {owningApp && (
         <div

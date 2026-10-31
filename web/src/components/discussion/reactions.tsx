@@ -27,7 +27,7 @@ const FALLBACK: ReactionEmoji[] = [
 
 let cached: ReactionEmoji[] | null = null
 
-function useReactionEmoji(): ReactionEmoji[] {
+export function useReactionEmoji(): ReactionEmoji[] {
   const [items, setItems] = useState<ReactionEmoji[]>(cached ?? FALLBACK)
 
   useEffect(() => {
