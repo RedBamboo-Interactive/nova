@@ -23,6 +23,9 @@ public sealed class DiscordServiceRegistrationTests
 
         services.AddLogging();
         services.AddKeyedSingleton<IEntityStore>(NovaAppPlugin.PluginId, new NoIoEntityStore());
+        // The kernel registers both for every plugin; the public self-context needs them.
+        services.AddKeyedSingleton<IRecordStreams>(NovaAppPlugin.PluginId, new NoIoRecordStreams());
+        services.AddSingleton<IAgentWorkspacePathResolver>(new NoIoWorkspacePaths());
         services.AddSingleton<IAgentScratchSpace>(new NoIoScratchSpace());
         // Provided by cap-sentinel, which Nova's manifest requires.
         services.AddSingleton<IUntrustedContentReview>(new NoIoSentinel());
@@ -51,6 +54,9 @@ public sealed class DiscordServiceRegistrationTests
 
         services.AddLogging();
         services.AddKeyedSingleton<IEntityStore>(NovaAppPlugin.PluginId, new NoIoEntityStore());
+        // The kernel registers both for every plugin; the public self-context needs them.
+        services.AddKeyedSingleton<IRecordStreams>(NovaAppPlugin.PluginId, new NoIoRecordStreams());
+        services.AddSingleton<IAgentWorkspacePathResolver>(new NoIoWorkspacePaths());
         services.AddSingleton<IAgentScratchSpace>(new NoIoScratchSpace());
         services.AddSingleton(Uninitialized<RedComputeClient>());
         services.AddSingleton(Uninitialized<AgentDirectory>());
@@ -91,6 +97,20 @@ public sealed class DiscordServiceRegistrationTests
         public UntrustedContentScreening Screen(
             string content, UntrustedContentFormat format = UntrustedContentFormat.Text,
             string? ownerDisplayName = null)
+            => throw new NotSupportedException();
+    }
+
+    private sealed class NoIoRecordStreams : IRecordStreams
+    {
+        public Task AppendAsync(string stream, JsonObject data, Guid? entityId = null, string? userId = null,
+            CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<LeafRecord>> QueryAsync(string stream, RecordQuery? query = null,
+            CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    private sealed class NoIoWorkspacePaths : IAgentWorkspacePathResolver
+    {
+        public Task<string?> ResolveAsync(Guid agentId, CancellationToken ct = default)
             => throw new NotSupportedException();
     }
 

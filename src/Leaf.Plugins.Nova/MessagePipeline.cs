@@ -350,11 +350,9 @@ public sealed class MessagePipeline(
                 var moodPath = Path.Combine(workspace.MemoryPath, "dreaming", "mood.md");
                 if (File.Exists(moodPath))
                 {
-                    var lines = File.ReadAllLines(moodPath);
-                    var energy = lines.FirstOrDefault(l => l.StartsWith("Energy:"))?.Trim();
-                    var vibe = lines.FirstOrDefault(l => l.StartsWith("Vibe:"))?.Trim();
-                    if (energy != null || vibe != null)
-                        moodSummary = string.Join(", ", new[] { energy, vibe }.Where(s => s != null));
+                    var lines = MoodLines.Parse(File.ReadAllLines(moodPath));
+                    if (lines.Energy != null || lines.Vibe != null)
+                        moodSummary = string.Join(", ", new[] { lines.Energy, lines.Vibe }.Where(s => s != null));
                 }
             }
             catch { }

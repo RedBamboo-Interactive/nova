@@ -60,7 +60,15 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<DiscordPromptInjectionVerifier>(),
                 sp.GetRequiredService<ILogger<ExternalAgentConversationProvider>>(),
                 // Without Assets, Leaf Community images cannot be read, so such messages are refused.
-                sp.GetService<IAssets>()));
+                sp.GetService<IAssets>(),
+                sp.GetRequiredService<PublicSelfContext>()));
+        services.AddSingleton(sp =>
+            new PublicSelfContext(
+                sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+                sp.GetRequiredKeyedService<IRecordStreams>(PluginId),
+                sp.GetRequiredService<ILogger<PublicSelfContext>>(),
+                sp.GetService<IAssets>(),
+                sp.GetRequiredService<AgentWorkspaces>()));
         services.AddSingleton<IExternalAgentConversationProvider>(sp =>
             sp.GetRequiredService<ExternalAgentConversationProvider>());
         services.AddSingleton(sp =>
