@@ -1,6 +1,6 @@
-import { memo, useCallback, useMemo } from "react"
-import type { ReactNode } from "react"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, ItemList, ItemListRow } from "@redbamboo/ui"
+import { memo, useCallback, useMemo, useRef } from "react"
+import type { ComponentProps } from "react"
+import { ItemList, ItemListRow, RowActionsMenu, useContextTarget, type ContextMenuEntry } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
 import type { BackgroundTaskInfo } from "@redbamboo/chat"
 import type { DelegationActivitySnapshot, DiscussionDelegationActivity, DiscussionInfo, AgentInfo } from "../../lib/types"
@@ -10,7 +10,7 @@ import { resolveArchiveSearchEscape, type ArchiveDiscussionItem } from "../../li
 import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
 import { discussionActivityIndicator } from "../../lib/delegation-activity"
-import { DiscussionActionItems } from "./discussion-actions-menu"
+import { discussionActionEntries } from "./discussion-actions-menu"
 import { LiveQuotaBorder } from "./live-quota-ring"
 import { formatOwningApp } from "../../lib/discussion-owner"
 import { createDiscussionTitleResolver } from "../../lib/discussion-display-title"
@@ -55,27 +55,11 @@ function DiscussionStatusIcon({ discussion, activity, backgroundTasks }: { discu
   )
 }
 
-/** Row actions trigger: always visible on touch screens, which have no hover.
- *  Only a hover-capable fine pointer hides it until row hover, focus or open;
- *  touch never matches a hiding rule, so stylesheet order cannot hide it there. */
-function RowActionsMenu({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        onClick={(e) => e.stopPropagation()}
-        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-all hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50 [@media(hover:hover)_and_(pointer:fine)]:opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 data-popup-open:opacity-100"
-        aria-label={label}
-        title={label}
-      >
-        <i aria-hidden="true" className="ph-bold ph-dots-three-vertical text-base" />
-      </DropdownMenuTrigger>
-      {/* The menu portals out of the DOM row, but React still bubbles its clicks
-          to the row button; stop them so an action never also selects the row. */}
-      <DropdownMenuContent align="end" sideOffset={4} onClick={(e) => e.stopPropagation()}>
-        {children}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
+/** A sidebar row whose right-click and long-press menu is its ⋮ menu's entries. */
+function DiscussionRowTarget({ entries, ...props }: { entries: ContextMenuEntry[] } & ComponentProps<"div">) {
+  const ref = useRef<HTMLDivElement>(null)
+  useContextTarget(ref, () => entries)
+  return <div ref={ref} {...props} />
 }
 
 interface Props {
@@ -122,8 +106,19 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
   const renderLiveItem = useCallback((discussion: DiscussionInfo) => {
     const unread = isDiscussionUnread(discussion)
     const agent = showAvatars ? getAgent?.(discussion.agentId) : undefined
+    const entries = discussionActionEntries({
+      showShortcuts: discussion.id === activeDiscussionId,
+      onVoice: () => onRowAction(discussion.id, "voice"),
+      voiceDisabled: discussion.status === "stopped",
+      onInfo: () => onRowAction(discussion.id, "info"),
+      onArtifacts: () => onRowAction(discussion.id, "artifacts"),
+      onShare: !discussion.confidential ? () => onRowAction(discussion.id, "share") : undefined,
+      onFloat: onFloat ? () => onFloat(discussion.id) : undefined,
+      onReset: () => onRotate(discussion.id),
+    })
     return (
-      <div
+      <DiscussionRowTarget
+        entries={entries}
         data-discussion-id={discussion.id}
         data-discussion-type={discussion.type}
         data-discussion-status={discussion.status}
@@ -170,22 +165,11 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             {unread && (
               <span aria-label="Unread" className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
             )}
-            <RowActionsMenu label="Live actions">
-              <DiscussionActionItems
-                showShortcuts={discussion.id === activeDiscussionId}
-                onVoice={() => onRowAction(discussion.id, "voice")}
-                voiceDisabled={discussion.status === "stopped"}
-                onInfo={() => onRowAction(discussion.id, "info")}
-                onArtifacts={() => onRowAction(discussion.id, "artifacts")}
-                onShare={!discussion.confidential ? () => onRowAction(discussion.id, "share") : undefined}
-                onFloat={onFloat ? () => onFloat(discussion.id) : undefined}
-                onReset={() => onRotate(discussion.id)}
-              />
-            </RowActionsMenu>
+            <RowActionsMenu label="Live actions" entries={entries} />
           </div>
         }
       />
-      </div>
+      </DiscussionRowTarget>
     )
   }, [sidebarSelectionId, activeDiscussionId, onSelect, onRotate, onRowAction, onFloat, getAgent, showAvatars, delegationActivity, backgroundTasks])
 
@@ -193,8 +177,31 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
     const alive = discussion.status !== "archived" && discussion.status !== "stopped"
     const unread = alive && isDiscussionUnread(discussion)
     const agent = showAvatars ? getAgent?.(discussion.agentId) : undefined
+    const entries: ContextMenuEntry[] = discussion.status === "archived"
+      ? [{ id: "remove", label: "Remove from list", icon: "ph-bold ph-x", run: () => onDismiss(discussion.id) }]
+      : discussion.ownedBy
+        ? discussionActionEntries({
+            showShortcuts: discussion.id === activeDiscussionId,
+            onInfo: () => onRowAction(discussion.id, "info"),
+            onArtifacts: () => onRowAction(discussion.id, "artifacts"),
+            onFloat: onFloat ? () => onFloat(discussion.id) : undefined,
+          })
+        : discussionActionEntries({
+            showShortcuts: discussion.id === activeDiscussionId,
+            onVoice: () => onRowAction(discussion.id, "voice"),
+            voiceDisabled: discussion.status === "stopped",
+            onInfo: () => onRowAction(discussion.id, "info"),
+            onArtifacts: () => onRowAction(discussion.id, "artifacts"),
+            onRename: () => onRowAction(discussion.id, "rename"),
+            onUpdateTitle: () => onUpdateTitle(discussion.id),
+            onShare: !discussion.confidential ? () => onRowAction(discussion.id, "share") : undefined,
+            onFloat: onFloat ? () => onFloat(discussion.id) : undefined,
+            onStop: onStop && alive && discussion.sessionId ? () => onStop(discussion.id) : undefined,
+            onClose: () => onArchive(discussion.id),
+          })
     return (
-      <div
+      <DiscussionRowTarget
+        entries={entries}
         data-discussion-id={discussion.id}
         data-discussion-type={discussion.type}
         data-discussion-status={discussion.status}
@@ -242,42 +249,14 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
               {unread && (
                 <span aria-label="Unread" className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
               )}
-              <RowActionsMenu label="Conversation actions">
-                {discussion.ownedBy ? (
-                  <DiscussionActionItems
-                    showShortcuts={discussion.id === activeDiscussionId}
-                    onInfo={() => onRowAction(discussion.id, "info")}
-                    onArtifacts={() => onRowAction(discussion.id, "artifacts")}
-                    onFloat={onFloat ? () => onFloat(discussion.id) : undefined}
-                  />
-                ) : (
-                <DiscussionActionItems
-                  showShortcuts={discussion.id === activeDiscussionId}
-                  onVoice={() => onRowAction(discussion.id, "voice")}
-                  voiceDisabled={discussion.status === "stopped"}
-                  onInfo={() => onRowAction(discussion.id, "info")}
-                  onArtifacts={() => onRowAction(discussion.id, "artifacts")}
-                  onRename={() => onRowAction(discussion.id, "rename")}
-                  onUpdateTitle={() => onUpdateTitle(discussion.id)}
-                  onShare={!discussion.confidential ? () => onRowAction(discussion.id, "share") : undefined}
-                  onFloat={onFloat ? () => onFloat(discussion.id) : undefined}
-                  onStop={onStop && alive && discussion.sessionId ? () => onStop(discussion.id) : undefined}
-                  onClose={() => onArchive(discussion.id)}
-                />
-                )}
-              </RowActionsMenu>
+              <RowActionsMenu label="Conversation actions" entries={entries} />
             </div>
           ) : (
-            <RowActionsMenu label="Conversation actions">
-              <DropdownMenuItem onClick={() => onDismiss(discussion.id)}>
-                <i aria-hidden="true" className="ph-bold ph-x size-4" />
-                Remove from list
-              </DropdownMenuItem>
-            </RowActionsMenu>
+            <RowActionsMenu label="Conversation actions" entries={entries} />
           )
         }
       />
-      </div>
+      </DiscussionRowTarget>
     )
   }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, titleOf])
 
