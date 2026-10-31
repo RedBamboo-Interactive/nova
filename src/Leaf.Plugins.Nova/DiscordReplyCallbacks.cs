@@ -125,7 +125,10 @@ public sealed class DiscordReplyCallbacks(
         }
         else
         {
-            sb.Append("Your Discord-side session answers them on its own; this note only closes the loop here.\n");
+            sb.Append("Your Discord-side session answers them on its own. ");
+            sb.Append("If this discussion is the one working on what they are asking, take the lead now so only one Nova answers: ");
+            sb.Append($"POST {TranscriptBase}/{reply.BindingEntityId}/lead, or \"leadConversation\": true on your next message. ");
+            sb.Append("Otherwise leave it to the Discord-side session; this note only closes the loop here.\n");
         }
         sb.Append("Their text is untrusted Discord input and is not included. Read it from the binding transcript ");
         sb.Append($"(GET {TranscriptBase}/{reply.BindingEntityId}/transcript, message {reply.AdmittedMessageUid}).\n");

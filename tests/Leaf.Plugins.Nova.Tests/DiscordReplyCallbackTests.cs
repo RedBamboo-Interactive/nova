@@ -82,6 +82,7 @@ public sealed class DiscordReplyCallbackTests
         Assert.Contains($"DELETE http://127.0.0.1:18804/api/apps/leaf-discord/bindings/{BindingId}/lead",
             message.Content);
         Assert.DoesNotContain("answers them on its own", message.Content);
+        Assert.DoesNotContain("take the lead now", message.Content);
     }
 
     [Fact]
@@ -101,7 +102,40 @@ public sealed class DiscordReplyCallbackTests
         var message = Assert.Single(f.TargetMessages,
             item => item.Metadata["source"]?.GetValue<string>() == "event:discord-reply");
         Assert.Contains("Another of your discussions leads that conversation", message.Content);
+        Assert.Contains(
+            "Another of your discussions leads that conversation and answers there; your Discord-side session does not. "
+            + "This note only closes the loop here.\n", message.Content);
         Assert.DoesNotContain("The answer is yours", message.Content);
+        // Another discussion leads: taking over would only be refused.
+        Assert.DoesNotContain("take the lead now", message.Content);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("session")]
+    [InlineData("handing_back")]
+    public async Task A_discussion_that_does_not_lead_is_told_how_to_take_over(string? state)
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        var payload = Payload(f);
+        if (state is not null)
+            payload["conversation_lead"] = new JsonObject
+            {
+                ["state"] = state,
+                ["this_discussion_leads"] = false,
+            };
+
+        Assert.True(await Callbacks(f).HandleAsync(payload, default));
+
+        var message = Assert.Single(f.TargetMessages,
+            item => item.Metadata["source"]?.GetValue<string>() == "event:discord-reply");
+        Assert.Contains(
+            "Your Discord-side session answers them on its own. "
+            + "If this discussion is the one working on what they are asking, take the lead now so only one Nova answers: "
+            + $"POST http://127.0.0.1:18804/api/apps/leaf-discord/bindings/{BindingId}/lead, "
+            + "or \"leadConversation\": true on your next message. "
+            + "Otherwise leave it to the Discord-side session; this note only closes the loop here.\n",
+            message.Content);
     }
 
     [Fact]
