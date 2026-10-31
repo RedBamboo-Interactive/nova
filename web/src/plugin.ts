@@ -9,6 +9,7 @@ import {
 } from "./components/floating-nova-service"
 import { getFloatingNovaSupport } from "./components/floating-nova-support"
 import { runUiSurfaceAction } from "@redbamboo/utility"
+import { ASK_NOVA_PROVIDERS } from "./lib/ask-nova-actions"
 
 export const plugin: LeafAppPlugin = {
   id: "nova",
@@ -26,4 +27,6 @@ export const plugin: LeafAppPlugin = {
     action: async () => { await runUiSurfaceAction(FLOATING_NOVA_SURFACE_ID, "open") },
   }] : [],
   settingsPanel: { Component: NovaSettingsPanel },
+  // "Ask Nova about this" on entities, images and selected text.
+  contextMenu: { providers: ASK_NOVA_PROVIDERS },
 }
