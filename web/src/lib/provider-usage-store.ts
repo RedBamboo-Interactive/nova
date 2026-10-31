@@ -181,12 +181,3 @@ export function summarizeProviderQuota(
 export function quotaRingLabel(summary: QuotaSummary): string {
   return `${summary.displayName} quota: ${summary.remainingPercent}% left (${summary.windowLabel} window)`
 }
-
-/** Same thresholds and tokens as the Session Info usage bars. */
-export function quotaToneColor(usedPercent: number): string {
-  return usedPercent < 90
-    ? "var(--color-accent-teal)"
-    : usedPercent < 100
-      ? "var(--color-accent-gold)"
-      : "var(--color-accent-red)"
-}

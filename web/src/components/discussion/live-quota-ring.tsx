@@ -1,10 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode, type SyntheticEvent } from "react"
 import { Popover, PopoverContent, PopoverTrigger } from "@redbamboo/ui"
-import { formatProviderUsageWindow, remainingProviderUsage, type ProviderUsageLoader } from "@redbamboo/chat"
+import { formatProviderUsageWindow, remainingProviderUsage, usageToneColor as sharedUsageToneColor, type ProviderUsageLoader } from "@redbamboo/chat"
 import {
   ProviderUsageStore,
   quotaRingLabel,
-  quotaToneColor,
   summarizeProviderQuota,
   usageKey,
   type QuotaFormat,
@@ -19,6 +18,16 @@ const QUOTA_FORMAT: QuotaFormat = {
   window: formatProviderUsageWindow,
   remaining: remainingProviderUsage,
 }
+
+// RedLeaf supplies Chat as a shared singleton. During a plugin-only reload the host can
+// temporarily predate this export, so keep the same policy locally until the kernel catches up.
+const usageToneColor = typeof sharedUsageToneColor === "function"
+  ? sharedUsageToneColor
+  : (usedPercent: number) => usedPercent < 75
+      ? "var(--color-accent-teal)"
+      : usedPercent < 90
+        ? "var(--color-accent-gold)"
+        : "var(--color-accent-red)"
 
 export interface LiveQuotaContextValue {
   providers: ReadonlyArray<UsageProviderRef & { name: string }>
@@ -92,7 +101,7 @@ function QuotaSummaryList({ context, liveKey, version }: { context: LiveQuotaCon
               <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-overlay-6">
                 <div
                   className="h-full rounded-full"
-                  style={{ width: `${Math.min(100, window.remaining)}%`, backgroundColor: quotaToneColor(window.used) }}
+                  style={{ width: `${Math.min(100, window.remaining)}%`, backgroundColor: usageToneColor(window.used) }}
                 />
               </div>
             </div>
@@ -164,7 +173,7 @@ export function LiveQuotaBorder({ discussion, children }: { discussion: Discussi
             inset: -BORDER_OFFSET,
             padding: BORDER_WIDTH,
             borderRadius: `calc(var(--radius-lg) + ${BORDER_OFFSET}px)`,
-            background: quotaBorderBackground(summary.remainingPercent, quotaToneColor(summary.usedPercent)),
+            background: quotaBorderBackground(summary.remainingPercent, usageToneColor(summary.usedPercent)),
             mask: BORDER_MASK,
           }}
         />

@@ -4,7 +4,6 @@ import type { ProviderUsageSnapshot, ProviderUsageWindow } from "@redbamboo/chat
 import {
   ProviderUsageStore,
   quotaRingLabel,
-  quotaToneColor,
   recordingUsageLoader,
   resolveLiveProvider,
   summarizeProviderQuota,
@@ -67,12 +66,6 @@ test("no ring when quota is unknown", () => {
   assert.equal(summarizeProviderQuota(null, format), null, "unsupported or failed")
   assert.equal(summarizeProviderQuota({ ...codex, buckets: [] }, format), null, "no windows")
   assert.equal(summarizeProviderQuota({ ...codex, buckets: [{ id: "x", name: "x", windows: [] }] }, format), null)
-})
-
-test("ring tone follows the Session Info thresholds", () => {
-  assert.equal(quotaToneColor(3), "var(--color-accent-teal)")
-  assert.equal(quotaToneColor(93), "var(--color-accent-gold)")
-  assert.equal(quotaToneColor(100), "var(--color-accent-red)")
 })
 
 test("a provider slug and its session backend id share one cache entry", () => {
