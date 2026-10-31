@@ -39,7 +39,7 @@ createRoot(document.getElementById("root")!).render(
         delegationActivity={{ session: delegation("running"), agents: delegation("running"), tasks: delegation("running"), delegations: delegation("waiting_to_resume") }}
         backgroundTasks={{ session: [agent("a0")], agents: [agent("a1"), agent("a2"), shell], tasks: [shell] }}
         activeDiscussionId={null} onSelect={noop} onArchive={noop} onRotate={noop} onDismiss={noop} onRowAction={noop} onUpdateTitle={noop}
-        getAgent={() => nova} multiAgent />
+        getAgent={() => nova} />
     </div>
   </MemoryRouter>,
 )

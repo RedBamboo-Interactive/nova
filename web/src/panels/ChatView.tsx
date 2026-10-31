@@ -1616,7 +1616,6 @@ export function ChatView({
                 onFloat={floatingSurface?.supported && !floating ? handleFloatDiscussion : undefined}
                 onStop={stopDiscussion}
                 getAgent={getAgent}
-                multiAgent={multiAgent}
                 archiveMode={archiveMode}
                 archiveQuery={archiveQuery}
                 archiveHasMore={archiveHasMore}

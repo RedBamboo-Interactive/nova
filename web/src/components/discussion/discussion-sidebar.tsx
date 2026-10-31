@@ -96,7 +96,6 @@ interface Props {
   /** Stops a running chat's session process; the next send resumes it. */
   onStop?: (id: string) => void
   getAgent?: (id: string | null) => AgentInfo | undefined
-  multiAgent?: boolean
   archiveMode?: boolean
   archiveQuery?: string
   archiveHasMore?: boolean
@@ -105,7 +104,7 @@ interface Props {
   onLoadMoreArchived?: () => void
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, multiAgent, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -120,7 +119,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
 
   const renderLiveItem = useCallback((discussion: DiscussionInfo) => {
     const unread = isDiscussionUnread(discussion)
-    const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
+    const agent = getAgent?.(discussion.agentId)
     return (
       <div
         data-discussion-id={discussion.id}
@@ -186,12 +185,12 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
       </div>
     )
-  }, [sidebarSelectionId, activeDiscussionId, onSelect, onRotate, onRowAction, onFloat, getAgent, multiAgent, delegationActivity, backgroundTasks])
+  }, [sidebarSelectionId, activeDiscussionId, onSelect, onRotate, onRowAction, onFloat, getAgent, delegationActivity, backgroundTasks])
 
   const renderChatItem = useCallback((discussion: DiscussionInfo) => {
     const alive = discussion.status !== "archived" && discussion.status !== "stopped"
     const unread = alive && isDiscussionUnread(discussion)
-    const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
+    const agent = getAgent?.(discussion.agentId)
     return (
       <div
         data-discussion-id={discussion.id}
@@ -278,11 +277,11 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
       </div>
     )
-  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, multiAgent, delegationActivity, backgroundTasks, titleOf])
+  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, delegationActivity, backgroundTasks, titleOf])
 
   const renderArchivedItem = useCallback((discussion: DiscussionInfo) => {
     const item = discussion as ArchiveDiscussionItem
-    const agent = multiAgent && getAgent ? getAgent(discussion.agentId) : undefined
+    const agent = getAgent?.(discussion.agentId)
     return (
       <div
         data-discussion-id={discussion.id}
@@ -314,7 +313,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         />
       </div>
     )
-  }, [activeDiscussionId, getAgent, multiAgent, onSelect, titleOf])
+  }, [activeDiscussionId, getAgent, onSelect, titleOf])
 
   if (archiveMode) {
     return (
