@@ -2,6 +2,8 @@ import { createLocalStore } from "@redbamboo/utility"
 
 export type LocalSettings = {
   showAvatar: boolean
+  /** Agent avatars on discussion rows; off shows the plain status icon. */
+  showDiscussionAvatars: boolean
   agentFilter: string | null
   lastUsedAgentId: string | null
   voiceInputDeviceId: string | null
@@ -13,6 +15,7 @@ export type LocalSettings = {
 
 export const settingsStore = createLocalStore<LocalSettings>("nova_settings", {
   showAvatar: true,
+  showDiscussionAvatars: true,
   agentFilter: null,
   lastUsedAgentId: null,
   voiceInputDeviceId: null,

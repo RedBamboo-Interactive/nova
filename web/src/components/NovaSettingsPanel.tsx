@@ -18,6 +18,12 @@ export function NovaSettingsPanel() {
           onCheckedChange={(v) => setLocalSettings({ showAvatar: v })}
         />
       </SettingRow>
+      <SettingRow label="Agent avatars in discussions" hint="Show each discussion's Agent avatar in the list. When off, rows show a status icon instead. The Live quota border stays either way.">
+        <Switch
+          checked={localSettings.showDiscussionAvatars}
+          onCheckedChange={(v) => setLocalSettings({ showDiscussionAvatars: v })}
+        />
+      </SettingRow>
       <SectionHeader>Chat</SectionHeader>
       <SettingRow label="Composer autofocus" hint="Choose when opening or switching a discussion moves focus to the message field.">
         <Select

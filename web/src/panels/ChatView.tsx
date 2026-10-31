@@ -1378,7 +1378,7 @@ export function ChatView({
   ) : null, [activeDiscussionId, activePendingContext, pendingContext])
 
   const { opacity: avatarOpacity } = useAvatarStyle()
-  const { showAvatar: avatarEnabled } = useLocalSettings()
+  const { showAvatar: avatarEnabled, showDiscussionAvatars } = useLocalSettings()
   const { autoFocusMode } = useComposerFocusSettings()
   const showAvatar = !floating && avatarEnabled && !!activeDiscussion
   const showFloatingTabAvatar = floating && avatarEnabled && !!activeDiscussion
@@ -1616,6 +1616,7 @@ export function ChatView({
                 onFloat={floatingSurface?.supported && !floating ? handleFloatDiscussion : undefined}
                 onStop={stopDiscussion}
                 getAgent={getAgent}
+                showAvatars={showDiscussionAvatars}
                 archiveMode={archiveMode}
                 archiveQuery={archiveQuery}
                 archiveHasMore={archiveHasMore}
