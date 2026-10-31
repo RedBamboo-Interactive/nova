@@ -11,7 +11,7 @@ import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
 import { discussionActivityIndicator } from "../../lib/delegation-activity"
 import { DiscussionActionItems } from "./discussion-actions-menu"
-import { LiveQuotaRing } from "./live-quota-ring"
+import { LiveQuotaBorder } from "./live-quota-ring"
 import { formatOwningApp } from "../../lib/discussion-owner"
 import { createDiscussionTitleResolver } from "../../lib/discussion-display-title"
 
@@ -133,33 +133,33 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         selected={discussion.id === sidebarSelectionId}
         onClick={() => onSelect(discussion.id)}
         icon={
-          <div className="relative flex h-full w-full items-center justify-center">
-            {agent ? (
-              <>
-                <img
-                  src={agent.avatarUrl}
-                  alt={agent.name}
-                  className="absolute inset-0 w-full h-full rounded-lg object-cover"
-                  onError={(e) => { e.currentTarget.style.display = "none" }}
-                />
-                <div className="absolute -bottom-1 right-0 origin-bottom-right scale-75">
-                  <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} />
-                </div>
-              </>
-            ) : (
-              <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} />
-            )}
-          </div>
+          <LiveQuotaBorder discussion={discussion}>
+            <div className="relative flex h-full w-full items-center justify-center">
+              {agent ? (
+                <>
+                  <img
+                    src={agent.avatarUrl}
+                    alt={agent.name}
+                    className="absolute inset-0 w-full h-full rounded-lg object-cover"
+                    onError={(e) => { e.currentTarget.style.display = "none" }}
+                  />
+                  <div className="absolute -bottom-1 right-0 origin-bottom-right scale-75">
+                    <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} />
+                  </div>
+                </>
+              ) : (
+                <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} />
+              )}
+            </div>
+          </LiveQuotaBorder>
         }
         className={[
-          agent || hasBackgroundWork(discussion, delegationActivity[discussion.id], backgroundTasks[discussion.id]) ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
+          "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible",
           unread ? "[&_[data-slot=item-list-title]]:font-semibold" : "",
         ].filter(Boolean).join(" ")}
         title={
           <span className="flex items-center gap-1.5">
-            <LiveQuotaRing discussion={discussion} size={16}>
-              <i className={`ph-bold ph-broadcast text-[10px] text-status-live ${discussion.status === "thinking" ? "animate-pulse" : ""}`} />
-            </LiveQuotaRing>
+            <i className={`ph-bold ph-broadcast text-[10px] text-status-live ${discussion.status === "thinking" ? "animate-pulse" : ""}`} />
             <span style={{ color: "var(--color-status-live)" }}>Live</span>
           </span>
         }

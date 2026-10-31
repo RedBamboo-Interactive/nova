@@ -19,7 +19,7 @@ import { useLocalSettings } from "../hooks/use-local-settings"
 import { useAgents } from "../hooks/use-agents"
 import { versionedAvatarSrc } from "../lib/agent-directory-sync"
 import { recordingUsageLoader, resolveLiveProvider, usageKey } from "../lib/provider-usage-store"
-import { LiveQuotaContext, LiveQuotaRing, providerUsageStore, type LiveQuotaContextValue } from "../components/discussion/live-quota-ring"
+import { LiveQuotaContext, providerUsageStore, type LiveQuotaContextValue } from "../components/discussion/live-quota-ring"
 import { useReactions } from "../hooks/use-reactions"
 import { useDisc, useNovaPendingContext } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
@@ -918,51 +918,46 @@ export function ChatView({
   const liveHeartbeatPair = findLiveHeartbeatPair(discussions, activeDiscussion)
 
   const liveHeartbeatTabs = liveHeartbeatPair && (
-    <LiveQuotaContext.Provider value={liveQuota}>
-      <Tabs
-        value={activeDiscussion?.type === "heartbeat" ? "heartbeat" : "live"}
-        onValueChange={(value) => handleSelectDiscussion(
-          value === "heartbeat" ? liveHeartbeatPair.heartbeat.id : liveHeartbeatPair.live.id,
-        )}
-        className="shrink-0"
-        style={{ height: "100%" }}
+    <Tabs
+      value={activeDiscussion?.type === "heartbeat" ? "heartbeat" : "live"}
+      onValueChange={(value) => handleSelectDiscussion(
+        value === "heartbeat" ? liveHeartbeatPair.heartbeat.id : liveHeartbeatPair.live.id,
+      )}
+      className="shrink-0"
+      style={{ height: "100%" }}
+    >
+      <TabsList
+        variant="line"
+        aria-label="Live views"
+        style={{ height: "100%", padding: 0 }}
       >
-        <TabsList
-          variant="line"
-          aria-label="Live views"
-          style={{ height: "100%", padding: 0 }}
+        <TabsTrigger
+          value="live"
+          className="after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px]"
+          style={{ height: "100%" }}
         >
-          <TabsTrigger
-            value="live"
-            aria-label="Live"
-            className="after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px]"
-            style={{ height: "100%" }}
-          >
-            <LiveQuotaRing discussion={liveHeartbeatPair.live} size={18}>
-              <i
-                aria-hidden="true"
-                className={`ph-bold ph-broadcast text-[12px] ${liveHeartbeatPair.live.status === "thinking" ? "animate-pulse" : ""}`}
-                style={{ color: "var(--color-status-live)" }}
-              />
-            </LiveQuotaRing>
-            Live
-          </TabsTrigger>
-          <TabsTrigger
-            value="heartbeat"
-            aria-label={liveHeartbeatPair.heartbeat.status === "thinking" ? "Heartbeat, tick running" : "Heartbeat"}
-            className="after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px]"
-            style={{ height: "100%" }}
-          >
-            <i
-              aria-hidden="true"
-              className={`ph-bold ph-heartbeat text-[12px] ${liveHeartbeatPair.heartbeat.status === "thinking" ? "animate-pulse" : ""}`}
-              style={{ color: "var(--color-accent-gold)" }}
-            />
-            Heartbeat
-          </TabsTrigger>
-        </TabsList>
-      </Tabs>
-    </LiveQuotaContext.Provider>
+          <i
+            aria-hidden="true"
+            className={`ph-bold ph-broadcast text-[12px] ${liveHeartbeatPair.live.status === "thinking" ? "animate-pulse" : ""}`}
+            style={{ color: "var(--color-status-live)" }}
+          />
+          Live
+        </TabsTrigger>
+        <TabsTrigger
+          value="heartbeat"
+          aria-label={liveHeartbeatPair.heartbeat.status === "thinking" ? "Heartbeat, tick running" : "Heartbeat"}
+          className="after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px]"
+          style={{ height: "100%" }}
+        >
+          <i
+            aria-hidden="true"
+            className={`ph-bold ph-heartbeat text-[12px] ${liveHeartbeatPair.heartbeat.status === "thinking" ? "animate-pulse" : ""}`}
+            style={{ color: "var(--color-accent-gold)" }}
+          />
+          Heartbeat
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
   )
 
   const activeDelegations = activeDiscussion ? delegationActivity[activeDiscussion.id] : undefined

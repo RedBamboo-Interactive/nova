@@ -29,41 +29,22 @@ export interface LiveQuotaContextValue {
 
 export const LiveQuotaContext = createContext<LiveQuotaContextValue | null>(null)
 
-const RING_STROKE = 1.75
+/** Quota border: 2 px wide, 1 px clear of the avatar, following its corner radius. */
+const BORDER_WIDTH = 2
+const BORDER_OFFSET = 3
+const BORDER_TRACK = "rgb(from var(--contrast) r g b / 0.10)"
+const BORDER_MASK = "linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0)"
 
 function stop(event: SyntheticEvent) {
-  // The ring sits inside the Live row/tab button: opening the summary must not
+  // The border sits inside the Live row button: opening the summary must not
   // also select the discussion.
   event.stopPropagation()
 }
 
-function QuotaRing({ remainingPercent, color, size }: { remainingPercent: number; color: string; size: number }) {
-  const radius = (size - RING_STROKE) / 2
-  return (
-    <svg
-      aria-hidden="true"
-      width={size}
-      height={size}
-      viewBox={`0 0 ${size} ${size}`}
-      className="pointer-events-none absolute inset-0 size-full -rotate-90"
-    >
-      <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="currentColor" strokeWidth={RING_STROKE} className="text-overlay-10" />
-      {remainingPercent > 0 && (
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke={color}
-          strokeWidth={RING_STROKE}
-          strokeLinecap="round"
-          pathLength={100}
-          strokeDasharray={`${Math.min(100, remainingPercent)} 100`}
-          className="transition-[stroke-dasharray] duration-500"
-        />
-      )}
-    </svg>
-  )
+/** Same technique as the chat audio player's progress border: a conic fill clockwise from 12 o'clock. */
+function quotaBorderBackground(remainingPercent: number, color: string): string {
+  const filled = Math.max(0, Math.min(100, remainingPercent))
+  return filled > 0 ? `conic-gradient(${color} ${filled}%, ${BORDER_TRACK} ${filled}%)` : BORDER_TRACK
 }
 
 function QuotaSummaryList({ context, liveKey, version }: { context: LiveQuotaContextValue; liveKey: string | null; version: number }) {
@@ -127,12 +108,13 @@ function QuotaSummaryList({ context, liveKey, version }: { context: LiveQuotaCon
 }
 
 /**
- * A thin ring around the Live icon showing how much quota its provider has
- * left. Renders the icon alone when the quota is unknown. Readings come from
- * the shared client cache (fed by Session Info); the ring itself only asks,
+ * A border around the Live avatar showing how much quota its provider has
+ * left. Renders the avatar alone when the quota is unknown. Hovering or
+ * clicking the avatar opens every provider's summary. Readings come from the
+ * shared client cache (fed by Session Info); the border itself only asks,
  * never forced, on mount and when the Live discussion's activity changes.
  */
-export function LiveQuotaRing({ discussion, size = 16, children }: { discussion: DiscussionInfo; size?: number; children: ReactNode }) {
+export function LiveQuotaBorder({ discussion, children }: { discussion: DiscussionInfo; children: ReactNode }) {
   const context = useContext(LiveQuotaContext)
   const version = useSyncExternalStore(providerUsageStore.subscribe, providerUsageStore.getVersion)
   const [open, setOpen] = useState(false)
@@ -164,17 +146,28 @@ export function LiveQuotaRing({ discussion, size = 16, children }: { discussion:
         nativeButton={false}
         render={<span />}
         aria-label={label}
-        data-slot="live-quota-ring"
+        data-slot="live-quota-border"
         data-quota-provider={summary.provider}
         data-quota-remaining={summary.remainingPercent}
-        className="relative inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
-        style={{ width: size, height: size }}
+        className="relative flex size-full cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50 focus-visible:ring-offset-4 focus-visible:ring-offset-transparent"
         onClick={stop}
         onPointerDown={stop}
         onMouseDown={stop}
         onKeyDown={stop}
       >
-        <QuotaRing remainingPercent={summary.remainingPercent} color={quotaToneColor(summary.usedPercent)} size={size} />
+        {/* Painted first so the avatar's status badge stays on top of it. */}
+        <span
+          aria-hidden="true"
+          data-slot="live-quota-border-track"
+          className="pointer-events-none absolute transition-[background] duration-500"
+          style={{
+            inset: -BORDER_OFFSET,
+            padding: BORDER_WIDTH,
+            borderRadius: `calc(var(--radius-lg) + ${BORDER_OFFSET}px)`,
+            background: quotaBorderBackground(summary.remainingPercent, quotaToneColor(summary.usedPercent)),
+            mask: BORDER_MASK,
+          }}
+        />
         {children}
       </PopoverTrigger>
       <PopoverContent side="bottom" align="start" className="w-60" onClick={stop}>
