@@ -1260,7 +1260,7 @@ export function ChatView({
   // The same picker, as the message menu's React submenu (context menu, ⋮ and touch sheet).
   const reactionEmoji = useReactionEmoji()
   const reactionChoices = useMemo(
-    () => reactionEmoji.map(item => ({ emoji: item.emoji, icon: normalizeIcon(item.icon) })),
+    () => reactionEmoji.map(item => ({ emoji: item.emoji, icon: normalizeIcon(item.icon), name: item.name })),
     [reactionEmoji],
   )
   const getMessageActions = useCallback(

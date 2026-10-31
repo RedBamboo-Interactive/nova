@@ -8,6 +8,8 @@ interface ReactionEmoji {
   icon: string
   color?: string
   sort: number
+  /** The reaction entity's name ("Clap"); the built-in fallback has none. */
+  name?: string
 }
 
 const FALLBACK: ReactionEmoji[] = [
@@ -38,7 +40,7 @@ export function useReactionEmoji(): ReactionEmoji[] {
         const list: ReactionEmoji[] = rows
           .map((e: any) => {
             const d = typeof e.data === "string" ? JSON.parse(e.data) : e.data
-            return { emoji: d?.emoji ?? e.name, icon: d?.icon ?? "ph-light ph-question", color: d?.color, sort: d?.sort ?? 0 }
+            return { emoji: d?.emoji ?? e.name, icon: d?.icon ?? "ph-light ph-question", color: d?.color, sort: d?.sort ?? 0, name: typeof e.name === "string" ? e.name : undefined }
           })
           .sort((a: ReactionEmoji, b: ReactionEmoji) => a.sort - b.sort)
         if (list.length === 0) return
