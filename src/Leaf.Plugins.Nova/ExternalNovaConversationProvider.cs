@@ -423,7 +423,11 @@ public sealed class ExternalAgentConversationProvider(
             var assetId = AssetIdFromReference(attachment.ScopeToken);
             var file = assetId is null ? null : await assets.ReadAsync(assetId, ct);
             // The Sentinel checks the media type against the stored Asset, so the bytes must agree.
-            var mediaType = file is null ? null : ExternalConversationImages.Displayable(file.Bytes);
+            // An animated GIF is never a still here: a still keeps its original bytes, and the session
+            // would then show whichever frame RedCompute's decoder keeps, which the review may not have
+            // covered. On Discord it is reviewed as media and the model sees the reviewed frames.
+            var animatedGif = discord && file is not null && ExternalConversationMedia.IsAnimatedGifFile(file.Bytes);
+            var mediaType = file is null || animatedGif ? null : ExternalConversationImages.Displayable(file.Bytes);
             if (assetId is not null && file is not null && mediaType is not null && mediaType == file.ContentType)
             {
                 images.Add(new(attachment.Id, new UntrustedContentImage(assetId, mediaType), mediaType, file.Bytes, false));

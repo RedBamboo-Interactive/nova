@@ -165,6 +165,79 @@ public sealed partial class ExternalAgentConversationProviderTests
         Assert.Equal(new[] { "1" }, envelope.GetProperty("shownImageIds").EnumerateArray().Select(id => id.GetString()));
     }
 
+    /// <summary>A real, tiny GIF: one 1x1 image block per frame.</summary>
+    private static byte[] Gif(int frames)
+    {
+        var bytes = new List<byte>("GIF89a"u8.ToArray()) { 1, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF };
+        for (var i = 0; i < frames; i++)
+        {
+            bytes.AddRange(new byte[] { 0x21, 0xF9, 4, 0, 10, 0, 0, 0 });
+            bytes.AddRange(new byte[] { 0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 1, 0 });
+        }
+        bytes.Add(0x3B);
+        return [.. bytes];
+    }
+
+    private static readonly byte[] AnimatedGif = Gif(3);
+    private static readonly byte[] StillGif = Gif(1);
+
+    [Fact]
+    public async Task Native_discord_animated_gif_is_reviewed_as_media_and_the_model_gets_only_reviewed_frames()
+    {
+        var run = await SendAsync(new RecordingSentinel(),
+            [Attachment("1", "/api/assets/anim.gif", "anim.gif", "image/gif")], transport: "discord");
+
+        Assert.Equal("delivered", run.Admission.Disposition);
+        Assert.Equal(new UntrustedContentImage("anim.gif", "image/gif"), Assert.Single(Assert.Single(run.Sentinel.Requests).Images!));
+        using var body = JsonDocument.Parse(run.Message!);
+        var images = body.RootElement.GetProperty("images").EnumerateArray().ToList();
+        Assert.Equal(3, images.Count);
+        Assert.All(images, image =>
+        {
+            Assert.Equal("image/jpeg", image.GetProperty("mediaType").GetString());
+            Assert.Equal(RecordingSentinel.FrameBytes, Convert.FromBase64String(image.GetProperty("base64").GetString()!));
+        });
+        Assert.DoesNotContain(Convert.ToBase64String(AnimatedGif), run.Message!, StringComparison.Ordinal);
+        Assert.Contains("Attachment 1 is an animated image", body.RootElement.GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task Native_discord_animated_gif_is_refused_when_the_review_reports_no_frames()
+    {
+        var run = await SendAsync(new RecordingSentinel { EmitFrames = false },
+            [Attachment("1", "/api/assets/anim.gif", "anim.gif", "image/gif")], transport: "discord");
+
+        Assert.Equal(ExternalConversationDispositions.RefusedSentinelUnavailable, run.Admission.Disposition);
+        Assert.Null(run.Message);
+    }
+
+    [Fact]
+    public async Task Native_discord_one_frame_gif_stays_a_still_with_its_own_bytes()
+    {
+        var run = await SendAsync(new RecordingSentinel(),
+            [Attachment("1", "/api/assets/still.gif", "still.gif", "image/gif")], transport: "discord");
+
+        Assert.Equal("delivered", run.Admission.Disposition);
+        using var body = JsonDocument.Parse(run.Message!);
+        var image = Assert.Single(body.RootElement.GetProperty("images").EnumerateArray());
+        Assert.Equal("image/gif", image.GetProperty("mediaType").GetString());
+        Assert.Equal(StillGif, Convert.FromBase64String(image.GetProperty("base64").GetString()!));
+    }
+
+    [Fact]
+    public async Task Leaf_community_keeps_showing_a_gif_as_it_is()
+    {
+        var run = await SendAsync(new RecordingSentinel(),
+            [Attachment("1", "/api/assets/anim.gif", "anim.gif", "image/gif")]);
+
+        Assert.Equal("delivered", run.Admission.Disposition);
+        Assert.Equal(new UntrustedContentImage("anim.gif", "image/gif"), Assert.Single(Assert.Single(run.Sentinel.Requests).Images!));
+        using var body = JsonDocument.Parse(run.Message!);
+        var image = Assert.Single(body.RootElement.GetProperty("images").EnumerateArray());
+        Assert.Equal("image/gif", image.GetProperty("mediaType").GetString());
+        Assert.Equal(AnimatedGif, Convert.FromBase64String(image.GetProperty("base64").GetString()!));
+    }
+
     [Fact]
     public async Task Native_discord_video_message_is_refused_when_the_review_is_unavailable()
     {
@@ -382,6 +455,8 @@ public sealed partial class ExternalAgentConversationProviderTests
                 "still.webp" => new AssetFile(StillWebp, "image/webp"),
                 "animated.webp" => new AssetFile(AnimatedWebp, "image/webp"),
                 "wide.png" => new AssetFile(WidePng, "image/png"),
+                "anim.gif" => new AssetFile(AnimatedGif, "image/gif"),
+                "still.gif" => new AssetFile(StillGif, "image/gif"),
                 "clip.mp4" => new AssetFile(ClipMp4, "video/mp4"),
                 "liar.mp4" => new AssetFile(ClipMp4, "text/plain"),
                 "fake.png" => new AssetFile("<html>not a png</html>"u8.ToArray(), "image/png"),

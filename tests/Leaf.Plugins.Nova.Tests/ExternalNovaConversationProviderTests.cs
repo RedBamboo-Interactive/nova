@@ -1548,10 +1548,11 @@ public sealed partial class ExternalAgentConversationProviderTests
             for (var index = 0; EmitFrames && EchoImages && index < (request.Images?.Count ?? 0); index++)
             {
                 var image = request.Images![index];
-                if (image.MediaType.StartsWith("video/", StringComparison.Ordinal) || image.AssetId == "wide.png")
+                if (image.MediaType.StartsWith("video/", StringComparison.Ordinal) || image.AssetId is "wide.png" or "anim.gif")
                     for (var step = 0; step < 3; step++)
                         frames.Add(new UntrustedContentReviewedFrame(
-                            index, step * 2.5, image.MediaType.StartsWith("video/", StringComparison.Ordinal) ? 7.5 : 0,
+                            index, step * 2.5,
+                            image.MediaType.StartsWith("video/", StringComparison.Ordinal) ? 7.5 : image.AssetId == "anim.gif" ? 2.5 : 0,
                             "image/jpeg", FrameBytes));
             }
             return Task.FromResult(new UntrustedContentReviewResult(

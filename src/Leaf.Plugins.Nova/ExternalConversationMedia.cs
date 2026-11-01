@@ -64,6 +64,10 @@ internal static class ExternalConversationMedia
             : null;
     }
 
+    /// <summary>Bytes that are a GIF with more than one frame.</summary>
+    public static bool IsAnimatedGifFile(byte[] bytes)
+        => ExternalConversationImages.Sniff(bytes) == "image/gif" && IsAnimatedGif(bytes);
+
     /// <summary>A GIF with more than one image block. Bounded: it only walks block headers.</summary>
     public static bool IsAnimatedGif(ReadOnlySpan<byte> b)
     {
@@ -175,7 +179,7 @@ internal static class ExternalConversationMedia
             notes.Add(attachment.MediaType.StartsWith("video/", StringComparison.Ordinal)
                 ? $"Attachment {attachment.AttachmentId} is a video {Seconds(duration)} s long. {seeing}, sampled across the clip, " +
                   "not every moment. Audio was not processed."
-                : duration > 0
+                : attachment.MediaType == "image/gif" || duration > 0
                     ? $"Attachment {attachment.AttachmentId} is an animated image {Seconds(duration)} s long. {seeing}, sampled across the animation."
                     : $"Attachment {attachment.AttachmentId} is a picture larger than the image limits, so it was reduced in size to be " +
                       (framesAttached ? "reviewed and shown: you see the reduced version." : "reviewed; you are not being shown it."));
