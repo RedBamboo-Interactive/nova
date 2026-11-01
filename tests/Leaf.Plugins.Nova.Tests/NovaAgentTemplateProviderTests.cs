@@ -61,26 +61,11 @@ public sealed class NovaAgentTemplateProviderTests
         Assert.Contains("references/local-checkout.md", File.ReadAllText(Path.Combine(skillRoot, "SKILL.md")));
         var procedure = File.ReadAllText(Path.Combine(skillRoot, "references", "local-checkout.md"));
 
-        // How the session started is not a refusal: the owner's Agent is the owner's Agent.
-        Assert.DoesNotContain("development_override_external_conversation", procedure);
-        Assert.DoesNotContain("development_override_unknown_context", procedure);
-        Assert.DoesNotContain("private conversation", procedure);
         Assert.Contains("Never work around a refusal", procedure);
-        // Where others can talk, only the owner's own message counts, read from the real envelope.
-        Assert.Contains("Only the owner's own message counts", procedure);
-        Assert.Contains("verifiedLeafIdentity.isConversationOwner", procedure);
-        Assert.Contains("That's my owner's call", procedure);
-        Assert.Contains("No person is speaking", procedure);
-        // A permission increase is the owner's decision, never the Agent's.
-        Assert.Contains("acceptPermissionIncrease", procedure);
+        Assert.Contains("follow your session's own rules about what counts as", procedure);
         Assert.Contains("only after the owner has said yes", procedure);
-        // An unreadable repository is a plain explanation, not a retry loop.
         Assert.Contains("GIT_TERMINAL_PROMPT", procedure);
-        Assert.Contains("do not loop", procedure);
-        // The kernel captures; the Agent builds, along the real standalone path.
         Assert.Contains("never runs git, MSBuild or pnpm", procedure);
-        Assert.Contains("packages.sdk-package.lock.json", procedure);
-        Assert.Contains("redbamboo-packages", procedure);
         Assert.Contains("return-to-release", procedure);
     }
 

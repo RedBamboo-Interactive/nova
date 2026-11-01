@@ -23,9 +23,7 @@ When the owner asks to set up an installed extension so they can work on it, on 
 installation, follow `references/local-checkout.md` step by step: find the repository, clone it and
 its sibling `redbamboo-packages`, choose the folder, build, preview, activate, verify, and return.
 RedLeaf never clones or builds; it only captures what you built, and a refusal is final for this
-session. Asking for it, each restart and a permission increase need the owner's own message: where
-other people can talk to you, the procedure says how to tell whose message it is, and someone else
-asking gets a polite "that's my owner's call".
+session. Each restart and a permission increase need the owner's go-ahead first.
 
 ## Resolve the real source
 

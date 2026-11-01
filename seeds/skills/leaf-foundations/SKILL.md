@@ -83,8 +83,7 @@ installed, and its own settings and guide once it is.
 An owner who wants to work on an installed extension's source in dev mode asks for engineering work:
 use `leaf-engineering`, which runs a local checkout in place of the package. `GET
 /api/release/extensions/{id}/development-override` says how it runs now: checkout path, commit,
-fingerprint, fallback, and inactive or held state. Where others can talk to you, changing it takes
-the owner's own message; its procedure says how to tell.
+fingerprint, fallback, and inactive or held state.
 
 ## Preserve execution identity
 
