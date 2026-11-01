@@ -13,6 +13,14 @@ public sealed record DiscordInjectionReview(
         new("unknown", ["verifier-unavailable"], "treat_as_untrusted_data", false);
 }
 
+/// <summary>An inbound review with the frames it covered, for attachments the model may only see as
+/// reviewed frames. The frames are held in memory for the admission and never serialized.</summary>
+public sealed record DiscordInboundReview(
+    DiscordInjectionReview Review, IReadOnlyList<UntrustedContentReviewedFrame> Frames)
+{
+    public static DiscordInboundReview Unavailable { get; } = new(DiscordInjectionReview.Unavailable, []);
+}
+
 /// <summary>
 /// Nova's adapter onto the shared Sentinel (<see cref="IUntrustedContentReview"/>, provided by
 /// cap-sentinel). It keeps the Discord and Leaf Commons review semantics Nova has always had:
@@ -44,19 +52,33 @@ public sealed class DiscordPromptInjectionVerifier(
         string? requestId = null,
         CancellationToken ct = default,
         IReadOnlyList<UntrustedContentImage>? images = null)
+        => (await ReviewWithFramesAsync(
+            agentReference, ownerUserId, bindingId, generation, content, transport, requestId, ct, images))
+            .Review;
+
+    public async Task<DiscordInboundReview> ReviewWithFramesAsync(
+        string agentReference,
+        string ownerUserId,
+        string bindingId,
+        long generation,
+        string content,
+        string transport = "discord",
+        string? requestId = null,
+        CancellationToken ct = default,
+        IReadOnlyList<UntrustedContentImage>? images = null)
     {
         if (sentinel is null)
         {
             if (Interlocked.Exchange(ref missingSentinelLogged, 1) == 0)
                 logger.LogWarning(
                     "The sentinel capability (cap-sentinel) is not installed; Discord and Leaf Commons messages are admitted with an unavailable prompt-injection review");
-            return DiscordInjectionReview.Unavailable;
+            return DiscordInboundReview.Unavailable;
         }
 
         var agent = (await agents.GetAgentsAsync(ct: ct)).FirstOrDefault(candidate =>
             candidate.Id.Equals(agentReference, StringComparison.OrdinalIgnoreCase)
             || candidate.Slug.Equals(agentReference, StringComparison.OrdinalIgnoreCase));
-        if (agent is null) return DiscordInjectionReview.Unavailable;
+        if (agent is null) return DiscordInboundReview.Unavailable;
 
         var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerUserId, ct);
         var provenance = await NovaComputeProvenance.CreateAsync(
@@ -93,8 +115,9 @@ public sealed class DiscordPromptInjectionVerifier(
                 result.TraceId, bindingId, generation, result.Verdict.Isolation, result.Verdict.Available);
             // A verdict covers the images only when the reviewer says it saw every one; an older
             // reviewer reports none, so content with images fails closed.
-            if ((images?.Count ?? 0) != result.ImagesReviewed) return DiscordInjectionReview.Unavailable;
-            return ToDiscordReview(result.Verdict);
+            if ((images?.Count ?? 0) != result.ImagesReviewed) return DiscordInboundReview.Unavailable;
+            return new DiscordInboundReview(
+                ToDiscordReview(result.Verdict), result.Verdict.Available ? result.ReviewedFrames : []);
         }
         catch (Exception ex)
         {
@@ -103,7 +126,7 @@ public sealed class DiscordPromptInjectionVerifier(
             logger.LogWarning(ex,
                 "Discord prompt-injection verifier failed for {BindingId} generation {Generation}",
                 bindingId, generation);
-            return DiscordInjectionReview.Unavailable;
+            return DiscordInboundReview.Unavailable;
         }
     }
 

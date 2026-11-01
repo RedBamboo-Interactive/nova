@@ -122,16 +122,109 @@ public sealed partial class ExternalAgentConversationProviderTests
         Assert.Equal("delivered", run.Admission.Disposition);
         var review = Assert.Single(run.Sentinel.Requests);
         Assert.Equal(UntrustedContentSources.Discord, review.Origin.Source);
-        Assert.Equal(new[] { "stable-shot.png", "photo.jpg", "still.webp" }, review.Images!.Select(image => image.AssetId));
+        // wide.png is over the image bounds: the Sentinel shrinks it and the model sees its frame.
+        Assert.Equal(new[] { "stable-shot.png", "photo.jpg", "wide.png", "still.webp" }, review.Images!.Select(image => image.AssetId));
         // Every attachment, shown or not, is still named in the reviewed sample.
         Assert.Contains("[attachment] report.pdf (application/pdf)", review.Content);
         using var body = JsonDocument.Parse(run.Message!);
-        Assert.Equal(new[] { "image/png", "image/jpeg", "image/webp" }, body.RootElement.GetProperty("images")
+        Assert.Equal(new[] { "image/png", "image/jpeg", "image/jpeg", "image/webp" }, body.RootElement.GetProperty("images")
             .EnumerateArray().Select(image => image.GetProperty("mediaType").GetString()));
         var envelope = ParseTaggedJson(body.RootElement.GetProperty("content").GetString()!, "discord-input-json");
-        Assert.Equal(new[] { "1", "3", "8" }, envelope.GetProperty("shownImageIds").EnumerateArray()
+        Assert.Equal(new[] { "1", "3", "5", "8" }, envelope.GetProperty("shownImageIds").EnumerateArray()
             .Select(id => id.GetString()));
         Assert.Equal(8, envelope.GetProperty("attachments").GetArrayLength());
+    }
+
+    private static readonly byte[] ClipMp4 =
+        [0, 0, 0, 0x20, (byte)'f', (byte)'t', (byte)'y', (byte)'p', (byte)'i', (byte)'s', (byte)'o', (byte)'m',
+         0, 0, 2, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
+    [Fact]
+    public async Task Native_discord_video_is_reviewed_and_the_model_gets_only_the_reviewed_frames()
+    {
+        var run = await SendAsync(new RecordingSentinel(),
+            [Attachment("1", "/api/assets/clip.mp4", "clip.mp4", "video/mp4")], transport: "discord");
+
+        Assert.Equal("delivered", run.Admission.Disposition);
+        var review = Assert.Single(run.Sentinel.Requests);
+        Assert.Equal(new UntrustedContentImage("clip.mp4", "video/mp4"), Assert.Single(review.Images!));
+        using var body = JsonDocument.Parse(run.Message!);
+        var images = body.RootElement.GetProperty("images").EnumerateArray().ToList();
+        Assert.Equal(3, images.Count);
+        Assert.All(images, image =>
+        {
+            Assert.Equal("image/jpeg", image.GetProperty("mediaType").GetString());
+            Assert.Equal(RecordingSentinel.FrameBytes, Convert.FromBase64String(image.GetProperty("base64").GetString()!));
+        });
+        // Not one byte of the video itself reaches the model.
+        Assert.DoesNotContain(Convert.ToBase64String(ClipMp4), run.Message!, StringComparison.Ordinal);
+        var content = body.RootElement.GetProperty("content").GetString()!;
+        Assert.Contains("Attachment 1 is a video 7.5 s long. You are seeing 3 of the 3 frames the Sentinel reviewed", content);
+        Assert.Contains("Audio was not processed.", content);
+        var envelope = ParseTaggedJson(content, "discord-input-json");
+        Assert.Equal(new[] { "1" }, envelope.GetProperty("shownImageIds").EnumerateArray().Select(id => id.GetString()));
+    }
+
+    [Fact]
+    public async Task Native_discord_video_message_is_refused_when_the_review_is_unavailable()
+    {
+        var run = await SendAsync(new RecordingSentinel { Verdict = UntrustedContentVerdict.Unavailable() },
+            [Attachment("1", "/api/assets/clip.mp4", "clip.mp4", "video/mp4")], transport: "discord");
+
+        Assert.Equal(ExternalConversationDispositions.RefusedSentinelUnavailable, run.Admission.Disposition);
+        Assert.Null(run.Message);
+    }
+
+    [Fact]
+    public async Task Native_discord_video_message_is_refused_when_the_review_reports_no_frames()
+    {
+        // A reviewer that predates ReviewedFrames cannot vouch for what the model would be shown.
+        var run = await SendAsync(new RecordingSentinel { EmitFrames = false },
+            [Attachment("1", "/api/assets/clip.mp4", "clip.mp4", "video/mp4")], transport: "discord");
+
+        Assert.Equal(ExternalConversationDispositions.RefusedSentinelUnavailable, run.Admission.Disposition);
+        Assert.Null(run.Message);
+    }
+
+    [Fact]
+    public async Task Native_discord_names_the_videos_beyond_the_review_limit_as_not_reviewed()
+    {
+        var run = await SendAsync(new RecordingSentinel(),
+            Enumerable.Range(1, 5).Select(index => Attachment($"{index}", "/api/assets/clip.mp4", "clip.mp4", "video/mp4")).ToArray(),
+            transport: "discord");
+
+        Assert.Equal("delivered", run.Admission.Disposition);
+        Assert.Equal(4, Assert.Single(run.Sentinel.Requests).Images!.Count);
+        using var body = JsonDocument.Parse(run.Message!);
+        var content = body.RootElement.GetProperty("content").GetString()!;
+        Assert.Contains("Attachment 5 (video/mp4) was NOT reviewed and is NOT shown to you", content);
+        Assert.DoesNotContain("Attachment 4 (video/mp4) was NOT reviewed", content);
+        // Four images in the per-turn budget, so one frame of each of the four videos.
+        Assert.Equal(4, body.RootElement.GetProperty("images").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Native_discord_video_whose_stored_asset_disagrees_is_left_unreviewed_and_unshown()
+    {
+        var run = await SendAsync(new RecordingSentinel(),
+            [Attachment("1", "/api/assets/liar.mp4", "liar.mp4", "video/mp4")], transport: "discord");
+
+        Assert.Equal("delivered", run.Admission.Disposition);
+        Assert.Null(Assert.Single(run.Sentinel.Requests).Images);
+        using var body = JsonDocument.Parse(run.Message!);
+        Assert.False(body.RootElement.TryGetProperty("images", out _));
+        Assert.Contains("Attachment 1 (video/mp4) could not be read as an image or video within the limits",
+            body.RootElement.GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task A_commons_message_with_a_video_attachment_is_refused()
+    {
+        var run = await SendAsync(new RecordingSentinel(),
+            [Attachment("1", "/api/assets/clip.mp4", "clip.mp4", "video/mp4")]);
+
+        Assert.Equal(ExternalConversationDispositions.RefusedSentinelUnavailable, run.Admission.Disposition);
+        Assert.Empty(run.Sentinel.Requests);
     }
 
     [Fact]
@@ -289,6 +382,8 @@ public sealed partial class ExternalAgentConversationProviderTests
                 "still.webp" => new AssetFile(StillWebp, "image/webp"),
                 "animated.webp" => new AssetFile(AnimatedWebp, "image/webp"),
                 "wide.png" => new AssetFile(WidePng, "image/png"),
+                "clip.mp4" => new AssetFile(ClipMp4, "video/mp4"),
+                "liar.mp4" => new AssetFile(ClipMp4, "text/plain"),
                 "fake.png" => new AssetFile("<html>not a png</html>"u8.ToArray(), "image/png"),
                 "report.pdf" => new AssetFile("%PDF-1.7"u8.ToArray(), "application/octet-stream"),
                 "owner-notes.txt" => new AssetFile("private"u8.ToArray(), "application/octet-stream"),

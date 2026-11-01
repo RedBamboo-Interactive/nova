@@ -1525,6 +1525,11 @@ public sealed partial class ExternalAgentConversationProviderTests
             new("none", [], "normal", true, UntrustedContentIsolation.VerifiedToolFree);
         /// <summary>False acts like a reviewer that predates images: it reports none reviewed.</summary>
         public bool EchoImages { get; init; } = true;
+        /// <summary>False acts like a reviewer that predates ReviewedFrames: media is reviewed but no
+        /// frame is reported back.</summary>
+        public bool EmitFrames { get; init; } = true;
+        /// <summary>The frames a Sentinel would report: one per video, and per picture it had to shrink.</summary>
+        public static readonly byte[] FrameBytes = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3];
 
         public Task<UntrustedContentReviewResult> ReviewAsync(
             UntrustedContentReviewRequest request, CancellationToken ct = default)
@@ -1539,11 +1544,22 @@ public sealed partial class ExternalAgentConversationProviderTests
                     withProvenance.Add((LogPath, "", request.ComputeProvenance));
                     break;
             }
+            var frames = new List<UntrustedContentReviewedFrame>();
+            for (var index = 0; EmitFrames && EchoImages && index < (request.Images?.Count ?? 0); index++)
+            {
+                var image = request.Images![index];
+                if (image.MediaType.StartsWith("video/", StringComparison.Ordinal) || image.AssetId == "wide.png")
+                    for (var step = 0; step < 3; step++)
+                        frames.Add(new UntrustedContentReviewedFrame(
+                            index, step * 2.5, image.MediaType.StartsWith("video/", StringComparison.Ordinal) ? 7.5 : 0,
+                            "image/jpeg", FrameBytes));
+            }
             return Task.FromResult(new UntrustedContentReviewResult(
                 Verdict, null, [], new UntrustedContentScreening(0, [], [], request.Content, []),
                 "job-1", "trace-1")
             {
                 ImagesReviewed = EchoImages ? request.Images?.Count ?? 0 : 0,
+                ReviewedFrames = frames,
             });
         }
 

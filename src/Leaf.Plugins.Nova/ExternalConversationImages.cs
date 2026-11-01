@@ -42,6 +42,17 @@ internal static class ExternalConversationImages
         return size is { Width: >= 1 and <= MaxDimension, Height: >= 1 and <= MaxDimension } ? mediaType : null;
     }
 
+    /// <summary>Pixel size from the header alone; null when unreadable, and for an animated WebP.</summary>
+    public static (int Width, int Height)? Dimensions(byte[] bytes, string mediaType)
+        => mediaType switch
+        {
+            "image/png" => Png(bytes),
+            "image/jpeg" => Jpeg(bytes),
+            "image/webp" => Webp(bytes),
+            "image/gif" => Gif(bytes),
+            _ => null,
+        };
+
     private static (int Width, int Height)? Png(byte[] bytes)
         => bytes.Length >= 24 && bytes.AsSpan(12, 4).SequenceEqual("IHDR"u8)
             ? ((int)Math.Min(int.MaxValue, BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(16))),
