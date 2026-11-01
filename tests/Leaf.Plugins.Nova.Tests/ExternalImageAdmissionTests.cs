@@ -248,6 +248,94 @@ public sealed partial class ExternalAgentConversationProviderTests
         Assert.Null(run.Message);
     }
 
+    private static UntrustedContentVerdict MediaToolMissing() => UntrustedContentVerdict.Unavailable() with
+    {
+        Signals = ["verifier-unavailable", "media-tool-unavailable"],
+    };
+
+    private static bool HasVideo(UntrustedContentReviewRequest request)
+        => request.Images?.Any(image => image.MediaType.StartsWith("video/", StringComparison.Ordinal)) == true;
+
+    [Fact]
+    public async Task A_video_whose_review_is_unavailable_does_not_cost_the_message_its_text()
+    {
+        var sentinel = new RecordingSentinel { VerdictFor = request => HasVideo(request) ? MediaToolMissing() : new("none", [], "normal", true, UntrustedContentIsolation.VerifiedToolFree) };
+        var run = await SendAsync(sentinel,
+            [Attachment("1", "/api/assets/clip.mp4", "clip.mp4", "video/mp4")], transport: "discord");
+
+        Assert.Equal("delivered", run.Admission.Disposition);
+        Assert.Equal(2, sentinel.Requests.Count); // at most one more review
+        Assert.True(HasVideo(sentinel.Requests[0]));
+        Assert.Null(sentinel.Requests[1].Images);
+        using var body = JsonDocument.Parse(run.Message!);
+        Assert.False(body.RootElement.TryGetProperty("images", out _)); // no frames
+        var content = body.RootElement.GetProperty("content").GetString()!;
+        Assert.Contains("Attachment 1 (video/mp4) could not be reviewed, so it is NOT shown to you.", content);
+        Assert.DoesNotContain(Convert.ToBase64String(ClipMp4), run.Message!, StringComparison.Ordinal);
+        var envelope = ParseTaggedJson(content, "discord-input-json");
+        Assert.Empty(envelope.GetProperty("shownImageIds").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task When_the_review_without_the_video_is_unavailable_too_the_message_is_refused_after_two_reviews()
+    {
+        var sentinel = new RecordingSentinel { Verdict = MediaToolMissing() };
+        var run = await SendAsync(sentinel,
+            [Attachment("1", "/api/assets/clip.mp4", "clip.mp4", "video/mp4")], transport: "discord");
+
+        Assert.Equal(ExternalConversationDispositions.RefusedSentinelUnavailable, run.Admission.Disposition);
+        Assert.Null(run.Message);
+        Assert.Equal(2, sentinel.Requests.Count);
+    }
+
+    [Fact]
+    public async Task A_held_video_verdict_is_never_retried_and_is_delivered_with_its_verdict()
+    {
+        var held = new UntrustedContentVerdict("high", ["image-credential"], "require_private_approval", true,
+            UntrustedContentIsolation.VerifiedToolFree);
+        var sentinel = new RecordingSentinel { VerdictFor = request => HasVideo(request) ? held : new("none", [], "normal", true, UntrustedContentIsolation.VerifiedToolFree) };
+        var run = await SendAsync(sentinel,
+            [Attachment("1", "/api/assets/clip.mp4", "clip.mp4", "video/mp4")], transport: "discord");
+
+        Assert.Single(sentinel.Requests);
+        Assert.Equal("delivered", run.Admission.Disposition);
+        using var body = JsonDocument.Parse(run.Message!);
+        Assert.Equal(3, body.RootElement.GetProperty("images").GetArrayLength()); // reviewed frames, as without a retry
+        var content = body.RootElement.GetProperty("content").GetString()!;
+        Assert.Contains("image-credential", content);
+        Assert.DoesNotContain("could not be reviewed", content);
+    }
+
+    [Fact]
+    public async Task Stills_next_to_a_video_that_could_not_be_reviewed_are_still_reviewed_and_shown()
+    {
+        var sentinel = new RecordingSentinel { VerdictFor = request => HasVideo(request) ? MediaToolMissing() : new("none", [], "normal", true, UntrustedContentIsolation.VerifiedToolFree) };
+        var run = await SendAsync(sentinel,
+            [Attachment("1", "/api/assets/stable-shot.png"), Attachment("2", "/api/assets/clip.mp4", "clip.mp4", "video/mp4")],
+            transport: "discord");
+
+        Assert.Equal("delivered", run.Admission.Disposition);
+        Assert.Equal(2, sentinel.Requests.Count);
+        Assert.Equal("stable-shot.png", Assert.Single(sentinel.Requests[1].Images!).AssetId);
+        using var body = JsonDocument.Parse(run.Message!);
+        var image = Assert.Single(body.RootElement.GetProperty("images").EnumerateArray());
+        Assert.Equal("image/png", image.GetProperty("mediaType").GetString());
+        var content = body.RootElement.GetProperty("content").GetString()!;
+        Assert.Contains("Attachment 2 (video/mp4) could not be reviewed", content);
+        var envelope = ParseTaggedJson(content, "discord-input-json");
+        Assert.Equal(new[] { "1" }, envelope.GetProperty("shownImageIds").EnumerateArray().Select(id => id.GetString()));
+    }
+
+    [Fact]
+    public async Task An_unavailable_review_without_any_media_is_not_retried()
+    {
+        var sentinel = new RecordingSentinel { Verdict = MediaToolMissing() };
+        var run = await SendAsync(sentinel, [Attachment("1", "/api/assets/stable-shot.png")], transport: "discord");
+
+        Assert.Equal(ExternalConversationDispositions.RefusedSentinelUnavailable, run.Admission.Disposition);
+        Assert.Single(sentinel.Requests);
+    }
+
     [Fact]
     public async Task Native_discord_video_message_is_refused_when_the_review_reports_no_frames()
     {

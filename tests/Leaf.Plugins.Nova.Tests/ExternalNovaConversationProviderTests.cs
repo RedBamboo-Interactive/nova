@@ -1528,6 +1528,8 @@ public sealed partial class ExternalAgentConversationProviderTests
         /// <summary>False acts like a reviewer that predates ReviewedFrames: media is reviewed but no
         /// frame is reported back.</summary>
         public bool EmitFrames { get; init; } = true;
+        /// <summary>Overrides <see cref="Verdict"/> per request, for a reviewer whose answer depends on the media.</summary>
+        public Func<UntrustedContentReviewRequest, UntrustedContentVerdict>? VerdictFor { get; init; }
         /// <summary>The frames a Sentinel would report: one per video, and per picture it had to shrink.</summary>
         public static readonly byte[] FrameBytes = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3];
 
@@ -1555,11 +1557,13 @@ public sealed partial class ExternalAgentConversationProviderTests
                             image.MediaType.StartsWith("video/", StringComparison.Ordinal) ? 7.5 : image.AssetId == "anim.gif" ? 2.5 : 0,
                             "image/jpeg", FrameBytes));
             }
+            var verdict = VerdictFor?.Invoke(request) ?? Verdict;
+            if (!verdict.Available) frames.Clear();
             return Task.FromResult(new UntrustedContentReviewResult(
-                Verdict, null, [], new UntrustedContentScreening(0, [], [], request.Content, []),
+                verdict, null, [], new UntrustedContentScreening(0, [], [], request.Content, []),
                 "job-1", "trace-1")
             {
-                ImagesReviewed = EchoImages ? request.Images?.Count ?? 0 : 0,
+                ImagesReviewed = !verdict.Available ? 0 : EchoImages ? request.Images?.Count ?? 0 : 0,
                 ReviewedFrames = frames,
             });
         }

@@ -190,6 +190,8 @@ internal static class ExternalConversationMedia
                 SkipReason.BeyondLimit =>
                     $"Attachment {item.AttachmentId} ({item.MediaType}) was NOT reviewed and is NOT shown to you: only the first " +
                     $"{ExternalConversationImages.MaxImages} images and videos of a message are reviewed.",
+                SkipReason.ReviewUnavailable =>
+                    $"Attachment {item.AttachmentId} ({item.MediaType}) could not be reviewed, so it is NOT shown to you.",
                 _ =>
                     $"Attachment {item.AttachmentId} ({item.MediaType}) could not be read as an image or video within the limits, " +
                     "so it was NOT reviewed and is NOT shown to you.",
@@ -214,6 +216,8 @@ internal enum SkipReason
 {
     BeyondLimit,
     Unreadable,
+    /// <summary>Media whose review was unavailable, so the message went through without it.</summary>
+    ReviewUnavailable,
 }
 
 internal sealed record SkippedAttachment(string AttachmentId, string MediaType, SkipReason Reason);

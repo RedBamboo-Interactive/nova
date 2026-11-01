@@ -191,6 +191,33 @@ public sealed class ExternalAgentConversationProvider(
                 transport, input.RequestId, ct, images.Select(image => image.Review).ToArray())
             : new DiscordInboundReview(
                 new DiscordInjectionReview("not_applicable", [], "Use the application-scoped Agent instructions.", true), []);
+        // Media that cannot be reviewed (no ffmpeg, a corrupt or over-long file, a timeout) is not a
+        // reason to lose the person's message: inbound the model only ever receives reviewed frames,
+        // so such an attachment can simply not be shown. The message is reviewed once more without
+        // it. Only an unavailable first review leads here, never a held verdict, and if the second
+        // review is unavailable too it is a real outage and the message is refused as before.
+        if (outboundNotice is null && !inbound.Review.Available && RequiresSentinelReview(transport)
+            && string.Equals(transport, "discord", StringComparison.OrdinalIgnoreCase)
+            && loaded is not null && images!.Any(image => image.Media))
+        {
+            logger.LogWarning(
+                "Discord message {RequestId} has media the Sentinel could not review; reviewing it again without the media",
+                input.RequestId);
+            var stills = images!.Where(image => !image.Media).ToArray();
+            var dropped = images!.Where(image => image.Media)
+                .Select(image => new SkippedAttachment(image.AttachmentId, image.MediaType, SkipReason.ReviewUnavailable));
+            var retry = await verifier.ReviewWithFramesAsync(
+                sentinelAgentId,
+                ownerId, handle.BindingId, handle.Generation, InboundReviewSample(input),
+                transport, input.RequestId, ct,
+                stills.Length == 0 ? null : stills.Select(image => image.Review).ToArray());
+            if (retry.Review.Available)
+            {
+                inbound = retry;
+                images = stills;
+                loaded = new LoadedImages(stills, [.. loaded.Skipped, .. dropped]);
+            }
+        }
         var review = inbound.Review;
         // The model is shown pictures as they are, and video, animations and resized pictures only as
         // the frames this review covered. A review that covered none of an attachment's frames is no
