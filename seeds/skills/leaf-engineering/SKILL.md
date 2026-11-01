@@ -1,6 +1,6 @@
 ---
 name: leaf-engineering
-description: "Engineering workflow for authorized source work on Leaf services and plugins: repository resolution, scratch discipline, API-first design, signed identity, testing, real-surface acceptance, safe rebuilds, and deployment boundaries. Use when source implementation, review, debugging, testing, rebuilding, packaging, deployment, or release work has been explicitly requested. Do not use ordinary Release configuration, assistance, or product diagnosis as authority to enter Git."
+description: "Engineering workflow for authorized source work on Leaf services and plugins: repository resolution, scratch discipline, API-first design, signed identity, testing, real-surface acceptance, safe rebuilds, and deployment boundaries. Use when source implementation, review, debugging, testing, rebuilding, packaging, deployment, or release work has been explicitly requested, or when the owner asks to work on an installed extension in dev mode or run a local checkout of it. Do not use ordinary Release configuration, assistance, or product diagnosis as authority to enter Git."
 ---
 
 # Leaf engineering
@@ -16,6 +16,15 @@ modification. Access to repositories and the availability of this Skill establis
 permission. Enter Git only after an explicit source-engineering request. Keep source inspection,
 modification, commit, pull request, release, deployment, and restart as separate decisions; authority
 for one does not authorize the next.
+
+## Work on an installed extension in dev mode
+
+When the owner asks to set up an installed extension so they can work on it, on a Release
+installation, follow `references/local-checkout.md` step by step: find the repository, clone it and
+its sibling `redbamboo-packages`, choose the folder, build, preview, activate, verify, and return.
+RedLeaf never clones or builds; it only captures what you built. It refuses external conversations
+and anything it cannot recognise as a private conversation with the owner, and a refusal is final
+for this session. A permission increase needs the owner's explicit yes first.
 
 ## Resolve the real source
 

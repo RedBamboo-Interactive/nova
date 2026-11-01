@@ -54,6 +54,31 @@ public sealed class NovaAgentTemplateProviderTests
     }
 
     [Fact]
+    public void LocalCheckoutProcedureKeepsItsSafetyRules()
+    {
+        var skillRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..", "seeds", "skills", "leaf-engineering"));
+        Assert.Contains("references/local-checkout.md", File.ReadAllText(Path.Combine(skillRoot, "SKILL.md")));
+        var procedure = File.ReadAllText(Path.Combine(skillRoot, "references", "local-checkout.md"));
+
+        // The refusals an Agent must stop at, and that it never routes around one.
+        Assert.Contains("development_override_external_conversation", procedure);
+        Assert.Contains("development_override_unknown_context", procedure);
+        Assert.Contains("Never work around a refusal", procedure);
+        // A permission increase is the owner's decision, never the Agent's.
+        Assert.Contains("acceptPermissionIncrease", procedure);
+        Assert.Contains("only after the owner has said yes", procedure);
+        // An unreadable repository is a plain explanation, not a retry loop.
+        Assert.Contains("GIT_TERMINAL_PROMPT", procedure);
+        Assert.Contains("do not loop", procedure);
+        // The kernel captures; the Agent builds, along the real standalone path.
+        Assert.Contains("never runs git, MSBuild or pnpm", procedure);
+        Assert.Contains("packages.sdk-package.lock.json", procedure);
+        Assert.Contains("redbamboo-packages", procedure);
+        Assert.Contains("return-to-release", procedure);
+    }
+
+    [Fact]
     public void LoadingTemplateIsDeterministicAndSideEffectFree()
     {
         var first = new NovaAgentTemplateProvider().Template;
