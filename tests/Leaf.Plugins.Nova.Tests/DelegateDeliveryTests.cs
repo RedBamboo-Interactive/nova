@@ -16,6 +16,17 @@ public sealed class DelegateDeliveryTests
 {
     public static TheoryData<string?> Modes => new() { null, "after-current", "steer-current", "interrupt-current" };
 
+    [Fact]
+    public async Task A_delegation_is_the_Agents_decision_whoever_the_owner_is()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        var compute = new Compute();
+
+        await Delegate(f, compute, new() { SessionId = "worker", Prompt = "next", DiscussionId = "target" });
+
+        Assert.Equal(ComputeCauses.Agent, Assert.Single(compute.MessageCauses));
+    }
+
     [Theory]
     [InlineData("queue")]
     [InlineData("steer")]
@@ -377,6 +388,7 @@ public sealed class DelegateDeliveryTests
         public bool LoseFirstAcknowledgement { get; set; }
         public bool SupervisorAccepted { get; set; } = true;
         public int FreshAdmissions { get; private set; }
+        public List<string?> MessageCauses { get; } = [];
         private readonly HashSet<string> admitted = [];
 
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
@@ -401,6 +413,7 @@ public sealed class DelegateDeliveryTests
             if (path.EndsWith("/message"))
             {
                 Assert.NotNull(provenance);
+                MessageCauses.Add(provenance.Cause);
                 // RedCompute acts (interrupts, steers) only on a fresh admission; a reused key replays.
                 var replay = key is not null && !admitted.Add(key);
                 if (!replay) FreshAdmissions++;

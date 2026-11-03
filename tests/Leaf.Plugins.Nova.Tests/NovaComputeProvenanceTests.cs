@@ -1,13 +1,86 @@
+using System.Security.Claims;
 using System.Text.Json.Nodes;
 using Leaf.Plugins.Nova;
 using Leaf.Sdk;
 using Leaf.Sdk.Services;
+using Microsoft.AspNetCore.Http;
 using Xunit;
 
 namespace Leaf.Plugins.Nova.Tests;
 
 public sealed class NovaComputeProvenanceTests
 {
+    private const string Owner = "00000000-0000-4000-8000-000000000001";
+
+    [Fact]
+    public void The_owner_on_their_own_page_is_the_person_who_caused_it()
+        => Assert.Equal(ComputeCauses.Beneficiary, Cause(Plain(Owner, browser: true), Owner));
+
+    [Fact]
+    public void A_person_who_is_not_the_owner_is_someone_else()
+        => Assert.Equal(ComputeCauses.OtherPerson, Cause(Plain("someone-else", browser: true), Owner));
+
+    [Fact]
+    public void The_first_real_person_on_a_local_discussion_becomes_its_owner()
+        => Assert.Equal(ComputeCauses.Beneficiary, Cause(Plain(Owner, browser: true), "local-user"));
+
+    [Fact]
+    public void A_script_holding_the_owners_token_is_not_the_owner_typing()
+        => Assert.Null(Cause(Plain(Owner, browser: false), Owner));
+
+    [Fact]
+    public void A_browser_token_on_its_page_is_the_person_and_an_Agents_token_is_the_Agent()
+    {
+        const string browserToken =
+            """{"actor":{"kind":"app"},"beneficiary":{"kind":"user"},"context":[{"kind":"browser"}]}""";
+        var onItsPage = Execution(Owner, browserToken);
+        onItsPage.Request.Headers["Sec-Fetch-Site"] = "same-origin";
+        Assert.Equal(ComputeCauses.Beneficiary, Cause(onItsPage, Owner));
+        // The same token replayed from a backend is nobody clicking.
+        Assert.Null(Cause(Execution(Owner, browserToken), Owner));
+        Assert.Equal(ComputeCauses.Agent, Cause(Execution(Owner,
+            """{"actor":{"kind":"agent"},"context":[{"kind":"job-cause","id":"agent"}]}"""), Owner));
+        // A session process token issued before causes were recorded is still its Agent.
+        Assert.Equal(ComputeCauses.Agent, Cause(Execution(Owner,
+            """{"actor":{"kind":"agent"},"context":[]}"""), Owner));
+        Assert.Null(Cause(Execution(Owner, """{"actor":{"kind":"app"},"context":[]}"""), Owner));
+    }
+
+    [Fact]
+    public async Task Provenance_carries_the_cause_it_was_given_and_none_otherwise()
+    {
+        var store = new FakeEntityStore(Entity(Guid.NewGuid(), "plugin", "nova", "Nova", new JsonObject()));
+        var agent = new AgentInfo("agent-id", "nova", "Nova", null, null, "C:\\Nova", null, null, null, null, null);
+        var beneficiary = new ComputeBeneficiary("system", Reason: "test");
+
+        Assert.Equal(ComputeCauses.Agent, (await NovaComputeProvenance.CreateAsync(
+            store, agent, beneficiary, "/test", [], cause: ComputeCauses.Agent)).Cause);
+        Assert.Null((await NovaComputeProvenance.CreateAsync(store, agent, beneficiary, "/test", [])).Cause);
+    }
+
+    private static string? Cause(DefaultHttpContext context, string? owner)
+        => NovaComputeProvenance.RequestCause(context, owner);
+
+    private static DefaultHttpContext Plain(string subject, bool browser)
+    {
+        var context = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", subject)], "Bearer")),
+        };
+        if (browser) context.Request.Headers["Sec-Fetch-Site"] = "same-origin";
+        return context;
+    }
+
+    private static DefaultHttpContext Execution(string subject, string identity) => new()
+    {
+        User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", subject),
+            new Claim("token_use", "execution"),
+            new Claim("execution_identity", identity),
+        ], "Bearer")),
+    };
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

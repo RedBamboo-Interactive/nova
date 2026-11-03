@@ -56,7 +56,7 @@ public sealed class MessagePipeline(
         => _pendingSessions.TryGetValue(discussionId, out var pending) ? pending : null;
 
     /// <summary>Kick off background session creation for a fresh discussion.</summary>
-    public void BeginSessionCreation(DiscussionRead discussion)
+    public void BeginSessionCreation(DiscussionRead discussion, string? cause)
     {
         if (discussion.SessionId is not null) return;
         var discId = discussion.Id;
@@ -67,7 +67,7 @@ public sealed class MessagePipeline(
                 var sessionId = await TryCreateSessionAsync(discussion.AgentId, discussion.OwnerId,
                     discussion.QualityTier, discussion.Provider,
                     discussionId: discussion.Id, confidential: discussion.Confidential,
-                    keepResident: KeepsSessionResident(discussion));
+                    keepResident: KeepsSessionResident(discussion), cause: cause);
                 if (sessionId is null)
                 {
                     await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped);
@@ -111,7 +111,8 @@ public sealed class MessagePipeline(
         IReadOnlyList<ComputeContextReference>? additionalContext = null,
         string? correlationId = null, string? parentJobId = null,
         bool confidential = false, string? developerInstructions = null,
-        string? modelOverride = null, string? effortOverride = null, bool keepResident = false)
+        string? modelOverride = null, string? effortOverride = null, bool keepResident = false,
+        string? cause = null)
     {
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
         if (agent == null)
@@ -151,7 +152,8 @@ public sealed class MessagePipeline(
         if (discussionId != null) context.Add(new ComputeContextReference("discussion", discussionId));
         if (additionalContext != null) context.AddRange(additionalContext);
         var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
-            entrypointRoute, context, correlationId: correlationId, parentJobId: parentJobId, ct: ct);
+            entrypointRoute, context, correlationId: correlationId, parentJobId: parentJobId, ct: ct,
+            cause: cause);
         var (sessionId, failure) = await redCompute.CreateSessionWithReasonAsync(body, provenance, ct);
         if (sessionId is null)
             logger.LogWarning("RedCompute refused session creation for agent {AgentId} via {Provider}: {Reason}",
@@ -164,10 +166,10 @@ public sealed class MessagePipeline(
         string content, ImageAttachmentDto[]? images, ResolvedDevice device, string input,
         string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
         string? requestedMessageUid = null,
-        CancellationToken ct = default, bool humanInitiated = true)
+        CancellationToken ct = default, bool humanInitiated = true, string? cause = null)
         => SendCoreAsync(discussion, userId, content, images, null, device, input,
             delivery, idempotencyKey, displayContent, persistUserMessage: true,
-            requestedMessageUid, ct, humanInitiated);
+            requestedMessageUid, ct, humanInitiated, cause);
 
     /// <summary>
     /// Starts a real discussion turn while keeping its bootstrap instruction out of
@@ -192,21 +194,23 @@ public sealed class MessagePipeline(
             persistUserMessage: false,
             requestedMessageUid: messageUid,
             ct,
-            humanInitiated: false);
+            humanInitiated: false,
+            // Nova's own bootstrap turn: nobody typed it and no Agent decided to send it.
+            cause: ComputeCauses.App);
 
     public Task<SendMessageOutcome> SendInputAsync(
         DiscussionRead discussion, string? userId,
         InputPartDto[] parts, ResolvedDevice device, string input,
         string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
         string? requestedMessageUid = null,
-        CancellationToken ct = default, bool humanInitiated = true)
+        CancellationToken ct = default, bool humanInitiated = true, string? cause = null)
     {
         var content = string.Join("\n", parts
             .Where(part => string.Equals(part.Type, "text", StringComparison.OrdinalIgnoreCase))
             .Select(part => part.Text ?? ""));
         return SendCoreAsync(discussion, userId, content, null, parts, device, input,
             delivery, idempotencyKey, displayContent, persistUserMessage: true,
-            requestedMessageUid, ct, humanInitiated);
+            requestedMessageUid, ct, humanInitiated, cause);
     }
 
     private async Task<SendMessageOutcome> SendCoreAsync(
@@ -214,7 +218,7 @@ public sealed class MessagePipeline(
         string content, ImageAttachmentDto[]? images, InputPartDto[]? inputParts,
         ResolvedDevice device, string input, string? delivery, string? idempotencyKey,
         string? displayContent, bool persistUserMessage, string? requestedMessageUid,
-        CancellationToken ct = default, bool humanInitiated = true)
+        CancellationToken ct = default, bool humanInitiated = true, string? cause = null)
     {
         // Endpoint checks provide the immediate 409, while this authoritative
         // re-read protects every internal caller that sends by explicit record.
@@ -248,7 +252,8 @@ public sealed class MessagePipeline(
                 sessionId = await TryCreateSessionAsync(discussion.AgentId, computeOwnerId,
                     discussion.QualityTier, discussion.Provider, ct, discussion.Id,
                     confidential: discussion.Confidential,
-                    keepResident: KeepsSessionResident(discussion));
+                    keepResident: KeepsSessionResident(discussion),
+                    cause: cause);
             }
             catch (ComputeMaintenanceException ex)
             {
@@ -281,7 +286,7 @@ public sealed class MessagePipeline(
         var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
             $"/api/apps/nova/discussions/{discussion.Id}/message",
             [new ComputeContextReference("discussion", discussion.Id),
-             new ComputeContextReference("session", sessionId)], method: "POST", ct: ct);
+             new ComputeContextReference("session", sessionId)], method: "POST", ct: ct, cause: cause);
 
         if (sessionIsNew)
         {

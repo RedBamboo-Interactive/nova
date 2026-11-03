@@ -327,6 +327,7 @@ public sealed class HeartbeatLifecycleTests
         var result = await fixture.Heartbeat.ReconcileAsync();
 
         Assert.Equal(["live-session", "heartbeat-session"], gateway.ResumeRequests.Select(r => r.SessionId));
+        Assert.All(gateway.ResumeRequests, request => Assert.Equal(ComputeCauses.Agent, request.Provenance?.Cause));
         Assert.All(gateway.ResumeRequests, request =>
         {
             Assert.NotNull(request.Provenance);

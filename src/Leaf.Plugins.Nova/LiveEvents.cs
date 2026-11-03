@@ -328,7 +328,9 @@ public sealed class EventInjector(
                 $"/api/apps/nova/discussions/{discussion.Id}/event",
                 [new ComputeContextReference("discussion", discussion.Id),
                  new ComputeContextReference("session", sessionId),
-                 new ComputeContextReference("event", uid, NameSnapshot: source)], method: "POST", ct: ct);
+                 new ComputeContextReference("event", uid, NameSnapshot: source)], method: "POST", ct: ct,
+                // An injected event is never a person talking, even in a discussion a person started.
+                cause: senderAgentId is not null ? ComputeCauses.Agent : ComputeCauses.App);
             var result = await redCompute.SendMessageDetailedAsync(
                 sessionId, messageBody, provenance, ct, idempotencyKey: admissionKey);
             // An injected event (heartbeat, automation, callback, delegation, Discord

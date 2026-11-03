@@ -48,7 +48,7 @@ public sealed class VoiceSessionService(
     private readonly VoiceSessionDiscussionGate _discussionGate = new();
 
     public async Task<RedComputeClient.ProxyResult> StartAsync(DiscussionRead discussion,
-        string offerSdp, CancellationToken ct)
+        string offerSdp, CancellationToken ct, string? cause = null)
     {
         var agent = discussion.AgentId is null ? null : await agents.GetAgentAsync(discussion.AgentId, ct);
         if (agent is null)
@@ -82,7 +82,8 @@ public sealed class VoiceSessionService(
                 sessionId = await pipeline.TryCreateSessionAsync(discussion.AgentId, discussion.OwnerId,
                     discussion.QualityTier, discussion.Provider, ct, discussion.Id,
                     entrypointRoute: $"/api/apps/nova/discussions/{discussion.Id}/voice-sessions",
-                    confidential: discussion.Confidential);
+                    confidential: discussion.Confidential,
+                    cause: cause);
                 if (sessionId is null)
                     return Json(503, new { error = "ai_session_unavailable", message = "Nova's AI session could not be started" });
                 await store.PatchAsync(discussion.EntityId, new JsonObject { ["session_id"] = sessionId }, ct: ct);
@@ -92,7 +93,7 @@ public sealed class VoiceSessionService(
             var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
                 $"/api/apps/nova/discussions/{discussion.Id}/voice-sessions",
                 [new ComputeContextReference("discussion", discussion.Id),
-                 new ComputeContextReference("session", sessionId)], method: "POST", ct: ct);
+                 new ComputeContextReference("session", sessionId)], method: "POST", ct: ct, cause: cause);
             var instructions = BuildVoiceInstructions(agent);
             // The previous transport is fully drained above. Only now may a replacement
             // snapshot canonical history, otherwise phone-sleep reconnect can rewind.

@@ -86,7 +86,7 @@ public sealed class DiscordPromptInjectionVerifier(
             "/api/apps/nova/external-conversations/prompt-injection-review",
             [new ComputeContextReference("external-conversation", bindingId),
              new ComputeContextReference("generation", generation.ToString())],
-            entrypointKind: "discord", method: "VERIFY", ct: ct);
+            entrypointKind: "discord", method: "VERIFY", ct: ct, cause: ComputeCauses.App);
         var source = string.Equals(transport, "leaf-commons", StringComparison.OrdinalIgnoreCase)
             ? UntrustedContentSources.LeafCommons
             : UntrustedContentSources.Discord;

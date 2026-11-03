@@ -233,7 +233,7 @@ public static class DelegateEndpoints
                 var resumeProvenance = await NovaComputeProvenance.CreateAsync(entities, resolvedAgent, beneficiary,
                     "/api/apps/nova/delegate",
                     [.. baseContext, new ComputeContextReference("session", sessionId)],
-                    method: "POST", ct: ctx.RequestAborted);
+                    method: "POST", ct: ctx.RequestAborted, cause: ComputeCauses.Agent);
                 if (!await redCompute.ResumeAsync(sessionId, resumeProvenance, ctx.RequestAborted))
                     return Results.Json(new { error = "resume_failed", message = $"Session '{sessionId}' could not be resumed" }, statusCode: 502);
             }
@@ -256,7 +256,8 @@ public static class DelegateEndpoints
 
                 var createProvenance = await NovaComputeProvenance.CreateAsync(
                     entities, resolvedAgent, beneficiary,
-                    "/api/apps/nova/delegate", baseContext, method: "POST", ct: ctx.RequestAborted);
+                    "/api/apps/nova/delegate", baseContext, method: "POST", ct: ctx.RequestAborted,
+                    cause: ComputeCauses.Agent);
                 var created = await redCompute.CreateSessionAsync(createBody,
                     createProvenance, ctx.RequestAborted);
                 if (created == null)
@@ -302,7 +303,7 @@ public static class DelegateEndpoints
                     entities, resolvedAgent, beneficiary,
                     "/api/apps/nova/delegate",
                     [.. baseContext, new ComputeContextReference("session", sessionId)],
-                    method: "POST", ct: ctx.RequestAborted);
+                    method: "POST", ct: ctx.RequestAborted, cause: ComputeCauses.Agent);
                 supervisorBound = await redCompute.SetSupervisorAsync(
                     sessionId, supervisorSessionId, supervisorProvenance, ctx.RequestAborted);
             }
@@ -345,7 +346,7 @@ public static class DelegateEndpoints
                     entities, resolvedAgent, beneficiary,
                     "/api/apps/nova/delegate",
                     [.. baseContext, new ComputeContextReference("session", sessionId)],
-                    method: "POST", ct: ctx.RequestAborted);
+                    method: "POST", ct: ctx.RequestAborted, cause: ComputeCauses.Agent);
                 var result = await redCompute.SendMessageDetailedAsync(sessionId, promptBody,
                     messageProvenance, ctx.RequestAborted,
                     idempotencyKey: promptIdempotencyKey);

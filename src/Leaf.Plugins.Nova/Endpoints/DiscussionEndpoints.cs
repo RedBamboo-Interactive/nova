@@ -482,7 +482,8 @@ public static class DiscussionEndpoints
             // empty provider session. Create it on the first user reply instead,
             // when MessagePipeline can also replay the persisted assistant post.
             if (createReq?.DeferSession != true)
-                pipeline.BeginSessionCreation(discussion);
+                pipeline.BeginSessionCreation(discussion,
+                    NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
 
             return Results.Ok(DiscussionStore.ToInfo(discussion));
         })
@@ -1250,7 +1251,8 @@ public static class DiscussionEndpoints
                 $"/api/apps/nova/discussions/{id}/title/generate",
                 [new ComputeContextReference("discussion", id),
                  new ComputeContextReference("session", discussion.SessionId)],
-                method: "POST", ct: ctx.RequestAborted);
+                method: "POST", ct: ctx.RequestAborted,
+                cause: NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
             var generated = await redCompute.GenerateAsync(new
             {
                 mode = "oneshot",
@@ -1342,7 +1344,8 @@ public static class DiscussionEndpoints
                     $"/api/apps/nova/discussions/{id}/confidential",
                     [new ComputeContextReference("discussion", id),
                      new ComputeContextReference("session", discussion.SessionId)],
-                    method: "PUT", ct: ctx.RequestAborted);
+                    method: "PUT", ct: ctx.RequestAborted,
+                    cause: NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
                 if (!await redCompute.SetConfidentialAsync(
                         discussion.SessionId, provenance, ctx.RequestAborted))
                     return Results.Json(new
@@ -1501,7 +1504,7 @@ public static class DiscussionEndpoints
                 $"/api/apps/nova/discussions/{id}/resume",
                 [new ComputeContextReference("discussion", id),
                  new ComputeContextReference("session", discussion.SessionId)], method: "POST",
-                ct: ctx.RequestAborted);
+                ct: ctx.RequestAborted, cause: NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
             if (!await redCompute.ResumeAsync(discussion.SessionId, provenance, ctx.RequestAborted))
                 return Results.Json(new { error = "resume_failed", message = "The provider session could not be resumed" }, statusCode: 502);
 
@@ -1648,7 +1651,8 @@ public static class DiscussionEndpoints
                     $"live-rotation:{idempotencyKey}", ctx.RequestAborted);
                 if (prior is not null)
                 {
-                    pipeline.BeginSessionCreation(prior);
+                    pipeline.BeginSessionCreation(prior,
+                        NovaComputeProvenance.RequestCause(ctx, prior.OwnerId));
                     heartbeat.OnLiveRotated(prior.AgentId, idempotencyKey);
                     return Results.Ok(new
                     {
@@ -1690,7 +1694,8 @@ public static class DiscussionEndpoints
             // handoff, session reset (§5 of the heartbeat design).
             heartbeat.OnLiveRotated(fresh.AgentId, idempotencyKey);
 
-            pipeline.BeginSessionCreation(fresh);
+            pipeline.BeginSessionCreation(fresh,
+                NovaComputeProvenance.RequestCause(ctx, fresh.OwnerId));
 
             return Results.Ok(new
             {
@@ -1786,7 +1791,8 @@ public static class DiscussionEndpoints
                         $"/api/apps/nova/discussions/{discussion.Id}/nova-message",
                         [new ComputeContextReference("discussion", discussion.Id),
                          new ComputeContextReference("session", discussion.SessionId)],
-                        method: "POST", ct: ctx.RequestAborted);
+                        method: "POST", ct: ctx.RequestAborted,
+                        cause: NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
                     object? metadata = request.SenderAgentId is not null
                         ? new { senderAgentId = request.SenderAgentId }
                         : null;
@@ -1856,17 +1862,18 @@ public static class DiscussionEndpoints
             var idempotencyKey = ctx.Request.Headers["X-Idempotency-Key"].FirstOrDefault();
 
             var humanInitiated = DiscussionAccessPolicy.IsHumanInitiated(ctx.User);
+            var cause = NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId);
             var outcome = request.Input is { Length: > 0 }
                 ? await pipeline.SendInputAsync(
                     discussion, userId, request.Input, resolved,
                     request.InputMethod ?? "typed", request.Delivery,
                     idempotencyKey, request.DisplayContent, request.MessageUid,
-                    humanInitiated: humanInitiated)
+                    humanInitiated: humanInitiated, cause: cause)
                 : await pipeline.SendAsync(
                     discussion, userId, request.Content, request.Images, resolved,
                     request.InputMethod ?? "typed", request.Delivery,
                     idempotencyKey, request.DisplayContent, request.MessageUid,
-                    humanInitiated: humanInitiated);
+                    humanInitiated: humanInitiated, cause: cause);
 
             if (!outcome.Success)
             {
@@ -2115,7 +2122,8 @@ public static class DiscussionEndpoints
                 $"/api/apps/nova/discussions/{discussionId}/input-queue{suffix}",
                 [new ComputeContextReference("discussion", discussionId),
                  new ComputeContextReference("session", discussion.SessionId)],
-                method: method.Method, ct: ctx.RequestAborted);
+                method: method.Method, ct: ctx.RequestAborted,
+                cause: NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
         }
 
         var result = await redCompute.ProxyInputQueueAsync(

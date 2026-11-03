@@ -31,7 +31,7 @@ public sealed class ConfidentialSessionBackfill(
                     "/api/apps/nova/startup/confidential-session-backfill",
                     [new ComputeContextReference("discussion", discussion.Id),
                      new ComputeContextReference("session", discussion.SessionId)],
-                    entrypointKind: "startup", ct: ct);
+                    entrypointKind: "startup", ct: ct, cause: ComputeCauses.App);
                 if (!await redCompute.SetConfidentialAsync(discussion.SessionId!, provenance, ct))
                     failures++;
             }

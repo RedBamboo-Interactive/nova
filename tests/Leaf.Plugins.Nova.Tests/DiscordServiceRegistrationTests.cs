@@ -80,11 +80,12 @@ public sealed class DiscordServiceRegistrationTests
         // Nova references IUntrustedContentReview (kernel API 0.1.2) and reviews Leaf Community
         // images with UntrustedContentReviewRequest.Images and ImagesReviewed (0.1.4). Its
         // frontend uses the Leaf context menu exports (0.1.7). It reads
-        // UntrustedContentReviewResult.ReviewedFrames to show the model video frames (0.1.8).
-        Assert.Equal("^0.1.8", manifest.KernelApi);
+        // UntrustedContentReviewResult.ReviewedFrames to show the model video frames (0.1.8). It
+        // records who started each job with ComputeProvenance.Cause (0.1.9).
+        Assert.Equal("^0.1.9", manifest.KernelApi);
         Assert.True(KernelApi.Satisfies(manifest.KernelApi));
-        Assert.True(SemverRange.Satisfies("0.1.8", manifest.KernelApi));
-        Assert.False(SemverRange.Satisfies("0.1.7", manifest.KernelApi));
+        Assert.True(SemverRange.Satisfies("0.1.9", manifest.KernelApi));
+        Assert.False(SemverRange.Satisfies("0.1.8", manifest.KernelApi));
     }
 
     private static T Uninitialized<T>() where T : class

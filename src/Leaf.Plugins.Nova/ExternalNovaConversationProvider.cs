@@ -127,7 +127,8 @@ public sealed class ExternalAgentConversationProvider(
             correlationId: request.IdempotencyKey,
             developerInstructions: DeveloperInstructions(request, agent.Name),
             modelOverride: request.SessionCompute?.Model,
-            effortOverride: request.SessionCompute?.Effort)
+            effortOverride: request.SessionCompute?.Effort,
+            cause: request.Cause)
             ?? throw new InvalidOperationException("RedCompute refused to create the external Agent session");
         var handle = new ExternalConversationHandle(
             ProviderId, request.BindingId, request.Generation, key, sessionId);
@@ -140,7 +141,7 @@ public sealed class ExternalAgentConversationProvider(
             entities, agent, beneficiary,
             "/api/apps/nova/external-conversations/callback",
             [.. context, new ComputeContextReference("session", sessionId)],
-            entrypointKind: request.Scope.Transport, method: "REGISTER", ct: ct);
+            entrypointKind: request.Scope.Transport, method: "REGISTER", ct: ct, cause: request.Cause);
         var callbackUrl = "http://127.0.0.1:18804/api/apps/nova/callbacks/external-conversation";
         if (!await redCompute.RegisterCallbackAsync(
                 sessionId, callbackUrl, force: true, ct: ct, provenance: provenance))
@@ -290,7 +291,7 @@ public sealed class ExternalAgentConversationProvider(
              new ComputeContextReference("external-conversation-generation", handle.Generation.ToString()),
              new ComputeContextReference("session", handle.SessionId)],
             entrypointKind: transport, method: "MESSAGE",
-            requestId: input.RequestId, ct: ct);
+            requestId: input.RequestId, ct: ct, cause: TurnCause(input.Metadata));
         var session = await redCompute.ProbeSessionAsync(handle.SessionId, ct);
         if (RequiresResume(session))
         {
@@ -1230,6 +1231,17 @@ public sealed class ExternalAgentConversationProvider(
             return null;
         return context.DeepClone().AsObject();
     }
+
+    /// <summary>
+    /// The bridge states whether the verified author is the conversation's owner. Anyone it does not
+    /// vouch for as the owner is someone else, however they are named in the message.
+    /// </summary>
+    internal static string TurnCause(JsonObject? metadata)
+        => metadata?["verified_leaf_user"] is JsonObject linked
+            && linked["is_conversation_owner"] is JsonValue owner
+            && owner.TryGetValue<bool>(out var isOwner) && isOwner
+                ? ComputeCauses.Beneficiary
+                : ComputeCauses.OtherPerson;
 
     private static JsonObject? VerifiedLeafIdentity(JsonObject? metadata)
     {

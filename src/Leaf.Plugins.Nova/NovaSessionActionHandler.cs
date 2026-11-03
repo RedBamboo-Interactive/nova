@@ -98,7 +98,7 @@ public sealed class NovaSessionActionHandler(
             $"automation:{automation.Id}:nova-session", provenanceContext,
             entrypointKind: "automation", method: "POST",
             correlationId: context.CorrelationId,
-            parentJobId: context.AttemptJobId.ToString(), ct: ct);
+            parentJobId: context.AttemptJobId.ToString(), ct: ct, cause: ComputeCauses.Agent);
         var result = await redCompute.ExecuteAsync(body, $"Nova: {automation.Name}",
             context.Beneficiary.Id, timeout, provenance, ct,
             idempotencyKey: context.IdempotencyKey

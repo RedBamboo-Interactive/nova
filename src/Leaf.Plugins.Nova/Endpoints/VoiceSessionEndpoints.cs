@@ -22,7 +22,8 @@ public static class VoiceSessionEndpoints
             var offerSdp = String(body, "offerSdp");
             if (string.IsNullOrWhiteSpace(offerSdp) || offerSdp.Length > 256_000)
                 return Results.BadRequest(new { error = "invalid_sdp", message = "A valid SDP offer is required" });
-            var result = await voice.StartAsync(discussion, offerSdp, ctx.RequestAborted);
+            var result = await voice.StartAsync(discussion, offerSdp, ctx.RequestAborted,
+                NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
             return Results.Content(result.Content, result.ContentType, statusCode: result.StatusCode);
         })
             .WithSummary("Starts a voice session on a discussion. Body: offerSdp (a WebRTC SDP offer, required); the answer comes back from the voice backend.");

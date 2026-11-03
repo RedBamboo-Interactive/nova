@@ -18,12 +18,54 @@ namespace Leaf.Plugins.Nova.Tests;
 public sealed class EventDeliveryQueueTests
 {
     [Fact]
+    public async Task A_person_typing_and_an_event_in_the_same_discussion_do_not_look_alike()
+    {
+        using var w = new World(sessionId: null);
+
+        // The person's message creates the session.
+        var sent = await w.Pipeline.SendAsync(w.Discussion(), "owner-1", "Hello", null,
+            new ResolvedDevice { Name = "test", Type = "desktop", Platform = "test" }, "typed",
+            cause: ComputeCauses.Beneficiary);
+        Assert.True(sent.Success);
+        Assert.Equal(ComputeCauses.Beneficiary, w.Gateway.CauseOf("/ai-session/sessions"));
+        Assert.Equal(ComputeCauses.Beneficiary, w.Gateway.LastMessageCause);
+
+        // An automation's event and an Agent's event in that same discussion are neither of them the person.
+        Assert.True(await w.Injector.InjectAsync(w.Discussion(), "An event", null, "automation"));
+        Assert.Equal(ComputeCauses.App, w.Gateway.LastMessageCause);
+        Assert.True(await w.Injector.InjectAsync(w.Discussion(), "A callback", null, "delegation",
+            senderAgentId: w.Discussion().AgentId));
+        Assert.Equal(ComputeCauses.Agent, w.Gateway.LastMessageCause);
+    }
+
+    [Fact]
+    public async Task A_session_nobody_typed_into_never_records_a_person()
+    {
+        // Created by an Agent's own request.
+        using var byAgent = new World(sessionId: null);
+        byAgent.Pipeline.BeginSessionCreation(byAgent.Discussion(), ComputeCauses.Agent);
+        await byAgent.WaitUntilAsync(() => byAgent.Gateway.SessionsCreated == 1);
+        Assert.Equal(ComputeCauses.Agent, byAgent.Gateway.CauseOf("/ai-session/sessions"));
+
+        // Nova's own bootstrap turn.
+        using var internalTurn = new World(sessionId: null);
+        await internalTurn.Pipeline.SendInternalAsync(internalTurn.Discussion(), "owner-1", "Introduce yourself",
+            "bootstrap-1", "bootstrap-uid");
+        Assert.Equal(ComputeCauses.App, internalTurn.Gateway.CauseOf("/ai-session/sessions"));
+
+        // A door that does not know records nothing rather than guessing.
+        using var unknown = new World(sessionId: null);
+        await unknown.SendAsync("From a door that cannot tell");
+        Assert.Null(unknown.Gateway.CauseOf("/ai-session/sessions"));
+    }
+
+    [Fact]
     public async Task Event_posted_while_the_session_is_being_created_is_delivered_once_after_it_exists()
     {
         using var w = new World(sessionId: null);
         w.Gateway.CreationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         // The repro: create (which starts the session in the background), then the event at once.
-        w.Pipeline.BeginSessionCreation(w.Discussion());
+        w.Pipeline.BeginSessionCreation(w.Discussion(), null);
         var posting = w.PostEventAsync("Hello from the race repro");
 
         await w.WaitUntilAsync(() => w.Queue().Count == 1);
@@ -397,7 +439,7 @@ public sealed class EventDeliveryQueueTests
     {
         using var w = new World(sessionId: null);
         w.Gateway.CreationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        w.Pipeline.BeginSessionCreation(w.Discussion());
+        w.Pipeline.BeginSessionCreation(w.Discussion(), null);
 
         var sends = new[] { w.SendAsync("one"), w.SendAsync("two") };
         await w.WaitUntilAsync(() => w.Gateway.SessionsRequested >= 1);
@@ -621,12 +663,16 @@ public sealed class EventDeliveryQueueTests
         public bool FailEvents { get; set; }
         public List<Admitted> Messages { get; } = [];
         public List<(string Session, string? Key)> Attempts { get; } = [];
+        private readonly List<(string Path, string? Cause)> causes = [];
+        public string? CauseOf(string path) { lock (causes) return causes.Single(c => c.Path == path).Cause; }
+        public string? LastMessageCause { get { lock (causes) return causes.Last(c => c.Path.EndsWith("/message")).Cause; } }
 
         public sealed record Admitted(string Session, string Text, string? MessageUid, string? Key);
 
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
             var path = request.RequestUri!.OriginalString;
+            lock (causes) causes.Add((path, provenance?.Cause));
             if (request.Method == HttpMethod.Post && path == "/ai-session/sessions")
             {
                 var number = Interlocked.Increment(ref SessionsRequested);

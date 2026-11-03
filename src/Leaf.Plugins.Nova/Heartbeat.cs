@@ -445,7 +445,7 @@ public sealed class HeartbeatService(
             var provenance = await NovaComputeProvenance.CreateAsync(
                 entities, agent, beneficiary, "presence:auto-resume", context,
                 entrypointKind: "automation", correlationId: correlationId,
-                parentJobId: parentJobId?.ToString(), ct: ct);
+                parentJobId: parentJobId?.ToString(), ct: ct, cause: ComputeCauses.Agent);
             var resumed = await redCompute.ResumeAsync(sessionId, provenance, ct);
             if (resumed)
             {
@@ -803,7 +803,8 @@ public sealed class HeartbeatService(
             ],
             correlationId: correlationId,
             parentJobId: parentJobId?.ToString(),
-            keepResident: true)
+            keepResident: true,
+            cause: ComputeCauses.Agent)
             ?? throw new InvalidOperationException("RedCompute refused to create a heartbeat session");
 
         await store.PatchAsync(discussion.EntityId, new JsonObject

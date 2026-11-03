@@ -187,6 +187,59 @@ public sealed partial class ExternalAgentConversationProviderTests
         Timestamp = DateTime.UnixEpoch.AddSeconds(sequence),
     };
 
+    [Theory]
+    [InlineData(ComputeCauses.Beneficiary)]
+    [InlineData(ComputeCauses.OtherPerson)]
+    [InlineData(null)]
+    public async Task An_external_session_records_the_cause_its_transport_states(string? cause)
+    {
+        var scratchPath = Path.Combine(
+            Path.GetTempPath(), $"nova-discord-session-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(scratchPath);
+        try
+        {
+            var agentId = Guid.NewGuid();
+            var entities = new FakeEntityStore(
+                Entity(agentId, "agent", "nova", "Nova", new JsonObject()),
+                Entity(Guid.NewGuid(), "plugin", NovaAppPlugin.PluginId, "Nova"));
+            using var agents = new AgentDirectory(entities, new NoOpPluginEvents());
+            var gateway = new RecordingComputeGateway();
+            var redCompute = new RedComputeClient(gateway);
+            var pipeline = new MessagePipeline(
+                null!, null!, entities, null!, redCompute, agents,
+                new AgentWorkspaces(agents, new NoWorkspacePathResolver()),
+                new FixedScratchSpace(scratchPath), null!, null!,
+                NullLogger<MessagePipeline>.Instance);
+            var provider = new ExternalAgentConversationProvider(
+                pipeline, redCompute, agents, entities, null!,
+                NullLogger<ExternalAgentConversationProvider>.Instance);
+
+            await provider.OpenAsync(new ExternalConversationOpenRequest(
+                "binding-1", 1, agentId.ToString(), "owner-1", "audience-1",
+                new ExternalConversationScope(
+                    "discord", "application-1", "channel-1", "guild-channel"),
+                "open-1") { Cause = cause });
+
+            Assert.Equal(cause, gateway.SessionCreateCause);
+        }
+        finally
+        {
+            Directory.Delete(scratchPath, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("""{"verified_leaf_user":{"display_name":"Owner","is_conversation_owner":true}}""", ComputeCauses.Beneficiary)]
+    [InlineData("""{"verified_leaf_user":{"display_name":"Friend","is_conversation_owner":false}}""", ComputeCauses.OtherPerson)]
+    [InlineData("""{"verified_leaf_user":{"display_name":"Owner"}}""", ComputeCauses.OtherPerson)]
+    [InlineData("""{"author_name":"Owner"}""", ComputeCauses.OtherPerson)]
+    [InlineData(null, ComputeCauses.OtherPerson)]
+    public void A_turn_is_the_owner_only_when_the_bridge_verified_them(string? metadata, string expected)
+    {
+        var parsed = metadata is null ? null : JsonNode.Parse(metadata)!.AsObject();
+        Assert.Equal(expected, ExternalAgentConversationProvider.TurnCause(parsed));
+    }
+
     [Fact]
     public async Task Discord_sessions_use_normal_non_confidential_semantics()
     {
@@ -1695,6 +1748,7 @@ public sealed partial class ExternalAgentConversationProviderTests
     private sealed class RecordingComputeGateway : IComputeGateway
     {
         public string? SessionCreateBody { get; private set; }
+        public string? SessionCreateCause { get; private set; }
 
         public async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -1704,6 +1758,7 @@ public sealed partial class ExternalAgentConversationProviderTests
             var path = request.RequestUri?.OriginalString ?? "";
             if (path == "/ai-session/sessions")
             {
+                SessionCreateCause = provenance?.Cause;
                 SessionCreateBody = await request.Content!.ReadAsStringAsync(ct);
                 return Response("""{"id":"session-1"}""");
             }

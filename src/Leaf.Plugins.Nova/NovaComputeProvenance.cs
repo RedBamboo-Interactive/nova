@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Leaf.Sdk;
 using Leaf.Sdk.Services;
+using Microsoft.AspNetCore.Http;
 
 namespace Leaf.Plugins.Nova;
 
@@ -30,7 +31,7 @@ public static class NovaComputeProvenance
         string route, IReadOnlyList<ComputeContextReference> context,
         string entrypointKind = "http", string? method = null,
         string? requestId = null, string? correlationId = null, string? parentJobId = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default, string? cause = null)
     {
         var app = await ResolveAppAsync(entities, ct);
         return new(
@@ -42,7 +43,22 @@ public static class NovaComputeProvenance
             context,
             new ComputeTrace(requestId, correlationId, parentJobId),
             ComputeProvenanceAssurance.Verified,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow)
+        {
+            Cause = cause,
+        };
+    }
+
+    /// <summary>
+    /// Who caused work this request asks for on a discussion. The actor on Nova's provenance is
+    /// always the Agent, so it says nothing about this: a person's own page is the owner or someone
+    /// else, an Agent's signed execution is the Agent, and anything else stays unknown.
+    /// </summary>
+    public static string? RequestCause(HttpContext context, string? discussionOwnerId)
+    {
+        var owner = DiscussionOwnership.ResolveForSessionStart(
+            discussionOwnerId, context.User.FindFirst("sub")?.Value, needsSession: true);
+        return ComputeCauses.FromRequest(context, owner ?? "");
     }
 
     private static async Task<ComputeAppReference> ResolveAppAsync(
