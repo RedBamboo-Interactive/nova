@@ -1,4 +1,5 @@
 import { CONTEXT_COMPACTION_TOOL_NAME } from "@redbamboo/chat/chat-status"
+import { findPairedResult } from "@redbamboo/chat/background-work"
 import { isEventBlock } from "@redbamboo/chat/event-parts"
 import { getEffectiveToolName } from "@redbamboo/chat/tool-semantics"
 import type { MessageBlock } from "@redbamboo/chat"
@@ -24,6 +25,17 @@ const toolLabels: Record<string, NovaStreamingStatus> = {
   WebFetch:   { icon: "ph-bold ph-globe",            label: "Fetching..." },
   WebSearch:  { icon: "ph-bold ph-globe",            label: "Searching the web..." },
   TodoWrite:  { icon: "ph-bold ph-list-checks",      label: "Planning..." },
+}
+
+const SHELL_TOOLS = new Set(["Bash", "PowerShell"])
+
+function shellDescription(toolInput: string | undefined): string | null {
+  try {
+    const description = (JSON.parse(toolInput ?? "") as { description?: unknown }).description
+    return typeof description === "string" && description.trim() ? description.trim() : null
+  } catch {
+    return null
+  }
 }
 
 /** Resolve the most specific live activity, with a prompt fallback before output begins. */
@@ -64,6 +76,12 @@ export function getNovaStreamingStatus(messages: MessageBlock[]): NovaStreamingS
         }
 
         const known = effectiveName ? toolLabels[effectiveName] : undefined
+        if (known && effectiveName && SHELL_TOOLS.has(effectiveName)) {
+          // Answered means it returned or went to the background: the turn isn't waiting on it.
+          if (findPairedResult(block.parts, part)) return { icon: "ph-bold ph-gear", label: "Working..." }
+          const description = shellDescription(part.toolInput)
+          return description ? { icon: known.icon, label: `Running: ${description}` } : known
+        }
         if (known) return known
         return { icon: "ph-bold ph-gear", label: "Working..." }
       }

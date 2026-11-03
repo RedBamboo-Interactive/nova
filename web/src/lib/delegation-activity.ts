@@ -49,7 +49,7 @@ export function discussionActivityIndicator(status: string, activity: Discussion
   const summary = summarizeBackgroundActivity(running, delegations ? { label: delegationActivityLabel(delegations) } : null)
   if (!summary) return { source: "none", label: "", paused: true }
   if (summary.source === "host") return { source: "delegations", label: summary.label, paused: delegationAnimationPaused(delegations!) }
-  return { source: summary.source, label: summary.label, leadKind: running[0]?.kind, paused: false }
+  return { source: summary.source, label: summary.label, leadKind: running[0]?.kind, paused: !!summary.paused }
 }
 
 /** An unavailable read is not a terminal lifecycle observation. */

@@ -31,3 +31,13 @@ test("background work never labels the turn", () => {
   const strayChild = tool("Read", { file_path: "a.ts" }, { parentToolUseId: "toolu_agent" })
   assert.equal(getNovaStreamingStatus([turn({ type: "thinking", content: "" }, strayChild)]).label, "Thinking...")
 })
+
+test("a command the turn is blocked on is named; one that has answered isn't waited on", () => {
+  const bash = tool("Bash", { command: "npm test", description: "Run the tests" }, { toolUseId: "toolu_b" })
+  assert.equal(getNovaStreamingStatus([turn(bash)]).label, "Running: Run the tests")
+  assert.equal(getNovaStreamingStatus([turn(tool("Bash", { command: "npm test" }, { toolUseId: "toolu_b" }))]).label, "Running command...")
+  assert.equal(getNovaStreamingStatus([turn(tool("PowerShell", { command: "npm test", description: "List" }))]).label, "Running: List")
+  // A launched background shell answers at once: the turn is doing something else now.
+  assert.equal(getNovaStreamingStatus([turn(bash, { type: "tool_result", toolUseId: "toolu_b", content: "Command running in background" })]).label, "Working...")
+  assert.equal(getNovaStreamingStatus([turn(tool("Bash", { command: "npm test", description: "Partial" }, { toolInput: "{\"command" }))]).label, "Running command...")
+})
