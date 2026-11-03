@@ -173,9 +173,14 @@ public static partial class JournalProjection
 
     /// <summary>A record's own time, falling back to when it was stored.</summary>
     public static DateTimeOffset At(SessionMessage message)
-        => message.Timestamp > DateTime.MinValue
+    {
+        if (message.Timestamp <= DateTime.MinValue) return message.RecordCreatedAt ?? DateTimeOffset.MinValue;
+
+        // A transcript time reads back in the machine's zone, so only an unmarked value may be taken as UTC.
+        return message.Timestamp.Kind == DateTimeKind.Unspecified
             ? new DateTimeOffset(DateTime.SpecifyKind(message.Timestamp, DateTimeKind.Utc))
-            : message.RecordCreatedAt ?? DateTimeOffset.MinValue;
+            : new DateTimeOffset(message.Timestamp.ToUniversalTime());
+    }
 
     public static bool IsAssistantText(SessionMessage message)
         => message.Role == "assistant" && message.EventType == "text" && !string.IsNullOrWhiteSpace(message.Content);

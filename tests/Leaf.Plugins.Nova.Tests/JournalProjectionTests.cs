@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Leaf.Sdk.Services;
 using Xunit;
@@ -20,6 +21,35 @@ public sealed class JournalProjectionTests
 
     private static SessionMessage Canonical(string role, string? content, string? uid = null, DateTimeOffset? at = null, string eventType = "text")
         => new() { Role = role, EventType = eventType, Content = content, MessageUid = uid, Timestamp = (at ?? T0).UtcDateTime };
+
+    // ── A record's time ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void A_transcript_time_with_an_offset_keeps_its_real_instant()
+    {
+        // The shape RedCompute's transcript page returns, read the way the client reads it.
+        var message = JsonSerializer.Deserialize<SessionMessage>(
+            """{"role":"assistant","eventType":"text","content":"words","timestamp":"2026-11-03T06:55:12.5+01:00"}""",
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+
+        Assert.Equal(DateTimeOffset.Parse("2026-11-03T05:55:12.5Z"), JournalProjection.At(message));
+    }
+
+    [Fact]
+    public void An_unmarked_transcript_time_is_taken_as_utc()
+    {
+        var message = new SessionMessage { Timestamp = new DateTime(2026, 11, 3, 5, 55, 0, DateTimeKind.Unspecified) };
+
+        Assert.Equal(DateTimeOffset.Parse("2026-11-03T05:55:00Z"), JournalProjection.At(message));
+    }
+
+    [Fact]
+    public void A_record_without_a_time_falls_back_to_when_it_was_stored()
+    {
+        var stored = DateTimeOffset.Parse("2026-11-03T05:55:00Z");
+
+        Assert.Equal(stored, JournalProjection.At(new SessionMessage { RecordCreatedAt = stored }));
+    }
 
     // ── The day ─────────────────────────────────────────────────────────────────
 
