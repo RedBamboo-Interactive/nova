@@ -5,7 +5,7 @@ import type { DelegationActivitySnapshot, DiscussionHistoryOverlay, DiscussionHi
 import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
 import { canonicalUserMessageUids, DeferredInvalidationCoordinator, DurableTranscriptPager, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
-import { appendEvent, byTimestamp, isRawEventMessage, orderMessages } from "../lib/message-order"
+import { appendEvent, byTimestamp, isRawEventMessage, markEventFrameSources, orderMessages, withCurrentEventPresentation } from "../lib/message-order"
 import { accumulateHistoryOverlays, coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeNovaMessageArrival, mergePagedDiscussionRecordsAndOverlays } from "../lib/discussion-transcript"
 import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch, sendNeedsExplicitResume, sessionStreamEffects, shouldRequestSessionTitleSync } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
@@ -138,9 +138,9 @@ function stripContextBlocks(m: MessageBlock): MessageBlock | null {
   return { ...m, parts: m.parts.map((p) => p === textPart ? { ...p, content: cleaned } : p) }
 }
 
-/** Canonical blocks, with each internal input (a reaction note) still marked as one. */
+/** Canonical blocks, each internal input still marked as one and each event frame naming its source. */
 function rebuildNovaBlocks(records: PersistedMessage[]): MessageBlock[] {
-  return markInternalInputs(rebuildBlocks(records), records)
+  return markEventFrameSources(markInternalInputs(rebuildBlocks(records), records), records)
 }
 
 /** Strip Nova's context wrappers, then apply the frieze ordering rule. */
@@ -320,7 +320,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
     : null
   const storedActiveMessages = activeDiscussionId ? messages[activeDiscussionId] : undefined
   // Product projection only: the stored blocks stay exactly what the shared reconciler holds.
-  const activeMessages = useMemo(() => hideSilentSettle(storedActiveMessages ?? []), [storedActiveMessages])
+  const eventPresentationCache = useMemo(() => new WeakMap<MessagePart, MessagePart>(), [eventResolver])
+  const activeMessages = useMemo(
+    () => withCurrentEventPresentation(hideSilentSettle(storedActiveMessages ?? []), eventResolver, eventPresentationCache),
+    [eventPresentationCache, eventResolver, storedActiveMessages])
   const isStreaming = activeDiscussionId ? streaming[activeDiscussionId] ?? false : false
   const supportsSteering = activeDiscussionId ? steeringSupport[activeDiscussionId] ?? false : false
   const backgroundTasks = useMemo(

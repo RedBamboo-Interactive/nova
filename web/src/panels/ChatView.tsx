@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type Ref } from "react"
 import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type ProviderUsageSnapshot, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
+import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type EventRowRenderer, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type ProviderUsageSnapshot, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
 import { isMobileClient } from "../components/floating-nova-support"
@@ -48,6 +48,8 @@ import { NOVA_DRAFT_STORAGE_KEY, opensChat } from "../lib/new-discussion-draft"
 import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToContext, type MonitorVisualSource } from "../lib/visual-capture"
 import { delegationSessionPath } from "../lib/delegation-session-link"
 import { AGENT_NOTE_KEY } from "../lib/agent-note"
+import { isNoteRowPart, type NoteOriginDiscussion } from "../lib/agent-note-row"
+import { AgentNoteRow } from "../components/discussion/agent-note-row"
 import { formatOwningApp } from "../lib/discussion-owner"
 import { useVoiceSession } from "../hooks/use-voice-session"
 import { VoiceSessionPanel } from "../components/voice-session-panel"
@@ -1235,6 +1237,36 @@ export function ChatView({
     return { name: agent.name, avatarUrl: agent.avatarUrl }
   }, [agents, getAgent])
 
+  // Read from what this client already lists, so a confidential origin it may
+  // not read has no title to show, and a retitle shows without reloading history.
+  const resolveNoteDiscussion = useCallback((id: string): NoteOriginDiscussion | undefined => {
+    const open = discussions.find(candidate => candidate.id === id)
+    const known = open ?? archivedDiscussions.find(candidate => candidate.id === id)
+    if (!known) return undefined
+    const closed = known.status === "archived" || known.status === "archiving"
+    return {
+      title: createDiscussionTitleResolver([...discussions, ...archivedDiscussions])(known),
+      agentId: known.agentId ?? null,
+      archived: !open || closed,
+    }
+  }, [archivedDiscussions, discussions])
+
+  const eventRows = useMemo<EventRowRenderer>(() => ({
+    isRow: isNoteRowPart,
+    render: (part, { queueStatus }) => (
+      <AgentNoteRow
+        part={part}
+        queueStatus={queueStatus}
+        currentDiscussionId={activeDiscussionId}
+        resolveAgent={resolveAgentInfo}
+        resolveDiscussion={resolveNoteDiscussion}
+        onOpenDiscussion={handleSelectDiscussion}
+        resolveImageSrc={resolveImageSrc}
+        resolveFileLink={resolveFileLink}
+      />
+    ),
+  }), [activeDiscussionId, handleSelectDiscussion, resolveAgentInfo, resolveFileLink, resolveImageSrc, resolveNoteDiscussion])
+
   const { reactions, react, unreact } = useReactions(activeDiscussionId)
 
   const renderSideActions = useCallback((block: MessageBlock) => {
@@ -1496,6 +1528,7 @@ export function ChatView({
         getTranscriptPayloadDownloadUrl={getTranscriptPayloadDownloadUrl}
         assistantAvatar={avatarSrc}
         resolveAgentInfo={resolveAgentInfo}
+        eventRows={eventRows}
         renderStatusLine={renderStatusLine}
         renderComposerAttachments={renderWhatISeeAttachment}
         renderAttachmentActions={renderWhatISeeAction}

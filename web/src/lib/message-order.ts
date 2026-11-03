@@ -1,10 +1,10 @@
 // Subpath import, not the barrel: this module is exercised by node:test, which
 // cannot load the barrel's React components.
-import { isEventBlock, eventInputMessageUid } from "@redbamboo/chat/event-parts"
-import type { MessageBlock, MessagePart } from "@redbamboo/chat"
+import { isEventBlock, isEventPart, eventInputMessageUid } from "@redbamboo/chat/event-parts"
+import type { MessageBlock, MessagePart, PersistedMessage } from "@redbamboo/chat"
 import type { EventType } from "./types"
-import { AGENT_NOTE_KEY, parseAgentNote } from "./agent-note.ts"
-import { DEFAULT_EVENT } from "./event-type-resolution.ts"
+import { AGENT_NOTE_KEY, agentNoteLabel, classifyNote, parseAgentNote, withoutInternalMarker } from "./agent-note.ts"
+import { isUnregisteredEvent } from "./event-type-resolution.ts"
 
 /**
  * Where frieze events sit in a discussion.
@@ -32,6 +32,9 @@ import { DEFAULT_EVENT } from "./event-type-resolution.ts"
 
 export type EventTypeResolver = (source: string) => EventType | undefined
 
+/** Set in a note's event data when it reads as a row of its own, not a frieze dot. */
+export const NOTE_ROW_KEY = "noteRow"
+
 /** A frieze event as it arrives from the server, before becoming a message part. */
 export interface FriezeEvent {
   /** Existing logical event/input UID, shared with the queue and history overlay. */
@@ -44,6 +47,8 @@ export interface FriezeEvent {
   data: Record<string, unknown> | null
   timestamp: string
   senderAgentId?: string
+  /** The discussion the sender wrote from, when the server stated it. */
+  senderDiscussionId?: string
 }
 
 export const byTimestamp = (a: MessageBlock, b: MessageBlock) =>
@@ -64,6 +69,41 @@ export function isRawEventMessage(m: MessageBlock): boolean {
   return /<nova-event\s/.test(m.parts[0]?.content ?? "")
 }
 
+const WHOLE_EVENT_FRAME = /^\s*<nova-event\s+source="([^"]*)"[^>]*>[\s\S]*<\/nova-event>\s*$/
+
+function unescapeFrameAttribute(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+}
+
+/**
+ * The transcript copy of an event is a user record holding one whole frame, and
+ * until the stream record's overlay page is loaded it is the only copy: a
+ * discussion's opening event sits before the first canonical record, on an
+ * earlier overlay page. Without this it reads "System" until then.
+ *
+ * Only the injector writes these records with no admission metadata. A person's
+ * send always carries it (MessagePipeline), so frame text they typed never
+ * becomes a source here.
+ */
+export function markEventFrameSources(blocks: MessageBlock[], records: PersistedMessage[]): MessageBlock[] {
+  const sources = new Map<string, string>()
+  for (const record of records) {
+    if (record.role !== "user" || record.attachmentsJson) continue
+    const frame = WHOLE_EVENT_FRAME.exec(record.content ?? "")
+    if (frame?.[1]) sources.set(record.messageUid || `db-${record.id}`, `event:${unescapeFrameAttribute(frame[1])}`)
+  }
+  if (sources.size === 0) return blocks
+  return blocks.map(block => {
+    const source = block.role === "user" && !block.metadata?.source ? sources.get(block.id) : undefined
+    return source ? { ...block, metadata: { ...block.metadata, source } } : block
+  })
+}
+
 function eventKey(source: string): string {
   return source.replace(/^event:/, "").split(":")[0] || "system"
 }
@@ -71,27 +111,93 @@ function eventKey(source: string): string {
 export function buildEventPart(event: FriezeEvent, resolve?: EventTypeResolver): MessagePart {
   const eventType = resolve?.(event.source)
   const unwrapped = unwrapEventText(event.content)
-  const note = parseAgentNote(eventKey(event.source), unwrapped)
-  const text = note?.text ?? unwrapped
-  const data = note
-    ? { ...event.data, agent: note.agent, discussionId: note.discussionId, topic: note.topic }
-    : event.data
+  // A note type is the fold of `<agent>-<8hex>`, not somebody's registration.
+  const registered = !!eventType && !isUnregisteredEvent(eventType) && eventType.key !== AGENT_NOTE_KEY
+  const row = classifyNote({
+    source: event.source,
+    text: unwrapped,
+    senderAgentId: event.senderAgentId,
+    senderDiscussionId: event.senderDiscussionId,
+    registered,
+  })
+  // A source-shaped note without the lead keeps its named frieze dot (7977d9f1).
+  const dot = row || registered ? null : parseAgentNote(eventKey(event.source), unwrapped)
+  const isNote = !!row || !!dot
+  const presentation = isNote ? resolve?.(`event:${AGENT_NOTE_KEY}`) ?? eventType : eventType
+  const text = row?.text ?? dot?.text ?? withoutInternalMarker(unwrapped)
+  const data = row
+    ? { ...event.data, agent: row.agent, discussionId: row.discussionId, topic: row.topic, [NOTE_ROW_KEY]: true }
+    : dot
+      ? { ...event.data, agent: dot.agent, discussionId: dot.discussionId, topic: dot.topic }
+      : event.data
+  const noteLabel = row
+    ? row.agent && row.discussionId ? agentNoteLabel(row.agent, row.discussionId) : presentation?.name ?? null
+    : dot ? agentNoteLabel(dot.agent, dot.discussionId) : null
   return {
     type: "tool_use",
     ...(event.messageUid ? { messageUid: event.messageUid } : {}),
-    toolName: `event:${note ? AGENT_NOTE_KEY : eventKey(event.source)}`,
+    toolName: `event:${isNote ? AGENT_NOTE_KEY : eventKey(event.source)}`,
     // The timestamp rides on the part, not the block: merged groups keep only
     // the first event's block timestamp, so the modal needs its own copy.
     toolInput: JSON.stringify({
       event: text,
-      // An unregistered source has no better title than its own key.
-      label: eventType && eventType.key !== DEFAULT_EVENT.key ? eventType.name : null,
-      icon: eventType?.icon ?? null,
-      color: eventType?.color ?? null,
+      label: isNote ? noteLabel : eventType?.name ?? null,
+      // A source nobody registered shows its name beside its dot.
+      inlineLabel: !isNote && !!eventType && isUnregisteredEvent(eventType),
+      icon: presentation?.icon ?? null,
+      color: presentation?.color ?? null,
       data,
       timestamp: event.timestamp,
     }),
     content: text,
+  }
+}
+
+/**
+ * Event types arrive after the first history load and projection isn't re-run
+ * when they do, so the presentation parts were baked with can be stale: a source
+ * that turned out to be registered would keep the unregistered name beside its
+ * dot. This re-reads it at view time. Identity and content are untouched, and an
+ * unchanged part stays the same object.
+ */
+export function withCurrentEventPresentation(blocks: MessageBlock[], resolve?: EventTypeResolver, cache = new WeakMap<MessagePart, MessagePart>()): MessageBlock[] {
+  if (!resolve) return blocks
+  let changed = false
+  const next = blocks.map(block => {
+    if (block.role === "user" || !block.parts.some(isPresentedEventPart)) return block
+    let blockChanged = false
+    const parts = block.parts.map(part => {
+      if (!isPresentedEventPart(part)) return part
+      let current = cache.get(part)
+      if (!current) {
+        current = refreshedEventPart(part, resolve)
+        cache.set(part, current)
+      }
+      if (current !== part) blockChanged = true
+      return current
+    })
+    if (!blockChanged) return block
+    changed = true
+    return { ...block, parts }
+  })
+  return changed ? next : blocks
+}
+
+function isPresentedEventPart(part: MessagePart): boolean {
+  return isEventPart(part) && part.toolName !== `event:${AGENT_NOTE_KEY}`
+}
+
+function refreshedEventPart(part: MessagePart, resolve: EventTypeResolver): MessagePart {
+  const type = resolve(part.toolName!)
+  if (!type) return part
+  try {
+    const payload = JSON.parse(part.toolInput ?? "{}") as Record<string, unknown>
+    const inlineLabel = isUnregisteredEvent(type)
+    if (payload.label === type.name && payload.icon === type.icon && payload.color === type.color && !!payload.inlineLabel === inlineLabel)
+      return part
+    return { ...part, toolInput: JSON.stringify({ ...payload, label: type.name, icon: type.icon, color: type.color, inlineLabel }) }
+  } catch {
+    return part
   }
 }
 
@@ -106,6 +212,7 @@ function toFriezeEvent(m: MessageBlock): FriezeEvent {
     data: data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null,
     timestamp: m.timestamp,
     senderAgentId: m.senderAgentId,
+    senderDiscussionId: typeof m.metadata?.senderDiscussionId === "string" ? m.metadata.senderDiscussionId : undefined,
   }
 }
 
