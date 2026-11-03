@@ -23,15 +23,15 @@ Use this order:
 
 1. `/ping` for process liveness only.
 2. `/health` for service health.
-3. `/discover` for capabilities, routes, management surfaces, and `authMode`.
-4. `/openapi.json` for request and response schemas.
+3. `/discover`, a short map of areas including plugins, with `authMode`. Search it with
+   `/discover/find?q=...` or open `/discover/{area}` for routes, schemas and entity types.
+4. `/openapi.json` for the whole surface at once. Both need your token past the service's name.
 5. On RedLeaf, inspect `/api/plugins`, `/api/extensions`, `/api/setup/capabilities`,
    `/api/system/health`, and `/ws/schema` for installed shape and event contracts.
 
 Do not interpret a blank route-level `auth` field or absent OpenAPI security declaration as public
-when service-wide authentication is required. Plugin-owned `/api/apps/*` routes may not yet appear
-in kernel discovery; verify the enabled plugin and inspect its installed manifest/current source
-instead of probing guessed URLs.
+when service-wide authentication is required. A request no route took answers with what it probably
+meant, so read that answer instead of probing guessed URLs.
 
 Respect native transports. The shell is HTML; Assets and media are binary; selected operations use
 SSE or WebSocket rather than JSON polling.
