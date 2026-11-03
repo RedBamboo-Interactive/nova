@@ -120,6 +120,9 @@ public static class MiscEndpoints
 
         group.MapGet("/file", (HttpContext ctx) =>
         {
+            if (!DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(ctx.User))
+                return Results.Json(new { error = OwnerOnlyError }, statusCode: 403);
+
             var path = ctx.Request.Query["path"].ToString();
             if (string.IsNullOrEmpty(path))
                 return Results.BadRequest(new { error = "Query parameter 'path' is required" });
@@ -167,10 +170,13 @@ public static class MiscEndpoints
             ctx.Response.Headers.CacheControl = "public, max-age=3600";
             return Results.File(fullPath, mime);
         })
-            .WithSummary("Serves a local image, video or audio file named by the path query parameter. Other file types are refused.");
+            .WithSummary("Serves a local image, video or audio file named by the path query parameter. Only the install owner or an administrator (403 otherwise); other file types are refused.");
 
-        group.MapPost("/file/open", async (OpenLocalFileRequest request, AgentWorkspaces workspaces, CancellationToken ct) =>
+        group.MapPost("/file/open", async (HttpContext ctx, OpenLocalFileRequest request, AgentWorkspaces workspaces, CancellationToken ct) =>
         {
+            if (!DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(ctx.User))
+                return Results.Json(new { error = OwnerOnlyError }, statusCode: 403);
+
             if (!OperatingSystem.IsWindows())
                 return Results.BadRequest(new { error = "Opening local files is only supported on Windows" });
 
@@ -204,8 +210,10 @@ public static class MiscEndpoints
             Process.Start(psi);
             return Results.Ok(new { action = "explorer", path = fullPath });
         })
-            .WithSummary("Opens a local file or folder on the host, or reports that it belongs to an Agent workspace. Body: path (required), optional agentId; Windows only.");
+            .WithSummary("Opens a local file or folder on the host, or reports that it belongs to an Agent workspace. Body: path (required), optional agentId; Windows only. Only the install owner or an administrator (403 otherwise).");
     }
+
+    private const string OwnerOnlyError = "Only the install's owner or an administrator can read or open local files";
 
     private static (bool Valid, string? Path, string? Error) ResolveSafeLocalPath(string? path)
     {

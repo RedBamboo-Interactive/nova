@@ -103,6 +103,32 @@ public sealed class DiscussionAccessPolicyTests
             discussion, BrowserExecution("local-user")));
     }
 
+    [Fact]
+    public void LocalFileAccessIsForTheInstallOwnerOrAdministratorOnly()
+    {
+        static ClaimsPrincipal With(string sub, string authType, params Claim[] extra)
+            => new(new ClaimsIdentity([new Claim("sub", sub), .. extra], authType));
+
+        Assert.True(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(
+            With(Owner, "Bearer", new Claim("roles", "admin"))));
+        Assert.True(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(
+            With(Owner, "Bearer", new Claim("roles", "[\"viewer\",\"Admin\"]"))));
+        // An Agent execution acting for the owner carries the owner's subject and roles.
+        Assert.True(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(
+            With(Owner, "Bearer", new Claim("token_use", "execution"), new Claim("roles", "admin"))));
+
+        Assert.False(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(
+            With("someone-else", "Bearer", new Claim("roles", "viewer"))));
+        Assert.False(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(With("someone-else", "Bearer")));
+        Assert.False(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(
+            With("someone-else", "Bearer", new Claim("token_use", "execution"), new Claim("roles", "[\"viewer\"]"))));
+        Assert.False(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(
+            With("local-user", "LocalDefault", new Claim("roles", "admin"))));
+        Assert.False(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(
+            With("system", "Bearer", new Claim("roles", "admin"))));
+        Assert.False(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(new ClaimsPrincipal(new ClaimsIdentity())));
+    }
+
     private static DiscussionRead ConfidentialDiscussion(string owner = Owner) => new(
         "discussion-1", "Private", "session-1", DiscussionStatus.Idle,
         DateTime.UtcNow, DateTime.UtcNow, 1, null, owner, Guid.NewGuid(), Agent,

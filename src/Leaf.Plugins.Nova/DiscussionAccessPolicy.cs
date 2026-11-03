@@ -57,6 +57,35 @@ public static class DiscussionAccessPolicy
             && IsOwnerOperatedNovaBrowserExecution(execution, discussion.OwnerId);
     }
 
+    /// <summary>
+    /// Whether the request is the install's owner or an administrator: a real signed identity
+    /// (never the loopback LocalDefault or a system subject) holding the admin role. An Agent
+    /// execution carries its beneficiary as the subject, so one acting for someone else is
+    /// judged by that person's roles.
+    /// </summary>
+    public static bool IsInstallOwnerOrAdministrator(ClaimsPrincipal principal)
+    {
+        var subject = principal.FindFirstValue("sub");
+        if (principal.Identity?.IsAuthenticated != true
+            || string.Equals(principal.Identity.AuthenticationType,
+                LocalDefaultAuthenticationType, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(subject)
+            || string.Equals(subject, LocalDefaultSubjectId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(subject, "system", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return principal.FindAll("roles").SelectMany(RoleValues)
+            .Any(role => string.Equals(role, "admin", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // A JWT splits a JSON array claim into one claim per role; a directly built identity keeps the array whole.
+    private static IEnumerable<string> RoleValues(Claim claim)
+    {
+        if (!claim.Value.StartsWith('[')) return [claim.Value];
+        try { return JsonSerializer.Deserialize<string[]>(claim.Value) ?? []; }
+        catch (JsonException) { return [claim.Value]; }
+    }
+
     public static bool IsExplicitHuman(ClaimsPrincipal principal)
         => principal.Identity?.IsAuthenticated == true
             && !string.Equals(principal.Identity.AuthenticationType,

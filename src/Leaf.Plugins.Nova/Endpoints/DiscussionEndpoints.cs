@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Leaf.Sdk.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -487,7 +488,8 @@ public static class DiscussionEndpoints
 
             return Results.Ok(DiscussionStore.ToInfo(discussion));
         })
-            .WithSummary("Creates a discussion and starts its provider session. The body is optional (agentId, type, qualityTier, provider, deferSession, idempotencyKey); a second open live or heartbeat discussion for the same Agent returns 409.");
+            .WithSummary("Creates a discussion and starts its provider session. The body is optional (agentId, type, qualityTier, provider, deferSession, idempotencyKey); a second open live or heartbeat discussion for the same Agent returns 409.")
+            .WithMetadata(new AcceptsMetadata([], typeof(CreateDiscussionRequest)));
 
         group.MapGet("/discussions/live", async (HttpContext ctx, DiscussionStore store) =>
         {
@@ -609,9 +611,10 @@ public static class DiscussionEndpoints
 
         group.MapGet("/discussions/export", async (HttpContext ctx, DiscussionStore store, ConversationExporter exporter) =>
         {
-            var since = ctx.Request.Query["since"].FirstOrDefault() is { } s
-                ? DateTime.Parse(s, null, System.Globalization.DateTimeStyles.RoundtripKind)
-                : DateTime.UtcNow.AddDays(-7);
+            var since = DateTime.UtcNow.AddDays(-7);
+            if (ctx.Request.Query["since"].FirstOrDefault() is { } s
+                && !DateTime.TryParse(s, null, System.Globalization.DateTimeStyles.RoundtripKind, out since))
+                return Results.BadRequest(new { error = "invalid_since", message = "since must be an ISO 8601 date and time" });
             var limit = 50;
             if (ctx.Request.Query.TryGetValue("limit", out var lv) && int.TryParse(lv, out var parsed))
                 limit = Math.Clamp(parsed, 1, 200);
@@ -892,7 +895,11 @@ public static class DiscussionEndpoints
 
             DateTime? since = null;
             if (ctx.Request.Query["since"].FirstOrDefault() is { } sv)
-                since = DateTimeOffset.Parse(sv, null, System.Globalization.DateTimeStyles.RoundtripKind).UtcDateTime;
+            {
+                if (!DateTimeOffset.TryParse(sv, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedSince))
+                    return Results.BadRequest(new { error = "invalid_since", message = "since must be an ISO 8601 date and time" });
+                since = parsedSince.UtcDateTime;
+            }
 
             int? tail = null;
             if (ctx.Request.Query["tail"].FirstOrDefault() is { } tv && int.TryParse(tv, out var tp))
@@ -1409,7 +1416,8 @@ public static class DiscussionEndpoints
                 request?.ConversationRevision ?? discussion.ConversationRevision);
             return Results.Ok(DiscussionStore.ToInfo(updated ?? discussion));
         })
-            .WithSummary("Marks a discussion as read up to a conversation revision. The body is optional (conversationRevision); it defaults to the current revision.");
+            .WithSummary("Marks a discussion as read up to a conversation revision. The body is optional (conversationRevision); it defaults to the current revision.")
+            .WithMetadata(new AcceptsMetadata([], typeof(DiscussionReadRequest)));
 
         group.MapPut("/discussions/{id}/activity", async (string id, HttpContext ctx,
             DiscussionStore store, ConversationUnread conversationUnread) =>
