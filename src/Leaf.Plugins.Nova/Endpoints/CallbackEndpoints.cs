@@ -346,8 +346,10 @@ public static class CallbackEndpoints
 
     public static void Map(RouteGroupBuilder group)
     {
-        group.MapPost("/callbacks/session-complete", HandleSessionCompleteAsync);
-        group.MapPost("/callbacks/session-question", HandleSessionQuestionAsync);
+        group.MapPost("/callbacks/session-complete", HandleSessionCompleteAsync)
+            .WithSummary("RedCompute webhook reporting that a delegated session finished a turn, injected into the discussion named by the discussionId query parameter. Loopback callers only and not meant for Agents; body needs sessionId.");
+        group.MapPost("/callbacks/session-question", HandleSessionQuestionAsync)
+            .WithSummary("RedCompute webhook reporting that a delegated session is blocked on a question, injected into the discussion named by the discussionId query parameter. Loopback callers only and not meant for Agents; body needs sessionId and requestId.");
 
         group.MapPost("/callbacks/agent-response", async (HttpContext ctx, DiscussionStore store, EventInjector injector, RedComputeClient redCompute) =>
         {
@@ -416,7 +418,8 @@ public static class CallbackEndpoints
             catch { }
 
             return Results.Ok(new { handled = true, sessionId, replyToDiscussionId, respondingAgentId });
-        });
+        })
+            .WithSummary("RedCompute webhook that copies the last reply of an Agent session into the discussion named by the replyTo query parameter, then stops that session. Loopback callers only and not meant for Agents; body needs sessionId.");
 
         group.MapPost("/callbacks/external-conversation", async (
             HttpContext ctx, ExternalAgentConversationProvider provider) =>
@@ -433,7 +436,8 @@ public static class CallbackEndpoints
                 return Results.BadRequest(new { error = "sessionId is required" });
             await provider.NotifySettledAsync(sessionId, ctx.RequestAborted);
             return Results.Ok(new { handled = true, sessionId });
-        });
+        })
+            .WithSummary("RedCompute webhook telling Nova that an external Agent conversation session has settled. Loopback callers only and not meant for Agents; body needs sessionId.");
     }
 
     private static bool IsLoopback(HttpContext ctx)

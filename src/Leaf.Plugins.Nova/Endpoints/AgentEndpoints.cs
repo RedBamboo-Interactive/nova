@@ -27,7 +27,8 @@ public static class AgentEndpoints
                 provider = a.Provider,
                 qualityTier = a.QualityTier,
             }));
-        });
+        })
+            .WithSummary("Lists the Agents Nova can talk as, with id, slug, name, avatar URL, workspace id, provider and quality tier.");
 
         group.MapGet("/avatar", async (AgentDirectory agents) =>
         {
@@ -35,6 +36,7 @@ public static class AgentEndpoints
             var agent = novaId != null ? await agents.GetAgentAsync(novaId) : null;
             var url = AgentDirectory.BuildAvatarUrl(agent?.AvatarFilename);
             return Results.Redirect(url ?? "/nova-avatar.png");
-        });
+        })
+            .WithSummary("Redirects to the avatar image of Nova's own Agent, or to the default avatar when none is set.");
     }
 }

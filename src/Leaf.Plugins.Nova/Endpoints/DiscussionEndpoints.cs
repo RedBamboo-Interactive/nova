@@ -356,7 +356,8 @@ public static class DiscussionEndpoints
             filtered = filtered.Where(d => DiscussionAccessPolicy.CanRead(d, ctx));
 
             return Results.Ok(filtered.Select(DiscussionStore.ToInfo));
-        });
+        })
+            .WithSummary("Lists the discussions the caller can read. Query: status, search, agent; with status archived and a limit it returns a cursor page instead of a plain array.");
 
         group.MapGet("/discussions/pending", async (HttpContext ctx, DiscussionStore store) =>
         {
@@ -372,7 +373,8 @@ public static class DiscussionEndpoints
                 && d.ConversationRevision > d.ReadConversationRevision);
 
             return Results.Ok(new { count });
-        });
+        })
+            .WithSummary("Returns the count of idle open discussions with replies the caller has not read, excluding heartbeat discussions.");
 
         group.MapPost("/discussions/sync", async (HttpContext ctx, DiscussionStore store,
             RedComputeClient redCompute, ConversationUnread conversationUnread) =>
@@ -428,7 +430,8 @@ public static class DiscussionEndpoints
             }
 
             return Results.Ok(discussions.Select(DiscussionStore.ToInfo));
-        });
+        })
+            .WithSummary("Reconciles the status of the caller's open discussions with their RedCompute sessions and returns them. Sends nothing to the sessions.");
 
         group.MapPost("/discussions", async (HttpContext ctx, DiscussionStore store, AgentDirectory agents, MessagePipeline pipeline, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, LiveEvents live) =>
         {
@@ -482,7 +485,9 @@ public static class DiscussionEndpoints
                 pipeline.BeginSessionCreation(discussion);
 
             return Results.Ok(DiscussionStore.ToInfo(discussion));
-        });
+        })
+            .WithSummary("Creates a discussion and starts its provider session. The body is optional (agentId, type, qualityTier, provider, deferSession, idempotencyKey); a second open live or heartbeat discussion for the same Agent returns 409.")
+            .Accepts<CreateDiscussionRequest>(true, "application/json");
 
         group.MapGet("/discussions/live", async (HttpContext ctx, DiscussionStore store) =>
         {
@@ -492,7 +497,8 @@ public static class DiscussionEndpoints
                     && DiscussionAccessPolicy.CanRead(d, ctx))
                 .Select(DiscussionStore.ToInfo);
             return Results.Ok(live);
-        });
+        })
+            .WithSummary("Lists the open LIVE discussions the caller can read. Query: agent.");
 
         group.MapGet("/discussions/search", async (
             HttpContext ctx,
@@ -598,7 +604,8 @@ public static class DiscussionEndpoints
                 });
 
             return Results.Ok(new { query = q, results });
-        });
+        })
+            .WithSummary("Searches discussion content for the q query parameter (required). Optional: status, agent, includeLive, includeHeartbeats, limit (1 to 100, default 20).");
 
         group.MapGet("/discussions/export", async (HttpContext ctx, DiscussionStore store, ConversationExporter exporter) =>
         {
@@ -617,7 +624,8 @@ public static class DiscussionEndpoints
 
             var markdown = await exporter.ExportAsync(discussions, since);
             return Results.Text(markdown, "text/markdown");
-        });
+        })
+            .WithSummary("Exports recent readable, non-confidential discussions as Markdown. Query: since (ISO time, default last 7 days), limit (1 to 200, default 50).");
 
         group.MapGet("/discussions/{id}/history-page", async (
             string id,
@@ -873,7 +881,8 @@ public static class DiscussionEndpoints
                     boundaryComplete = transcript?.Page.BoundaryComplete ?? true,
                 },
             });
-        });
+        })
+            .WithSummary("Returns one page of a discussion's transcript. Query: before or after (a cursor from a previous page, not both), limit (1 to 500, default 500).");
 
         group.MapGet("/discussions/{id}", async (string id, HttpContext ctx, DiscussionStore store, IDiscussions discussions, RedComputeClient redCompute, ConversationUnread conversationUnread) =>
         {
@@ -1080,7 +1089,8 @@ public static class DiscussionEndpoints
                 discussion = DiscussionStore.ToInfo(discussion),
                 messages = msgs,
             });
-        });
+        })
+            .WithSummary("Returns one discussion with its transcript from the linked session, and reconciles its stored status with the session. Query: since, tail (last N messages, 1 to 10000).");
 
         group.MapGet("/discussions/{id}/messages/{recordId:long}/output", async (
             string id,
@@ -1150,7 +1160,8 @@ public static class DiscussionEndpoints
                 });
 
             return Results.Ok(result);
-        });
+        })
+            .WithSummary("Lists the images attached to the user messages of a discussion, with the message content and timestamp.");
 
         group.MapGet("/discussions/{id}/context", async (string id, HttpContext ctx, DiscussionStore store, MessagePipeline pipeline, ExtensionContributions extensions) =>
         {
@@ -1180,7 +1191,8 @@ public static class DiscussionEndpoints
                 own, others, outfit, outfitAsset,
                 extensionContexts: extensionContexts);
             return Results.Ok(snapshot);
-        });
+        })
+            .WithSummary("Returns the context snapshot Nova builds for a discussion: the Agent's recent discussions, other open ones, outfit and extension contributions.");
 
         group.MapGet("/discussions/{id}/export", async (string id, HttpContext ctx, DiscussionStore store, ConversationExporter exporter) =>
         {
@@ -1190,7 +1202,8 @@ public static class DiscussionEndpoints
 
             var markdown = await exporter.ExportSingleAsync(discussion);
             return Results.Text(markdown, "text/markdown");
-        });
+        })
+            .WithSummary("Exports one discussion as Markdown.");
 
         group.MapPut("/discussions/{id}/title", async (string id, DiscussionTitleRequest request, HttpContext ctx, DiscussionStore store) =>
         {
@@ -1201,7 +1214,8 @@ public static class DiscussionEndpoints
             var updated = await store.SetManualTitleAsync(
                 discussion.EntityId, request.Title, ctx.RequestAborted);
             return updated is null ? NotFound() : Results.Ok(DiscussionStore.ToInfo(updated));
-        });
+        })
+            .WithSummary("Sets a discussion's title manually. Body: title.");
 
         group.MapPost("/discussions/{id}/title/generate", async (
             string id, HttpContext ctx, DiscussionStore store, AgentDirectory agents,
@@ -1267,7 +1281,8 @@ public static class DiscussionEndpoints
                     jobId = generated.JobId,
                     qualityTier = "fast",
                 });
-        });
+        })
+            .WithSummary("Generates a title for a chat discussion from its transcript with the fast model and saves it. Needs a session with enough conversation, otherwise 409.");
 
         group.MapPut("/discussions/{id}/title/fallback", async (string id, DiscussionTitleRequest request, HttpContext ctx, DiscussionStore store) =>
         {
@@ -1278,7 +1293,8 @@ public static class DiscussionEndpoints
             var updated = await store.TrySetFallbackTitleAsync(
                 discussion.EntityId, request.Title ?? "", ctx.RequestAborted);
             return updated is null ? NotFound() : Results.Ok(DiscussionStore.ToInfo(updated));
-        });
+        })
+            .WithSummary("Sets a fallback title for a discussion. Body: title; the title policy decides whether it replaces the current one.");
 
         // A session.updated event is only an invalidation signal. Re-read the
         // linked session here so an old pushed title can never win a race with
@@ -1300,7 +1316,8 @@ public static class DiscussionEndpoints
             var updated = await store.TryApplySessionTitleAsync(
                 discussion.EntityId, snapshot.Title, ctx.RequestAborted);
             return updated is null ? NotFound() : Results.Ok(DiscussionStore.ToInfo(updated));
-        });
+        })
+            .WithSummary("Re-reads the linked session and applies its title to a chat discussion if the title policy allows. Takes no body.");
 
         group.MapPut("/discussions/{id}/confidential", async (string id,
             DiscussionConfidentialRequest request, HttpContext ctx, DiscussionStore store,
@@ -1338,7 +1355,8 @@ public static class DiscussionEndpoints
 
             await store.PatchAsync(discussion.EntityId, new JsonObject { ["confidential"] = request.Confidential });
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Confidential = request.Confidential }));
-        });
+        })
+            .WithSummary("Sets or clears the confidential flag of a discussion. Body: confidential (boolean). Only callers allowed to manage confidentiality; making it confidential also applies the boundary to its session.");
 
         // Worktree attachments: where a discussion works inside a repository. The discussion keeps
         // its Agent-workspace cwd; this records the folders it touches so every turn can say so.
@@ -1348,7 +1366,8 @@ public static class DiscussionEndpoints
             if (discussion is null) return NotFound();
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
             return Results.Ok(new { items = discussion.Worktrees ?? [] });
-        });
+        })
+            .WithSummary("Lists the repository worktrees attached to a discussion.");
 
         group.MapPost("/discussions/{id}/worktrees", async (string id, AttachWorktreeRequest request,
             HttpContext ctx, DiscussionStore store, CodeWorktreeClient code,
@@ -1357,7 +1376,8 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id, ctx.RequestAborted);
             return discussion is null ? NotFound() : await AttachWorktreeAsync(discussion, request, ctx, store, code, entities, events);
-        });
+        })
+            .WithSummary("Attaches a repository worktree to a discussion, creating the branch worktree when needed. Body: repository and branch (required), optional base.");
 
         // Detaching only forgets the attachment; the worktree and its branch stay untouched.
         group.MapDelete("/discussions/{id}/worktrees", async (string id, [FromBody] DetachWorktreeRequest request,
@@ -1366,11 +1386,13 @@ public static class DiscussionEndpoints
         {
             var discussion = await store.GetAsync(id, ctx.RequestAborted);
             return discussion is null ? NotFound() : await DetachWorktreeAsync(discussion, request, ctx, store, events);
-        });
+        })
+            .WithSummary("Detaches a worktree from a discussion. Body: path. Only the attachment is forgotten; the worktree and its branch stay untouched.");
 
         // Every open discussion the caller can read that works in one of the repository's worktrees.
         group.MapGet("/worktree-attachments", (HttpContext ctx, DiscussionStore store) =>
-            WorktreeAttachmentsAsync(ctx.Request.Query["repositoryId"].FirstOrDefault(), ctx, store));
+            WorktreeAttachmentsAsync(ctx.Request.Query["repositoryId"].FirstOrDefault(), ctx, store))
+            .WithSummary("Lists the open discussions the caller can read that work in a worktree of one repository. Query: repositoryId (required).");
 
         group.MapPut("/discussions/{id}/read", async (string id, HttpContext ctx, DiscussionStore store) =>
         {
@@ -1384,7 +1406,9 @@ public static class DiscussionEndpoints
             var updated = await store.MarkConversationReadAsync(discussion.EntityId,
                 request?.ConversationRevision ?? discussion.ConversationRevision);
             return Results.Ok(DiscussionStore.ToInfo(updated ?? discussion));
-        });
+        })
+            .WithSummary("Marks a discussion as read up to a conversation revision. The body is optional (conversationRevision); it defaults to the current revision.")
+            .Accepts<DiscussionReadRequest>(true, "application/json");
 
         group.MapPut("/discussions/{id}/activity", async (string id, HttpContext ctx,
             DiscussionStore store, ConversationUnread conversationUnread) =>
@@ -1400,7 +1424,8 @@ public static class DiscussionEndpoints
             var status = await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Idle);
             if (status is not null) updated = updated with { Status = status };
             return Results.Ok(DiscussionStore.ToInfo(updated));
-        });
+        })
+            .WithSummary("Records activity on a discussion: updates its last activity time and sets its status to idle.");
 
         group.MapPut("/discussions/{id}/stopped", async (string id, HttpContext ctx, DiscussionStore store) =>
         {
@@ -1410,7 +1435,8 @@ public static class DiscussionEndpoints
 
             var result = await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped);
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Status = result ?? discussion.Status }));
-        });
+        })
+            .WithSummary("Marks a discussion as stopped in Nova. This only records the status; it does not stop the session.");
 
         group.MapPost("/discussions/{id}/resume", async (string id, HttpContext ctx,
             DiscussionStore store, RedComputeClient redCompute, AgentDirectory agents,
@@ -1483,7 +1509,8 @@ public static class DiscussionEndpoints
 
             var resumedStatus = await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Idle);
             return Results.Ok(new { sessionId = discussion.SessionId, status = resumedStatus ?? discussion.Status, initialized = true });
-        });
+        })
+            .WithSummary("Resumes a discussion's provider session so it can take a new turn; a session that is already running is left as is. Archived discussions return 409.");
 
         group.MapPost("/discussions/{id}/reopen", async (
             string id,
@@ -1518,7 +1545,8 @@ public static class DiscussionEndpoints
             }, ctx.RequestAborted);
             _ = activity.OnReopened(id, reopened.Title, reopened.Confidential);
             return Results.Ok(DiscussionStore.ToInfo(reopened));
-        });
+        })
+            .WithSummary("Reopens an archived discussion. LIVE and heartbeat discussions cannot be reopened, and the archive must still have its provider session.");
 
         group.MapDelete("/discussions/{id}", async (string id, HttpContext ctx, DiscussionStore store, DiscussionLifecycle lifecycle, DiscussionActivity activity, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
         {
@@ -1548,7 +1576,8 @@ public static class DiscussionEndpoints
             }, ctx.RequestAborted);
             _ = activity.OnArchived(id, discussion.Title, discussion.Confidential);
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Status = status }));
-        });
+        })
+            .WithSummary("Archives a discussion: the session is stopped and verified in the background before it shows as archived. LIVE and heartbeat discussions cannot be archived (400).");
 
         group.MapPost("/discussions/{id}/clear", async (string id, HttpContext ctx, DiscussionStore store, IDiscussions discussions, RedComputeClient redCompute, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
         {
@@ -1590,7 +1619,8 @@ public static class DiscussionEndpoints
                     ConversationRevision = 0, ReadConversationRevision = 0,
                     LastProcessedSessionAssistantUid = "" };
             return Results.Ok(new { cleared = true, discussion = DiscussionStore.ToInfo(cleared) });
-        });
+        })
+            .WithSummary("Stops a LIVE discussion's session and clears its timeline, leaving a single day marker. LIVE discussions only (others return 400); the cleared messages are not recoverable.");
 
         group.MapPost("/discussions/{id}/rotate", async (string id, HttpContext ctx, DiscussionStore store, AgentDirectory agents, DiscussionLifecycle lifecycle, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, MessagePipeline pipeline, DiscussionActivity activity, HeartbeatService heartbeat) =>
         {
@@ -1669,10 +1699,12 @@ public static class DiscussionEndpoints
                 archived = DiscussionStore.ToInfo(discussion with { Status = DiscussionStatus.Archiving }),
                 created = DiscussionStore.ToInfo(fresh),
             });
-        });
+        })
+            .WithSummary("Archives a LIVE discussion and creates its replacement, which is the day boundary for heartbeat. LIVE discussions only; the id may be live, and an Idempotency-Key header makes a retry reuse the replacement.");
 
         group.MapPost("/discussions/{id}/event", (string id, DiscussionEventRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, EventInjector injector, MessagePipeline pipeline)
-            => PostEventAsync(id, request, ctx, store, agents, injector, pipeline));
+            => PostEventAsync(id, request, ctx, store, agents, injector, pipeline))
+            .WithSummary("Injects an event into a discussion and delivers it to its session. Body: content (required), optional type, source, senderAgentId, replyToDiscussionId, metadata, idempotencyKey. The id may be live for the current LIVE discussion.");
 
         group.MapPost("/discussions/{id}/nova-message", async (string id, NovaMessageRequest request,
             HttpContext ctx, DiscussionStore store, ConversationUnread conversationUnread,
@@ -1798,7 +1830,8 @@ public static class DiscussionEndpoints
             // A proactive message never settles a session turn; tell an open voice directly.
             _ = voiceForwarder.OnDirectAssistantMessageAsync(id, uid, request.Content, CancellationToken.None);
             return Results.Ok(new { success = true, discussion = DiscussionStore.ToInfo(discussion) });
-        });
+        })
+            .WithSummary("Posts a message as Nova into a discussion without starting a turn: it is stored, shown and injected into the session as an assistant message. Body: content (required), optional title, audioUrl, senderAgentId, idempotencyKey. The id may be live.");
 
         group.MapPost("/discussions/{id}/message", async (string id, DiscussionMessageRequest request, HttpContext ctx, DiscussionStore store, MessagePipeline pipeline, DeviceResolver devices, LiveEvents live, DiscussionActivity activity, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
         {
@@ -1899,7 +1932,8 @@ public static class DiscussionEndpoints
                 queue = outcome.Queue,
                 item = outcome.Item,
             }, statusCode: outcome.Disposition == "delivered" ? 200 : 202);
-        });
+        })
+            .WithSummary("Sends a user message into a discussion. It returns 200 when the provider accepted the turn, or 202 when it was queued behind a running turn. Body: content, or images or input (at least one); optional delivery, inputMethod, displayContent, messageUid. Use ask instead to wait for the reply.");
 
         // Discussion-scoped facade over RedCompute's canonical durable queue. The
         // browser never needs to discover or retain the backing session id, while
@@ -1907,35 +1941,42 @@ public static class DiscussionEndpoints
         group.MapGet("/discussions/{id}/input-queue", async (
             string id, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
             await ProxyInputQueueAsync(id, "" + ctx.Request.QueryString,
-                HttpMethod.Get, ctx, store, redCompute, emptyWhenSessionless: true));
+                HttpMethod.Get, ctx, store, redCompute, emptyWhenSessionless: true))
+            .WithSummary("Lists the inputs queued on the discussion's session; empty when the discussion has no session yet.");
 
         group.MapGet("/discussions/{id}/input-queue/{itemId}", async (
             string id, string itemId, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
             await ProxyInputQueueAsync(id, $"/{Uri.EscapeDataString(itemId)}",
-                HttpMethod.Get, ctx, store, redCompute));
+                HttpMethod.Get, ctx, store, redCompute))
+            .WithSummary("Returns one queued input of the discussion's session.");
 
         group.MapDelete("/discussions/{id}/input-queue/{itemId}", async (
             string id, string itemId, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
             await ProxyInputQueueAsync(id, $"/{Uri.EscapeDataString(itemId)}",
-                HttpMethod.Delete, ctx, store, redCompute));
+                HttpMethod.Delete, ctx, store, redCompute))
+            .WithSummary("Cancels one queued input before it runs.");
 
         group.MapPost("/discussions/{id}/input-queue/{itemId}/retry", async (
             string id, string itemId, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
             await ProxyInputQueueAsync(id, $"/{Uri.EscapeDataString(itemId)}/retry",
-                HttpMethod.Post, ctx, store, redCompute));
+                HttpMethod.Post, ctx, store, redCompute))
+            .WithSummary("Retries one queued input that failed to run.");
 
         group.MapPost("/discussions/{id}/input-queue/send-now", async (
             string id, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
             await ProxyInputQueueAsync(id, "/send-now",
-                HttpMethod.Post, ctx, store, redCompute));
+                HttpMethod.Post, ctx, store, redCompute))
+            .WithSummary("Asks the session to run its queued inputs now instead of waiting for the current turn to finish.");
 
         // ── Reactions ──────────────────────────────────────────────────
 
         group.MapPost("/discussions/{id}/reactions", async (string id, ReactionRequest request, HttpContext ctx, DiscussionStore store, IDiscussions discussions, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, DeviceResolver devices, ReactionTriggers triggers, ILogger<ReactionTriggers> logger) =>
-            await SetReactionAsync(id, request, ctx, store, discussions, events, devices, triggers, logger, remove: false));
+            await SetReactionAsync(id, request, ctx, store, discussions, events, devices, triggers, logger, remove: false))
+            .WithSummary("Adds an emoji reaction to a message. Body: emoji and messageKey (required), optional agentId and agentName. A reaction from a signed-in human may also steer or start a turn.");
 
         group.MapPost("/discussions/{id}/reactions/remove", async (string id, ReactionRequest request, HttpContext ctx, DiscussionStore store, IDiscussions discussions, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, DeviceResolver devices, ReactionTriggers triggers, ILogger<ReactionTriggers> logger) =>
-            await SetReactionAsync(id, request, ctx, store, discussions, events, devices, triggers, logger, remove: true));
+            await SetReactionAsync(id, request, ctx, store, discussions, events, devices, triggers, logger, remove: true))
+            .WithSummary("Removes an emoji reaction from a message. Body: emoji and messageKey (required), optional agentId and agentName.");
 
         group.MapGet("/discussions/{id}/reactions", async (string id, HttpContext ctx, DiscussionStore store, IDiscussions discussions) =>
         {
@@ -1947,7 +1988,8 @@ public static class DiscussionEndpoints
             var records = await discussions.GetReactionsAsync(discussion.EntityId);
             var reactions = AggregateReactions(records, userId);
             return Results.Ok(new { reactions });
-        });
+        })
+            .WithSummary("Lists the emoji reactions on a discussion's messages, aggregated per message.");
 
         group.MapGet("/event-types", async ([FromKeyedServices(NovaAppPlugin.PluginId)] IEntityStore entities) =>
         {
@@ -2002,7 +2044,8 @@ public static class DiscussionEndpoints
                     description = StringValue(entry.Item, "description"),
                 });
             return Results.Ok(types);
-        });
+        })
+            .WithSummary("Lists the event types Nova knows, with key, name, icon, resolved color and description.");
     }
 
     internal static bool MatchesSearchTypeScope(

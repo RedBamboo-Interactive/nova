@@ -34,7 +34,8 @@ public static class MiscEndpoints
             {
                 return Results.Json(new { error = ex.Message }, statusCode: 409);
             }
-        });
+        })
+            .WithSummary("Lists the files of an Agent's workspace. Query: agent (required).");
 
         group.MapPost("/workspace/reveal", async (HttpContext ctx, AgentWorkspaces workspaces) =>
         {
@@ -61,7 +62,8 @@ public static class MiscEndpoints
             {
                 return Results.BadRequest(new { error = $"Could not open the workspace folder: {ex.Message}" });
             }
-        });
+        })
+            .WithSummary("Opens an Agent's workspace folder in the host file explorer. Query: agent (required); Windows only.");
 
         group.MapGet("/memory/file", async (HttpContext ctx, AgentWorkspaces workspaces) =>
         {
@@ -86,7 +88,8 @@ public static class MiscEndpoints
             {
                 return Results.Json(new { error = ex.Message }, statusCode: 409);
             }
-        });
+        })
+            .WithSummary("Reads one file from an Agent's workspace. Query: agent and path (both required).");
 
         group.MapPut("/memory/file", async (HttpContext ctx, MemoryFileRequest request, AgentWorkspaces workspaces) =>
         {
@@ -110,7 +113,8 @@ public static class MiscEndpoints
             {
                 return Results.Json(new { error = ex.Message }, statusCode: 409);
             }
-        });
+        })
+            .WithSummary("Writes one file in an Agent's workspace, replacing its content. Query: agent (required); body: path (workspace-relative) and content.");
 
         // ── Local media ────────────────────────────────────────────────
 
@@ -162,7 +166,8 @@ public static class MiscEndpoints
 
             ctx.Response.Headers.CacheControl = "public, max-age=3600";
             return Results.File(fullPath, mime);
-        });
+        })
+            .WithSummary("Serves a local image, video or audio file named by the path query parameter. Other file types are refused.");
 
         group.MapPost("/file/open", async (OpenLocalFileRequest request, AgentWorkspaces workspaces, CancellationToken ct) =>
         {
@@ -198,7 +203,8 @@ public static class MiscEndpoints
             psi.ArgumentList.Add(File.Exists(fullPath) ? $"/select,{fullPath}" : fullPath);
             Process.Start(psi);
             return Results.Ok(new { action = "explorer", path = fullPath });
-        });
+        })
+            .WithSummary("Opens a local file or folder on the host, or reports that it belongs to an Agent workspace. Body: path (required), optional agentId; Windows only.");
     }
 
     private static (bool Valid, string? Path, string? Error) ResolveSafeLocalPath(string? path)

@@ -48,7 +48,8 @@ public static class DelegateEndpoints
 {
     public static void Map(RouteGroupBuilder group)
     {
-        group.MapPost("/delegate", HandleDelegateAsync);
+        group.MapPost("/delegate", HandleDelegateAsync)
+            .WithSummary("Delegates work to a Code session: starts one on a repository or Agent workspace, or continues one with sessionId, delivers the prompt, and registers a callback that reports the result into discussionId. Body: prompt (required); needs a signed user or execution identity.");
     }
 
     internal static async Task<IResult> HandleDelegateAsync(HttpContext ctx, DelegateRequest request, RedComputeClient redCompute,

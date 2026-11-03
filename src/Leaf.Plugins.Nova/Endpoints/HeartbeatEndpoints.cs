@@ -18,7 +18,8 @@ public static class HeartbeatEndpoints
     public static void Map(RouteGroupBuilder group)
     {
         group.MapPost("/heartbeat/reconcile", async (HeartbeatService heartbeat) =>
-            Results.Ok(await heartbeat.ReconcileAsync()));
+            Results.Ok(await heartbeat.ReconcileAsync()))
+            .WithSummary("Reconciles the heartbeat setup of every Agent with its automation and returns the result.");
 
         group.MapGet("/heartbeat/status", async (
             HeartbeatService heartbeat,
@@ -60,19 +61,22 @@ public static class HeartbeatEndpoints
                 });
             }
             return Results.Ok(result);
-        });
+        })
+            .WithSummary("Returns the heartbeat status of each Agent that has one: schedule, timezone, enabled flag, quality tier and last tick.");
 
         group.MapPost("/heartbeat/{agentId}/rotate", async (string agentId, HeartbeatService heartbeat) =>
         {
             var fresh = await heartbeat.RotateAsync(agentId, "manual-reset");
             return Results.Ok(new { ok = true, discussionId = fresh?.Id });
-        });
+        })
+            .WithSummary("Rotates an Agent's heartbeat discussion (reason manual-reset) and returns the new discussion id.");
 
         // Alias: goodnight automation calls end-of-day, same as rotate.
         group.MapPost("/heartbeat/{agentId}/end-of-day", async (string agentId, HeartbeatService heartbeat) =>
         {
             var fresh = await heartbeat.RotateAsync(agentId, "goodnight");
             return Results.Ok(new { ok = true, discussionId = fresh?.Id });
-        });
+        })
+            .WithSummary("Ends the heartbeat day for an Agent by rotating its heartbeat discussion (reason goodnight), the same as rotate. Returns the new discussion id.");
     }
 }

@@ -24,7 +24,8 @@ public static class VoiceSessionEndpoints
                 return Results.BadRequest(new { error = "invalid_sdp", message = "A valid SDP offer is required" });
             var result = await voice.StartAsync(discussion, offerSdp, ctx.RequestAborted);
             return Results.Content(result.Content, result.ContentType, statusCode: result.StatusCode);
-        });
+        })
+            .WithSummary("Starts a voice session on a discussion. Body: offerSdp (a WebRTC SDP offer, required); the answer comes back from the voice backend.");
 
         group.MapGet("/discussions/{id}/voice-sessions/{voiceSessionId}", async (string id,
             string voiceSessionId, HttpContext ctx, DiscussionStore store, VoiceSessionService voice) =>
@@ -35,7 +36,8 @@ public static class VoiceSessionEndpoints
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
             var result = await voice.GetAsync(discussion, voiceSessionId, ctx.RequestAborted);
             return Results.Content(result.Content, result.ContentType, statusCode: result.StatusCode);
-        });
+        })
+            .WithSummary("Returns the state of one voice session of a discussion.");
 
         group.MapPost("/discussions/{id}/voice-sessions/{voiceSessionId}/close", async (string id,
             string voiceSessionId, HttpContext ctx, DiscussionStore store, VoiceSessionService voice) =>
@@ -46,7 +48,8 @@ public static class VoiceSessionEndpoints
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
             var result = await voice.CloseAsync(discussion, voiceSessionId, ctx.RequestAborted);
             return Results.Content(result.Content, result.ContentType, statusCode: result.StatusCode);
-        });
+        })
+            .WithSummary("Closes one voice session of a discussion.");
 
         group.MapPost("/callbacks/voice-session", async (HttpContext ctx, VoiceSessionService voice) =>
         {
@@ -60,7 +63,8 @@ public static class VoiceSessionEndpoints
             return await voice.HandleCallbackAsync(body, ctx.RequestAborted)
                 ? Results.Ok(new { handled = true })
                 : Results.BadRequest(new { error = "invalid_voice_event" });
-        });
+        })
+            .WithSummary("Voice backend webhook delivering a voice session event for Nova to handle. Loopback callers only and not meant for Agents; the body is the voice event.");
     }
 
     private static string? String(JsonElement element, string name)

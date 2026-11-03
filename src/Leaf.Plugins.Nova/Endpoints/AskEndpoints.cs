@@ -94,7 +94,8 @@ public static class AskEndpoints
                 $"Nova did not reply within {timeout}s. The session may still be working — " +
                 $"poll GET /ai-session/sessions/{sessionId} or ask again with discussionId '{discussion.Id}'.",
                 discussion.Id, sessionId);
-        });
+        })
+            .WithSummary("Sends content to Nova and waits for the reply, returning it in one response. Body: content (required), discussionId (omit to start a new discussion), timeoutSeconds (10 to 300, default 60); on timeout it returns ok false with the ids to follow up.");
     }
 
     /// <summary>200 response with the error envelope plus the ids needed to follow up.</summary>
