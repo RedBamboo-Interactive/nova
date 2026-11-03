@@ -219,7 +219,7 @@ public static class NovaContextBuilder
 
         var liveDisc = active.FirstOrDefault(d => d.Type == "live");
         if (liveDisc != null)
-            sb.Append($"\nPost to LIVE timeline: curl -s -X POST {ApiBase}/discussions/{liveDisc.Id}/event -H \"Content-Type: application/json\" -d '{{\"content\":\"...\",\"source\":\"...\"}}'");
+            sb.Append($"\nPost to LIVE timeline: curl -s -X POST {ApiBase}/discussions/{liveDisc.Id}/event -H \"Authorization: Bearer $REDLEAF_EXECUTION_TOKEN\" -H \"Content-Type: application/json\" -d '{{\"content\":\"...\"}}'");
 
         if (snapshot.LiveEvents.Count > 0)
         {
