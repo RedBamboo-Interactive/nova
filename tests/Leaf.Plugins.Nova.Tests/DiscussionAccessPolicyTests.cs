@@ -122,8 +122,11 @@ public sealed class DiscussionAccessPolicyTests
         Assert.False(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(With("someone-else", "Bearer")));
         Assert.False(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(
             With("someone-else", "Bearer", new Claim("token_use", "execution"), new Claim("roles", "[\"viewer\"]"))));
+        // A browser on this machine before sign-in: local images in chat must keep working.
+        Assert.True(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(
+            With("local-user", "LocalDefault", new Claim("roles", "[\"admin\"]"))));
         Assert.False(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(
-            With("local-user", "LocalDefault", new Claim("roles", "admin"))));
+            With("local-user", "Bearer", new Claim("roles", "admin"))));
         Assert.False(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(
             With("system", "Bearer", new Claim("roles", "admin"))));
         Assert.False(DiscussionAccessPolicy.IsInstallOwnerOrAdministrator(new ClaimsPrincipal(new ClaimsIdentity())));

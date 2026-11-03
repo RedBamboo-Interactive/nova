@@ -58,20 +58,23 @@ public static class DiscussionAccessPolicy
     }
 
     /// <summary>
-    /// Whether the request is the install's owner or an administrator: a real signed identity
-    /// (never the loopback LocalDefault or a system subject) holding the admin role. An Agent
-    /// execution carries its beneficiary as the subject, so one acting for someone else is
-    /// judged by that person's roles.
+    /// Whether the request is the install's owner or an administrator: an identity holding the admin
+    /// role, never a system subject. The loopback LocalDefault identity counts, because it is only ever
+    /// given to a request from this machine, whose user can read these files anyway. An Agent execution
+    /// carries its beneficiary as the subject, so one acting for someone else is judged by that person's roles.
     /// </summary>
     public static bool IsInstallOwnerOrAdministrator(ClaimsPrincipal principal)
     {
         var subject = principal.FindFirstValue("sub");
         if (principal.Identity?.IsAuthenticated != true
-            || string.Equals(principal.Identity.AuthenticationType,
-                LocalDefaultAuthenticationType, StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(subject)
-            || string.Equals(subject, LocalDefaultSubjectId, StringComparison.OrdinalIgnoreCase)
             || string.Equals(subject, "system", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // The local subject means something only on the identity the loopback path builds.
+        if (string.Equals(subject, LocalDefaultSubjectId, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(principal.Identity.AuthenticationType,
+                LocalDefaultAuthenticationType, StringComparison.Ordinal))
             return false;
 
         return principal.FindAll("roles").SelectMany(RoleValues)
