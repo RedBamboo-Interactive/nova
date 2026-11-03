@@ -102,6 +102,12 @@ beneficiary's permissions. Do not combine it with legacy `X-Compute-Provenance`.
   belong to the entity contract.
 - Use records or streams for high-volume history and events.
 - Upload user-visible media to Assets and preserve the exact returned URL.
+- Search before you scan. `GET /api/search?q=...` ranks entities and conversations and shows the
+  matching text; add `entity_types=page` for memory and workspace files, and `include_data=true` only
+  when you need whole entities. Give `/api/entities?search=` a `type`.
+- An Agent workspace is a filesystem served by RedLeaf, not a disk. A recursive `grep` or `rg` reads every
+  file through the service, images included, and holds up whatever waits behind it. When you must scan
+  text, make it one pass, in one folder if you can, leaving out binaries and `memory/artifacts`.
 - Treat Agent workspaces and harness files as entity-backed projections. Author Agents and Skills
   through their entities, never by editing read-only `.agents`, `.claude`, `AGENTS.md`, or
   `CLAUDE.md` projections.
