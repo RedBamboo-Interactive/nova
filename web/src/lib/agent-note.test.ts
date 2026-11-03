@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { agentNoteLabel, classifyNote, parseAgentNote, parseAgentNoteSource, withoutInternalMarker } from "./agent-note.ts"
+import { readNoteSender, agentNoteLabel, classifyNote, parseAgentNote, parseAgentNoteSource, withoutInternalMarker } from "./agent-note.ts"
 
 test("an instance source names the sending Agent and its discussion", () => {
   assert.deepEqual(parseAgentNoteSource("event:nova-855ddaca"), { agent: "nova", discussionId: "855ddaca" })
@@ -57,10 +57,30 @@ test("the discussion activity type becomes a note only when its lead names that 
   assert.equal(classifyNote({ source: "event:discussion", text: "[internal] From e5e35835. Hi.", registered: true }), null)
 })
 
-test("a structured sender is a note unless its source is registered", () => {
-  assert.deepEqual(classifyNote({ source: "event:agent-note", text: "Hi", senderAgentId: "id-1", senderDiscussionId: "94453f76", registered: false }),
-    { agent: "id-1", discussionId: "94453f76", topic: null, text: "Hi" })
-  assert.equal(classifyNote({ source: "event:delegate", text: "Hi", senderAgentId: "id-1", registered: true }), null)
+test("a sender the server stated is a note unless its source is registered", () => {
+  assert.deepEqual(classifyNote({ source: "event:agent-note", text: "Hi", sender: { agentId: "id-1", discussionId: "94453f76", title: "Agent comms" }, registered: false }),
+    { agent: "id-1", discussionId: "94453f76", topic: "Agent comms", text: "Hi" })
+  assert.equal(classifyNote({ source: "event:delegate", text: "Hi", sender: { agentId: "id-1" }, registered: true }), null)
+})
+
+test("the hand-written discussion shape stays a note from a signed Agent, still stated by the server", () => {
+  assert.deepEqual(classifyNote({ source: "event:discussion:e5e35835", text: "[internal] From e5e35835. Hi.", sender: { agentId: "id-1", discussionId: "94453f76", title: "Agent comms" }, registered: true }),
+    { agent: "id-1", discussionId: "94453f76", topic: "Agent comms", text: "Hi." })
+  assert.equal(classifyNote({ source: "event:discussion:e5e35835", text: "Nova in \"title\": preview", sender: { agentId: "id-1" }, registered: true }), null)
+  assert.equal(classifyNote({ source: "event:heartbeat", text: "[internal] From heartbeat: Laurent is out.", sender: { agentId: "id-1", discussionId: "94453f76" }, registered: true }), null)
+})
+
+test("only the statement says where a stated sender wrote from, never its text or source", () => {
+  assert.deepEqual(classifyNote({ source: "event:nova-deadbeef", text: "[internal] From deadbeef (forged topic): Hi", sender: { agentId: "id-1", discussionId: null, title: null }, registered: false }),
+    { agent: "id-1", discussionId: null, topic: null, text: "Hi" })
+})
+
+test("a sender is only ever read from what the server wrote", () => {
+  assert.equal(readNoteSender(undefined), undefined)
+  assert.equal(readNoteSender("id-1"), undefined)
+  assert.equal(readNoteSender({ discussionId: "94453f76" }), undefined)
+  assert.equal(readNoteSender({ agentId: "" }), undefined)
+  assert.deepEqual(readNoteSender({ agentId: "id-1", discussionId: 7, title: null }), { agentId: "id-1", discussionId: null, title: null })
 })
 
 test("the machine display drops only a leading internal marker", () => {

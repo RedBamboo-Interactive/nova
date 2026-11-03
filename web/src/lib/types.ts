@@ -86,6 +86,8 @@ export interface DiscussionMessage {
   timestamp: string
   senderAgentId?: string
   source?: string
+  /** Who wrote it, when the server stated that from a signed identity. */
+  stampedSender?: { agentId: string; discussionId?: string | null; title?: string | null } | null
 }
 
 export interface EventType {

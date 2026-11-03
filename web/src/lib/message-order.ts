@@ -3,7 +3,7 @@
 import { isEventBlock, isEventPart, eventInputMessageUid } from "@redbamboo/chat/event-parts"
 import type { MessageBlock, MessagePart, PersistedMessage } from "@redbamboo/chat"
 import type { EventType } from "./types"
-import { AGENT_NOTE_KEY, agentNoteLabel, classifyNote, parseAgentNote, withoutInternalMarker } from "./agent-note.ts"
+import { readNoteSender, type NoteSender, AGENT_NOTE_KEY, agentNoteLabel, classifyNote, parseAgentNote, withoutInternalMarker } from "./agent-note.ts"
 import { isUnregisteredEvent } from "./event-type-resolution.ts"
 
 /**
@@ -47,8 +47,8 @@ export interface FriezeEvent {
   data: Record<string, unknown> | null
   timestamp: string
   senderAgentId?: string
-  /** The discussion the sender wrote from, when the server stated it. */
-  senderDiscussionId?: string
+  /** Who wrote it, when the server stated that from a signed identity. */
+  stampedSender?: NoteSender
 }
 
 export const byTimestamp = (a: MessageBlock, b: MessageBlock) =>
@@ -64,12 +64,16 @@ function unwrapEventText(content: string): string {
  * conversation. Two markers because older records predate the source metadata.
  */
 export function isRawEventMessage(m: MessageBlock): boolean {
+  if (m.metadata?.[PERSON_INPUT_KEY] === true) return false
   const source = m.metadata?.source
   if (typeof source === "string" && source.startsWith("event:")) return true
   return /<nova-event\s/.test(m.parts[0]?.content ?? "")
 }
 
-const WHOLE_EVENT_FRAME = /^\s*<nova-event\s+source="([^"]*)"[^>]*>[\s\S]*<\/nova-event>\s*$/
+const WHOLE_EVENT_FRAME = /^\s*<nova-event\s+source="([^"]*)"([^>]*)>[\s\S]*<\/nova-event>\s*$/
+
+/** Marks a person's own send whose text holds a frame: it is what they wrote, not an event. */
+const PERSON_INPUT_KEY = "personInput"
 
 function unescapeFrameAttribute(value: string): string {
   return value
@@ -86,21 +90,65 @@ function unescapeFrameAttribute(value: string): string {
  * discussion's opening event sits before the first canonical record, on an
  * earlier overlay page. Without this it reads "System" until then.
  *
- * Only the injector writes these records with no admission metadata. A person's
- * send always carries it (MessagePipeline), so frame text they typed never
- * becomes a source here.
+ * Who wrote a record is settled by its admission metadata, never by its text:
+ *
+ * - None: only the injector writes those, for an event with no sender.
+ * - `novaEvent` and no `app`: the injector again, for an event with a sender.
+ *   Only this kind can state a sender, in the frame's `from-*` attributes.
+ * - `app`, not internal: a person's send (MessagePipeline, or a transport such as
+ *   Discord). Frame text they typed stays their message.
+ * - Anything else, including a coalesced batch, isn't one event: left alone.
  */
 export function markEventFrameSources(blocks: MessageBlock[], records: PersistedMessage[]): MessageBlock[] {
-  const sources = new Map<string, string>()
+  const marks = new Map<string, Record<string, unknown>>()
   for (const record of records) {
-    if (record.role !== "user" || record.attachmentsJson) continue
-    const frame = WHOLE_EVENT_FRAME.exec(record.content ?? "")
-    if (frame?.[1]) sources.set(record.messageUid || `db-${record.id}`, `event:${unescapeFrameAttribute(frame[1])}`)
+    if (record.role !== "user") continue
+    const id = record.messageUid || `db-${record.id}`
+    const content = record.content ?? ""
+    const admission = readAdmission(record)
+    if (admission === "person") {
+      if (/<nova-event\s/.test(content)) marks.set(id, { [PERSON_INPUT_KEY]: true })
+      continue
+    }
+    if (admission === "other") continue
+    const frame = WHOLE_EVENT_FRAME.exec(content)
+    if (!frame?.[1]) continue
+    const sender = admission === "marked-event" ? frameSender(frame[2] ?? "") : undefined
+    marks.set(id, {
+      source: `event:${unescapeFrameAttribute(frame[1])}`,
+      ...(sender ? { stampedSender: sender } : {}),
+    })
   }
-  if (sources.size === 0) return blocks
+  if (marks.size === 0) return blocks
   return blocks.map(block => {
-    const source = block.role === "user" && !block.metadata?.source ? sources.get(block.id) : undefined
-    return source ? { ...block, metadata: { ...block.metadata, source } } : block
+    const mark = block.role === "user" && !block.metadata?.source ? marks.get(block.id) : undefined
+    return mark ? { ...block, metadata: { ...block.metadata, ...mark } } : block
+  })
+}
+
+function readAdmission(record: PersistedMessage): "plain-event" | "marked-event" | "person" | "other" {
+  if (!record.attachmentsJson) return "plain-event"
+  try {
+    const { inputMessageUids, metadata } = JSON.parse(record.attachmentsJson) ?? {}
+    if (Array.isArray(inputMessageUids) && inputMessageUids.length > 1) return "other"
+    if (!metadata || typeof metadata !== "object") return "other"
+    if (metadata.novaEvent === true && metadata.app === undefined) return "marked-event"
+    return typeof metadata.app === "string" && metadata.internalMessage !== true ? "person" : "other"
+  } catch {
+    return "other"
+  }
+}
+
+function frameAttribute(attributes: string, name: string): string | null {
+  const value = new RegExp(`\\s${name}="([^"]*)"`).exec(attributes)?.[1]
+  return value ? unescapeFrameAttribute(value) : null
+}
+
+function frameSender(attributes: string): NoteSender | undefined {
+  return readNoteSender({
+    agentId: frameAttribute(attributes, "from-agent-id"),
+    discussionId: frameAttribute(attributes, "from-discussion"),
+    title: frameAttribute(attributes, "from-title"),
   })
 }
 
@@ -116,8 +164,7 @@ export function buildEventPart(event: FriezeEvent, resolve?: EventTypeResolver):
   const row = classifyNote({
     source: event.source,
     text: unwrapped,
-    senderAgentId: event.senderAgentId,
-    senderDiscussionId: event.senderDiscussionId,
+    sender: event.stampedSender,
     registered,
   })
   // A source-shaped note without the lead keeps its named frieze dot (7977d9f1).
@@ -131,7 +178,8 @@ export function buildEventPart(event: FriezeEvent, resolve?: EventTypeResolver):
       ? { ...event.data, agent: dot.agent, discussionId: dot.discussionId, topic: dot.topic }
       : event.data
   const noteLabel = row
-    ? row.agent && row.discussionId ? agentNoteLabel(row.agent, row.discussionId) : presentation?.name ?? null
+    // A stated sender's `agent` is an id, not a name to print.
+    ? row.agent && row.discussionId && !event.stampedSender ? agentNoteLabel(row.agent, row.discussionId) : presentation?.name ?? null
     : dot ? agentNoteLabel(dot.agent, dot.discussionId) : null
   return {
     type: "tool_use",
@@ -212,7 +260,7 @@ function toFriezeEvent(m: MessageBlock): FriezeEvent {
     data: data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null,
     timestamp: m.timestamp,
     senderAgentId: m.senderAgentId,
-    senderDiscussionId: typeof m.metadata?.senderDiscussionId === "string" ? m.metadata.senderDiscussionId : undefined,
+    stampedSender: readNoteSender(m.metadata?.stampedSender),
   }
 }
 

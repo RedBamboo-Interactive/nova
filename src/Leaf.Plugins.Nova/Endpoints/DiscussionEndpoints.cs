@@ -21,6 +21,10 @@ public class CreateDiscussionRequest
     public string? Provider { get; set; }
     public bool DeferSession { get; set; }
     public string? IdempotencyKey { get; set; }
+    /// <summary>Set once at creation; automatic titling never overwrites it.</summary>
+    public string? Title { get; set; }
+    /// <summary>What the new discussion should do: posted as an event, then its session starts and takes it.</summary>
+    public string? Brief { get; set; }
 }
 
 public class DiscussionTitleRequest
@@ -97,7 +101,8 @@ internal sealed record HistoryOverlayDto(
     object[] Parts,
     string Timestamp,
     string? SenderAgentId,
-    string Source);
+    string Source,
+    object? StampedSender = null);
 
 internal sealed record OverlayPageRead(
     IReadOnlyList<DiscussionMessage> Messages,
@@ -178,9 +183,16 @@ public static class DiscussionEndpoints
         if (request.IdempotencyKey is { } requestKey && (string.IsNullOrWhiteSpace(requestKey) || requestKey.Length > 200))
             return Results.BadRequest(new { error = "invalid_idempotency_key", message = "idempotencyKey must be 1-200 characters" });
 
-        var result = await injector.InjectEventAsync(discussion, request.Content, request.Type, request.Source,
-            request.SenderAgentId, request.ReplyToDiscussionId, request.Metadata, UserId(ctx),
-            request.IdempotencyKey, ctx.RequestAborted);
+        // A signed Agent's identity comes from its token, whatever the body says. Registering the
+        // reply callback stays the caller's explicit choice: stamping alone must not arm it.
+        var stamped = await EventSender.ResolveAsync(ctx.User, store, discussion, ctx.RequestAborted);
+        var source = stamped is not null && string.IsNullOrWhiteSpace(request.Source)
+            ? EventSender.DefaultSource : request.Source;
+        var replyTo = request.SenderAgentId is null ? null : request.ReplyToDiscussionId;
+
+        var result = await injector.InjectEventAsync(discussion, request.Content, request.Type, source,
+            request.SenderAgentId, replyTo, request.Metadata, UserId(ctx),
+            request.IdempotencyKey, ctx.RequestAborted, stamped);
 
         // A discussion created a moment ago is still getting its session. The event is queued
         // and the creation delivers it; wait a bounded while so the answer can say delivered.
@@ -195,6 +207,131 @@ public static class DiscussionEndpoints
 
         return EventResponse(result);
     }
+
+    private const int MaxCreationTitleLength = 200;
+
+    /// <summary>The source of a brief from a caller that isn't a signed Agent.</summary>
+    private const string BriefSource = "discussion-brief";
+
+    internal static async Task<IResult> CreateDiscussionAsync(CreateDiscussionRequest? createReq, HttpContext ctx,
+        DiscussionStore store, AgentDirectory agents, MessagePipeline pipeline, IPluginEvents events,
+        LiveEvents live, EventInjector injector)
+    {
+        var brief = string.IsNullOrWhiteSpace(createReq?.Brief) ? null : createReq.Brief;
+        var title = string.IsNullOrWhiteSpace(createReq?.Title) ? null : createReq.Title.Trim();
+        if (brief is not null && createReq?.DeferSession == true)
+            return Results.BadRequest(new
+            {
+                error = "brief_with_deferred_session",
+                message = "A brief needs a session to take it, and deferSession starts none. Drop one of them.",
+            });
+        if (title is { Length: > MaxCreationTitleLength })
+            return Results.BadRequest(new { error = "invalid_title", message = $"title must be at most {MaxCreationTitleLength} characters" });
+
+        var agentId = createReq?.AgentId ?? agents.NovaAgentId;
+        var type = createReq?.Type ?? "chat";
+
+        if (type is "live" or HeartbeatService.DiscussionType)
+        {
+            var existing = (await store.ListByTypeAsync(type, agentId, ctx.RequestAborted))
+                .Any(d => !DiscussionStatus.IsClosed(d.Status));
+            if (existing)
+                return Results.Json(new { error = $"A {type.ToUpperInvariant()} discussion already exists for this agent" }, statusCode: 409);
+        }
+
+        DiscussionRead discussion;
+        var created = true;
+        if (!string.IsNullOrWhiteSpace(createReq?.IdempotencyKey))
+        {
+            (discussion, created) = await store.GetOrCreateIdempotentAsync(
+                createReq.IdempotencyKey, agentId, UserId(ctx), type,
+                createReq.QualityTier, createReq.Provider, ctx.RequestAborted, title);
+        }
+        else
+        {
+            discussion = await store.CreateAsync(title, agentId, UserId(ctx), type,
+                createReq?.QualityTier, createReq?.Provider, ctx.RequestAborted);
+        }
+
+        // A reused key may name a discussion this caller can't touch, or one closed since.
+        if (!created && brief is not null)
+        {
+            if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+            if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
+        }
+
+        if (created)
+        {
+            await events.PublishAsync("discussion.created", new JsonObject
+            {
+                ["discussionId"] = discussion.Id,
+                ["agentId"] = discussion.AgentId,
+                ["status"] = discussion.Status,
+                ["type"] = discussion.Type,
+            });
+
+            if (discussion.Type != "live")
+                _ = live.PostAsync("discussion", $"New discussion: \"{discussion.Title ?? "untitled"}\"");
+        }
+        else if (brief is null)
+            return Results.Ok(DiscussionStore.ToInfo(discussion));
+
+        // Before the session starts, so its creation drains the brief. Keyed on the discussion: a
+        // retry after a crash anywhere in here finds the same record and the same admission key.
+        EventInjectionResult? briefResult = null;
+        if (brief is not null)
+        {
+            var stamped = await EventSender.ResolveAsync(ctx.User, store, discussion, ctx.RequestAborted);
+            briefResult = await injector.InjectEventAsync(discussion, brief, null,
+                stamped is not null ? EventSender.DefaultSource : BriefSource,
+                null, null, null, UserId(ctx), $"discussion-brief:{discussion.Id}", ctx.RequestAborted, stamped);
+        }
+
+        // Delivery discussions populated through nova-message do not need an
+        // empty provider session. Create it on the first user reply instead,
+        // when MessagePipeline can also replay the persisted assistant post.
+        if (createReq?.DeferSession != true)
+            pipeline.BeginSessionCreation(discussion,
+                NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
+
+        if (briefResult is null) return Results.Ok(DiscussionStore.ToInfo(discussion));
+
+        var info = JsonSerializer.SerializeToNode(DiscussionStore.ToInfo(discussion))!.AsObject();
+        info["brief"] = new JsonObject
+        {
+            ["delivery"] = briefResult.Delivery switch
+            {
+                EventDelivery.Delivered or EventDelivery.Reused => "delivered",
+                EventDelivery.Queued => "queued",
+                EventDelivery.Failed => "failed",
+                EventDelivery.Denied => "denied",
+                _ => "undeliverable",
+            },
+            ["messageUid"] = briefResult.MessageUid,
+        };
+        // The discussion exists either way, so a caller retrying under its key can recover it.
+        var status = briefResult.Delivery switch
+        {
+            EventDelivery.Delivered or EventDelivery.Reused or EventDelivery.Queued => StatusCodes.Status200OK,
+            EventDelivery.Failed => StatusCodes.Status502BadGateway,
+            EventDelivery.Denied => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status422UnprocessableEntity,
+        };
+        return Results.Json(info, statusCode: status);
+    }
+
+    /// <summary>
+    /// <c>/message</c> means a person talking: display text, images, delivery modes and queue
+    /// items have no meaning for a note, and quietly converting would keep the wrong call alive.
+    /// </summary>
+    internal static IResult? RefuseAgentMessage(HttpContext ctx, string discussionId)
+        => DiscussionAccessPolicy.ReadSignedActor(ctx.User) is { IsAgent: true }
+            ? Results.Json(new
+            {
+                error = "agent_must_post_event",
+                message = $"This route is a person talking, and you are an Agent. POST /api/apps/nova/discussions/{discussionId}/event with {{content}} instead: the server states who sent it. To start a new discussion in one call, POST /api/apps/nova/discussions with {{title, brief}}.",
+            }, statusCode: StatusCodes.Status409Conflict)
+            : null;
 
     internal static async Task<IResult> AttachWorktreeAsync(DiscussionRead discussion, AttachWorktreeRequest request,
         HttpContext ctx, DiscussionStore store, CodeWorktreeClient code, IEntityStore entities,
@@ -434,61 +571,14 @@ public static class DiscussionEndpoints
         })
             .WithSummary("Reconciles the status of the caller's open discussions with their RedCompute sessions and returns them. Sends nothing to the sessions.");
 
-        group.MapPost("/discussions", async (HttpContext ctx, DiscussionStore store, AgentDirectory agents, MessagePipeline pipeline, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, LiveEvents live) =>
+        group.MapPost("/discussions", async (HttpContext ctx, DiscussionStore store, AgentDirectory agents, MessagePipeline pipeline, [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events, LiveEvents live, EventInjector injector) =>
         {
             CreateDiscussionRequest? createReq = null;
             try { createReq = await ctx.Request.ReadFromJsonAsync<CreateDiscussionRequest>(JsonOptions); }
             catch { /* body is optional */ }
-
-            var agentId = createReq?.AgentId ?? agents.NovaAgentId;
-            var type = createReq?.Type ?? "chat";
-
-            if (type is "live" or HeartbeatService.DiscussionType)
-            {
-                var existing = (await store.ListByTypeAsync(type, agentId, ctx.RequestAborted))
-                    .Any(d => !DiscussionStatus.IsClosed(d.Status));
-                if (existing)
-                    return Results.Json(new { error = $"A {type.ToUpperInvariant()} discussion already exists for this agent" }, statusCode: 409);
-            }
-
-            DiscussionRead discussion;
-            var created = true;
-            if (!string.IsNullOrWhiteSpace(createReq?.IdempotencyKey))
-            {
-                (discussion, created) = await store.GetOrCreateIdempotentAsync(
-                    createReq.IdempotencyKey, agentId, UserId(ctx), type,
-                    createReq.QualityTier, createReq.Provider, ctx.RequestAborted);
-            }
-            else
-            {
-                discussion = await store.CreateAsync(null, agentId, UserId(ctx), type,
-                    createReq?.QualityTier, createReq?.Provider, ctx.RequestAborted);
-            }
-
-            if (!created)
-                return Results.Ok(DiscussionStore.ToInfo(discussion));
-
-            await events.PublishAsync("discussion.created", new JsonObject
-            {
-                ["discussionId"] = discussion.Id,
-                ["agentId"] = discussion.AgentId,
-                ["status"] = discussion.Status,
-                ["type"] = discussion.Type,
-            });
-
-            if (discussion.Type != "live")
-                _ = live.PostAsync("discussion", $"New discussion: \"{discussion.Title ?? "untitled"}\"");
-
-            // Delivery discussions populated through nova-message do not need an
-            // empty provider session. Create it on the first user reply instead,
-            // when MessagePipeline can also replay the persisted assistant post.
-            if (createReq?.DeferSession != true)
-                pipeline.BeginSessionCreation(discussion,
-                    NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
-
-            return Results.Ok(DiscussionStore.ToInfo(discussion));
+            return await CreateDiscussionAsync(createReq, ctx, store, agents, pipeline, events, live, injector);
         })
-            .WithSummary("Creates a discussion and starts its provider session. The body is optional (agentId, type, qualityTier, provider, deferSession, idempotencyKey); a second open live or heartbeat discussion for the same Agent returns 409.")
+            .WithSummary("Creates a discussion and starts its provider session, owned by the signed-in person or the calling Agent's beneficiary. The body is optional: agentId, type, qualityTier, provider, deferSession, idempotencyKey, title (kept: automatic titling won't overwrite it), brief (what it should do: posted as an event the new session takes, the server stating who sent it). brief with deferSession is a 400; a retry under idempotencyKey reuses the discussion and its brief. A second open live or heartbeat discussion for the same Agent returns 409.")
             .WithMetadata(new AcceptsMetadata([], typeof(CreateDiscussionRequest)));
 
         group.MapGet("/discussions/live", async (HttpContext ctx, DiscussionStore store) =>
@@ -979,6 +1069,7 @@ public static class DiscussionEndpoints
                                 timestamp = m.Timestamp.ToString("o"),
                                 senderAgentId = (string?)null,
                                 source = (string?)"session-transcript",
+                                stampedSender = (object?)null,
                             };
                         });
 
@@ -1001,6 +1092,7 @@ public static class DiscussionEndpoints
                             timestamp = m.CreatedAt.UtcDateTime.ToString("o"),
                             senderAgentId = (string?)null,
                             source = (string?)"user-message",
+                            stampedSender = (object?)null,
                         });
 
                     // Automation-created discussions exist before their RedCompute
@@ -1023,6 +1115,7 @@ public static class DiscussionEndpoints
                             timestamp = m.CreatedAt.UtcDateTime.ToString("o"),
                             senderAgentId = m.Metadata["sender_agent_id"]?.GetValue<string>(),
                             source = (string?)"nova-message",
+                            stampedSender = (object?)null,
                         });
 
                     var eventMsgs = records
@@ -1041,6 +1134,7 @@ public static class DiscussionEndpoints
                                 timestamp = ts.ToString("o"),
                                 senderAgentId = m.Metadata["sender_agent_id"]?.GetValue<string>(),
                                 source = m.Metadata["source"]?.GetValue<string>(),
+                                stampedSender = EventSender.Read(m.Metadata)?.ToDto(),
                             };
                         });
 
@@ -1715,7 +1809,7 @@ public static class DiscussionEndpoints
 
         group.MapPost("/discussions/{id}/event", (string id, DiscussionEventRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, EventInjector injector, MessagePipeline pipeline)
             => PostEventAsync(id, request, ctx, store, agents, injector, pipeline))
-            .WithSummary("Injects an event into a discussion and delivers it to its session. Body: content (required), optional type, source, senderAgentId, replyToDiscussionId, metadata, idempotencyKey. The id may be live for the current LIVE discussion.");
+            .WithSummary("Injects an event into a discussion and delivers it to its session; this is how an Agent writes to a discussion, its own included. For a signed Agent the server states the sender and sending discussion from the token and ignores senderAgentId in the body, and source defaults to agent-note. Body: content (required), optional type, source, senderAgentId, replyToDiscussionId (with senderAgentId, registers a reply callback), metadata, idempotencyKey. Never creates a session: to a discussion without one it answers 202 queued. The id may be live for the current LIVE discussion.");
 
         group.MapPost("/discussions/{id}/nova-message", async (string id, NovaMessageRequest request,
             HttpContext ctx, DiscussionStore store, ConversationUnread conversationUnread,
@@ -1853,6 +1947,7 @@ public static class DiscussionEndpoints
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
             if (DiscussionApplicationOwner.IsForeign(discussion)) return DiscussionApplicationOwner.Refusal(discussion);
             if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
+            if (RefuseAgentMessage(ctx, id) is { } refusal) return refusal;
 
             if (string.IsNullOrWhiteSpace(request.Content)
                 && (request.Images == null || request.Images.Length == 0)
@@ -1946,7 +2041,7 @@ public static class DiscussionEndpoints
                 item = outcome.Item,
             }, statusCode: outcome.Disposition == "delivered" ? 200 : 202);
         })
-            .WithSummary("Sends a user message into a discussion. It returns 200 when the provider accepted the turn, or 202 when it was queued behind a running turn. Body: content, or images or input (at least one); optional delivery, inputMethod, displayContent, messageUid. Use ask instead to wait for the reply.");
+            .WithSummary("Sends a person's message into a discussion. It returns 200 when the provider accepted the turn, or 202 when it was queued behind a running turn. Body: content, or images or input (at least one); optional delivery, inputMethod, displayContent, messageUid. A signed Agent gets 409 agent_must_post_event: it posts to the event route instead. Use ask instead to wait for the reply.");
 
         // Discussion-scoped facade over RedCompute's canonical durable queue. The
         // browser never needs to discover or retain the backing session id, while
@@ -2669,7 +2764,8 @@ public static class DiscussionEndpoints
                         : MapParts(message.Metadata["parts_json"]?.GetValue<string>(), message.Content),
                     timestamp.UtcDateTime.ToString("o"),
                     message.Metadata["sender_agent_id"]?.GetValue<string>(),
-                    source);
+                    source,
+                    EventSender.Read(message.Metadata)?.ToDto());
             })
             .ToArray();
     }

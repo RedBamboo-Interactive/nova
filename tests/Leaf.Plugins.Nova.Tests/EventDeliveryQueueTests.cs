@@ -15,7 +15,7 @@ namespace Leaf.Plugins.Nova.Tests;
 /// exactly once, in order with its other inputs, also when the session is still being created,
 /// deferred, or was interrupted by a restart.
 /// </summary>
-public sealed class EventDeliveryQueueTests
+public sealed partial class EventDeliveryQueueTests
 {
     [Fact]
     public async Task A_person_typing_and_an_event_in_the_same_discussion_do_not_look_alike()
@@ -463,6 +463,10 @@ public sealed class EventDeliveryQueueTests
         public DiscussionStore Discussions { get; }
         public EventInjector Injector { get; }
         public MessagePipeline Pipeline { get; }
+        public AgentDirectory Agents => agents;
+        public LiveEvents Live { get; }
+        public IPluginEvents Events { get; }
+        public List<(string Name, JsonObject? Data)> Published { get; } = [];
         public LeafEntity Entity => Store.Get(Store.DiscussionId);
 
         public World(string? sessionId, string type = "chat")
@@ -476,7 +480,15 @@ public sealed class EventDeliveryQueueTests
             ownsScratch = sharedScratch is null;
             scratch = sharedScratch ?? Path.Combine(Path.GetTempPath(), $"nova-event-queue-test-{Guid.NewGuid():N}");
             Directory.CreateDirectory(scratch);
-            var events = CallbackDeliveryTests.Proxy.Create<IPluginEvents>((method, _) => method == "Subscribe" ? new Noop() : Task.CompletedTask);
+            stream.CreateDiscussion = store.CreateDiscussion;
+            var events = CallbackDeliveryTests.Proxy.Create<IPluginEvents>((method, args) =>
+            {
+                if (method == "Subscribe") return new Noop();
+                if (method == "PublishAsync" && args?[0] is string name)
+                    lock (Published) Published.Add((name, args[1] as JsonObject));
+                return Task.CompletedTask;
+            });
+            Events = events;
             agents = new AgentDirectory(store, events) { NovaAgentId = store.AgentId.ToString() };
             var client = new RedComputeClient(gateway);
             Discussions = new DiscussionStore(store, stream);
@@ -493,7 +505,7 @@ public sealed class EventDeliveryQueueTests
             });
             Pipeline = new MessagePipeline(Discussions, stream, store, null!, client, agents,
                 new AgentWorkspaces(agents, new NoWorkspace()), new Scratch(scratch),
-                new ExtensionContributions(extensions, new LiveEvents(Discussions, Injector, agents)),
+                new ExtensionContributions(extensions, Live = new LiveEvents(Discussions, Injector, agents)),
                 unread, NullLogger<MessagePipeline>.Instance, eventInjector: Injector);
         }
 
@@ -578,6 +590,17 @@ public sealed class EventDeliveryQueueTests
 
         public LeafEntity Get(Guid id) { lock (entities) return entities.Single(e => e.Id == id); }
 
+        public LeafEntity CreateDiscussion(string? title, string? agent, JsonObject? data)
+        {
+            var values = data ?? new JsonObject();
+            values["agent"] = agent;
+            values["status"] ??= "idle";
+            var entity = New("discussion", DiscussionStore.Slug(values["discussion_id"]!.GetValue<string>()), values)
+                with { Name = title ?? $"Discussion {values["discussion_id"]}" };
+            lock (entities) entities.Add(entity);
+            return entity;
+        }
+
         public void SetSession(string sessionId) => PatchAsync(DiscussionId, new JsonObject { ["session_id"] = sessionId }).Wait();
 
         public Task<LeafEntity?> GetAsync(Guid id, CancellationToken ct = default)
@@ -641,7 +664,9 @@ public sealed class EventDeliveryQueueTests
 
         public Task<IReadOnlyList<LeafRecord>> GetReactionsAsync(Guid discussionId, DateTimeOffset? since = null, int limit = 1000, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<LeafRecord>>([]);
-        public Task<LeafEntity> CreateAsync(string? title, string? agentSlugOrId = null, JsonObject? data = null, CancellationToken ct = default) => throw new NotSupportedException();
+        public Func<string?, string?, JsonObject?, LeafEntity>? CreateDiscussion { get; set; }
+        public Task<LeafEntity> CreateAsync(string? title, string? agentSlugOrId = null, JsonObject? data = null, CancellationToken ct = default)
+            => Task.FromResult((CreateDiscussion ?? throw new NotSupportedException())(title, agentSlugOrId, data));
         public Task<IReadOnlyList<DiscussionMessage>> SearchMessagesAsync(string query, int limit = 1000, CancellationToken ct = default) => throw new NotSupportedException();
         public Task ClearMessagesAsync(Guid discussionId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task SetReactionAsync(Guid discussionId, ReactionChange change, CancellationToken ct = default) => throw new NotSupportedException();
@@ -665,9 +690,11 @@ public sealed class EventDeliveryQueueTests
         public List<(string Session, string? Key)> Attempts { get; } = [];
         private readonly List<(string Path, string? Cause)> causes = [];
         public string? CauseOf(string path) { lock (causes) return causes.Single(c => c.Path == path).Cause; }
+        public string[] Paths { get { lock (causes) return causes.Select(c => c.Path).ToArray(); } }
         public string? LastMessageCause { get { lock (causes) return causes.Last(c => c.Path.EndsWith("/message")).Cause; } }
 
-        public sealed record Admitted(string Session, string Text, string? MessageUid, string? Key);
+        public sealed record Admitted(string Session, string Text, string? MessageUid, string? Key,
+            string? Content = null, string? Metadata = null);
 
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
@@ -687,7 +714,7 @@ public sealed class EventDeliveryQueueTests
                 var key = request.Headers.TryGetValues("X-Idempotency-Key", out var values) ? values.Single() : null;
                 var raw = await request.Content!.ReadAsStringAsync(ct);
                 using var body = JsonDocument.Parse(raw);
-                var content = body.RootElement.GetProperty("content").GetString()!;
+                var content = body.RootElement.TryGetProperty("content", out var sentText) ? sentText.GetString()! : "";
                 var isEvent = content.StartsWith("<nova-event", StringComparison.Ordinal);
                 var text = isEvent ? content.Split('\n')[1] : content;
                 var uid = body.RootElement.TryGetProperty("messageUid", out var u) && u.ValueKind == JsonValueKind.String ? u.GetString() : null;
@@ -708,7 +735,8 @@ public sealed class EventDeliveryQueueTests
                         else
                         {
                             if (key is not null) admittedKeys.Add(key, raw);
-                            Messages.Add(new(session, text, uid, key));
+                            Messages.Add(new(session, text, uid, key, content,
+                                body.RootElement.TryGetProperty("metadata", out var sent) ? sent.GetRawText() : null));
                         }
                     }
                     if (fail) throw new HttpRequestException("Simulated lost acknowledgement");

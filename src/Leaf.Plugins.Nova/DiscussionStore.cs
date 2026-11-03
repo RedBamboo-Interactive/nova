@@ -476,7 +476,8 @@ public sealed class DiscussionStore(
 
     public async Task<(DiscussionRead Discussion, bool Created)> GetOrCreateIdempotentAsync(
         string idempotencyKey, string? agentId, string? ownerId, string type = "chat",
-        string? qualityTier = null, string? provider = null, CancellationToken ct = default)
+        string? qualityTier = null, string? provider = null, CancellationToken ct = default,
+        string? title = null)
     {
         var existing = await entities.QueryAsync(new EntityQuery
         {
@@ -505,7 +506,9 @@ public sealed class DiscussionStore(
         };
         if (qualityTier != null) data["quality_tier"] = qualityTier;
         if (provider != null) data["provider"] = provider;
-        var entity = await discussions.CreateAsync(null, agentId, data, ct);
+        if (!string.IsNullOrWhiteSpace(title))
+            data["title_source"] = DiscussionTitleSource.System;
+        var entity = await discussions.CreateAsync(title, agentId, data, ct);
         return (Map(entity)!, true);
     }
 

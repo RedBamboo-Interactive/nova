@@ -21,7 +21,7 @@ public static class AskEndpoints
 {
     public static void Map(RouteGroupBuilder group)
     {
-        group.MapPost("/ask", async (AskRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, MessagePipeline pipeline, RedComputeClient redCompute) =>
+        group.MapPost("/ask", async (AskRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, MessagePipeline pipeline, RedComputeClient redCompute, EventInjector injector) =>
         {
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "'content' is required", code = "missing_content" });
@@ -54,11 +54,17 @@ public static class AskEndpoints
                 baseline = pre?.Messages.Count ?? 0;
             }
 
-            var outcome = await pipeline.SendAsync(
-                discussion, userId, request.Content, images: null,
-                device: new ResolvedDevice { Name = "API", Type = "api", Platform = "api" }, input: "api",
-                humanInitiated: DiscussionAccessPolicy.IsHumanInitiated(ctx.User),
-                cause: NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
+            // An Agent instance asking is a note, not a person talking. It still needs its answer, so
+            // unlike /event this asks for a session; only the way the words arrive differs.
+            var outcome = AsksAsNote(ctx.User)
+                && await EventSender.ResolveAsync(ctx.User, store, discussion, ctx.RequestAborted) is { } sender
+                ? await AskAsNoteAsync(discussion, request.Content, sender, userId, timeout,
+                    NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId), store, pipeline, injector, ctx.RequestAborted)
+                : await pipeline.SendAsync(
+                    discussion, userId, request.Content, images: null,
+                    device: new ResolvedDevice { Name = "API", Type = "api", Platform = "api" }, input: "api",
+                    humanInitiated: DiscussionAccessPolicy.IsHumanInitiated(ctx.User),
+                    cause: NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
 
             if (!outcome.Success)
                 return Results.Json(new { error = outcome.ErrorMessage ?? "RedCompute is unavailable", code = outcome.ErrorCode ?? "redcompute_unavailable" }, statusCode: 502);
@@ -96,7 +102,49 @@ public static class AskEndpoints
                 $"poll GET /ai-session/sessions/{sessionId} or ask again with discussionId '{discussion.Id}'.",
                 discussion.Id, sessionId);
         })
-            .WithSummary("Sends content to Nova and waits for the reply, returning it in one response. Body: content (required), discussionId (omit to start a new discussion), timeoutSeconds (10 to 300, default 60); on timeout it returns ok false with the ids to follow up.");
+            .WithSummary("Sends content to Nova and waits for the reply, returning it in one response. Body: content (required), discussionId (omit to start a new discussion), timeoutSeconds (10 to 300, default 60); on timeout it returns ok false with the ids to follow up. From an Agent writing out of a discussion it arrives as a note the server attributes to that Agent, not as a person's message.");
+    }
+
+    /// <summary>
+    /// An Agent instance writes out of a discussion. A Flow node run for an Agent has no discussion
+    /// in its identity: its message is the turn's prompt and still needs Nova's context, so it stays
+    /// an ordinary send.
+    /// </summary>
+    internal static bool AsksAsNote(ClaimsPrincipal principal)
+        => DiscussionAccessPolicy.ReadSignedActor(principal) is { IsAgent: true, DiscussionId: not null };
+
+    internal static async Task<SendMessageOutcome> AskAsNoteAsync(
+        DiscussionRead discussion, string content, EventSender sender, string? userId, int timeoutSeconds,
+        string? cause, DiscussionStore store, MessagePipeline pipeline, EventInjector injector, CancellationToken ct)
+    {
+        if (DiscussionMutationPolicy.RejectSend(discussion))
+            return new(false, discussion.SessionId, "closed", "Archived discussions are read-only.");
+        if (DiscussionApplicationOwner.IsForeign(discussion))
+            return new(false, discussion.SessionId, DiscussionApplicationOwner.ErrorCode,
+                DiscussionApplicationOwner.Message(discussion));
+
+        var result = await injector.InjectEventAsync(discussion, content, null, EventSender.DefaultSource,
+            null, null, null, userId, null, ct, sender);
+
+        // Started after the note is queued, so its creation drains the note.
+        if (discussion.SessionId is null) pipeline.BeginSessionCreation(discussion, cause);
+        if (result.Delivery == EventDelivery.Queued && result.MessageUid is { } uid)
+        {
+            if (pipeline.PendingSessionCreation(discussion.Id) is { } creation)
+            {
+                try { await creation.WaitAsync(TimeSpan.FromSeconds(timeoutSeconds), ct); }
+                catch (TimeoutException) { }
+            }
+            await injector.DeliverPendingAsync(discussion.EntityId, ct);
+            result = await injector.QueuedStateAsync(discussion.EntityId, uid, ct);
+        }
+
+        if (result.Delivery is not (EventDelivery.Delivered or EventDelivery.Reused))
+            return new(false, discussion.SessionId, result.ErrorCode ?? "event_delivery_failed",
+                result.ErrorMessage ?? "The AI session did not take the note.");
+
+        var current = await store.GetAsync(discussion.EntityId, ct);
+        return new(true, current?.SessionId ?? discussion.SessionId, null, null, MessageUid: result.MessageUid);
     }
 
     /// <summary>200 response with the error envelope plus the ids needed to follow up.</summary>

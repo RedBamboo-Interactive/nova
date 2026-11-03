@@ -120,10 +120,10 @@ public static class DiscussionAccessPolicy
     /// </summary>
     public static SignedActor? ReadSignedActor(ClaimsPrincipal principal)
         => IsExecution(principal) && TryReadExecution(principal, out var execution) && execution is not null
-            ? new SignedActor(execution.ActorKind, execution.ActorId, execution.ActorName)
+            ? new SignedActor(execution.ActorKind, execution.ActorId, execution.ActorName, execution.DiscussionId)
             : null;
 
-    public sealed record SignedActor(string Kind, string Id, string? Name)
+    public sealed record SignedActor(string Kind, string Id, string? Name, string? DiscussionId = null)
     {
         public bool IsAgent => Kind.Equals("agent", StringComparison.OrdinalIgnoreCase);
     }
@@ -192,11 +192,18 @@ public static class DiscussionAccessPolicy
                         .ToList()
                     : [];
             var hasNovaBrowserContext = browserRoutes.Any(IsNovaRoute);
+            var discussionId = contexts.ValueKind == JsonValueKind.Array
+                ? contexts.EnumerateArray()
+                    .Where(item => string.Equals(String(item, "kind"), "discussion",
+                        StringComparison.OrdinalIgnoreCase))
+                    .Select(item => String(item, "id"))
+                    .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id))
+                : null;
             execution = new ParsedExecution(
                 appId, actorKind, actorStableId, actorId,
                 beneficiaryKind, beneficiaryId, hasNovaBrowserContext,
                 String(root, "parentExecutionId"), browserRoutes.Count > 0,
-                String(actor, "name"));
+                String(actor, "name"), discussionId);
             return true;
         }
         catch (JsonException)
@@ -225,5 +232,6 @@ public static class DiscussionAccessPolicy
         bool HasNovaBrowserContext,
         string? ParentExecutionId,
         bool HasBrowserContext,
-        string? ActorName = null);
+        string? ActorName = null,
+        string? DiscussionId = null);
 }

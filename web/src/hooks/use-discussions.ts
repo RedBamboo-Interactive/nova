@@ -6,6 +6,7 @@ import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock,
 import { canonicalUserMessageUids, DeferredInvalidationCoordinator, DurableTranscriptPager, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, markEventFrameSources, orderMessages, withCurrentEventPresentation } from "../lib/message-order"
+import { readNoteSender } from "../lib/agent-note"
 import { accumulateHistoryOverlays, coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeNovaMessageArrival, mergePagedDiscussionRecordsAndOverlays } from "../lib/discussion-transcript"
 import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch, sendNeedsExplicitResume, sessionStreamEffects, shouldRequestSessionTitleSync } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
@@ -179,6 +180,7 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
     if (m.source) metadata.source = m.source
     if (m.messageUid) metadata.messageUid = m.messageUid
     if (eventData) metadata.eventData = eventData
+    if (m.stampedSender) metadata.stampedSender = m.stampedSender
     return {
       id: m.messageUid ?? m.id,
       role: m.role,
@@ -1749,7 +1751,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       loadedRef.current.delete(discussionId)
       void catchUpMessages(discussionId)
     } else if (event.type === "discussion.event") {
-      const { discussionId, content, source, senderAgentId, messageUid, metadata, timestamp: serverTs } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; messageUid?: string | null; metadata?: Record<string, unknown> | null; timestamp?: string }
+      const { discussionId, content, source, senderAgentId, stampedSender, messageUid, metadata, timestamp: serverTs } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; stampedSender?: DiscussionMessage["stampedSender"]; messageUid?: string | null; metadata?: Record<string, unknown> | null; timestamp?: string }
       if (!discussionId) return
       const ts = serverTs ?? new Date().toISOString()
       if (messageUid && shouldAccumulatePushedHistoryOverlay(
@@ -1767,6 +1769,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           timestamp: ts,
           senderAgentId,
           source: sourceTag,
+          stampedSender,
         }
         const overlays = accumulateHistoryOverlays(
           historyOverlaysRef.current.get(discussionId) ?? new Map(),
@@ -1784,6 +1787,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           data: metadata ?? null,
           timestamp: ts,
           senderAgentId,
+          stampedSender: readNoteSender(stampedSender),
         }, eventResolver),
       }))
     } else if (event.type === "discussion.nova-message") {

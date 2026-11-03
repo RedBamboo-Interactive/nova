@@ -56,12 +56,31 @@ export interface NoteRowFields {
   text: string
 }
 
+/** Who wrote an event, as the server stated it from the caller's signed identity. */
+export interface NoteSender {
+  agentId: string
+  discussionId?: string | null
+  title?: string | null
+}
+
+/** A sender read off the wire or a record's metadata; anything else is no sender at all. */
+export function readNoteSender(value: unknown): NoteSender | undefined {
+  if (!value || typeof value !== "object") return undefined
+  const { agentId, discussionId, title } = value as Record<string, unknown>
+  if (typeof agentId !== "string" || !agentId) return undefined
+  return {
+    agentId,
+    discussionId: typeof discussionId === "string" && discussionId ? discussionId : null,
+    title: typeof title === "string" && title ? title : null,
+  }
+}
+
 export interface NoteClassificationInput {
   /** Stored source, with or without the `event:` prefix. Server-held, never read from text. */
   source: string
   text: string
-  senderAgentId?: string | null
-  senderDiscussionId?: string | null
+  /** Only ever the server's statement. A `senderAgentId` a caller typed in a body isn't one. */
+  sender?: NoteSender | null
   /** The source is a registered machine type (authored or built in). */
   registered: boolean
 }
@@ -82,21 +101,21 @@ function leadFields(text: string): { from: string | null; topic: string | null; 
  * makes one: the `[internal]` lead only confirms what the stored source or
  * sender already says, so a forged lead on any other source changes nothing.
  *
- * - A structured sender is a note unless its source is a registered machine type.
+ * - A server-stated sender is a note unless its source is a registered machine type,
+ *   and only that statement says where it came from: its text can't name another origin.
  * - `<agent>-<8hex>` names both sender and discussion; the lead confirms it.
  * - A bare `<8hex>` names only the discussion; the Agent is resolved at render.
  * - `discussion:<8hex>` is the registered activity type unless the lead's own
  *   `From <id>` names that same discussion.
  */
-export function classifyNote({ source, text, senderAgentId, senderDiscussionId, registered }: NoteClassificationInput): NoteRowFields | null {
+export function classifyNote({ source, text, sender, registered }: NoteClassificationInput): NoteRowFields | null {
   const bare = source.replace(/^event:/, "")
   const lead = leadFields(text)
-  if (senderAgentId) {
-    if (registered) return null
+  if (sender && !registered) {
     return {
-      agent: senderAgentId,
-      discussionId: senderDiscussionId ?? parseAgentNoteSource(bare)?.discussionId ?? lead.from,
-      topic: lead.topic,
+      agent: sender.agentId,
+      discussionId: sender.discussionId ?? null,
+      topic: sender.title ?? null,
       text: lead.body,
     }
   }
@@ -104,15 +123,16 @@ export function classifyNote({ source, text, senderAgentId, senderDiscussionId, 
   const fromActivity = DISCUSSION_SOURCE.exec(bare)
   if (fromActivity) {
     const discussionId = fromActivity[1]!.toLowerCase()
-    return lead.from === discussionId
-      ? { agent: null, discussionId, topic: lead.topic, text: lead.body }
-      : null
+    if (lead.from !== discussionId) return null
+    return sender
+      ? { agent: sender.agentId, discussionId: sender.discussionId ?? null, topic: sender.title ?? null, text: lead.body }
+      : { agent: null, discussionId, topic: lead.topic, text: lead.body }
   }
   if (registered) return null
   if (BARE_DISCUSSION.test(bare))
     return { agent: null, discussionId: bare.toLowerCase(), topic: lead.topic, text: lead.body }
-  const sender = parseAgentNoteSource(bare)
-  return sender ? { ...sender, topic: lead.topic, text: lead.body } : null
+  const named = parseAgentNoteSource(bare)
+  return named ? { ...named, topic: lead.topic, text: lead.body } : null
 }
 
 /** Display text for a machine event: the `[internal]` marker is for the model. */

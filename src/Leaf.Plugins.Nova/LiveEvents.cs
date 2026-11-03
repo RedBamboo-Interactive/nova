@@ -76,11 +76,12 @@ public sealed class EventInjector(
     public Task<EventInjectionResult> InjectEventAsync(
         DiscussionRead discussion, string content, string? type, string? source,
         string? senderAgentId, string? replyToDiscussionId, JsonElement? metadata, string? userId,
-        string? requestIdempotencyKey, CancellationToken ct = default)
+        string? requestIdempotencyKey, CancellationToken ct = default, EventSender? stamped = null)
     {
         var key = requestIdempotencyKey is null ? null : $"event-request:{requestIdempotencyKey}";
         return InjectCoreAsync(discussion, content, type, source, senderAgentId, replyToDiscussionId,
-            metadata, userId, key, redeliverOnReuse: key is not null, ct, key, null, keyByUid: true);
+            metadata, userId, key, redeliverOnReuse: key is not null, ct, key, null, keyByUid: true,
+            stamped: stamped);
     }
 
     /// <summary>
@@ -116,8 +117,10 @@ public sealed class EventInjector(
         string? senderAgentId, string? replyToDiscussionId, JsonElement? metadata, string? userId,
         string? idempotencyKey, bool redeliverOnReuse, CancellationToken ct,
         string? deliveryIdempotencyKey, PluginLiveEventRecipient? recipient,
-        bool requireOpen = false, bool framed = false, bool keyByUid = false)
+        bool requireOpen = false, bool framed = false, bool keyByUid = false, EventSender? stamped = null)
     {
+        // The signed sender replaces whatever the caller said about itself.
+        if (stamped is not null) senderAgentId = stamped.AgentId;
         var role = type is "assistant" or "system" ? type : "user";
         var sourceTag = $"event:{source ?? "automation"}";
 
@@ -191,14 +194,16 @@ public sealed class EventInjector(
             // entry without a record, which a drain discards; the caller never saw a success.
             if (role != "system")
                 decision = await EnqueueIfWaitingAsync(discussion.EntityId, QueueEntry(uid), ct);
-            await discussions.PostAsync(discussion.EntityId, role, content, new JsonObject
+            var record = new JsonObject
             {
                 ["parts_json"] = partsJson,
                 ["source"] = sourceTag,
                 ["sender_agent_id"] = senderAgentId,
                 ["uid"] = uid,
                 ["idempotency_key"] = idempotencyKey,
-            }, userId, ct);
+            };
+            stamped?.WriteTo(record);
+            await discussions.PostAsync(discussion.EntityId, role, content, record, userId, ct);
             return true;
         }, ct);
         if (admissionDenied) return new(EventDelivery.Denied, null);
@@ -215,6 +220,9 @@ public sealed class EventInjector(
         {
             content = stored.Content;
             uid = StoredUid(stored) ?? uid;
+            // So is who sent it: a title changed since must not alter the frame this key admitted.
+            stamped = EventSender.Read(stored.Metadata);
+            senderAgentId = stored.Metadata["sender_agent_id"]?.GetValue<string>() ?? senderAgentId;
         }
 
         // Scoped projections always invalidate for authoritative retrieval, even
@@ -222,7 +230,7 @@ public sealed class EventInjector(
         // Do not mirror that summary/evidence link into the public plugin bus.
         if (persisted)
             await PublishEventAsync(discussion, discussion.Confidential || recipient is not null,
-                uid, content, source, senderAgentId, metadata, ct);
+                uid, content, source, senderAgentId, metadata, ct, stamped);
 
         if (role == "system") return new(EventDelivery.Recorded, uid);
 
@@ -248,14 +256,14 @@ public sealed class EventInjector(
         // Retried callback delivery uses the existing durable admission contract.
         // Other event callers (including heartbeat redelivery) keep their policy.
         var forwarded = await ForwardAsync(discussion with { SessionId = sessionId }, sessionId, content, uid,
-            source, senderAgentId, replyToDiscussionId, framed, admissionKey, ct);
+            source, senderAgentId, replyToDiscussionId, framed, admissionKey, ct, stamped);
         if (forwarded.Success) return new(EventDelivery.Delivered, uid);
         return new(IsPermanentRefusal(forwarded.StatusCode) ? EventDelivery.Undeliverable : EventDelivery.Failed,
             uid, forwarded.ErrorCode ?? "event_delivery_failed", forwarded.ErrorMessage);
     }
 
     private Task PublishEventAsync(DiscussionRead discussion, bool changedOnly, string uid, string content,
-        string? source, string? senderAgentId, JsonElement? metadata, CancellationToken ct)
+        string? source, string? senderAgentId, JsonElement? metadata, CancellationToken ct, EventSender? stamped = null)
     {
         var timestamp = DateTimeOffset.UtcNow.ToString("O");
         return changedOnly
@@ -273,6 +281,7 @@ public sealed class EventInjector(
                 ["content"] = content,
                 ["source"] = source ?? "automation",
                 ["senderAgentId"] = senderAgentId,
+                ["stampedSender"] = stamped is null ? null : JsonSerializer.SerializeToNode(stamped.ToDto()),
                 ["metadata"] = metadata is { } m ? JsonNode.Parse(m.GetRawText()) : null,
                 ["timestamp"] = timestamp,
             }, ct);
@@ -285,7 +294,7 @@ public sealed class EventInjector(
     private async Task<RedComputeClient.SendMessageResult> ForwardAsync(
         DiscussionRead discussion, string sessionId, string content, string uid, string? source,
         string? senderAgentId, string? replyToDiscussionId, bool framed, string? admissionKey,
-        CancellationToken ct)
+        CancellationToken ct, EventSender? stamped = null)
     {
         discussion = await conversationUnread.EnsureBaselineAsync(discussion, ct);
 
@@ -311,14 +320,18 @@ public sealed class EventInjector(
             // inside it made inert, so an agent reply, automation output or posted event cannot
             // close this frame or open a forged one. Content is never trusted for how it starts:
             // text opening with "<nova-event" is framed and neutralized like any other.
+            var senderName = senderAgentId is null ? null : await agents.GetAgentNameAsync(senderAgentId, ct);
             var taggedContent = framed
                 ? content
-                : $"<nova-event source=\"{NovaEventText.AttributeText(source ?? "automation")}\">\n{NovaEventText.Neutralize(content)}\n</nova-event>";
+                : $"<nova-event source=\"{NovaEventText.AttributeText(source ?? "automation")}\"{stamped?.FrameAttributes(senderName)}>\n{NovaEventText.Neutralize(content)}\n</nova-event>";
 
             // The transcript copy carries the same uid as the stream record —
             // one logical event, one identity.
+            // `novaEvent` tells a client this record's frame came from here, not from text someone
+            // typed: this is the only place that writes it (see NovaEventMarkerTests). A person's
+            // send carries Nova's or the transport's own admission metadata instead.
             object messageBody = senderAgentId is not null
-                ? new { content = taggedContent, messageUid = uid, metadata = new { senderAgentId, senderName = await agents.GetAgentNameAsync(senderAgentId, ct) } }
+                ? new { content = taggedContent, messageUid = uid, metadata = new { novaEvent = true, senderAgentId, senderName } }
                 : new { content = taggedContent, messageUid = uid };
             var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
             if (agent == null)
@@ -503,7 +516,7 @@ public sealed class EventInjector(
                         ? tag["event:".Length..] : null;
                     var result = await ForwardAsync(current, sessionId, record.Content, entry.Uid, source,
                         record.Metadata["sender_agent_id"]?.GetValue<string>(), entry.ReplyToDiscussionId,
-                        entry.Framed, entry.AdmissionKey, ct);
+                        entry.Framed, entry.AdmissionKey, ct, EventSender.Read(record.Metadata));
                     var error = result.ErrorCode ?? $"http_{result.StatusCode}";
                     // A conflict on this event's own key means RedCompute already holds it.
                     if (result.Success || result.ErrorCode == "idempotency_conflict")

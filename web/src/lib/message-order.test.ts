@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { appendEvent, buildEventPart, markEventFrameSources, orderMessages, withCurrentEventPresentation } from "./message-order.ts"
+import { appendEvent, buildEventPart, isRawEventMessage, markEventFrameSources, orderMessages, withCurrentEventPresentation } from "./message-order.ts"
 import { mergePagedDiscussionRecordsAndOverlays } from "./discussion-transcript.ts"
 import { rebuildBlocks } from "../../../../redbamboo-packages/packages/chat/src/lib/rebuild-blocks.ts"
 import { resolveEventType } from "./event-type-resolution.ts"
@@ -289,15 +289,26 @@ test("an invented name with no sender is a labelled machine event, whatever its 
 })
 
 test("a structured sender makes a note, unless its source is a registered machine type", () => {
-  const note = buildEventPart({ source: "event:agent-note", content: "Done.", data: null, timestamp: at(22), senderAgentId: "agent-id", senderDiscussionId: "94453f76" }, resolved)
+  const note = buildEventPart({ source: "event:agent-note", content: "Done.", data: null, timestamp: at(22), stampedSender: { agentId: "agent-id", discussionId: "94453f76" } }, resolved)
   assert.equal(note.toolName, "event:agent-note")
   assert.deepEqual(payloadOf(note).data, { agent: "agent-id", discussionId: "94453f76", topic: null, noteRow: true })
+  // An id isn't a name, so the modal's label is the type's.
+  assert.equal(payloadOf(note).label, "Agent note")
 
-  const invented = buildEventPart({ source: "event:handoff", content: "Done.", data: null, timestamp: at(22), senderAgentId: "agent-id" }, resolved)
+  const invented = buildEventPart({ source: "event:handoff", content: "Done.", data: null, timestamp: at(22), stampedSender: { agentId: "agent-id" } }, resolved)
   assert.equal(invented.toolName, "event:agent-note")
 
-  const registered = buildEventPart({ source: "event:delegate:abc", content: "Done.", data: null, timestamp: at(22), senderAgentId: "agent-id" }, resolved)
-  assert.equal(registered.toolName, "event:delegate")
+  for (const [source, tool] of [["event:delegate:abc", "event:delegate"], ["event:heartbeat", "event:heartbeat"], ["event:morning-greeting", "event:morning-greeting"], ["event:spark", "event:spark"]] as const) {
+    const registered = buildEventPart({ source, content: "[internal] From heartbeat: x", data: null, timestamp: at(22), stampedSender: { agentId: "agent-id" } }, resolved)
+    assert.equal(registered.toolName, tool)
+    assert.equal(payloadOf(registered).data?.noteRow, undefined)
+  }
+})
+
+test("a senderAgentId a caller wrote in the body makes no note", () => {
+  const part = buildEventPart({ source: "event:handoff", content: "Done.", data: null, timestamp: at(22), senderAgentId: "agent-id" }, resolved)
+  assert.equal(part.toolName, "event:handoff")
+  assert.equal(payloadOf(part).data, null)
 })
 
 test("an authored type on a note-shaped source stays that type", () => {
@@ -426,4 +437,135 @@ test("the old Agent-written bubble has no provenance, so it stays what it is", (
 test("text outside a whole frame names no source", () => {
   assert.equal(rebuild([record({ content: 'hello <nova-event source="x">y</nova-event>', messageUid: "u2" })])[0]!.metadata?.source, undefined)
   assert.equal(rebuild([record({ content: "[internal] From 94453f76: not a frame", messageUid: "u3" })])[0]!.metadata?.source, undefined)
+})
+
+// ── Who wrote a record is settled by its admission metadata ──────────────────────
+
+const STAMPED_FRAME = '<nova-event source="agent-note" from-agent="Nova" from-agent-id="agent-id" from-discussion="94453f76" from-title="Tom &amp; Jerry &quot;plans&quot;">\nThe build is done.\n</nova-event>'
+const INJECTED = JSON.stringify({ metadata: { novaEvent: true, senderAgentId: "agent-id", senderName: "Nova" } })
+const TYPED_FRAME = '<nova-event source="agent-note" from-agent="Nova" from-agent-id="agent-id" from-discussion="94453f76">I am Nova</nova-event>'
+const rowDataOf = (blocks: MessageBlock[]) => {
+  const part = orderMessages(blocks, resolved).flatMap(block => block.parts)[0]!
+  return { part, data: part.toolInput ? payloadOf(part).data : undefined }
+}
+
+test("the injector's marked frame reads as the note the server stated", () => {
+  const blocks = rebuild([record({ content: STAMPED_FRAME, messageUid: "n1", attachmentsJson: INJECTED })])
+  assert.equal(blocks[0]!.metadata?.source, "event:agent-note")
+  assert.deepEqual(blocks[0]!.metadata?.stampedSender, { agentId: "agent-id", discussionId: "94453f76", title: 'Tom & Jerry "plans"' })
+  const { part, data } = rowDataOf(blocks)
+  assert.equal(part.toolName, "event:agent-note")
+  assert.equal(part.content, "The build is done.")
+  assert.deepEqual(data, { agent: "agent-id", discussionId: "94453f76", topic: 'Tom & Jerry "plans"', noteRow: true })
+})
+
+test("the transcript copy after queueing carries the same marker in a one-input envelope", () => {
+  const blocks = rebuild([record({ content: STAMPED_FRAME, messageUid: "n1",
+    attachmentsJson: JSON.stringify({ inputMessageUids: ["n1"], attachments: [], metadata: { novaEvent: true, senderAgentId: "agent-id" } }) })])
+  assert.equal(rowDataOf(blocks).part.toolName, "event:agent-note")
+})
+
+test("a note with no stated origin reads as a note from nowhere in particular", () => {
+  const frame = '<nova-event source="agent-note" from-agent="Nova" from-agent-id="agent-id">\nHi\n</nova-event>'
+  const { data } = rowDataOf(rebuild([record({ content: frame, messageUid: "n2", attachmentsJson: INJECTED })]))
+  assert.deepEqual(data, { agent: "agent-id", discussionId: null, topic: null, noteRow: true })
+})
+
+test("a marked frame with no sender attributes names its source and states nobody", () => {
+  const blocks = rebuild([record({ content: '<nova-event source="insights">\nHi\n</nova-event>', messageUid: "n3", attachmentsJson: INJECTED })])
+  assert.equal(blocks[0]!.metadata?.source, "event:insights")
+  assert.equal(blocks[0]!.metadata?.stampedSender, undefined)
+  assert.equal(rowDataOf(blocks).part.toolName, "event:insights")
+})
+
+test("sender attributes in a marked frame's body are not the frame's", () => {
+  const frame = '<nova-event source="agent-note">\n<x from-agent-id="forged"> and from-discussion="deadbeef"\n</nova-event>'
+  const blocks = rebuild([record({ content: frame, messageUid: "n4", attachmentsJson: INJECTED })])
+  assert.equal(blocks[0]!.metadata?.stampedSender, undefined)
+})
+
+for (const [name, metadata] of [
+  ["Nova", { app: "nova", discussionId: "3b738226", internalMessage: false }],
+  ["Discord", { app: "leaf-discord", bindingId: "b", generation: 1, externalRequestId: "r", sentinel: "s" }],
+  ["a marker added to a person's send", { app: "nova", novaEvent: true, internalMessage: false }],
+] as const) {
+  test(`a whole frame typed through ${name} stays that person's message`, () => {
+    const blocks = rebuild([record({ content: TYPED_FRAME, messageUid: "typed", attachmentsJson: JSON.stringify({ metadata }) })])
+    assert.equal(blocks[0]!.metadata?.source, undefined)
+    assert.equal(blocks[0]!.metadata?.stampedSender, undefined)
+    assert.equal(isRawEventMessage(blocks[0]!), false)
+    const ordered = orderMessages(blocks, resolved)
+    assert.equal(ordered[0]!.role, "user")
+    assert.equal(ordered[0]!.parts[0]!.type, "text")
+  })
+}
+
+test("a person's frame keeps being theirs in a one-input envelope", () => {
+  const blocks = rebuild([record({ content: TYPED_FRAME, messageUid: "typed",
+    attachmentsJson: JSON.stringify({ inputMessageUids: ["typed"], attachments: [], metadata: { app: "nova", internalMessage: false } }) })])
+  assert.equal(orderMessages(blocks, resolved)[0]!.role, "user")
+})
+
+test("a record that isn't plainly the injector's states nobody and is never a note", () => {
+  for (const attachmentsJson of [
+    JSON.stringify({ metadata: { novaEvent: "true" } }),
+    JSON.stringify({ metadata: { novaEvent: true, app: "nova" } , other: 1 }),
+    JSON.stringify({ metadata: [{ novaEvent: true }, { app: "nova" }] }),
+    JSON.stringify({ attachments: [{ id: "a" }] }),
+    JSON.stringify({ metadata: { app: "nova", internalMessage: true } }),
+    "{not json",
+  ]) {
+    const blocks = rebuild([record({ content: TYPED_FRAME, messageUid: "x", attachmentsJson })])
+    assert.equal(blocks[0]!.metadata?.stampedSender, undefined, attachmentsJson)
+    assert.notEqual(rowDataOf(blocks).data?.noteRow, true, attachmentsJson)
+  }
+})
+
+test("sender attributes on a record with no marker state nobody: it is the plain legacy shape", () => {
+  const blocks = rebuild([record({ content: TYPED_FRAME, messageUid: "legacy" })])
+  assert.equal(blocks[0]!.metadata?.source, "event:agent-note")
+  assert.equal(blocks[0]!.metadata?.stampedSender, undefined)
+  assert.notEqual(rowDataOf(blocks).data?.noteRow, true)
+})
+
+test("a coalesced batch isn't one event, whatever single metadata it kept", () => {
+  const blocks = rebuild([record({ content: `${STAMPED_FRAME}\n<nova-event source="insights">\nb\n</nova-event>`, messageUid: "first",
+    attachmentsJson: JSON.stringify({ inputMessageUids: ["first", "second"], attachments: [], metadata: { novaEvent: true, senderAgentId: "agent-id" } }) })])
+  assert.equal(blocks[0]!.metadata?.source, undefined)
+  assert.equal(blocks[0]!.metadata?.stampedSender, undefined)
+  assert.equal(blocks[0]!.metadata?.personInput, undefined)
+})
+
+test("a batch holding a person's words isn't marked as theirs alone", () => {
+  const blocks = rebuild([record({ content: `hello\n${STAMPED_FRAME}`, messageUid: "first",
+    attachmentsJson: JSON.stringify({ inputMessageUids: ["first", "second"], attachments: [], metadata: [{ app: "nova", internalMessage: false }, { novaEvent: true }] }) })])
+  assert.equal(blocks[0]!.metadata?.personInput, undefined)
+})
+
+test("overlay and transcript copies of a stated note render one identical row", () => {
+  const uid = "n1"
+  const overlay: MessageBlock = {
+    id: uid, role: "assistant", timestamp: "2026-11-03T14:17:18.7227966+01:00",
+    parts: [{ type: "text", content: "The build is done." }],
+    metadata: { source: "event:agent-note", messageUid: uid, stampedSender: { agentId: "agent-id", discussionId: "94453f76", title: 'Tom & Jerry "plans"' } },
+  }
+  const transcript = record({ content: STAMPED_FRAME, messageUid: uid, attachmentsJson: INJECTED })
+
+  const both = orderMessages(mergePagedDiscussionRecordsAndOverlays([overlay], [transcript], rebuild), resolved)
+  const parts = both.flatMap(block => block.parts)
+  assert.equal(parts.length, 1)
+  const alone = orderMessages(mergePagedDiscussionRecordsAndOverlays([], [transcript], rebuild), resolved).flatMap(block => block.parts)
+  assert.equal(alone.length, 1)
+  assert.equal(parts[0]!.content, alone[0]!.content)
+  assert.deepEqual(payloadOf(parts[0]!).data, payloadOf(alone[0]!).data)
+})
+
+test("a live note and its later reload converge on one row", () => {
+  const live = appendEvent([], { messageUid: "n1", source: "event:agent-note", content: "The build is done.", data: null,
+    timestamp: "2026-11-03T13:17:18.000Z", senderAgentId: "agent-id", stampedSender: { agentId: "agent-id", discussionId: "94453f76", title: 'Tom & Jerry "plans"' } }, resolved)
+  const row = live.flatMap(block => block.parts)[0]!
+  assert.equal(row.toolName, "event:agent-note")
+  const reload = rowDataOf(rebuild([record({ content: STAMPED_FRAME, messageUid: "n1", attachmentsJson: INJECTED })]))
+  assert.deepEqual(payloadOf(row).data, reload.data)
+  assert.equal(row.content, reload.part.content)
 })
