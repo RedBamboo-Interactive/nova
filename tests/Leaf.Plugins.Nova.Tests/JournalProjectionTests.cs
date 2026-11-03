@@ -277,12 +277,12 @@ public sealed class JournalProjectionTests
     {
         var early = Assert.Single(JournalProjection.GroupAutomations([
             Automation("a", Night), Automation("b", Night.AddMinutes(90), text: "b's outcome."), Automation("c", Night.AddMinutes(180)),
-        ], Zurich));
+        ]));
         Assert.Equal(JournalKinds.AutomationGroup, early.Kind);
-        Assert.Equal("Night cycle", early.Title);
+        Assert.Equal("Scheduled", early.Title);
         Assert.Equal(3, early.Lines.Count);
 
-        var day = Assert.Single(JournalProjection.GroupAutomations([Automation("a", Noon), Automation("b", Noon.AddMinutes(10))], Zurich));
+        var day = Assert.Single(JournalProjection.GroupAutomations([Automation("a", Noon), Automation("b", Noon.AddMinutes(10))]));
         Assert.Equal("Scheduled", day.Title);
     }
 
@@ -293,21 +293,21 @@ public sealed class JournalProjectionTests
             Automation("a", Night, text: "Slept well. Then much more that stays out."),
             Automation("b", Night.AddMinutes(10)),
             Automation("c", Night.AddMinutes(20), text: "Skipped, no sound.\nA second line."),
-        ], Zurich));
+        ]));
 
         Assert.Null(group.Text);
         Assert.Equal(["Slept well.", null, "Skipped, no sound."], group.Lines.Select(line => line.Text));
     }
 
     [Fact]
-    public void A_gap_or_an_entry_between_them_ends_the_run()
+    public void Only_an_entry_between_them_ends_the_run()
     {
-        var gap = JournalProjection.GroupAutomations([Automation("a", Noon), Automation("b", Noon.AddMinutes(91))], Zurich);
-        Assert.Equal([JournalKinds.Automation, JournalKinds.Automation], gap.Select(entry => entry.Kind));
+        var apart = JournalProjection.GroupAutomations([Automation("a", Noon), Automation("b", Noon.AddHours(3))]);
+        Assert.Equal([JournalKinds.AutomationGroup], apart.Select(entry => entry.Kind));
 
         var between = JournalProjection.GroupAutomations([
             Automation("a", Noon), Thread("t", Noon.AddMinutes(1)), Automation("b", Noon.AddMinutes(2)),
-        ], Zurich);
+        ]);
         Assert.Equal([JournalKinds.Automation, JournalKinds.Thread, JournalKinds.Automation], between.Select(entry => entry.Kind));
     }
 
@@ -318,7 +318,7 @@ public sealed class JournalProjectionTests
             Automation("a", Noon), Automation("b", Noon.AddMinutes(1)),
             Automation("broken", Noon.AddMinutes(2), "failed"),
             Automation("c", Noon.AddMinutes(3)), Automation("d", Noon.AddMinutes(4)),
-        ], Zurich);
+        ]);
 
         Assert.Equal([JournalKinds.AutomationGroup, JournalKinds.Automation, JournalKinds.AutomationGroup], entries.Select(entry => entry.Kind));
         Assert.Equal(1, JournalProjection.Count(entries).Failed);

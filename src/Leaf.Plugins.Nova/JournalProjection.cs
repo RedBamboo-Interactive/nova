@@ -67,7 +67,6 @@ public static partial class JournalProjection
 {
     public const int TitleLength = 90;
     public const int QuoteLength = 160;
-    public static readonly TimeSpan GroupGap = TimeSpan.FromMinutes(90);
 
     private static readonly HashSet<string> InstanceSources = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -325,10 +324,10 @@ public static partial class JournalProjection
     }
 
     /// <summary>
-    /// Runs of automations with nothing between them and at most 90 minutes apart collapse into one
+    /// Runs of automations with nothing between them collapse into one
     /// entry. A failed one stands alone and so ends a run: it is never grouped away.
     /// </summary>
-    public static IReadOnlyList<JournalEntry> GroupAutomations(IReadOnlyList<JournalEntry> ordered, TimeZoneInfo zone)
+    public static IReadOnlyList<JournalEntry> GroupAutomations(IReadOnlyList<JournalEntry> ordered)
     {
         var result = new List<JournalEntry>();
         var run = new List<JournalEntry>();
@@ -336,7 +335,7 @@ public static partial class JournalProjection
         void Flush()
         {
             if (run.Count == 1) result.Add(run[0]);
-            else if (run.Count > 1) result.Add(Group(run, zone));
+            else if (run.Count > 1) result.Add(Group(run));
             run.Clear();
         }
 
@@ -348,14 +347,13 @@ public static partial class JournalProjection
                 result.Add(entry);
                 continue;
             }
-            if (run.Count > 0 && entry.At - run[^1].At > GroupGap) Flush();
             run.Add(entry);
         }
         Flush();
         return result;
     }
 
-    private static JournalEntry Group(IReadOnlyList<JournalEntry> run, TimeZoneInfo zone)
+    private static JournalEntry Group(IReadOnlyList<JournalEntry> run)
     {
         var first = run[0];
         return new JournalEntry
@@ -364,7 +362,7 @@ public static partial class JournalProjection
             Kind = JournalKinds.AutomationGroup,
             Cause = JournalCauses.Scheduled,
             At = first.At,
-            Title = TimeZoneInfo.ConvertTime(first.At, zone).Hour < 7 ? "Night cycle" : "Scheduled",
+            Title = "Scheduled",
             Status = run.Any(entry => entry.Status == "running") ? "running" : "completed",
             Filters = [JournalFilters.Scheduled],
             // No text of its own: no run speaks for the others, and each says its outcome on its line.

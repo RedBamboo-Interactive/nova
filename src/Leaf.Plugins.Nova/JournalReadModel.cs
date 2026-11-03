@@ -278,7 +278,7 @@ public sealed class JournalReadModel(
         entries.AddRange(automationItems);
 
         entries = JournalProjection.GroupAutomations(
-            entries.OrderBy(entry => entry.At).ThenBy(entry => entry.Id, StringComparer.Ordinal).ToList(), zone).ToList();
+            entries.OrderBy(entry => entry.At).ThenBy(entry => entry.Id, StringComparer.Ordinal).ToList()).ToList();
 
         return new JournalDayResponse
         {

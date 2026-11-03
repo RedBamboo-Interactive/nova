@@ -295,7 +295,7 @@ export function journalBadge(entry: Pick<JournalEntry, "status" | "cause" | "kin
 
 export function journalIcon(entry: Pick<JournalEntry, "status" | "cause" | "kind" | "silent">): string {
   if (isFailedAutomation(entry)) return "ph-warning"
-  if (entry.kind === "automation-group") return "ph-moon-stars"
+  if (entry.kind === "automation-group") return "ph-clock"
   if (entry.kind === "automation") return "ph-clock"
   if (entry.kind === "tick") return entry.silent ? "ph-moon" : "ph-heartbeat"
   if (entry.cause === "own") return "ph-sparkle"
