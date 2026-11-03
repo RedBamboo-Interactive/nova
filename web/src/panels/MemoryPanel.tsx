@@ -103,7 +103,7 @@ export function MemoryPanel() {
 
   const sidebar = (
     <>
-      <PanelHeader title="Journal">
+      <PanelHeader title="Memory">
         {multiAgent && (
           <AgentPicker
             agents={agents}
@@ -139,7 +139,7 @@ export function MemoryPanel() {
               <i className="ph-bold ph-folder-dashed text-2xl mb-3 opacity-30" />
               <p className="text-sm">No workspace set up</p>
               <p className="mt-1 text-xs text-text-disabled">
-                Add a Workspace to this Agent to use Journal.
+                Add a Workspace to this Agent to use Memory.
               </p>
             </div>
           </div>

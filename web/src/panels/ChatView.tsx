@@ -1,5 +1,8 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type Ref } from "react"
 import { useParams, useNavigate, useLocation } from "react-router-dom"
+import { JournalView } from "../components/journal/journal-view"
+import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
+import { MESSAGE_PARAM, messageDeepLinkStep, withoutMessageParam } from "../lib/message-deep-link"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type EventRowRenderer, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type ProviderUsageSnapshot, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
@@ -28,7 +31,7 @@ import { useMaintenanceStatus } from "../hooks/use-maintenance-status"
 import { useShare } from "../hooks/use-share"
 import { setSettings } from "../lib/settings-store"
 import { api, novaExecution } from "../lib/api"
-import { findLiveHeartbeatPair } from "../lib/live-heartbeat"
+import { findCurrentLive, findLiveHeartbeatPair } from "../lib/live-heartbeat"
 import { GoToMessageController } from "../lib/go-to-message"
 import { getAdjacentSidebarDiscussion, getSidebarDiscussionOrder } from "../lib/discussion-navigation"
 import { createDiscussionTitleResolver } from "../lib/discussion-display-title"
@@ -120,6 +123,9 @@ function navigateCodeRed(path: string) {
   }).catch(() => {})
 }
 
+// Three tabs and the menu share the phone's row beside the avatar, so each gives up some air there.
+const LIVE_TAB_CLASS = "after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px] max-md:gap-1 max-md:px-1 max-md:text-[13px]"
+
 export interface ChatViewProps {
   presentation?: "standard" | "floating"
   selectedDiscussionId?: string | null
@@ -135,13 +141,12 @@ export function ChatView({
   onNewDiscussion,
   onDock,
 }: ChatViewProps = {}) {
-  const { discussionId: urlDiscussionId } = useParams()
+  const { discussionId: urlDiscussionId, date: journalDate } = useParams()
   const navigate = useNavigate()
   const disc = useDisc()
   const environment = useUiEnvironment()
   const floating = presentation === "floating"
   const mobileClient = isMobileClient(environment.window.navigator)
-  const requestedDiscussionId = floating ? selectedDiscussionId : (urlDiscussionId ?? null)
   const [pendingDiscussionId, setPendingDiscussionId] = useState<string | null>(null)
   const location = useLocation()
   const [mobileTab, setMobileTab] = useState(() => (!floating && opensChat(location.state) ? 1 : 0))
@@ -192,6 +197,7 @@ export function ChatView({
     questionOutcome,
     selectDiscussion,
     clearDiscussionSelection,
+    setReadAcknowledgementPaused,
     sendMessage,
     sendInput,
     interruptDiscussion,
@@ -217,6 +223,17 @@ export function ChatView({
     refreshDelegationActivity,
     syncAndRefresh,
   } = disc
+
+  const { agents, getAgent, defaultAgentId, refreshAgents, avatarRevision } = useAgents()
+
+  // The Journal is a route beside a discussion, and the chat under it stays on the Agent's Live.
+  // Floating has no route of its own to stand on, so it keeps its two tabs.
+  const journalOpen = !floating && isJournalPath(location.pathname)
+  const journalAgent = journalOpen ? new URLSearchParams(location.search).get("agent") : null
+  const journalLive = journalOpen ? findCurrentLive(discussions, journalAgent ?? defaultAgentId) : null
+  const requestedDiscussionId = floating
+    ? selectedDiscussionId
+    : journalOpen ? (journalLive?.id ?? null) : (urlDiscussionId ?? null)
 
   const defaultDiscussionId = getSidebarDiscussionOrder(discussions, null)[0]?.id ?? null
   const synchronizedDiscussionId = resolveRequestedDiscussionId(
@@ -244,6 +261,20 @@ export function ChatView({
       ? `/api/apps/nova/discussions/${encodeURIComponent(activeDiscussionId)}/messages/${ref.recordId}/output`
       : "#",
   [activeDiscussionId])
+
+  // On a phone the Journal lives on the chat side of the layout.
+  useLayoutEffect(() => {
+    if (journalOpen) setMobileTab(1)
+  }, [journalOpen])
+
+  // Before the selection below: opening the Journal must not mark the Live under it as read.
+  // Coming back to Live is reading it; leaving this view altogether is not.
+  useLayoutEffect(() => {
+    if (!floating) setReadAcknowledgementPaused(journalOpen, true)
+  }, [floating, journalOpen, setReadAcknowledgementPaused])
+  useLayoutEffect(() => () => {
+    if (!floating) setReadAcknowledgementPaused(false, false)
+  }, [floating, setReadAcknowledgementPaused])
 
   useLayoutEffect(() => {
     if (pendingDiscussionId && requestedDiscussionId === pendingDiscussionId) {
@@ -273,7 +304,9 @@ export function ChatView({
         : activeDisplayTitle || "New Discussion",
   )
 
-  const { agents, getAgent, refreshAgents, avatarRevision } = useAgents()
+  // The route's segment would read "journal"; a dated day has its own crumb under it.
+  useBreadcrumbLabel(journalOpen ? JOURNAL_ROUTE : undefined, "Journal")
+  useBreadcrumbLabel(journalOpen && journalDate ? journalPath({ day: journalDate }) : undefined, "Journal")
   const multiAgent = agents.length > 1
   const settings = useLocalSettings()
   const pushToTalk = usePushToTalkSettings()
@@ -648,6 +681,31 @@ export function ChatView({
     setFocusRequest(null)
   }, [activeDiscussionId, goToMessage])
   useEffect(() => () => goToMessage.cancel(), [goToMessage])
+  // A link to one message: go there once its discussion is on screen, then drop the parameter, so
+  // Back and a reload don't repeat it. Archived discussions come through the same selection.
+  const linkedMessage = floating ? null : new URLSearchParams(location.search).get(MESSAGE_PARAM)
+  const handledLink = useRef<string | null>(null)
+  useEffect(() => {
+    if (!linkedMessage) {
+      handledLink.current = null
+      return
+    }
+    const step = messageDeepLinkStep({
+      uid: linkedMessage,
+      discussionId: urlDiscussionId ?? null,
+      activeDiscussionId,
+      loading: isLoadingMessages || isResolvingDiscussion,
+      handled: handledLink.current,
+    })
+    if (step.action !== "go") return
+    handledLink.current = step.handled
+    setMobileTab(1)
+    goToMessage.go(step.uid)
+    navigate(
+      { pathname: location.pathname, search: withoutMessageParam(location.search) },
+      { replace: true, state: location.state },
+    )
+  }, [activeDiscussionId, goToMessage, isLoadingMessages, isResolvingDiscussion, linkedMessage, location.pathname, location.search, location.state, navigate, urlDiscussionId])
   const handleFocusMessageResult = useCallback((result: { uid: string; nonce: number; found: boolean }) => {
     goToMessage.result(result)
   }, [goToMessage])
@@ -918,14 +976,21 @@ export function ChatView({
     action: () => { if (activeDiscussionId) void handleRotateDiscussion(activeDiscussionId) },
   })
 
-  const liveHeartbeatPair = findLiveHeartbeatPair(discussions, activeDiscussion)
+  const liveViews = findLiveHeartbeatPair(discussions, journalOpen ? journalLive : activeDiscussion)
+  // Without the Journal tab, a lone Live has nothing to switch to.
+  const liveHeartbeatPair = liveViews && (!floating || liveViews.heartbeat) ? liveViews : null
 
   const liveHeartbeatTabs = liveHeartbeatPair && (
     <Tabs
-      value={activeDiscussion?.type === "heartbeat" ? "heartbeat" : "live"}
-      onValueChange={(value) => handleSelectDiscussion(
-        value === "heartbeat" ? liveHeartbeatPair.heartbeat.id : liveHeartbeatPair.live.id,
-      )}
+      value={journalOpen ? "journal" : activeDiscussion?.type === "heartbeat" ? "heartbeat" : "live"}
+      onValueChange={(value) => {
+        if (value === "journal") {
+          const agentId = liveHeartbeatPair.live.agentId
+          navigate(journalPath({ agent: agentId && agentId !== defaultAgentId ? agentId : null }))
+          return
+        }
+        handleSelectDiscussion(value === "heartbeat" && liveHeartbeatPair.heartbeat ? liveHeartbeatPair.heartbeat.id : liveHeartbeatPair.live.id)
+      }}
       className="shrink-0"
       style={{ height: "100%" }}
     >
@@ -936,7 +1001,7 @@ export function ChatView({
       >
         <TabsTrigger
           value="live"
-          className="after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px]"
+          className={LIVE_TAB_CLASS}
           style={{ height: "100%" }}
         >
           <i
@@ -946,19 +1011,35 @@ export function ChatView({
           />
           Live
         </TabsTrigger>
-        <TabsTrigger
-          value="heartbeat"
-          aria-label={liveHeartbeatPair.heartbeat.status === "thinking" ? "Heartbeat, tick running" : "Heartbeat"}
-          className="after:rounded-full after:bg-primary group-data-[orientation=horizontal]/tabs:after:inset-x-1 group-data-[orientation=horizontal]/tabs:after:bottom-[-2px]"
-          style={{ height: "100%" }}
-        >
-          <i
-            aria-hidden="true"
-            className={`ph-bold ph-heartbeat text-[12px] ${liveHeartbeatPair.heartbeat.status === "thinking" ? "animate-pulse" : ""}`}
-            style={{ color: "var(--color-accent-gold)" }}
-          />
-          Heartbeat
-        </TabsTrigger>
+        {liveHeartbeatPair.heartbeat && (
+          <TabsTrigger
+            value="heartbeat"
+            aria-label={liveHeartbeatPair.heartbeat.status === "thinking" ? "Heartbeat, tick running" : "Heartbeat"}
+            className={LIVE_TAB_CLASS}
+            style={{ height: "100%" }}
+          >
+            <i
+              aria-hidden="true"
+              className={`ph-bold ph-heartbeat text-[12px] ${liveHeartbeatPair.heartbeat.status === "thinking" ? "animate-pulse" : ""}`}
+              style={{ color: "var(--color-accent-gold)" }}
+            />
+            Heartbeat
+          </TabsTrigger>
+        )}
+        {!floating && (
+          <TabsTrigger
+            value="journal"
+            className={LIVE_TAB_CLASS}
+            style={{ height: "100%" }}
+          >
+            <i
+              aria-hidden="true"
+              className="ph-bold ph-notebook text-[12px]"
+              style={{ color: "var(--color-accent-purple)" }}
+            />
+            Journal
+          </TabsTrigger>
+        )}
       </TabsList>
     </Tabs>
   )
@@ -1689,11 +1770,27 @@ export function ChatView({
           )}
         </>
       }
-      detail={chatArea}
+      detail={
+        // The chat stays mounted and in its place under the Journal, so its scroll anchor and its
+        // draft are as it left them. `invisible` keeps its layout, unlike taking it off the page.
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className={`flex min-h-0 min-w-0 flex-1 flex-col${journalOpen ? " invisible" : ""}`}>{chatArea}</div>
+          {journalOpen && (
+            <div data-slot="journal-surface" className="absolute inset-0 z-20 flex min-h-0 flex-col">
+              <PanelHeader
+                leading={liveHeartbeatTabs
+                  ? <div className="flex flex-1 min-w-0 self-stretch">{liveHeartbeatTabs}</div>
+                  : <span className="truncate text-sm font-medium text-contrast">Journal</span>}
+              />
+              <JournalView agent={journalAgent} date={journalDate ?? null} resolveImageSrc={resolveImageSrc} />
+            </div>
+          )}
+        </div>
+      }
     />
     <ArtifactsSurface
       discussionId={activeDiscussionId}
-      open={artifactsOpen && !!activeDiscussion}
+      open={artifactsOpen && !!activeDiscussion && !journalOpen}
       onClose={closeArtifacts}
       isStreaming={isStreaming}
       resolveImageSrc={resolveImageSrc}

@@ -43,6 +43,15 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<HeartbeatService>()));
         services.AddSingleton<RedComputeClient>();
         services.AddSingleton<CodeWorktreeClient>();
+        services.AddSingleton<IJournalPeers, JournalPeers>();
+        services.AddSingleton(sp => new JournalReadModel(
+            sp.GetRequiredService<DiscussionStore>(),
+            sp.GetRequiredService<IDiscussions>(),
+            sp.GetRequiredService<RedComputeClient>(),
+            sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+            sp.GetRequiredService<IAgentWorkspacePathResolver>(),
+            sp.GetRequiredService<IJournalPeers>(),
+            () => sp.GetRequiredService<AgentDirectory>().NovaAgentId));
         services.AddSingleton(sp =>
             new DiscordPromptInjectionVerifier(
                 // Optional: provided by cap-sentinel when installed. Without it every review is
@@ -242,6 +251,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
             }
         });
         DiscussionEndpoints.Map(group);
+        JournalEndpoints.Map(group);
         VoiceSessionEndpoints.Map(group);
         AskEndpoints.Map(group);
         DelegateEndpoints.Map(group);

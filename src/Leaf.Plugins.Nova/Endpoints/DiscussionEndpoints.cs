@@ -25,6 +25,15 @@ public class CreateDiscussionRequest
     public string? Title { get; set; }
     /// <summary>What the new discussion should do: posted as an event, then its session starts and takes it.</summary>
     public string? Brief { get; set; }
+    /// <summary>Where he asked for this. Stamped on the brief's record; signed Agents only.</summary>
+    public RequestedInBody? RequestedIn { get; set; }
+}
+
+/// <summary>"He asked for this there": a discussion and the message in it.</summary>
+public class RequestedInBody
+{
+    public string? DiscussionId { get; set; }
+    public string? MessageUid { get; set; }
 }
 
 public class DiscussionTitleRequest
@@ -64,6 +73,8 @@ public class DiscussionEventRequest
     public JsonElement? Metadata { get; set; }
     /// <summary>Optional caller key: a retry under it neither stores nor delivers the event twice.</summary>
     public string? IdempotencyKey { get; set; }
+    /// <summary>Where he asked for this. Stamped with the sender; signed Agents only.</summary>
+    public RequestedInBody? RequestedIn { get; set; }
 }
 
 public class NovaMessageRequest
@@ -185,7 +196,10 @@ public static class DiscussionEndpoints
 
         // A signed Agent's identity comes from its token, whatever the body says. Registering the
         // reply callback stays the caller's explicit choice: stamping alone must not arm it.
+        var (requestedIn, requestRefusal) = await ReadRequestedInAsync(request.RequestedIn, discussion, ctx, store);
+        if (requestRefusal is not null) return requestRefusal;
         var stamped = await EventSender.ResolveAsync(ctx.User, store, discussion, ctx.RequestAborted);
+        if (stamped is not null) stamped = stamped with { RequestedIn = requestedIn };
         var source = stamped is not null && string.IsNullOrWhiteSpace(request.Source)
             ? EventSender.DefaultSource : request.Source;
         var replyTo = request.SenderAgentId is null ? null : request.ReplyToDiscussionId;
@@ -208,6 +222,41 @@ public static class DiscussionEndpoints
         return EventResponse(result);
     }
 
+    private const int MaxRequestUidLength = 200;
+
+    /// <summary>
+    /// A request reference is the server's claim, so it comes only from a signed Agent and names only
+    /// a discussion that Agent can read. Like a sender, a confidential discussion's id never reaches a
+    /// record outside it. An unreadable discussion and a missing one answer alike, so this is no oracle.
+    /// </summary>
+    internal static async Task<(RequestReference? Reference, IResult? Refusal)> ReadRequestedInAsync(
+        RequestedInBody? body, DiscussionRead? target, HttpContext ctx, DiscussionStore store)
+    {
+        if (body is null) return (null, null);
+        if (DiscussionAccessPolicy.ReadSignedActor(ctx.User) is not { IsAgent: true })
+            return (null, Results.Json(new
+            {
+                error = "requested_in_agent_only",
+                message = "Only a signed Agent can state where it was asked.",
+            }, statusCode: StatusCodes.Status403Forbidden));
+        if (string.IsNullOrWhiteSpace(body.DiscussionId) || string.IsNullOrWhiteSpace(body.MessageUid)
+            || body.MessageUid.Length > MaxRequestUidLength)
+            return (null, Results.BadRequest(new
+            {
+                error = "invalid_requested_in",
+                message = $"requestedIn needs discussionId and messageUid (at most {MaxRequestUidLength} characters).",
+            }));
+
+        var from = await store.GetAsync(body.DiscussionId.Trim(), ctx.RequestAborted);
+        if (from is null || !DiscussionAccessPolicy.CanRead(from, ctx) || (from.Confidential && target?.Confidential != true))
+            return (null, Results.Json(new
+            {
+                error = "requested_in_unreadable",
+                message = "requestedIn names a discussion this Agent can't cite here.",
+            }, statusCode: StatusCodes.Status403Forbidden));
+        return (new RequestReference(from.Id, body.MessageUid.Trim()), null);
+    }
+
     private const int MaxCreationTitleLength = 200;
 
     /// <summary>The source of a brief from a caller that isn't a signed Agent.</summary>
@@ -227,6 +276,16 @@ public static class DiscussionEndpoints
             });
         if (title is { Length: > MaxCreationTitleLength })
             return Results.BadRequest(new { error = "invalid_title", message = $"title must be at most {MaxCreationTitleLength} characters" });
+
+        // Refused before anything exists. It stamps the brief's record, so with no brief it has no home.
+        if (createReq?.RequestedIn is not null && brief is null)
+            return Results.BadRequest(new
+            {
+                error = "requested_in_without_brief",
+                message = "requestedIn is stamped on the brief's record, so it needs a brief.",
+            });
+        var (requestedIn, requestRefusal) = await ReadRequestedInAsync(createReq?.RequestedIn, null, ctx, store);
+        if (requestRefusal is not null) return requestRefusal;
 
         var agentId = createReq?.AgentId ?? agents.NovaAgentId;
         var type = createReq?.Type ?? "chat";
@@ -282,6 +341,7 @@ public static class DiscussionEndpoints
         if (brief is not null)
         {
             var stamped = await EventSender.ResolveAsync(ctx.User, store, discussion, ctx.RequestAborted);
+            if (stamped is not null) stamped = stamped with { RequestedIn = requestedIn };
             briefResult = await injector.InjectEventAsync(discussion, brief, null,
                 stamped is not null ? EventSender.DefaultSource : BriefSource,
                 null, null, null, UserId(ctx), $"discussion-brief:{discussion.Id}", ctx.RequestAborted, stamped);
@@ -578,7 +638,7 @@ public static class DiscussionEndpoints
             catch { /* body is optional */ }
             return await CreateDiscussionAsync(createReq, ctx, store, agents, pipeline, events, live, injector);
         })
-            .WithSummary("Creates a discussion and starts its provider session, owned by the signed-in person or the calling Agent's beneficiary. The body is optional: agentId, type, qualityTier, provider, deferSession, idempotencyKey, title (kept: automatic titling won't overwrite it), brief (what it should do: posted as an event the new session takes, the server stating who sent it). brief with deferSession is a 400; a retry under idempotencyKey reuses the discussion and its brief. A second open live or heartbeat discussion for the same Agent returns 409.")
+            .WithSummary("Creates a discussion and starts its provider session, owned by the signed-in person or the calling Agent's beneficiary. The body is optional: agentId, type, qualityTier, provider, deferSession, idempotencyKey, title (kept: automatic titling won't overwrite it), brief (what it should do: posted as an event the new session takes, the server stating who sent it), requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, needs a brief, 403 for a discussion the caller can't read). brief with deferSession is a 400; a retry under idempotencyKey reuses the discussion and its brief. A second open live or heartbeat discussion for the same Agent returns 409.")
             .WithMetadata(new AcceptsMetadata([], typeof(CreateDiscussionRequest)));
 
         group.MapGet("/discussions/live", async (HttpContext ctx, DiscussionStore store) =>
@@ -1809,7 +1869,7 @@ public static class DiscussionEndpoints
 
         group.MapPost("/discussions/{id}/event", (string id, DiscussionEventRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, EventInjector injector, MessagePipeline pipeline)
             => PostEventAsync(id, request, ctx, store, agents, injector, pipeline))
-            .WithSummary("Injects an event into a discussion and delivers it to its session; this is how an Agent writes to a discussion, its own included. For a signed Agent the server states the sender and sending discussion from the token and ignores senderAgentId in the body, and source defaults to agent-note. Body: content (required), optional type, source, senderAgentId, replyToDiscussionId (with senderAgentId, registers a reply callback), metadata, idempotencyKey. Never creates a session: to a discussion without one it answers 202 queued. The id may be live for the current LIVE discussion.");
+            .WithSummary("Injects an event into a discussion and delivers it to its session; this is how an Agent writes to a discussion, its own included. For a signed Agent the server states the sender and sending discussion from the token and ignores senderAgentId in the body, and source defaults to agent-note. Body: content (required), optional type, source, senderAgentId, replyToDiscussionId (with senderAgentId, registers a reply callback), metadata, idempotencyKey, requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, 403 for a discussion the caller can't read). Never creates a session: to a discussion without one it answers 202 queued. The id may be live for the current LIVE discussion.");
 
         group.MapPost("/discussions/{id}/nova-message", async (string id, NovaMessageRequest request,
             HttpContext ctx, DiscussionStore store, ConversationUnread conversationUnread,

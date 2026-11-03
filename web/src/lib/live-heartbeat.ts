@@ -2,7 +2,8 @@ import type { DiscussionInfo } from "./types"
 
 export interface LiveHeartbeatPair {
   live: DiscussionInfo
-  heartbeat: DiscussionInfo
+  /** Absent for an Agent without a Heartbeat: Live and Journal are still its views. */
+  heartbeat: DiscussionInfo | null
 }
 
 /** Find the current Live/Heartbeat views for the active discussion's agent. */
@@ -25,7 +26,14 @@ export function findLiveHeartbeatPair(
 
   const live = discussions.find((discussion) => discussion.type === "live" && isCurrentForAgent(discussion))
   const heartbeat = discussions.find((discussion) => discussion.type === "heartbeat" && isCurrentForAgent(discussion))
-  return live && heartbeat ? { live, heartbeat } : null
+  return live ? { live, heartbeat: heartbeat ?? null } : null
+}
+
+/** The current Live of one Agent, or with no Agent named the first current Live in the list. */
+export function findCurrentLive(discussions: DiscussionInfo[], agentId: string | null): DiscussionInfo | null {
+  return discussions.find((discussion) => discussion.type === "live"
+    && discussion.status !== "archived" && discussion.status !== "archiving"
+    && (agentId === null || discussion.agentId === agentId)) ?? null
 }
 
 /** Keep the agent's single Live sidebar surface selected while viewing Heartbeat. */

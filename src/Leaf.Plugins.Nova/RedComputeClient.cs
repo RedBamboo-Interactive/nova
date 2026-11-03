@@ -816,6 +816,36 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         return new SessionTranscriptPageResult((int)response.StatusCode, page, content, contentType);
     }
 
+    /// <summary>One page of the job list over <c>[since, until)</c>, with the caller's derived identity.</summary>
+    public async Task<ProxyResult> ListJobsAsync(
+        DateTimeOffset since, DateTimeOffset until, int limit, int offset,
+        string? capability = null, string? contextKind = null, string? status = null, CancellationToken ct = default)
+    {
+        var query = new List<string>
+        {
+            $"since={Uri.EscapeDataString(since.ToUniversalTime().ToString("O"))}",
+            $"until={Uri.EscapeDataString(until.ToUniversalTime().ToString("O"))}",
+            $"limit={limit}",
+            $"offset={offset}",
+        };
+        if (!string.IsNullOrWhiteSpace(capability)) query.Add($"capability={Uri.EscapeDataString(capability)}");
+        if (!string.IsNullOrWhiteSpace(contextKind)) query.Add($"contextKind={Uri.EscapeDataString(contextKind)}");
+        if (!string.IsNullOrWhiteSpace(status)) query.Add($"status={Uri.EscapeDataString(status)}");
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"/jobs?{string.Join("&", query)}");
+        using var response = await gateway.SendAsync(request, provenance: null, ct);
+        return new((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct),
+            response.Content.Headers.ContentType?.ToString() ?? "application/json");
+    }
+
+    /// <summary>One job's full record. Its result holds a session's last assistant text.</summary>
+    public async Task<ProxyResult> GetJobAsync(Guid jobId, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"/jobs/{jobId:D}");
+        using var response = await gateway.SendAsync(request, provenance: null, ct);
+        return new((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct),
+            response.Content.Headers.ContentType?.ToString() ?? "application/json");
+    }
+
     /// <summary>
     /// Reads the session's derived artifact list through the kernel-authenticated gateway, with the
     /// caller's derived identity like <see cref="GetTranscriptPageAsync"/>. Filters are forwarded

@@ -9,7 +9,7 @@ namespace Leaf.Plugins.Nova;
 /// identity, never from the request. An Agent's text reaches its session as a user-role turn, so
 /// this is what tells the model and the reader that it isn't the person.
 /// </summary>
-public sealed record EventSender(string AgentId, string? DiscussionId, string? Title)
+public sealed record EventSender(string AgentId, string? DiscussionId, string? Title, RequestReference? RequestedIn = null)
 {
     /// <summary>The source of a signed Agent's event that doesn't name one.</summary>
     public const string DefaultSource = "agent-note";
@@ -20,6 +20,8 @@ public sealed record EventSender(string AgentId, string? DiscussionId, string? T
     private const string AgentKey = "sender_agent_id";
     private const string DiscussionKey = "sender_discussion_id";
     private const string TitleKey = "sender_title";
+    private const string RequestDiscussionKey = "request_discussion_id";
+    private const string RequestMessageKey = "request_message_uid";
 
     /// <summary>
     /// The sender of this call, or null when the caller isn't a signed Agent. A confidential
@@ -45,7 +47,10 @@ public sealed record EventSender(string AgentId, string? DiscussionId, string? T
             || !stamped.TryGetValue<bool>(out var isStamped) || !isStamped
             || Text(metadata, AgentKey) is not { } agentId)
             return null;
-        return new(agentId, Text(metadata, DiscussionKey), Text(metadata, TitleKey));
+        return new(agentId, Text(metadata, DiscussionKey), Text(metadata, TitleKey),
+            Text(metadata, RequestDiscussionKey) is { } discussion && Text(metadata, RequestMessageKey) is { } message
+                ? new RequestReference(discussion, message)
+                : null);
     }
 
     public void WriteTo(JsonObject metadata)
@@ -54,6 +59,9 @@ public sealed record EventSender(string AgentId, string? DiscussionId, string? T
         metadata[AgentKey] = AgentId;
         metadata[DiscussionKey] = DiscussionId;
         metadata[TitleKey] = Title;
+        if (RequestedIn is null) return;
+        metadata[RequestDiscussionKey] = RequestedIn.DiscussionId;
+        metadata[RequestMessageKey] = RequestedIn.MessageUid;
     }
 
     /// <summary>What clients read: the overlay DTO, the live bus event, and the discussion detail.</summary>
@@ -72,3 +80,6 @@ public sealed record EventSender(string AgentId, string? DiscussionId, string? T
         => metadata[key] is JsonValue value && value.TryGetValue<string>(out var text)
             && !string.IsNullOrWhiteSpace(text) ? text : null;
 }
+
+/// <summary>"He asked for this there": the message a signed Agent names when it starts work he asked for.</summary>
+public sealed record RequestReference(string DiscussionId, string MessageUid);

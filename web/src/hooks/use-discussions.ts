@@ -570,7 +570,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
   }, [])
 
+  // The Journal keeps Live selected under it without anyone reading it, so nothing may say it was read.
+  const readAcknowledgementPausedRef = useRef(false)
   const acknowledgeRead = useCallback(async (id: string, conversationRevision: number) => {
+    if (readAcknowledgementPausedRef.current) return
     try {
       const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/read`, {
         conversationRevision,
@@ -578,6 +581,14 @@ export function useDiscussions(eventResolver?: EventResolver) {
       upsertDiscussionMetadata(updated)
     } catch { /* a later refresh preserves any still-unread revision */ }
   }, [])
+
+  const setReadAcknowledgementPaused = useCallback((paused: boolean, acknowledgeOnResume: boolean) => {
+    const resumed = readAcknowledgementPausedRef.current && !paused
+    readAcknowledgementPausedRef.current = paused
+    if (!resumed || !acknowledgeOnResume) return
+    const active = discussionsRef.current.find((discussion) => discussion.id === activeIdRef.current)
+    if (active) void acknowledgeRead(active.id, active.conversationRevision)
+  }, [acknowledgeRead])
 
   useEffect(() => {
     // A failed read is surfaced through discussionListLoadState with a retry.
@@ -2152,6 +2163,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     questionOutcome: activeQuestionOutcome,
     selectDiscussion,
     clearDiscussionSelection,
+    setReadAcknowledgementPaused,
     createDiscussion,
     sendMessage,
     sendInput,
