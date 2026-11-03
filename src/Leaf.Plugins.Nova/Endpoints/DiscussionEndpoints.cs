@@ -486,8 +486,7 @@ public static class DiscussionEndpoints
 
             return Results.Ok(DiscussionStore.ToInfo(discussion));
         })
-            .WithSummary("Creates a discussion and starts its provider session. The body is optional (agentId, type, qualityTier, provider, deferSession, idempotencyKey); a second open live or heartbeat discussion for the same Agent returns 409.")
-            .Accepts<CreateDiscussionRequest>(true, "application/json");
+            .WithSummary("Creates a discussion and starts its provider session. The body is optional (agentId, type, qualityTier, provider, deferSession, idempotencyKey); a second open live or heartbeat discussion for the same Agent returns 409.");
 
         group.MapGet("/discussions/live", async (HttpContext ctx, DiscussionStore store) =>
         {
@@ -1407,8 +1406,7 @@ public static class DiscussionEndpoints
                 request?.ConversationRevision ?? discussion.ConversationRevision);
             return Results.Ok(DiscussionStore.ToInfo(updated ?? discussion));
         })
-            .WithSummary("Marks a discussion as read up to a conversation revision. The body is optional (conversationRevision); it defaults to the current revision.")
-            .Accepts<DiscussionReadRequest>(true, "application/json");
+            .WithSummary("Marks a discussion as read up to a conversation revision. The body is optional (conversationRevision); it defaults to the current revision.");
 
         group.MapPut("/discussions/{id}/activity", async (string id, HttpContext ctx,
             DiscussionStore store, ConversationUnread conversationUnread) =>
