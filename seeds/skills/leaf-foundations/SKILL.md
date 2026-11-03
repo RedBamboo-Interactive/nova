@@ -104,7 +104,8 @@ beneficiary's permissions. Do not combine it with legacy `X-Compute-Provenance`.
 - Upload user-visible media to Assets and preserve the exact returned URL.
 - Search before you scan. `GET /api/search?q=...` ranks entities and conversations and shows the
   matching text; add `entity_types=page` for memory and workspace files, and `include_data=true` only
-  when you need whole entities. Give `/api/entities?search=` a `type`.
+  when you need whole entities. Use `/api/entities?search=` only to filter one known `type`: it scans
+  that type's raw JSON, so avoid it on `compute-job`.
 - An Agent workspace is a filesystem served by RedLeaf, not a disk. A recursive `grep` or `rg` reads every
   file through the service, images included, and holds up whatever waits behind it. When you must scan
   text, make it one pass, in one folder if you can, leaving out binaries and `memory/artifacts`.
