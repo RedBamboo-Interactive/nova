@@ -526,7 +526,8 @@ public sealed partial class EventDeliveryQueueTests
                     .Any(part => part?["data"]?["kind"]?.GetValue<string>() == kind));
 
         public IEnumerable<DiscussionMessage> EventRecords()
-            => Stream.Snapshot().Where(r => r.Metadata["source"]?.GetValue<string>()?.StartsWith("event:") == true);
+            => Stream.Snapshot().Where(r => r.Metadata["source"]?.GetValue<string>()?.StartsWith("event:") == true
+                && r.Metadata["source"]?.GetValue<string>() != $"event:{SentNote.Source}");
 
         public async Task<(int Status, JsonElement Body)> PostEventAsync(string content, string? type = null, string? idempotencyKey = null,
             string? delivery = null)

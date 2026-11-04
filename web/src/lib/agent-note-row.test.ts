@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import type { MessagePart } from "@redbamboo/chat"
-import { describeNote, isNoteRowPart, notePreview, type NoteOriginDiscussion } from "./agent-note-row.ts"
+import { describeNote, describeSentNote, isNoteRowPart, isSentNotePart, notePreview, type NoteOriginDiscussion } from "./agent-note-row.ts"
 import { buildEventPart } from "./message-order.ts"
 import { resolveEventType } from "./event-type-resolution.ts"
 
@@ -80,4 +80,56 @@ test("only a projected note row is lifted out of the frieze", () => {
   assert.equal(isNoteRowPart(part("event:nova-94453f76", "no lead")), false, "keeps its named dot")
   assert.equal(isNoteRowPart(part("event:heartbeat", "[internal] x")), false)
   assert.equal(isNoteRowPart({ type: "tool_use", toolName: "event:agent-note", toolInput: "not json", content: "" } as MessagePart), false)
+})
+
+const sentTo = (over: Partial<Parameters<typeof describeSentNote>[0]>) => describeSentNote({
+  targetDiscussionId: "94453f76",
+  targetTitle: "Title when sent",
+  targetAgentId: "agent-guid",
+  resolveAgent: ref => AGENTS[ref],
+  resolveDiscussion: id => DISCUSSIONS[id],
+  ...over,
+})
+
+test("a sent note names who it went to, with the discussion's current title", () => {
+  assert.deepEqual(sentTo({}), { name: "Nova", avatarUrl: "/api/assets/nova.png", target: "Taking initiative", openDiscussionId: "94453f76" })
+})
+
+test("a sent note to another Agent carries that Agent's name and avatar", () => {
+  const to = sentTo({ targetAgentId: "leni-b863d153" })
+  assert.equal(to.name, "Leni")
+  assert.equal(to.avatarUrl, "/api/assets/leni.png")
+})
+
+test("a sent note keeps its stored title when the discussion is gone, and doesn't open it", () => {
+  assert.deepEqual(sentTo({ targetDiscussionId: "ffffffff" }), { name: "Nova", avatarUrl: "/api/assets/nova.png", target: "Title when sent", openDiscussionId: null })
+})
+
+test("a sent note to an archived discussion can't be opened from the bubble", () => {
+  const to = sentTo({ targetDiscussionId: "a0000000" })
+  assert.equal(to.target, "Old thread")
+  assert.equal(to.openDiscussionId, null)
+})
+
+test("a sent note to a confidential discussion names nothing", () => {
+  assert.deepEqual(sentTo({ targetDiscussionId: null, targetTitle: null, targetAgentId: null }), { name: null, avatarUrl: null, target: "another discussion", openDiscussionId: null })
+})
+
+test("the server's sent record renders as a sent row and never as a received note", () => {
+  const part = buildEventPart({
+    source: "event:agent-note-sent",
+    content: "Rebuild when you can.",
+    data: { targetDiscussionId: "94453f76", targetAgentId: "agent-guid", failed: false },
+    timestamp: "2026-11-04T15:00:00Z",
+  }, key => resolveEventType(key, new Map()))
+  assert.equal(part.toolName, "event:agent-note-sent")
+  assert.equal(isSentNotePart(part), true)
+  assert.equal(isNoteRowPart(part), true)
+  assert.equal(part.content, "Rebuild when you can.")
+})
+
+test("an unrelated event isn't a sent note", () => {
+  const part = buildEventPart({ source: "event:delegation", content: "Delegated", timestamp: "2026-11-04T15:00:00Z" }, key => resolveEventType(key, new Map()))
+  assert.equal(isSentNotePart(part), false)
+  assert.equal(isNoteRowPart(part), false)
 })

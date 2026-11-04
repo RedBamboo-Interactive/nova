@@ -1,5 +1,5 @@
 import type { EventType } from "./types"
-import { AGENT_NOTE_KEY, agentNoteLabel, parseAgentNoteSource } from "./agent-note.ts"
+import { AGENT_NOTE_KEY, AGENT_NOTE_SENT_KEY, agentNoteLabel, parseAgentNoteSource } from "./agent-note.ts"
 
 export const DEFAULT_EVENT: EventType = {
   key: "default",
@@ -30,6 +30,13 @@ export const BUILTIN_EVENTS: Record<string, EventType> = {
     icon: "ph-bold ph-chats-circle",
     color: "rgb(236 72 153)",
     description: "Notes another Agent instance posted into this discussion",
+  },
+  [AGENT_NOTE_SENT_KEY]: {
+    key: AGENT_NOTE_SENT_KEY,
+    name: "Note sent",
+    icon: "ph-bold ph-paper-plane-tilt",
+    color: "rgb(236 72 153)",
+    description: "What this Agent sent to another discussion",
   },
   heartbeat: {
     key: "heartbeat",

@@ -99,6 +99,15 @@ public sealed class EventInjector(
         => Forwarded(await InjectCoreAsync(discussion, content, null, source, null, null,
             metadata, userId, idempotencyKey, false, ct, idempotencyKey, null, requireOpen: true, framed: framed));
 
+    /// <summary>What an Agent sent, shown where it wrote from. See <see cref="SentNote"/>.</summary>
+    internal Task<EventInjectionResult> RecordSentNoteAsync(DiscussionRead from, string content, JsonElement metadata,
+        string? userId, string? idempotencyKey, CancellationToken ct)
+        => InjectCoreAsync(from, content, "system", SentNote.Source, null, null, metadata, userId,
+            idempotencyKey, false, ct, idempotencyKey, null, requireOpen: true);
+
+    internal void SentNoteNotRecorded(Exception ex, string fromId, string targetId)
+        => logger?.LogWarning(ex, "A note from {From} to {Target} went out, but its bubble was not recorded", fromId, targetId);
+
     // Additive scoped entry point. Legacy injection signature, event identity, persistence,
     // delivery and reconciliation remain unchanged.
     public async Task<bool> InjectScopedLiveAsync(DiscussionRead discussion, PluginLiveEventProjection projection,

@@ -223,6 +223,8 @@ public static class DiscussionEndpoints
             result = await injector.QueuedStateAsync(discussion.EntityId, queuedUid, ctx.RequestAborted) with { Report = result.Report };
         }
 
+        await SentNote.RecordAsync(ctx.User, store, injector, discussion, request.Content, result.MessageUid,
+            SentNote.Failed(result.Delivery), UserId(ctx), ctx.RequestAborted);
         return EventResponse(result);
     }
 
@@ -354,6 +356,8 @@ public static class DiscussionEndpoints
             briefResult = await injector.InjectEventAsync(discussion, brief, null,
                 stamped is not null ? EventSender.DefaultSource : BriefSource,
                 null, null, null, UserId(ctx), $"discussion-brief:{discussion.Id}", ctx.RequestAborted, stamped);
+            await SentNote.RecordAsync(ctx.User, store, injector, discussion, brief, briefResult.MessageUid,
+                SentNote.Failed(briefResult.Delivery), UserId(ctx), ctx.RequestAborted);
         }
 
         // Delivery discussions populated through nova-message do not need an
@@ -1878,7 +1882,7 @@ public static class DiscussionEndpoints
 
         group.MapPost("/discussions/{id}/event", (string id, DiscussionEventRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, EventInjector injector, MessagePipeline pipeline)
             => PostEventAsync(id, request, ctx, store, agents, injector, pipeline))
-            .WithSummary("Injects an event into a discussion and delivers it to its session; this is how an Agent writes to a discussion, its own included. For a signed Agent the server states the sender and sending discussion from the token and ignores senderAgentId in the body, and source defaults to agent-note. Body: content (required), optional type, source, senderAgentId, replyToDiscussionId (with senderAgentId, registers a reply callback), metadata, idempotencyKey, requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, 403 for a discussion the caller can't read), delivery (after-current, the default, or steer-current: into the running turn if it can take it, otherwise queued; anything else is a 400). The response's deliveryReport says what became of that: requested, effective, deliveryReason. Never creates a session: to a discussion without one it answers 202 queued. The id may be live for the current LIVE discussion.");
+            .WithSummary("Injects an event into a discussion and delivers it to its session; this is how an Agent writes to a discussion, its own included. A note to another discussion also shows, for the reader only, in the discussion it was sent from. For a signed Agent the server states the sender and sending discussion from the token and ignores senderAgentId in the body, and source defaults to agent-note. Body: content (required), optional type, source, senderAgentId, replyToDiscussionId (with senderAgentId, registers a reply callback), metadata, idempotencyKey, requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, 403 for a discussion the caller can't read), delivery (after-current, the default, or steer-current: into the running turn if it can take it, otherwise queued; anything else is a 400). The response's deliveryReport says what became of that: requested, effective, deliveryReason. Never creates a session: to a discussion without one it answers 202 queued. The id may be live for the current LIVE discussion.");
 
         group.MapPost("/discussions/{id}/nova-message", async (string id, NovaMessageRequest request,
             HttpContext ctx, DiscussionStore store, ConversationUnread conversationUnread,

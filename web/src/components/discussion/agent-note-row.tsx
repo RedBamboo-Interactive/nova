@@ -1,7 +1,7 @@
 import { memo, useState, type MouseEvent } from "react"
 import { MarkdownRenderer, parseEventPart, resolveChatMediaSrc } from "@redbamboo/chat"
 import type { EventQueueStatus, MessagePart } from "@redbamboo/chat"
-import { describeNote, notePreview, type NoteOriginDiscussion } from "../../lib/agent-note-row"
+import { describeNote, describeSentNote, isSentNotePart, notePreview, type NoteOriginDiscussion } from "../../lib/agent-note-row"
 
 interface AgentNoteRowProps {
   part: MessagePart
@@ -38,9 +38,10 @@ function formatNoteTime(iso: string | undefined): string | null {
 }
 
 /**
- * What one Agent instance wrote to another. It sits on the right because that is
- * where things said to this Agent go, and every step of it is quieter than the
- * person's own bubble: fainter fill, muted smaller text, no tail, a sender on top.
+ * What one Agent instance wrote to another. A note received sits on the right because
+ * that is where things said to this Agent go; a note sent sits on the left, where this
+ * Agent speaks. Every step of it is quieter than the person's own bubble: fainter fill,
+ * muted smaller text, no tail, and who it's from or to on top.
  */
 export const AgentNoteRow = memo(function AgentNoteRow({
   part,
@@ -56,7 +57,15 @@ export const AgentNoteRow = memo(function AgentNoteRow({
   const event = parseEventPart(part)
   if (!event) return null
 
-  const { name, avatarUrl, origin, openDiscussionId } = describeNote({
+  const sent = isSentNotePart(part)
+  const sentTo = sent ? describeSentNote({
+    targetDiscussionId: stringOrNull(event.data?.targetDiscussionId),
+    targetTitle: stringOrNull(event.data?.targetTitle),
+    targetAgentId: stringOrNull(event.data?.targetAgentId),
+    resolveAgent,
+    resolveDiscussion,
+  }) : null
+  const from = sentTo ? null : describeNote({
     agent: stringOrNull(event.data?.agent),
     discussionId: stringOrNull(event.data?.discussionId),
     topic: stringOrNull(event.data?.topic),
@@ -64,6 +73,12 @@ export const AgentNoteRow = memo(function AgentNoteRow({
     resolveAgent,
     resolveDiscussion,
   })
+  const name = sentTo ? sentTo.name ?? "another discussion" : from!.name
+  const avatarUrl = sentTo ? sentTo.avatarUrl : from!.avatarUrl
+  const origin = sentTo ? sentTo.target : from!.origin
+  const openDiscussionId = sentTo ? sentTo.openDiscussionId : from!.openDiscussionId
+  const lead = sentTo ? (sentTo.name ? `To ${sentTo.name} in` : "To") : `${name} in`
+  const failed = sent && event.data?.failed === true
   const avatar = avatarUrl ? resolveChatMediaSrc(avatarUrl, resolveImageSrc) : undefined
   const time = expanded ? formatNoteTime(event.timestamp) : null
   const posted = expanded ? formatNoteTime(event.postedAt) : null
@@ -73,8 +88,9 @@ export const AgentNoteRow = memo(function AgentNoteRow({
   return (
     <div
       data-slot="agent-note-row"
+      data-direction={sent ? "sent" : "received"}
       data-expanded={expanded || undefined}
-      className={`ml-auto w-fit min-w-0 cursor-pointer bg-overlay-4 px-3.5 py-2 ${expanded ? "max-w-[92%]" : "max-w-[80%]"}`}
+      className={`${sent ? "" : "ml-auto "}w-fit min-w-0 cursor-pointer bg-overlay-4 px-3.5 py-2 ${expanded ? "max-w-[92%]" : "max-w-[80%]"}`}
       style={NOTE_SHAPE}
       onClick={toggle}
     >
@@ -87,7 +103,7 @@ export const AgentNoteRow = memo(function AgentNoteRow({
               {name.charAt(0).toUpperCase()}
             </span>
           )}
-          <span className="shrink-0">{name} in</span>
+          <span className="shrink-0">{lead}</span>
           {openDiscussionId ? (
             <button
               type="button"
@@ -108,7 +124,7 @@ export const AgentNoteRow = memo(function AgentNoteRow({
             <button
               type="button"
               aria-expanded={expanded}
-              aria-label={expanded ? `Collapse the note from ${name}` : `Read the note from ${name}`}
+              aria-label={`${expanded ? "Collapse" : "Read"} the note ${sent ? "to" : "from"} ${name}`}
               data-slot="agent-note-toggle"
               onClick={click => { click.stopPropagation(); toggle() }}
               className="cursor-pointer text-text-disabled transition-colors hover:text-text-muted"
@@ -130,6 +146,9 @@ export const AgentNoteRow = memo(function AgentNoteRow({
           >
             <MarkdownRenderer content={event.text} resolveImageSrc={resolveImageSrc} resolveFileLink={resolveFileLink} />
           </div>
+        )}
+        {failed && (
+          <div data-slot="agent-note-failed" className="text-[11px] leading-5 text-red-400">Not delivered</div>
         )}
         {queueStatus && (
           <div

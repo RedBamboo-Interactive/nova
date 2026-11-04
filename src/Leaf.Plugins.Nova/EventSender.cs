@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Leaf.Plugins.Nova.Endpoints;
 
@@ -79,6 +80,53 @@ public sealed record EventSender(string AgentId, string? DiscussionId, string? T
     private static string? Text(JsonObject metadata, string key)
         => metadata[key] is JsonValue value && value.TryGetValue<string>(out var text)
             && !string.IsNullOrWhiteSpace(text) ? text : null;
+}
+
+/// <summary>
+/// What an Agent sent, as it shows in the discussion it wrote from. A system record, so it is for
+/// the reader only: it never reaches the sending session and never wakes a turn. It carries no
+/// stated sender, which is what keeps it from reading as a note received there.
+/// </summary>
+internal static class SentNote
+{
+    public const string Source = "agent-note-sent";
+
+    private const int MaxTitleLength = 120;
+
+    public static bool Failed(EventDelivery delivery)
+        => delivery is EventDelivery.Failed or EventDelivery.Undeliverable or EventDelivery.Denied;
+
+    /// <summary>
+    /// Never fails the note it describes: the words have already gone. A confidential target gives a
+    /// discussion that isn't confidential no title, id or Agent, as a confidential sender does the
+    /// other way. Written only while the sender is open, so this can't revive a closed one.
+    /// </summary>
+    public static async Task RecordAsync(ClaimsPrincipal principal, DiscussionStore store, EventInjector injector,
+        DiscussionRead target, string content, string? noteUid, bool failed, string? userId, CancellationToken ct)
+    {
+        if (DiscussionAccessPolicy.ReadSignedActor(principal) is not { IsAgent: true, DiscussionId: { } fromId }) return;
+        if (string.Equals(fromId, target.Id, StringComparison.OrdinalIgnoreCase)) return;
+        try
+        {
+            var from = await store.GetAsync(fromId, ct);
+            if (from is null || DiscussionApplicationOwner.IsForeign(from)) return;
+            var hidden = target.Confidential && !from.Confidential;
+            var metadata = JsonSerializer.SerializeToElement(new
+            {
+                targetDiscussionId = hidden ? null : target.Id,
+                targetTitle = hidden ? null : NovaEventText.Field(DiscussionDisplayTitle.For(target), MaxTitleLength),
+                targetAgentId = hidden ? null : target.AgentId,
+                noteUid,
+                failed,
+            });
+            await injector.RecordSentNoteAsync(from, content, metadata, userId,
+                noteUid is null ? null : $"note-sent:{target.Id}:{noteUid}", ct);
+        }
+        catch (Exception ex)
+        {
+            injector.SentNoteNotRecorded(ex, fromId, target.Id);
+        }
+    }
 }
 
 /// <summary>"He asked for this there": the message a signed Agent names when it starts work he asked for.</summary>

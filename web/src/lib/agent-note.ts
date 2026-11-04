@@ -10,6 +10,9 @@
  */
 export const AGENT_NOTE_KEY = "agent-note"
 
+/** What an Agent sent, as it shows in the discussion it wrote from. Written by the server. */
+export const AGENT_NOTE_SENT_KEY = "agent-note-sent"
+
 // Agent slugs may themselves contain hyphens and hex (`leni-b863d153`); the
 // discussion is always the final eight hex digits.
 const NOTE_SOURCE = /^(?:event:)?([a-z][a-z0-9-]*?)-([0-9a-f]{8})$/i

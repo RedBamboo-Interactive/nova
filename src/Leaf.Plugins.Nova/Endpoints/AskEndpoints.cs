@@ -56,15 +56,21 @@ public static class AskEndpoints
 
             // An Agent instance asking is a note, not a person talking. It still needs its answer, so
             // unlike /event this asks for a session; only the way the words arrive differs.
-            var outcome = AsksAsNote(ctx.User)
-                && await EventSender.ResolveAsync(ctx.User, store, discussion, ctx.RequestAborted) is { } sender
-                ? await AskAsNoteAsync(discussion, request.Content, sender, userId, timeout,
+            var noteSender = AsksAsNote(ctx.User)
+                ? await EventSender.ResolveAsync(ctx.User, store, discussion, ctx.RequestAborted)
+                : null;
+            var outcome = noteSender is not null
+                ? await AskAsNoteAsync(discussion, request.Content, noteSender, userId, timeout,
                     NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId), store, pipeline, injector, ctx.RequestAborted)
                 : await pipeline.SendAsync(
                     discussion, userId, request.Content, images: null,
                     device: new ResolvedDevice { Name = "API", Type = "api", Platform = "api" }, input: "api",
                     humanInitiated: DiscussionAccessPolicy.IsHumanInitiated(ctx.User),
                     cause: NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
+
+            if (noteSender is not null)
+                await SentNote.RecordAsync(ctx.User, store, injector, discussion, request.Content, outcome.MessageUid,
+                    !outcome.Success, userId, ctx.RequestAborted);
 
             if (!outcome.Success)
                 return Results.Json(new { error = outcome.ErrorMessage ?? "RedCompute is unavailable", code = outcome.ErrorCode ?? "redcompute_unavailable" }, statusCode: 502);

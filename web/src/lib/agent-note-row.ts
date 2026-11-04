@@ -1,5 +1,5 @@
 import type { MessagePart } from "@redbamboo/chat"
-import { AGENT_NOTE_KEY } from "./agent-note.ts"
+import { AGENT_NOTE_KEY, AGENT_NOTE_SENT_KEY } from "./agent-note.ts"
 import { NOTE_ROW_KEY } from "./message-order.ts"
 
 /** What a reader's client knows about the discussion a note came from. */
@@ -50,6 +50,36 @@ export function describeNote({ agent, discussionId, topic, currentDiscussionId, 
   return { name, avatarUrl, origin: topic || "another discussion", openDiscussionId: null }
 }
 
+export interface SentNoteInput {
+  targetDiscussionId: string | null
+  targetTitle: string | null
+  targetAgentId: string | null
+  resolveAgent: NoteRowInput["resolveAgent"]
+  resolveDiscussion: NoteRowInput["resolveDiscussion"]
+}
+
+export interface SentNoteDescription {
+  /** Null when the target can't be named here, because it is confidential. */
+  name: string | null
+  avatarUrl: string | null
+  target: string
+  openDiscussionId: string | null
+}
+
+/** Who a sent note went to, read at render so a retitle or an outfit change shows without a reload. */
+export function describeSentNote({ targetDiscussionId, targetTitle, targetAgentId, resolveAgent, resolveDiscussion }: SentNoteInput): SentNoteDescription {
+  const discussion = targetDiscussionId ? resolveDiscussion(targetDiscussionId) : undefined
+  const ref = targetAgentId ?? discussion?.agentId ?? null
+  const info = ref ? resolveAgent(ref) : undefined
+  const title = discussion?.title ?? targetTitle
+  return {
+    name: ref ? info?.name ?? fallbackName(ref) : null,
+    avatarUrl: info?.avatarUrl || null,
+    target: title ?? "another discussion",
+    openDiscussionId: discussion && !discussion.archived ? targetDiscussionId : null,
+  }
+}
+
 /** The note as one plain line: the row truncates it, so Markdown markers would only show as noise. */
 export function notePreview(text: string): string {
   return text
@@ -61,8 +91,13 @@ export function notePreview(text: string): string {
     .trim()
 }
 
+export function isSentNotePart(part: MessagePart): boolean {
+  return part.toolName === `event:${AGENT_NOTE_SENT_KEY}`
+}
+
 /** A note the conversation shows as a row. Anything else stays in the frieze. */
 export function isNoteRowPart(part: MessagePart): boolean {
+  if (isSentNotePart(part)) return true
   if (part.toolName !== `event:${AGENT_NOTE_KEY}`) return false
   try {
     return (JSON.parse(part.toolInput ?? "{}") as { data?: Record<string, unknown> }).data?.[NOTE_ROW_KEY] === true
