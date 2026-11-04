@@ -120,6 +120,14 @@ test("background stream events never touch the turn state", async () => {
     { applyTurnState: true, settleIdle: false, forceActive: true })
 })
 
+test("a transcript reset moves no turn state", async () => {
+  const { sessionStreamEffects } = await import("./discussion-runtime.ts")
+  assert.deepEqual(
+    sessionStreamEffects({ type: "transcript_reset" } as never, { isStreaming: true, resumePending: false, background: true }),
+    { applyTurnState: false, settleIdle: false, forceActive: false },
+  )
+})
+
 test("every non-restart stop projects to the one grey stopped state", () => {
   for (const reason of ["user_stopped", "idle_timeout", "idle_ttl_expired", "usage_limit", undefined])
     assert.equal(discussionStatusForSession("Stopped", "chat", reason), "stopped")

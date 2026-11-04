@@ -72,7 +72,7 @@ export function invalidatesDelegationActivity(type: string, data: Record<string,
   }
   const discussionId = type === "discussion.rotated" ? data.oldDiscussionId : data.discussionId
   if (typeof discussionId !== "string" || !discussionIds.has(discussionId)) return false
-  return type === "discussion.changed" || type === "discussion.cleared" || type === "discussion.rotated"
+  return type === "discussion.changed" || type === "discussion.cleared" || type === "discussion.rolled_back" || type === "discussion.rotated"
     || type === "discussion.event" && (data.source === "delegation"
       || typeof data.source === "string" && data.source.startsWith("delegate:"))
 }

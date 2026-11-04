@@ -187,6 +187,8 @@ export function ChatView({
     activeMessages,
     isStreaming,
     supportsSteering,
+    supportsRollback,
+    rollbackDiscussion,
     backgroundTasks,
     backgroundTasksByDiscussion,
     stopBackgroundTask,
@@ -244,6 +246,12 @@ export function ChatView({
 
   const maintenance = useMaintenanceStatus()
   const voiceSession = useVoiceSession(activeDiscussionId)
+  const conversationRollback = useMemo(() => activeDiscussionId
+    ? {
+        supported: supportsRollback,
+        request: (messageUid: string) => rollbackDiscussion(activeDiscussionId, messageUid),
+      }
+    : undefined, [activeDiscussionId, supportsRollback, rollbackDiscussion])
   const voiceSessionTriggerRef = useRef<HTMLButtonElement>(null)
   const payloadSessionId = activeDiscussion?.sessionId ?? null
   const loadTranscriptPayload = useCallback<TranscriptPayloadLoader>((ref, range, signal) => {
@@ -1568,6 +1576,7 @@ export function ChatView({
         messages={activeMessages}
         isStreaming={isStreaming}
         supportsSteering={supportsSteering}
+        rollback={conversationRollback}
         backgroundTasks={backgroundTasks}
         onStopBackgroundTask={handleStopBackgroundTask}
         hostActivity={delegationRowActivity}

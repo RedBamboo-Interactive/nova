@@ -125,6 +125,22 @@ public static class OwnerScope
 /// is over). Same slugs and data keys the standalone app mirrored, so existing rows
 /// carry over untouched: <c>discussion-nova-{id}</c> with <c>data.app = "nova"</c>.
 /// </summary>
+/// <summary>What RedCompute says a rollback removed, as far as this discussion's own records go.</summary>
+public sealed record DiscussionRollback(
+    string RollbackId,
+    IReadOnlyCollection<string> RemovedMessageUids,
+    DateTimeOffset? FromCreatedAt,
+    DateTimeOffset? RolledBackAt)
+{
+    public bool Removes(DiscussionMessage message)
+    {
+        if (message.Metadata["uid"] is JsonValue value && value.TryGetValue<string>(out var uid)
+            && RemovedMessageUids.Contains(uid))
+            return true;
+        return message.CreatedAt >= FromCreatedAt && !(message.CreatedAt >= RolledBackAt);
+    }
+}
+
 public sealed class DiscussionStore(
     IEntityStore entities, IDiscussions discussions, AgentActivitySignals? activity = null)
 {
@@ -858,6 +874,50 @@ public sealed class DiscussionStore(
                 ReadConversationRevision = acknowledged,
                 LastReadAt = now,
             };
+        }, ct);
+
+    /// <summary>
+    /// Brings the discussion's own record in line with a rollback RedCompute has applied: what it
+    /// removed leaves this discussion's messages, and the discussion stops counting it. Nothing is
+    /// unread because of a rewind, and the next reply is new. Safe to repeat: a record written after
+    /// <see cref="DiscussionRollback.RolledBackAt"/> came later and stays, however late the repeat.
+    /// </summary>
+    /// <param name="keptSession">RedCompute's transcript after the rollback, or null if it could not be read.</param>
+    public Task<DiscussionRead?> ApplyRollbackAsync(
+        Guid entityId, DiscussionRollback rollback, List<SessionMessage>? keptSession, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            if (await RequireNovaOwnedAsync(entityId, ct) is null) return null;
+
+            var removed = new List<long>();
+            var kept = new List<DiscussionMessage>();
+            long afterId = 0;
+            while (true)
+            {
+                var page = await discussions.GetMessagesAsync(entityId, 1000, afterId, ct);
+                foreach (var message in page)
+                {
+                    if (rollback.Removes(message)) removed.Add(message.Id);
+                    else kept.Add(message);
+                }
+                if (page.Count < 1000) break;
+                afterId = page[^1].Id;
+            }
+            if (removed.Count > 0)
+                await discussions.MarkRolledBackAsync(entityId, removed, rollback.RollbackId, ct);
+
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity is null) return null;
+            var patch = new JsonObject
+            {
+                ["last_context_json"] = null,
+                ["last_activity"] = DateTimeOffset.UtcNow.ToString("O"),
+                ["read_conversation_revision"] = Long(entity.Data, "conversation_revision") ?? 0,
+            };
+            if (keptSession is not null)
+                patch["last_processed_session_assistant_uid"] = ConversationUnread.FindLatestAssistantUid(
+                    keptSession, ConversationUnread.DirectMessageUids(kept)) ?? "";
+            return Map(await entities.PatchAsync(entityId, patch, ct: ct));
         }, ct);
 
     public Task<DiscussionRead?> ResetConversationReadAsync(

@@ -126,6 +126,7 @@ export interface DiscussionHistorySession {
   stopReason?: string | null
   title?: string | null
   supportsSteering?: boolean
+  supportsRollback?: boolean
   backgroundTasks?: import("@redbamboo/chat").BackgroundTaskInfo[]
 }
 

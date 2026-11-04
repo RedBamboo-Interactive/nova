@@ -139,10 +139,10 @@ public static class DiscussionEndpoints
     private static string? UserId(HttpContext ctx) => ctx.User.FindFirstValue("sub");
 
     private static IResult Forbidden() => Results.Json(new { error = "Forbidden" }, statusCode: 403);
-    private static IResult NotFound() => Results.NotFound(new { error = "Discussion not found" });
-    private static IResult AccessDenied(DiscussionRead discussion)
+    internal static IResult NotFound() => Results.NotFound(new { error = "Discussion not found" });
+    internal static IResult AccessDenied(DiscussionRead discussion)
         => discussion.Confidential ? NotFound() : Forbidden();
-    private static IResult Closed()
+    internal static IResult Closed()
         => Results.Json(new { error = "closed", message = "Archived discussions are read-only" }, statusCode: 409);
 
     private static readonly TimeSpan EventSessionWait = TimeSpan.FromSeconds(20);

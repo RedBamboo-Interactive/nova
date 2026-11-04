@@ -59,6 +59,7 @@ public sealed class SessionPageInfo
     public string? Title { get; set; }
     /// <summary>Live background tasks RedCompute overlays on the page; passed through as-is.</summary>
     public JsonElement? BackgroundTasks { get; set; }
+    public bool? SupportsRollback { get; set; }
 }
 
 /// <summary>Authoritative keyset facts returned by RedCompute.</summary>
@@ -343,6 +344,12 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         => await SendProxyAsync(HttpMethod.Post,
             $"/voice-session/sessions/{Uri.EscapeDataString(voiceSessionId)}/close",
             new { }, provenance, ct);
+
+    /// <summary>Rewinds a session. RedCompute's status and words come back as they are.</summary>
+    public Task<ProxyResult> RollbackSessionAsync(string sessionId, string messageUid, CancellationToken ct = default)
+        => SendProxyAsync(HttpMethod.Post,
+            $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}/rollback",
+            new { messageUid }, provenance: null, ct);
 
     private async Task<ProxyResult> SendProxyAsync(HttpMethod method, string path, object? body,
         ComputeProvenance? provenance, CancellationToken ct)

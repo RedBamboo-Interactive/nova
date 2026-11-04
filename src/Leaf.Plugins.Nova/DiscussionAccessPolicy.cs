@@ -114,6 +114,33 @@ public static class DiscussionAccessPolicy
     }
 
     /// <summary>
+    /// Whether a person, at a browser, is doing this themselves. For an action only a person may take,
+    /// and that Nova then has to carry to RedCompute. <see cref="IsHumanInitiated"/> is about who a
+    /// conversation is with, and is too wide here: it passes every service token and tokenless local
+    /// request, and refuses the loopback owner's browser, whose token benefits <c>system</c> and keeps
+    /// <c>local-user</c> as its subject. <see cref="IsExplicitHuman"/> refuses every browser token.
+    /// A login with no browser token is refused too: the kernel's gateway has no identity to send on for it.
+    /// </summary>
+    public static bool IsPersonAtBrowser(ClaimsPrincipal principal)
+    {
+        if (!IsExecution(principal) || !TryReadExecution(principal, out var execution) || execution is null)
+            return false;
+        if (execution.ParentExecutionId is not null
+            || !execution.HasBrowserContext
+            || !execution.ActorKind.Equals("app", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(execution.ActorStableId, execution.AppId, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var subject = principal.FindFirstValue("sub");
+        return execution.BeneficiaryKind.Equals("user", StringComparison.OrdinalIgnoreCase)
+            ? !string.Equals(subject, LocalDefaultSubjectId, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(subject)
+                && string.Equals(execution.BeneficiaryId, subject, StringComparison.OrdinalIgnoreCase)
+            : execution.BeneficiaryKind.Equals("system", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(subject, LocalDefaultSubjectId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Who a signed execution says is acting (an Agent, an automation, an app at a browser), or
     /// null for a request without a verified execution identity. The id is the actor's entity id
     /// when it has one, as Nova stores Agent ids.

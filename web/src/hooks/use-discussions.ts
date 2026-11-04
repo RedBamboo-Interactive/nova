@@ -272,6 +272,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [])
   const [streaming, setStreaming] = useState<Record<string, boolean>>({})
   const [steeringSupport, setSteeringSupport] = useState<Record<string, boolean>>({})
+  const [rollbackSupport, setRollbackSupport] = useState<Record<string, boolean>>({})
   // Live background work per discussion (session.backgroundTasks). It never
   // makes a discussion busy; it only feeds the background status line.
   const [backgroundTasksByDiscussion, setBackgroundTasksByDiscussion] = useState<Record<string, BackgroundTaskInfo[]>>({})
@@ -328,6 +329,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     [eventPresentationCache, eventResolver, storedActiveMessages])
   const isStreaming = activeDiscussionId ? streaming[activeDiscussionId] ?? false : false
   const supportsSteering = activeDiscussionId ? steeringSupport[activeDiscussionId] ?? false : false
+  const supportsRollback = activeDiscussionId ? rollbackSupport[activeDiscussionId] ?? false : false
   const backgroundTasks = useMemo(
     () => activeDiscussionId ? backgroundTasksByDiscussion[activeDiscussionId] ?? [] : [],
     [activeDiscussionId, backgroundTasksByDiscussion])
@@ -408,10 +410,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
       && (runtimeReadGenerationRef.current[id] ?? 0) === read.generation
       && connectionGenerationRef.current === read.connection
   }, [])
-  const hydrateRuntime = useCallback((id: string, session: { id: string; status?: string; stopReason?: string | null; supportsSteering?: boolean; backgroundTasks?: BackgroundTaskInfo[] } | null | undefined, read: ReturnType<typeof captureRuntimeRead>) => {
+  const hydrateRuntime = useCallback((id: string, session: { id: string; status?: string; stopReason?: string | null; supportsSteering?: boolean; supportsRollback?: boolean; backgroundTasks?: BackgroundTaskInfo[] } | null | undefined, read: ReturnType<typeof captureRuntimeRead>) => {
     if (!session?.status || session.id !== read.sessionId || !runtimeReadIsCurrent(id, read)) return
     if (typeof session.supportsSteering === "boolean")
       setSteeringSupport(previous => ({ ...previous, [id]: session.supportsSteering! }))
+    if (typeof session.supportsRollback === "boolean")
+      setRollbackSupport(previous => ({ ...previous, [id]: session.supportsRollback! }))
     if (Array.isArray(session.backgroundTasks))
       setBackgroundTasksByDiscussion(previous => ({ ...previous, [id]: session.backgroundTasks! }))
     const status = session.status
@@ -445,7 +449,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
    */
   const reconcileStreaming = useCallback(async () => {
     const reads = new Map(getDiscussionList().map(d => [d.id, captureRuntimeRead(d.id)]))
-    let list: { id: string; status: string; stopReason?: string; supportsSteering?: boolean; backgroundTasks?: BackgroundTaskInfo[] }[]
+    let list: { id: string; status: string; stopReason?: string; supportsSteering?: boolean; supportsRollback?: boolean; backgroundTasks?: BackgroundTaskInfo[] }[]
     try {
       list = await api.get<{ id: string; status: string; stopReason?: string }[]>("/ai-session/sessions?limit=200")
     } catch { return }
@@ -908,7 +912,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           let sessionCursor: TranscriptCursor | null = null
           if (disc.sessionId) {
             try {
-              const session = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string; supportsSteering?: boolean; backgroundTasks?: BackgroundTaskInfo[] }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+              const session = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string; supportsSteering?: boolean; supportsRollback?: boolean; backgroundTasks?: BackgroundTaskInfo[] }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
               if (isCurrentLoad()) hydrateRuntime(id, session.session, runtimeRead)
               if (session.messages?.length) {
                 sessionMsgs = filterInternalBootstrapBlock(
@@ -1428,6 +1432,24 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [deliverMessage])
 
   /** Stop one background task. Its terminal state arrives as a `task` record and session.updated. */
+  // A rollback moved the transcript to a new epoch, so what is held here is from before it. What
+  // is on screen stays until the newest page replaces it.
+  const reloadAfterRollback = useCallback((discussionId: string) => {
+    resetHistoryPaging(discussionId)
+    loadedRef.current.delete(discussionId)
+    return loadMessages(discussionId, INITIAL_HISTORY_TAIL, true)
+  }, [loadMessages, resetHistoryPaging])
+
+  /** Rejects with the server's own words. Says what to give back to the composer. */
+  const rollbackDiscussion = useCallback(async (discussionId: string, messageUid: string) => {
+    const result = await api.post<{ restoredText?: string | null; discussion: DiscussionInfo }>(
+      `/api/apps/nova/discussions/${encodeURIComponent(discussionId)}/rollback`,
+      { messageUid },
+    )
+    await reloadAfterRollback(discussionId)
+    return { restoredText: result.restoredText }
+  }, [reloadAfterRollback])
+
   const stopBackgroundTask = useCallback(async (discussionId: string, taskId: string) => {
     const disc = discussions.find((d) => d.id === discussionId)
     if (!disc?.sessionId) return
@@ -1604,13 +1626,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
         void refreshDiscussions()
       }
     } else if (event.type === "session.updated") {
-      const session = event.data as { id: string; status: string; stopReason?: string; title?: string; supportsSteering?: boolean; backgroundTasks?: BackgroundTaskInfo[] }
+      const session = event.data as { id: string; status: string; stopReason?: string; title?: string; supportsSteering?: boolean; supportsRollback?: boolean; backgroundTasks?: BackgroundTaskInfo[] }
       const discId = sessionToDiscussion.get(session.id)
       if (!discId) return
       const known = discussionsRef.current.find((d) => d.id === discId)
       if (!known || isClosed(known.status) || isDiscussionArchivePending(discId) || !historyLifecycleRef.current.canRun(discId)) return
       if (typeof session.supportsSteering === "boolean")
         setSteeringSupport(previous => ({ ...previous, [discId]: session.supportsSteering! }))
+      if (typeof session.supportsRollback === "boolean")
+        setRollbackSupport(previous => ({ ...previous, [discId]: session.supportsRollback! }))
       if (Array.isArray(session.backgroundTasks))
         setBackgroundTasksByDiscussion(previous => ({ ...previous, [discId]: session.backgroundTasks! }))
       if (shouldRequestSessionTitleSync(known, session.title)) {
@@ -1890,6 +1914,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setResumePending((prev) => ({ ...prev, [discussionId]: false }))
       loadedRef.current.delete(discussionId)
       loadMessages(discussionId, INITIAL_HISTORY_TAIL, true)
+    } else if (event.type === "discussion.rolled_back") {
+      const { discussionId } = event.data as { discussionId: string }
+      if (!discussionId) return
+      void reloadAfterRollback(discussionId)
+      void refreshDiscussions()
     } else if (event.type === "discussion.rotated") {
       const { oldDiscussionId, newDiscussionId } = event.data as { oldDiscussionId: string; newDiscussionId: string; agentId: string }
       historyLifecycleRef.current.revive(newDiscussionId)
@@ -1975,7 +2004,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discId]: reconciled.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, refreshArchivedDiscussions, refreshDelegationActivity, delegationInvalidations, loadMessages, catchUpMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming, resetHistoryPaging, retireHistoryPaging])
+  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, refreshArchivedDiscussions, refreshDelegationActivity, delegationInvalidations, loadMessages, reloadAfterRollback, catchUpMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming, resetHistoryPaging, retireHistoryPaging])
   handleWsEventRef.current = handleWsEvent
 
   const handleUpstreamDisconnect = useCallback(() => {
@@ -2153,6 +2182,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     activeMessages,
     isStreaming,
     supportsSteering,
+    supportsRollback,
+    rollbackDiscussion,
     backgroundTasks,
     backgroundTasksByDiscussion,
     stopBackgroundTask,

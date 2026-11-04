@@ -49,18 +49,19 @@ public sealed class ConversationUnread(
             _ = voiceForwarder.OnSettledAsync(discussion.Id, discussion.SessionId, snapshot, CancellationToken.None);
 
         var records = await discussions.GetMessagesAsync(discussion.EntityId, ct: ct);
-        var directMessageUids = records
+        var latestUid = FindLatestAssistantUid(snapshot.Messages, DirectMessageUids(records));
+        return await store.ReconcileConversationAsync(discussion.EntityId, latestUid, ct)
+            ?? discussion;
+    }
+
+    internal static HashSet<string> DirectMessageUids(IEnumerable<DiscussionMessage> records)
+        => records
             .Where(message => message.Role == "assistant"
                 && message.Metadata["source"]?.GetValue<string>() == "nova-message")
             .Select(message => message.Metadata["uid"]?.GetValue<string>())
             .Where(uid => !string.IsNullOrWhiteSpace(uid))
             .Select(uid => uid!)
             .ToHashSet(StringComparer.Ordinal);
-
-        var latestUid = FindLatestAssistantUid(snapshot.Messages, directMessageUids);
-        return await store.ReconcileConversationAsync(discussion.EntityId, latestUid, ct)
-            ?? discussion;
-    }
 
     internal static string? FindLatestAssistantUid(
         List<SessionMessage> rawMessages,
