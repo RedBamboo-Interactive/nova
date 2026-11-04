@@ -17,7 +17,11 @@ interface AgentNoteRowProps {
 const stringOrNull = (value: unknown) => typeof value === "string" && value ? value : null
 
 // Tappable, without an underline as loud as the words it sits under.
-const ORIGIN_UNDERLINE = { textDecorationColor: "color-mix(in oklch, currentColor 35%, transparent)" }
+const ORIGIN_UNDERLINE = { textDecorationColor: "color-mix(in oklch, currentColor 25%, transparent)" }
+
+// Inline for the reason USER_BUBBLE_SHAPE_STYLE is: a later plugin stylesheet can reset a rounded-*.
+// All four corners round, because the tail is what makes a bubble the person's own.
+const NOTE_SHAPE = { borderRadius: "calc(var(--radius) * 1.4)" }
 
 /** A tap on the prose collapses a long note, but a link, an image or a selection stays what it is. */
 function keepInteractionInBody(click: MouseEvent<HTMLDivElement>) {
@@ -34,9 +38,9 @@ function formatNoteTime(iso: string | undefined): string | null {
 }
 
 /**
- * What one Agent instance wrote to another, as a quiet line in the conversation:
- * who, from where, and the first line of it. It reads as something overheard
- * rather than something said, so nothing here is louder than the conversation.
+ * What one Agent instance wrote to another. It sits on the right because that is
+ * where things said to this Agent go, and every step of it is quieter than the
+ * person's own bubble: fainter fill, muted smaller text, no tail, a sender on top.
  */
 export const AgentNoteRow = memo(function AgentNoteRow({
   part,
@@ -70,20 +74,20 @@ export const AgentNoteRow = memo(function AgentNoteRow({
     <div
       data-slot="agent-note-row"
       data-expanded={expanded || undefined}
-      className="flex min-w-0 cursor-pointer items-start gap-2"
+      className={`ml-auto w-fit min-w-0 cursor-pointer bg-overlay-4 px-3.5 py-2 ${expanded ? "max-w-[92%]" : "max-w-[80%]"}`}
+      style={NOTE_SHAPE}
       onClick={toggle}
     >
-      {avatar ? (
-        <img src={avatar} alt="" className="mt-0.5 size-5 shrink-0 rounded-full object-cover" />
-      ) : (
-        <span aria-hidden className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-overlay-8 text-[10px] font-medium text-text-muted">
-          {name.charAt(0).toUpperCase()}
-        </span>
-      )}
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-baseline gap-1 text-xs leading-5 text-text-muted">
-          <span className="shrink-0 font-medium">{name},</span>
-          <span className="shrink-0">from</span>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-1 text-[11px] leading-[18px] text-text-muted">
+          {avatar ? (
+            <img src={avatar} alt="" className="mr-0.5 size-3.5 shrink-0 rounded-full object-cover" />
+          ) : (
+            <span aria-hidden className="mr-0.5 grid size-3.5 shrink-0 place-items-center rounded-full bg-overlay-8 text-[8px] font-medium">
+              {name.charAt(0).toUpperCase()}
+            </span>
+          )}
+          <span className="shrink-0">{name} in</span>
           {openDiscussionId ? (
             <button
               type="button"
@@ -98,7 +102,7 @@ export const AgentNoteRow = memo(function AgentNoteRow({
           ) : (
             <span data-slot="agent-note-origin" className="min-w-0 truncate">{origin}</span>
           )}
-          <span className="ml-auto flex shrink-0 items-baseline gap-2 pl-2">
+          <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
             {postedAt && <span className="font-mono text-[10px] tabular-nums text-text-disabled">Posted {postedAt}</span>}
             {time && <span className="font-mono text-[10px] tabular-nums text-text-disabled">{time}</span>}
             <button
@@ -114,14 +118,14 @@ export const AgentNoteRow = memo(function AgentNoteRow({
           </span>
         </div>
         {!expanded && (
-          <p data-slot="agent-note-preview" className="truncate text-xs leading-5 text-text-disabled">
+          <p data-slot="agent-note-preview" className="line-clamp-2 font-serif text-[13px] leading-5 text-text-muted">
             {notePreview(event.text)}
           </p>
         )}
         {expanded && (
           <div
             data-slot="agent-note-body"
-            className="mt-0.5 pb-1 text-sm leading-relaxed font-serif text-text-secondary markdown-body break-words"
+            className="mt-0.5 text-[13.5px] leading-[21px] font-serif text-text-muted markdown-body break-words [&>:first-child]:mt-0 [&>:last-child]:mb-0"
             onClick={keepInteractionInBody}
           >
             <MarkdownRenderer content={event.text} resolveImageSrc={resolveImageSrc} resolveFileLink={resolveFileLink} />
