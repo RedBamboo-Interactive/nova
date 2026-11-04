@@ -13,7 +13,7 @@ public sealed class LiveDiscussionAliasTests
         var current = Live("current");
         var calls = new List<string>();
 
-        var resolved = await LiveDiscussionAlias.ResolveAsync("live", NovaAgent,
+        var resolved = await LiveDiscussionAlias.ResolveAsync("live", null, NovaAgent,
             id => { calls.Add(id); return Task.FromResult<DiscussionRead?>(null); },
             () => Task.FromResult(new List<DiscussionRead> { current }));
 
@@ -55,7 +55,7 @@ public sealed class LiveDiscussionAliasTests
         var target = Live("concrete", DiscussionStatus.Archived);
         var listed = false;
 
-        var resolved = await LiveDiscussionAlias.ResolveAsync("concrete", NovaAgent,
+        var resolved = await LiveDiscussionAlias.ResolveAsync("concrete", null, NovaAgent,
             id => Task.FromResult<DiscussionRead?>(id == "concrete" ? target : null),
             () => { listed = true; return Task.FromResult(new List<DiscussionRead>()); });
 
@@ -63,8 +63,28 @@ public sealed class LiveDiscussionAliasTests
         Assert.False(listed);
     }
 
+    [Fact]
+    public void A_signed_agent_with_its_own_live_gets_that_one_not_novas()
+    {
+        var nova = Live("nova-live");
+        var leni = Live("leni-live", agentId: "leni");
+
+        Assert.Same(leni, LiveDiscussionAlias.FirstOpenFor([nova, leni], "leni", NovaAgent));
+    }
+
+    [Fact]
+    public void An_agent_without_an_open_live_and_an_unsigned_caller_still_reach_novas()
+    {
+        var nova = Live("nova-live");
+        var archived = Live("leni-live", DiscussionStatus.Archived, "leni");
+
+        Assert.Same(nova, LiveDiscussionAlias.FirstOpenFor([archived, nova], "leni", NovaAgent));
+        Assert.Same(nova, LiveDiscussionAlias.FirstOpenFor([nova], "spark", NovaAgent));
+        Assert.Same(nova, LiveDiscussionAlias.FirstOpenFor([nova], null, NovaAgent));
+    }
+
     private static Task<DiscussionRead?> Resolve(string id, List<DiscussionRead> lives)
-        => LiveDiscussionAlias.ResolveAsync(id, NovaAgent,
+        => LiveDiscussionAlias.ResolveAsync(id, null, NovaAgent,
             _ => Task.FromResult<DiscussionRead?>(null),
             () => Task.FromResult(lives));
 

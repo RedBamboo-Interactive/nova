@@ -181,7 +181,7 @@ public static class DiscussionEndpoints
     {
         // "live" resolves to the current LIVE discussion — the heartbeat posts
         // its note-events through this form since the LIVE id rotates daily.
-        var discussion = await LiveDiscussionAlias.ResolveAsync(id, agents.NovaAgentId,
+        var discussion = await LiveDiscussionAlias.ResolveAsync(id, SignedAgentId(ctx), agents.NovaAgentId,
             i => store.GetAsync(i, ctx.RequestAborted),
             () => store.ListByTypeAsync("live", ct: ctx.RequestAborted));
         if (discussion is null) return NotFound();
@@ -262,6 +262,9 @@ public static class DiscussionEndpoints
     /// <summary>The source of a brief from a caller that isn't a signed Agent.</summary>
     private const string BriefSource = "discussion-brief";
 
+    private static string? SignedAgentId(HttpContext ctx)
+        => DiscussionAccessPolicy.ReadSignedActor(ctx.User) is { IsAgent: true } actor ? actor.Id : null;
+
     internal static async Task<IResult> CreateDiscussionAsync(CreateDiscussionRequest? createReq, HttpContext ctx,
         DiscussionStore store, AgentDirectory agents, MessagePipeline pipeline, IPluginEvents events,
         LiveEvents live, EventInjector injector)
@@ -287,7 +290,9 @@ public static class DiscussionEndpoints
         var (requestedIn, requestRefusal) = await ReadRequestedInAsync(createReq?.RequestedIn, null, ctx, store);
         if (requestRefusal is not null) return requestRefusal;
 
-        var agentId = createReq?.AgentId ?? agents.NovaAgentId;
+        // An Agent opening a discussion opens its own. Falling through to Nova would run its brief
+        // under another Agent's identity and memory.
+        var agentId = createReq?.AgentId ?? SignedAgentId(ctx) ?? agents.NovaAgentId;
         var type = createReq?.Type ?? "chat";
 
         if (type is "live" or HeartbeatService.DiscussionType)
@@ -1878,7 +1883,7 @@ public static class DiscussionEndpoints
             [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events,
             DiscussionActivity activity, VoiceBackendForwarder voiceForwarder) =>
         {
-            var discussion = await LiveDiscussionAlias.ResolveAsync(id, agents.NovaAgentId,
+            var discussion = await LiveDiscussionAlias.ResolveAsync(id, SignedAgentId(ctx), agents.NovaAgentId,
                 i => store.GetAsync(i, ctx.RequestAborted),
                 () => store.ListByTypeAsync("live", ct: ctx.RequestAborted));
             if (discussion is null) return NotFound();

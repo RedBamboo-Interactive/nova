@@ -85,6 +85,23 @@ public sealed partial class EventDeliveryQueueTests
             JsonSerializer.SerializeToElement(((IValueHttpResult)result).Value));
     }
 
+    [Fact]
+    public async Task An_agent_opening_a_discussion_opens_its_own_not_novas()
+    {
+        using var world = new World("session-1");
+        AddOrigin(world);
+        const string other = "11111111-2222-3333-4444-555555555555";
+
+        var (_, signed) = await OpenAsync(world, Signed("agent", other), new CreateDiscussionRequest { Title = "Mine" });
+        var (_, person) = await OpenAsync(world, Person(), new CreateDiscussionRequest { Title = "Theirs" });
+        var (_, named) = await OpenAsync(world, Signed("agent", other),
+            new CreateDiscussionRequest { Title = "Named", AgentId = AgentOf(world) });
+
+        Assert.Equal(other, signed.GetProperty("agentId").GetString());
+        Assert.Equal(world.Agents.NovaAgentId, person.GetProperty("agentId").GetString());
+        Assert.Equal(AgentOf(world), named.GetProperty("agentId").GetString());
+    }
+
     private static string OpeningTag(string frame) => frame[..(frame.IndexOf('>') + 1)];
 
     private static int Occurrences(string text, string part)

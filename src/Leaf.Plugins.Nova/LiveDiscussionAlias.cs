@@ -20,14 +20,25 @@ internal static class LiveDiscussionAlias
             && (novaAgentId == null || d.AgentId == null || d.AgentId == novaAgentId));
 
     /// <summary>
-    /// Resolves a route id: the <c>live</c> alias to the current open LIVE, any other id
+    /// The LIVE a caller means by the alias: a signed Agent's own when it has one. An Agent without
+    /// a LIVE, such as one delivering to Nova's morning, and every unsigned caller get Nova's.
+    /// </summary>
+    public static DiscussionRead? FirstOpenFor(
+        IReadOnlyCollection<DiscussionRead> liveDiscussions, string? callerAgentId, string? novaAgentId)
+        => (callerAgentId is null
+                ? null
+                : liveDiscussions.FirstOrDefault(d => !DiscussionStatus.IsClosed(d.Status) && d.AgentId == callerAgentId))
+            ?? FirstOpen(liveDiscussions, novaAgentId);
+
+    /// <summary>
+    /// Resolves a route id: the <c>live</c> alias to the caller's current open LIVE, any other id
     /// through <paramref name="getById"/>. Callers still run access/mutation checks on the result.
     /// </summary>
     public static async Task<DiscussionRead?> ResolveAsync(
-        string id, string? novaAgentId,
+        string id, string? callerAgentId, string? novaAgentId,
         Func<string, Task<DiscussionRead?>> getById,
         Func<Task<List<DiscussionRead>>> listLive)
         => IsAlias(id)
-            ? FirstOpen(await listLive(), novaAgentId)
+            ? FirstOpenFor(await listLive(), callerAgentId, novaAgentId)
             : await getById(id);
 }
