@@ -220,6 +220,18 @@ public sealed class JournalProjectionTests
     }
 
     [Fact]
+    public void Real_words_before_a_trailing_marker_are_what_the_turn_said()
+    {
+        var turns = JournalProjection.Turns([
+            Canonical("user", "<nova-event source=\"heartbeat-tick\">tick</nova-event>", "u0", T0),
+            Canonical("assistant", "Waiting on the worker.\n\n" + NovaNoReply.Marker, "t1", T0.AddSeconds(5)),
+        ]);
+
+        Assert.False(Assert.Single(turns).Silent);
+        Assert.Equal("Waiting on the worker.", turns[0].Text);
+    }
+
+    [Fact]
     public void A_turn_ending_in_the_marker_stayed_silent_whatever_it_said_on_the_way()
     {
         var turns = JournalProjection.Turns([

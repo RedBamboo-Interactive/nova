@@ -209,9 +209,9 @@ public sealed class VoiceBackendForwarder(ILogger<VoiceBackendForwarder>? logger
             var selected = text.Any(message => IsFinalPhase(message.Phase))
                 ? text.Where(message => IsFinalPhase(message.Phase))
                 : text.Where(message => !string.Equals(message.Phase, "commentary", StringComparison.OrdinalIgnoreCase));
-            var content = string.Concat(selected.Select(message => message.Content)).Trim();
-            // A silent settle has nothing to say aloud.
-            if (content.Length > 0 && !NovaNoReply.IsMarker(content)) finals.Add(new(group.Key, content));
+            // A silent settle has nothing to say aloud, and a marker after real words is never read out.
+            var content = NovaNoReply.WithoutTrailingMarker(string.Concat(selected.Select(message => message.Content))).Trim();
+            if (content.Length > 0) finals.Add(new(group.Key, content));
         }
         return finals;
     }

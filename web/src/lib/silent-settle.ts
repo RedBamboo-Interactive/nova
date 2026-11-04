@@ -16,6 +16,19 @@ export function isSilentSettleText(content: string): boolean {
   return text.length > 0 && NO_REPLY_MARKER.startsWith(text)
 }
 
+/**
+ * A real reply with the marker alone on its last line (seq 13086): the words stand and the marker
+ * goes, whole or still streaming in. The record can't say which was meant, and hiding words is the
+ * worse mistake. Only a last line that is nothing else counts: prose or inline code about the marker
+ * shows as written, and a code fence ends on its own closing line.
+ */
+export function withoutTrailingMarker(content: string): string {
+  const text = content.trimEnd()
+  const lineStart = text.lastIndexOf("\n")
+  if (lineStart < 0 || !NO_REPLY_MARKER.startsWith(text.slice(lineStart + 1).trim())) return content
+  return text.slice(0, lineStart).trimEnd()
+}
+
 /** Block metadata flag for a user record that Nova admitted as internal input (`internalMessage`). */
 export const INTERNAL_INPUT_KEY = "internalInput"
 
@@ -71,12 +84,27 @@ export function hideSilentSettle(blocks: MessageBlock[]): MessageBlock[] {
       changed = true
       continue
     }
-    if (block.role !== "assistant" || !block.parts.some(part => part.type === "text" && isSilentSettleText(part.content))) {
+    if (block.role !== "assistant") {
+      visible.push(block)
+      continue
+    }
+    let touched = false
+    const parts = block.parts.flatMap(part => {
+      if (part.type !== "text") return [part]
+      if (isSilentSettleText(part.content)) {
+        touched = true
+        return []
+      }
+      const shown = withoutTrailingMarker(part.content)
+      if (shown === part.content) return [part]
+      touched = true
+      return [{ ...part, content: shown }]
+    })
+    if (!touched) {
       visible.push(block)
       continue
     }
     changed = true
-    const parts = block.parts.filter(part => !(part.type === "text" && isSilentSettleText(part.content)))
     if (parts.length > 0) visible.push({ ...block, parts })
   }
   return changed ? visible : blocks

@@ -37,6 +37,43 @@ test("text that leaves the marker's prefix shows as written", () => {
   }
 })
 
+test("a real reply ending in the marker keeps its words and loses the marker (seq 13086)", () => {
+  const words = "Ambience's new id rule is safe against the real data. Everything else is committed and reviewed, and I'm now waiting on the Nova worker and Code's last four routes."
+  const shown = hideSilentSettle([block("turn-2", "assistant", text(`${words}\n\n${NO_REPLY_MARKER}`))])
+
+  assert.equal(shown.length, 1)
+  assert.equal(shown[0]!.parts[0]!.content, words)
+})
+
+test("the trailing marker never flashes while it streams in pieces", () => {
+  let streamed = "Waiting on the worker.\n\n"
+  for (const delta of ["<nova-", "no-re", "ply", "/>"]) {
+    streamed += delta
+    const shown = hideSilentSettle([block("turn-2", "assistant", text(streamed))])
+    assert.equal(shown[0]!.parts[0]!.content, "Waiting on the worker.", `after ${JSON.stringify(streamed)}`)
+  }
+})
+
+test("words about the marker stay as written: the real mentions and a code fence", () => {
+  for (const content of [
+    "A literal `<nova-no-reply/>` shows after my text.\n\nIf the look is right, say so and I'll push.",
+    `The marker is ${NO_REPLY_MARKER}`,
+    `First line\nThe marker is ${NO_REPLY_MARKER}`,
+    `Reply with:\n\`\`\`\n${NO_REPLY_MARKER}\n\`\`\``,
+    `Reply with:\n> ${NO_REPLY_MARKER}`,
+    `${NO_REPLY_MARKER}\nand then I spoke anyway`,
+    "A list:\n<b>bold</b>",
+  ]) {
+    const unchanged = block("turn-2", "assistant", text(content))
+    assert.equal(hideSilentSettle([unchanged])[0], unchanged, content)
+  }
+})
+
+test("a person's message ending in the marker is theirs", () => {
+  const typed = block("user-2", "user", text(`What does this do?\n${NO_REPLY_MARKER}`))
+  assert.equal(hideSilentSettle([typed])[0], typed)
+})
+
 test("a reaction made during the silent turn keeps its tool squares", () => {
   const reacted = block("turn-2", "assistant", tool("Bash"), { type: "tool_result", content: "{\"success\":true}" }, text(NO_REPLY_MARKER))
 

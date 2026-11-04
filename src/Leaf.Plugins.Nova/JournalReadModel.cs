@@ -653,13 +653,13 @@ public sealed class JournalReadModel(
             if (firstAt is null || at < firstAt) firstAt = at;
 
         var spoken = JournalProjection.LastSpoken(canonical);
-        string? lastText = spoken?.Content, lastUid = spoken?.MessageUid;
+        string? lastText = spoken is null ? null : NovaNoReply.WithoutTrailingMarker(spoken.Content), lastUid = spoken?.MessageUid;
         // A delivery discussion's words live only in the overlay, as Nova's own bridge records.
         var bridged = overlays.LastOrDefault(message => message.Role == "assistant"
             && Text(message.Metadata, "source") == "nova-message" && !NovaNoReply.IsMarker(message.Content)
             && !string.IsNullOrWhiteSpace(message.Content));
         if (bridged is not null && (spoken is null || bridged.CreatedAt > JournalProjection.At(spoken)))
-            (lastText, lastUid) = (bridged.Content, Text(bridged.Metadata, "uid"));
+            (lastText, lastUid) = (NovaNoReply.WithoutTrailingMarker(bridged.Content), Text(bridged.Metadata, "uid"));
 
         // One message however many records hold it: a turn's uid, and the overlay copy of a framed event.
         var spokenUids = canonical

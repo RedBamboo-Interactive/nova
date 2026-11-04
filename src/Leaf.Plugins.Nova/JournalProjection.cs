@@ -233,7 +233,7 @@ public static partial class JournalProjection
             var last = list.LastOrDefault(IsAssistantText);
             var silent = last is not null && NovaNoReply.IsMarker(last.Content);
             turns.Add(new(uid, trigger is null ? At(list[0]) : At(trigger),
-                silent ? null : last?.Content, silent, TriggerOf(trigger, list[0])));
+                silent || last is null ? null : NovaNoReply.WithoutTrailingMarker(last.Content), silent, TriggerOf(trigger, list[0])));
         }
         return turns;
     }
