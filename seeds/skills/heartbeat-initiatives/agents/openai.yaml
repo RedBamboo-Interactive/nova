@@ -1,0 +1,4 @@
+interface:
+  display_name: "Heartbeat: Initiatives"
+  short_description: "Start unrequested work in its own discussion"
+  default_prompt: "Use $heartbeat-initiatives on this Heartbeat tick."

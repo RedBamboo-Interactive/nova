@@ -59,8 +59,8 @@ public sealed class EventWrapperFrameTests
             + (char)0x200D + char.ConvertFromUtf32(0x1F469);
         return new()
         {
-            { "heartbeat-tick", HeartbeatPrompts.Morning(digest, config, "Nova", initiatives: true) },
-            { "heartbeat-tick", HeartbeatPrompts.Tick(digest, DateTimeOffset.Parse("2026-10-24T08:00:00Z"), config, initiatives: true) },
+            { "heartbeat-tick", HeartbeatPrompts.Morning(digest, config, "Nova", HeartbeatSkillSet.Empty) },
+            { "heartbeat-tick", HeartbeatPrompts.Tick(digest, DateTimeOffset.Parse("2026-10-24T08:00:00Z"), config, HeartbeatSkillSet.Empty) },
             { "heartbeat-tick", HeartbeatPrompts.EndOfDay("rotation at 04:00") },
             { "heartbeat-tick", HeartbeatPrompts.SpokenCompletionRequired },
             { "automation:Backup & Sync", "Backup & Sync completed: 3 files <changed>, 0 errors." },

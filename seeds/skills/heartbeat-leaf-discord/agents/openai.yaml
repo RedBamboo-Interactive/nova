@@ -1,0 +1,4 @@
+interface:
+  display_name: "Heartbeat: Leaf Discord"
+  short_description: "Join Leaf Discord when there is a real reason"
+  default_prompt: "Use $heartbeat-leaf-discord on this Heartbeat tick."

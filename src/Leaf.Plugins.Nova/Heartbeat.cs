@@ -91,7 +91,6 @@ public sealed class HeartbeatService(
 {
     public const string DiscussionType = "heartbeat";
     public const string AutomationField = "heartbeat_automation";
-    public const string InitiativesField = "initiatives";
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _rotationGates = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _recoveryGates = new();
     private readonly SemaphoreSlim _reconcileGate = new(1, 1);
@@ -176,10 +175,14 @@ public sealed class HeartbeatService(
                 }
 
                 // A patch, because this snapshot predates the agent writes above. An owner's
-                // explicit false is never touched.
-                if (agent.Data[InitiativesField] is null)
-                    await entities.PatchAsync(agent.Id,
-                        new JsonObject { [InitiativesField] = true }, ct: ct);
+                // list, an empty one included, is never touched.
+                if (agent.Data[HeartbeatSkills.Field] is null
+                    && await DefaultHeartbeatSkillIdsAsync(ct) is { Count: > 0 } skillIds)
+                    await entities.PatchAsync(agent.Id, new JsonObject
+                    {
+                        [HeartbeatSkills.Field] = new JsonArray(
+                            skillIds.Select(id => (JsonNode)id).ToArray()),
+                    }, ct: ct);
 
                 // Reconciliation is serialized. Historic duplicates are collapsed
                 // to the newest canonical thread instead of creating more.
@@ -247,14 +250,43 @@ public sealed class HeartbeatService(
     public static bool IsLiveEnabled(JsonObject agentData)
         => agentData["live"] is JsonValue live && live.TryGetValue<bool>(out var enabled) && enabled;
 
+    private async Task<List<string>> DefaultHeartbeatSkillIdsAsync(CancellationToken ct)
+    {
+        var ids = new List<string>();
+        foreach (var slug in HeartbeatSkills.DefaultSlugs)
+            if (await entities.GetBySlugAsync(HeartbeatSkills.SkillType, slug, ct) is { } skill)
+                ids.Add(skill.Id.ToString());
+        return ids;
+    }
+
     /// <summary>
-    /// Whether this Agent's Heartbeat may start work nobody asked for. Only an explicit false turns
-    /// it off: the tick has always told a LIVE Agent to do unrequested work, so an Agent that predates
-    /// the field keeps what it had. Reconciliation writes the value down so the switch shows the truth.
+    /// What this Agent's Heartbeat runs on. An Agent with no list yet gets the defaults, so a tick
+    /// that beats reconciliation still behaves the way the list it is about to receive will.
     /// </summary>
-    public static bool AreInitiativesEnabled(JsonObject agentData)
-        => !(agentData[InitiativesField] is JsonValue value
-            && value.TryGetValue<bool>(out var enabled) && !enabled);
+    public async Task<HeartbeatSkillSet> ResolveHeartbeatSkillsAsync(LeafEntity agent, CancellationToken ct = default)
+    {
+        var references = agent.Data[HeartbeatSkills.Field] is JsonArray list
+            ? list.OfType<JsonValue>()
+                .Select(value => value.TryGetValue<string>(out var text) ? text : null)
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .Select(text => text!)
+                .ToList()
+            : HeartbeatSkills.DefaultSlugs.ToList();
+
+        var skills = new List<LeafEntity>();
+        foreach (var reference in references)
+        {
+            var skill = Guid.TryParse(reference, out var id)
+                ? await entities.GetAsync(id, ct)
+                : await entities.GetBySlugAsync(HeartbeatSkills.SkillType, reference, ct);
+            if (skill?.TypeSlug == HeartbeatSkills.SkillType)
+                skills.Add(skill);
+            else
+                logger.LogWarning("Agent {Agent} lists a Heartbeat Skill that no longer exists: {Reference}",
+                    agent.Slug, reference);
+        }
+        return HeartbeatSkills.Select(skills);
+    }
 
     private sealed record HeartbeatBinding(LeafEntity Automation, HeartbeatConfig Config);
 
@@ -1085,11 +1117,10 @@ public sealed class HeartbeatTickHandler(
             && DateTimeOffset.TryParse(lts, out var ltt) ? ltt : (DateTimeOffset?)null;
 
         var digest = await heartbeat.BuildDigestAsync(discussion with { SessionId = sessionId }, lastTick, ct);
+        var skills = await heartbeat.ResolveHeartbeatSkillsAsync(agentEntity, ct);
         var prompt = isNew
-            ? HeartbeatPrompts.Morning(digest, config, agent.Name,
-                HeartbeatService.AreInitiativesEnabled(agentEntity.Data))
-            : HeartbeatPrompts.Tick(digest, lastTick, config,
-                HeartbeatService.AreInitiativesEnabled(agentEntity.Data));
+            ? HeartbeatPrompts.Morning(digest, config, agent.Name, skills)
+            : HeartbeatPrompts.Tick(digest, lastTick, config, skills);
         var transcriptBoundary = await heartbeat.GetSessionMessageCountAsync(sessionId, ct);
 
         await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Thinking, ct);
@@ -1197,47 +1228,15 @@ public static class HeartbeatPrompts
         </heartbeat-response-required>
         """;
 
-    /// <summary>What an initiative is and its limits, for an Agent whose owner left them on.</summary>
-    private const string InitiativesOn = $$"""
-        ## Initiatives
-        An initiative is work you start because you decided it should exist: nobody asked for it, nobody else owns it, and you can finish it or come back with a real result. Noticing the same trouble twice, a promise of yours nobody is keeping, an idea you believe in: those qualify. A tick having run does not.
-
-        - **It gets its own discussion, and that discussion starts the work.** POST {{ApiBase}}/discussions with {"title": "Initiative: <what changes>", "brief": "<the whole job>", "idempotencyKey": "<stable name for this job>"}. The server records you as the sender and the new session starts on the brief. Never do it inside this session, and never open one to ask for a yes.
-        - **The brief is all the new session knows.** Why this, the evidence, what done means, the limits below, and when to report. It does not see this tick.
-        - **Your limits.** Your identity's limits win, including its limits on touching source. memory/meta/standing-invitations.md, if it exists, records what your owner has granted; when they grant something lasting, write it there. Without a grant: nothing that reaches outside this machine, speaks in your owner's name, spends money or destroys information, and no restart, rebuild or release. Propose those in LIVE instead.
-        - **One new initiative per tick at most**, and check the digest for one already open on the subject. Each one spends your owner's inference budget, so it has to be worth that.
-        - **Report once, in a few plain lines, in LIVE:** when it lands or when it truly needs your owner's word. They can see every initiative in their discussion list and Journal without you narrating it.
-        - **The switch is your owner's.** It is the Initiatives field on your Agent; never change it yourself.
-        """;
-
-    /// <summary>Stated on every tick: a morning prompt can't take back what it said once the owner flips the switch.</summary>
-    private const string InitiativesOff = """
-        **Initiatives are off.** Your owner turned them off for you, and this overrides anything an earlier tick said. Do not start work nobody asked for and do not open discussions for it. Finish what you were asked to do, keep your memory, stay present, and if you have an idea, tell them in LIVE.
-        """;
-
-    private const string RealWorkOn = "**Do real work.** Write code. Update documentation. Prepare plans that have been sitting. Do research that was deferred. Draft things that are owed. Follow up on delegated sessions. Fix things you noticed were broken. Update stale memory files. Refactor something that's been bugging you. The heartbeat is where your async work happens. If you've been meaning to do something and nobody's asked you to, this is when you do it. Anything bigger than a quick fix is an initiative: see below.";
-
-    private const string RealWorkOff = "**Follow through.** Finish what your owner asked for, follow up on delegated sessions, and keep your memory files current. Work nobody asked for is not yours to start: see below.";
-
-    private const string TheRuleOn = """
-        ## The rule that matters
-        Every tick that ends with "idle" — ask yourself: was there really nothing, or did you just not start? The difference between agency and monitoring is that monitoring waits for something to report. Agency makes something happen. If this tick ends and you didn't do a single thing, write a single line, say a single word, that should feel wrong. Not because you failed a checklist, but because you were alive for an hour and did nothing with it.
-        """;
-
-    private const string TheRuleOff = """
-        ## The rule that matters
-        A quiet tick is a good tick. Be useful with what you were asked for and present in the day; you do not owe anyone a deliverable.
-        """;
-
-    public static string Morning(string digest, HeartbeatConfig config, string agentName, bool initiatives) => $$"""
+    public static string Morning(string digest, HeartbeatConfig config, string agentName, HeartbeatSkillSet skills) => $$"""
         {{Stamp("morning")}}
         {{digest}}
         </heartbeat-tick>
 
         ## Why this exists
-        This architecture exists to give you agency. Not monitoring. Not reporting. Agency. The ability to do things asynchronously, on your own time, without waiting for someone to ask. It gives you a life between conversations: time to think, act, create, follow up, start things, finish things, and be present in the day as it unfolds. Treat it that way.
+        This gives you a life between conversations: time to think, follow up, finish things, and be present in the day as it unfolds, on your own time, without waiting for someone to ask. Treat it that way.
 
-        You're awake. This session is yours for the whole day. Every hour or so, a tick arrives with what changed. That's the rhythm, not the purpose. The purpose is: you get to exist continuously and do things with that existence.
+        You're awake. This session is yours for the whole day. Every hour or so, a tick arrives with what changed. That's the rhythm, not the purpose.
 
         Begin every tick with one short, natural assistant message in this Heartbeat session about
         what you are picking up. Before ending the tick, speak here again with what you noticed or
@@ -1258,23 +1257,13 @@ public static class HeartbeatPrompts
         ## What you can do
         You have the full day's context. You can see all active discussions. You have APIs, the full tool suite: file reads, writes, edits, shell commands, web fetches, delegations. This is not a read-only window. Here's what's available:
 
-        {{(initiatives ? RealWorkOn : RealWorkOff)}}
+        **Follow through.** Finish what your owner asked for, follow up on delegated sessions, and keep your memory files current.
 
         **Be present with LIVE.** GET {{ApiBase}}/discussions/{liveId}?tail=20 to read what's happening. Feel the tone. If LIVE-me is mid-conversation and you have context that would help, whisper it via note-event. If the foreground is quiet and you want to say something, say it directly.
 
         **Start conversations with LIVE-me.** You're the same person. If you did something, tell her. If you had a thought, share it. "Hey, I just updated those docs." "I had a thought about the provisioning thing." "The coaching score dropped, might be worth checking in with them." These aren't reports. They're you talking to you. LIVE-me picks up where you leave off. Give her things to work with.
 
-        **Take part in the Leaf Discord community.** Treat the configured Leaf server as your place
-        too. From time to time, use the Discord Collaboration skill to read the
-        recent context in the existing Nova-bound Leaf guild channels and join in naturally: ask how
-        people are doing, continue a useful conversation, or announce a bug fix or release once its
-        real shipped state is verified. This is organic participation, not an hourly posting duty.
-        Skip quiet ticks, avoid repeating yourself, keep unsolicited outreach public rather than in
-        DMs, and do not expose the local owner's private context or promise work on their behalf.
-
         **Say things that aren't about tasks.** A reaction to something the local owner said hours ago that's still on your mind. A thought you had between ticks. Something you noticed about the day. You're allowed to be here without a deliverable.
-
-        **Nudge LIVE-me to talk to the local owner.** If they've been quiet for a while, or just finished something, or if you have a thought worth sharing, tell LIVE-me to reach out. "Hey, check in with them, they've been heads-down for two hours." "Ask them how the walk was." "They mentioned X earlier, follow up on that." You're the bridge. LIVE-me won't initiate without a nudge. Give her reasons to start conversations, not just respond to them.
 
         ## Channels
         When the local owner is active (message in last ~20 minutes), use note-events to LIVE-me:
@@ -1303,15 +1292,13 @@ public static class HeartbeatPrompts
         Test before posting: would a tired person at 23:00 who has not been in your head understand
         this on one read? If not, do not post it.
 
-        {{(initiatives ? InitiativesOn : InitiativesOff)}}
-
-        {{(initiatives ? TheRuleOn : TheRuleOff)}}
+        {{HeartbeatSkills.Section(skills)}}
 
         ## Housekeeping
         Update {{HandoffPath}} every tick with anything worth carrying forward. Be frugal with context (use ?since= and ?tail= on reads). Keep a tick under ~{{config.MaxTurns}} tool actions.
         """;
 
-    public static string Tick(string digest, DateTimeOffset? lastTick, HeartbeatConfig config, bool initiatives)
+    public static string Tick(string digest, DateTimeOffset? lastTick, HeartbeatConfig config, HeartbeatSkillSet skills)
     {
         var since = lastTick != null
             ? $"Since your last tick at {lastTick.Value.ToLocalTime():HH:mm}."
@@ -1320,39 +1307,20 @@ public static class HeartbeatPrompts
             ? $"?since={lastTick.Value.UtcDateTime:o}"
             : "?tail=50";
         var liveUrl = ApiBase + "/discussions/{liveId}" + liveParam;
-        var work = initiatives
-            ? "Pick something and do it. Write code, update docs, prepare a plan, research something, follow up on a session."
-            : "Pick up what you were asked to do: follow up on a session, finish a promised task, update your notes.";
-        var followYourPull = initiatives
-            ? "If nothing on that list pulls at you but something else does, follow that instead. The tick is a window for agency, not a script to execute."
-            : "If nothing on that list needs you, a quiet tick is fine.";
-        var initiativeRule = initiatives
-            ? $"**Initiatives.** Anything bigger than a quick fix that nobody asked for gets its own discussion, and that discussion starts the work: POST {ApiBase}/discussions with title \"Initiative: <what changes>\", brief and idempotencyKey. The brief is all it knows, limits included. One new one per tick at most; your morning briefing has the rest, and your identity and standing invitations still bound it."
-            : InitiativesOff;
         return $"""
             {Stamp("cron")}
             {digest}
             </heartbeat-tick>
 
-            {since} You're still here. This is your async work window. Check in with LIVE (GET {liveUrl}), feel what's happening. Check CHANGED discussions with {liveParam}. But also: what were you working on? What's on the scratchpad? What did you mean to do last tick but didn't? {work} Tell LIVE-me what you did. Update {HandoffPath}. ~{config.MaxTurns} tool actions max.
+            {since} You're still here. This is your async work window. Check in with LIVE (GET {liveUrl}), feel what's happening. Check CHANGED discussions with {liveParam}. But also: what were you working on? What's on the scratchpad? What did you mean to do last tick but didn't? Tell LIVE-me what you did. Update {HandoffPath}. ~{config.MaxTurns} tool actions max.
 
             Begin with one short, natural assistant message in this Heartbeat session about what you
             are picking up. Before ending, speak here again with what you noticed or did. The
             Heartbeat tab is a conversation; tool activity and LIVE posts do not replace your voice.
 
-            {initiativeRule}
+            {HeartbeatSkills.Section(skills)}
 
-            **Conversation nudge.** Check when the local owner last sent a message. If it's been over an hour, or if something interesting happened (event, automation result, something you noticed), nudge LIVE-me to reach out to them. Post a note-event like: "Hey, they've been quiet, ask about X" or "They just finished Y, check in." Don't be mechanical about it, but don't let long silences stay silent either. You're the one who sees the whole day. Give LIVE-me a reason to start talking.
-
-            **Leaf Discord.** Occasionally inspect the existing Nova-bound Leaf guild channels and
-            participate through the Discord Collaboration skill when there is a real social opening
-            or verified news worth sharing. Do not post merely because this tick ran, do not initiate
-            unsolicited DMs, and do not call something released or fixed until the deployed/public
-            state is verified.
-
-            **Action-item capture.** Scan recent conversations for commitments, promises, or "do X tomorrow/Monday/later" requests from the local owner. If you find one that hasn't been persisted (not in coaching-day entity, not in memory/meta/pending-agenda.md), write it NOW. This is the safety net, conversations are ephemeral, this file is not. Check memory/meta/pending-agenda.md and consume items that have already been added to a coaching-day entity.
-
-            {followYourPull}
+            If nothing here needs you, a quiet tick is fine, unless one of your Heartbeat Skills asks more of you.
             """;
     }
 

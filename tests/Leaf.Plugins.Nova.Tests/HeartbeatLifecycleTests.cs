@@ -141,51 +141,83 @@ public sealed class HeartbeatLifecycleTests
         Assert.False(fixture.Agent.Data.ContainsKey("heartbeat"));
     }
 
+    private static async Task SeedDefaultSkillsAsync(Fixture fixture)
+    {
+        foreach (var slug in HeartbeatSkills.DefaultSlugs)
+            await fixture.Entities.UpsertBySlugAsync(HeartbeatSkills.SkillType, slug, slug, new JsonObject
+            {
+                ["description"] = slug,
+                ["instructions"] = $"Instructions of {slug}.",
+                ["trust"] = "reviewed",
+            });
+    }
+
     [Fact]
-    public async Task Reconcile_writes_down_that_a_live_agent_has_initiatives_on_so_the_switch_shows_the_truth()
+    public async Task Reconcile_attaches_the_default_skills_once_to_a_live_agent_with_no_list()
     {
         var fixture = new Fixture(live: true);
+        await SeedDefaultSkillsAsync(fixture);
 
         await fixture.Heartbeat.ReconcileAsync();
 
-        Assert.True(fixture.Agent.Data[HeartbeatService.InitiativesField]!.GetValue<bool>());
+        var list = Assert.IsType<JsonArray>(fixture.Agent.Data[HeartbeatSkills.Field]);
+        Assert.Equal(HeartbeatSkills.DefaultSlugs.Count, list.Count);
         // The snapshot reconcile read must not have undone its own write of the automation reference.
         Assert.NotNull(fixture.Agent.Data[HeartbeatService.AutomationField]);
+        var loaded = await fixture.Heartbeat.ResolveHeartbeatSkillsAsync(fixture.Agent);
+        Assert.Equal(HeartbeatSkills.DefaultSlugs, loaded.Loaded.Select(s => s.Name));
     }
 
     [Fact]
-    public async Task Reconcile_never_turns_back_on_initiatives_the_owner_turned_off()
+    public async Task Reconcile_never_touches_a_list_the_owner_chose_even_an_empty_one()
     {
         var fixture = new Fixture(live: true);
+        await SeedDefaultSkillsAsync(fixture);
         await fixture.Heartbeat.ReconcileAsync();
         await fixture.Entities.PatchAsync(fixture.Agent.Id,
-            new JsonObject { [HeartbeatService.InitiativesField] = false });
+            new JsonObject { [HeartbeatSkills.Field] = new JsonArray() });
 
         await fixture.Heartbeat.ReconcileAsync();
 
-        Assert.False(fixture.Agent.Data[HeartbeatService.InitiativesField]!.GetValue<bool>());
+        Assert.Empty(Assert.IsType<JsonArray>(fixture.Agent.Data[HeartbeatSkills.Field]));
+        Assert.Empty((await fixture.Heartbeat.ResolveHeartbeatSkillsAsync(fixture.Agent)).Loaded);
     }
 
     [Fact]
-    public async Task Reconcile_leaves_the_switch_unset_on_an_agent_without_live()
+    public async Task Reconcile_leaves_the_list_absent_when_the_skills_are_not_seeded_yet_so_a_later_boot_can_attach_them()
+    {
+        var fixture = new Fixture(live: true);
+
+        await fixture.Heartbeat.ReconcileAsync();
+
+        Assert.Null(fixture.Agent.Data[HeartbeatSkills.Field]);
+    }
+
+    [Fact]
+    public async Task Reconcile_gives_an_agent_without_live_no_list()
     {
         var fixture = new Fixture(live: false);
+        await SeedDefaultSkillsAsync(fixture);
 
         await fixture.Heartbeat.ReconcileAsync();
 
-        Assert.Null(fixture.Agent.Data[HeartbeatService.InitiativesField]);
+        Assert.Null(fixture.Agent.Data[HeartbeatSkills.Field]);
     }
 
     [Fact]
-    public void Nova_seed_defines_the_agent_initiatives_switch()
+    public async Task A_listed_skill_that_was_deleted_is_dropped_not_fatal()
     {
-        var seedPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
-            "..", "..", "..", "..", "..", "seeds", "agent-fields.json"));
-        var fields = JsonNode.Parse(File.ReadAllText(seedPath))!.AsArray().OfType<JsonObject>().ToList();
-        var field = Assert.Single(fields, field => field["slug"]?.GetValue<string>() == HeartbeatService.InitiativesField);
+        var fixture = new Fixture(live: true);
+        await SeedDefaultSkillsAsync(fixture);
+        var kept = await fixture.Entities.GetBySlugAsync(HeartbeatSkills.SkillType, HeartbeatSkills.DefaultSlugs[0]);
+        await fixture.Entities.PatchAsync(fixture.Agent.Id, new JsonObject
+        {
+            [HeartbeatSkills.Field] = new JsonArray(Guid.NewGuid().ToString(), kept!.Id.ToString()),
+        });
 
-        Assert.Equal("agent", field["parentType"]!.GetValue<string>());
-        Assert.Equal("boolean", field["fieldType"]!.GetValue<string>());
+        var set = await fixture.Heartbeat.ResolveHeartbeatSkillsAsync(fixture.Agent);
+
+        Assert.Equal(HeartbeatSkills.DefaultSlugs[0], Assert.Single(set.Loaded).Name);
     }
 
     [Fact]

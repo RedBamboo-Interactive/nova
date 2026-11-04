@@ -1,0 +1,4 @@
+interface:
+  display_name: "Heartbeat: Action items"
+  short_description: "Write down commitments before they are lost"
+  default_prompt: "Use $heartbeat-action-items on this Heartbeat tick."

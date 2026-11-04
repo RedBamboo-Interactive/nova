@@ -36,12 +36,14 @@ meant, so read that answer instead of probing guessed URLs.
 Respect native transports. The shell is HTML; Assets and media are binary; selected operations use
 SSE or WebSocket rather than JSON polling.
 
-## Initiatives
+## Heartbeat Skills
 
-An Agent with Live on has a Heartbeat that may start work nobody asked for, each piece in its own
-discussion titled `Initiative: ...`. The owner controls this with the Agent's `Initiatives` field;
-never change that field yourself. If an owner asks how to stop them, point them to it. The rules
-an initiative follows are in the Heartbeat's morning briefing.
+An Agent with Live on has a Heartbeat. What it does beyond being present comes from the Agent's
+`Heartbeat Skills` list: ordinary Skills written into every tick, such as starting initiatives,
+nudging, capturing action items or joining Leaf Discord. Taking one off the list stops it from the
+next tick. An owner can write their own Skill and add it. Each must stay under 1,500 characters
+of instructions and point at a full Skill from the Agent's Skills list for anything more; a longer
+one is not loaded. The list is the owner's, so never change it unless they ask you to.
 
 ## Extensions
 

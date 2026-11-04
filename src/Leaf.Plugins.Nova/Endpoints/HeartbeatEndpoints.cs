@@ -35,6 +35,7 @@ public static class HeartbeatEndpoints
                     ? await entities.GetAsync(automationId)
                     : null;
 
+                var skills = await heartbeat.ResolveHeartbeatSkillsAsync(agent);
                 var discussion = await heartbeat.GetDiscussionAsync(agent.Id.ToString());
                 JsonObject? state = null;
                 if (discussion != null)
@@ -57,13 +58,18 @@ public static class HeartbeatEndpoints
                     ["schedule"] = automation?.Data["trigger"]?["expression"]?.DeepClone(),
                     ["timezone"] = automation?.Data["trigger"]?["timezone"]?.DeepClone(),
                     ["qualityTier"] = config.QualityTier,
-                    ["initiatives"] = HeartbeatService.AreInitiativesEnabled(agent.Data),
+                    ["skills"] = new JsonArray(skills.Loaded.Select(s => (JsonNode)s.Name).ToArray()),
+                    ["skillsNotLoaded"] = new JsonArray(skills.Refused.Select(s => (JsonNode)new JsonObject
+                    {
+                        ["name"] = s.Name,
+                        ["reason"] = s.Reason,
+                    }).ToArray()),
                     ["heartbeat"] = state,
                 });
             }
             return Results.Ok(result);
         })
-            .WithSummary("Returns the heartbeat status of each Agent that has one: schedule, timezone, enabled flag, quality tier, whether initiatives are on, and last tick.");
+            .WithSummary("Returns the heartbeat status of each Agent that has one: schedule, timezone, enabled flag, quality tier, Heartbeat Skills loaded and refused, and last tick.");
 
         group.MapPost("/heartbeat/{agentId}/rotate", async (string agentId, HeartbeatService heartbeat) =>
         {

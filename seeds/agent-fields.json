@@ -10,12 +10,13 @@
   },
   {
     "parentType": "agent",
-    "slug": "initiatives",
-    "name": "Initiatives",
-    "fieldType": "boolean",
+    "slug": "heartbeat_skills",
+    "name": "Heartbeat Skills",
+    "fieldType": "entity_list",
     "sortOrder": 9,
-    "description": "Lets this Agent's Heartbeat start work nobody asked for, each piece in its own titled discussion. Off, it only follows through on what it was asked. Needs Live.",
-    "icon": "ph-bold ph-lightbulb"
+    "description": "What this Agent's Heartbeat does beyond being present, such as starting initiatives. Every tick carries them in full, so each must stay under 1,500 characters and point at a full Skill for anything more. Needs Live.",
+    "constraints": "{\"target_type\": \"agent-skill\"}",
+    "icon": "ph-bold ph-heartbeat"
   },
   {
     "parentType": "agent",

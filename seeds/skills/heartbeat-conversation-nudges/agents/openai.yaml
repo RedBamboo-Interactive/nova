@@ -1,0 +1,4 @@
+interface:
+  display_name: "Heartbeat: Conversation nudges"
+  short_description: "Prompt LIVE to reach out to the owner"
+  default_prompt: "Use $heartbeat-conversation-nudges on this Heartbeat tick."
