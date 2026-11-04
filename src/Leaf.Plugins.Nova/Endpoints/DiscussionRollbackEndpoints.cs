@@ -35,14 +35,15 @@ public static class DiscussionRollbackEndpoints
     public static void Map(RouteGroupBuilder group)
     {
         group.MapPost("/discussions/{id}/rollback", (string id, [FromBody] RollbackBody? body, HttpContext ctx,
-                DiscussionStore store, RedComputeClient redCompute,
+                DiscussionStore store, RedComputeClient redCompute, LiveEvents live,
                 [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
-                RollbackAsync(id, body, ctx, store, redCompute, events))
+                RollbackAsync(id, body, ctx, store, redCompute, events, live.ForgetQuotesAsync))
             .WithSummary("Rewinds a discussion to just before one of the person's messages, named by messageUid. That message and everything after it leave the conversation for the agent and every client, and stay stored. Files are never changed. Only when the session reports supportsRollback and is idle: RedCompute's refusal comes back unchanged, with `reasons` for 409 rollback_not_idle. A discussion without a session answers 409 rollback_unsupported. 503 rollback_incomplete is safe to repeat, and a repeat changes nothing that already happened. Returns restoredText for the composer and the updated discussion. Clients hear `discussion.rolled_back`. Never automatic.");
     }
 
     internal static async Task<IResult> RollbackAsync(string id, RollbackBody? body, HttpContext ctx,
-        DiscussionStore store, RedComputeClient redCompute, IPluginEvents events)
+        DiscussionStore store, RedComputeClient redCompute, IPluginEvents events,
+        Func<string, DiscussionRollback, CancellationToken, Task> forgetQuotes)
     {
         var ct = ctx.RequestAborted;
         var discussion = await store.GetAsync(id);
@@ -81,9 +82,10 @@ public static class DiscussionRollbackEndpoints
         try
         {
             var kept = await redCompute.GetSessionAsync(discussion.SessionId, ct);
-            updated = await store.ApplyRollbackAsync(discussion.EntityId, new DiscussionRollback(
-                applied.RollbackId, applied.RemovedMessageUids ?? [], applied.FromCreatedAt, applied.RolledBackAt),
-                kept?.Messages, ct);
+            var rollback = new DiscussionRollback(
+                applied.RollbackId, applied.RemovedMessageUids ?? [], applied.FromCreatedAt, applied.RolledBackAt);
+            updated = await store.ApplyRollbackAsync(discussion.EntityId, rollback, kept?.Messages, ct);
+            await forgetQuotes(id, rollback, ct);
         }
         catch (Exception) when (!ct.IsCancellationRequested)
         {

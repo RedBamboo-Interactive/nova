@@ -137,8 +137,42 @@ public sealed record DiscussionRollback(
         if (message.Metadata["uid"] is JsonValue value && value.TryGetValue<string>(out var uid)
             && RemovedMessageUids.Contains(uid))
             return true;
-        return message.CreatedAt >= FromCreatedAt && !(message.CreatedAt >= RolledBackAt);
+        return Covers(message.CreatedAt);
     }
+
+    /// <summary>
+    /// Whether a LIVE timeline note quotes a message this rollback removed from
+    /// <paramref name="discussionId"/>. A note about anything else, such as an archive, stays.
+    /// </summary>
+    public bool RemovesQuoteIn(DiscussionMessage note, string discussionId)
+    {
+        if (note.Metadata["parts_json"]?.ToString() is not { Length: > 0 } parts) return false;
+        try
+        {
+            using var json = JsonDocument.Parse(parts);
+            if (json.RootElement.ValueKind != JsonValueKind.Array) return false;
+            foreach (var part in json.RootElement.EnumerateArray())
+            {
+                if (part.ValueKind != JsonValueKind.Object
+                    || !part.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String
+                    || type.GetString() != "event_data"
+                    || !part.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+                    continue;
+                if (Text(data, "discussionId") != discussionId
+                    || Text(data, "kind") is not ("user-message" or "nova-message"))
+                    continue;
+                return Text(data, "messageUid") is { } quoted && RemovedMessageUids.Contains(quoted)
+                    || Covers(note.CreatedAt);
+            }
+        }
+        catch (JsonException) { }
+        return false;
+    }
+
+    private bool Covers(DateTimeOffset when) => when >= FromCreatedAt && !(when >= RolledBackAt);
+
+    private static string? Text(JsonElement element, string name)
+        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 }
 
 public sealed class DiscussionStore(
@@ -918,6 +952,28 @@ public sealed class DiscussionStore(
                 patch["last_processed_session_assistant_uid"] = ConversationUnread.FindLatestAssistantUid(
                     keptSession, ConversationUnread.DirectMessageUids(kept)) ?? "";
             return Map(await entities.PatchAsync(entityId, patch, ct: ct));
+        }, ct);
+
+    /// <summary>
+    /// The LIVE timeline quotes the messages of other discussions, and every discussion's context
+    /// reads the timeline back, so a rewound message would otherwise return to the model that way.
+    /// These notes get the same non-destructive mark. Safe to repeat. Returns how many were marked.
+    /// </summary>
+    public Task<int> ForgetQuotesAsync(
+        Guid liveEntityId, string discussionId, DiscussionRollback rollback, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<int>(liveEntityId, async () =>
+        {
+            var quotes = new List<long>();
+            long afterId = 0;
+            while (true)
+            {
+                var page = await discussions.GetMessagesAsync(liveEntityId, 1000, afterId, ct);
+                quotes.AddRange(page.Where(note => rollback.RemovesQuoteIn(note, discussionId)).Select(note => note.Id));
+                if (page.Count < 1000) break;
+                afterId = page[^1].Id;
+            }
+            return quotes.Count == 0 ? 0
+                : await discussions.MarkRolledBackAsync(liveEntityId, quotes, rollback.RollbackId, ct);
         }, ct);
 
     public Task<DiscussionRead?> ResetConversationReadAsync(

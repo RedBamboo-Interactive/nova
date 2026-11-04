@@ -819,6 +819,13 @@ public sealed class LiveEvents(DiscussionStore store, EventInjector injector, Ag
         catch { /* the LIVE timeline is best-effort by design */ }
     }
 
+    /// <summary>A rewound discussion's removed messages stop being quoted to anyone from here on.</summary>
+    public async Task ForgetQuotesAsync(string discussionId, DiscussionRollback rollback, CancellationToken ct)
+    {
+        var live = await ResolveLiveAsync();
+        if (live is not null) await store.ForgetQuotesAsync(live.EntityId, discussionId, rollback, ct);
+    }
+
     private async Task<DiscussionRead?> ResolveLiveAsync()
     {
         if (_cachedLiveId != null)
@@ -847,24 +854,25 @@ public sealed class DiscussionActivity(LiveEvents live)
         string? title,
         string contentPreview,
         string? actorName,
-        bool confidential = false)
+        bool confidential = false,
+        string? messageUid = null)
     {
         if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title) || confidential) return;
         var preview = Truncate(contentPreview, 80);
         if (preview == "…") return;
         var actor = NormalizeActorName(actorName);
         await live.PostAsync("discussion", FormatUserActivity(actor, title, preview),
-            new { discussionId, title, kind = "user-message", actorName = actor, preview });
+            new { discussionId, title, kind = "user-message", actorName = actor, preview, messageUid });
     }
 
-    public async Task OnNovaMessage(string discussionId, string? title, string contentPreview, bool confidential = false)
+    public async Task OnNovaMessage(string discussionId, string? title, string contentPreview, bool confidential = false, string? messageUid = null)
     {
         if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title) || confidential) return;
         if (!TryThrottle(discussionId)) return;
         var preview = Truncate(contentPreview, 80);
         if (preview == "…") return;
         await live.PostAsync("discussion", $"Nova in \"{title}\": {preview}",
-            new { discussionId, title, kind = "nova-message", preview });
+            new { discussionId, title, kind = "nova-message", preview, messageUid });
     }
 
     public async Task OnArchived(string discussionId, string? title, bool confidential = false)

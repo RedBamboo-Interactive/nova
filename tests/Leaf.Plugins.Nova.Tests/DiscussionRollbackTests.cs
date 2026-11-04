@@ -46,6 +46,61 @@ public sealed class DiscussionRollbackTests
     }
 
     [Fact]
+    public async Task The_LIVE_notes_quoting_what_was_removed_go_with_it()
+    {
+        var f = new Fixture(type: "live");
+        var rollback = new DiscussionRollback("rollback-1", ["u2"], T0.AddMinutes(2), T0.AddMinutes(10));
+        f.PostNote(1, "rewound", "user-message", "u1", T0);                 // quotes a kept message
+        f.PostNote(2, "rewound", "user-message", null, T0);                 // an older note, before the rewound message
+        f.PostNote(3, "rewound", "user-message", "u2", T0.AddMinutes(1));   // named, though written before the window
+        f.PostNote(4, "rewound", "user-message", null, T0.AddMinutes(3));   // an older note, in the window
+        f.PostNote(5, "rewound", "nova-message", "a2", T0.AddMinutes(4));   // a reply in the window
+        f.PostNote(6, "rewound", "archived", null, T0.AddMinutes(5));       // quotes nothing
+        f.PostNote(7, "elsewhere", "user-message", "u2", T0.AddMinutes(3)); // another discussion's conversation
+        f.PostNote(8, "rewound", "user-message", "u9", T0.AddMinutes(11));  // written after the rewind
+        f.Post(9, "system", "Now playing", "e9", T0.AddMinutes(3), "event:spotify");
+        f.Discussions.All.Add(new DiscussionMessage(10, f.Entity.Id, "system", "broken", new JsonObject
+        {
+            ["source"] = "event:discussion",
+            ["parts_json"] = "{not json",
+        }, T0.AddMinutes(3)));
+
+        Assert.Equal(3, await f.Store.ForgetQuotesAsync(f.Entity.Id, "rewound", rollback));
+
+        Assert.Equal([3L, 4L, 5L], f.Discussions.MarkedIds.Order());
+        Assert.Equal(["rollback-1"], f.Discussions.MarkedWith);
+        Assert.Equal(0, await f.Store.ForgetQuotesAsync(f.Entity.Id, "rewound", rollback));
+    }
+
+    [Fact]
+    public async Task A_rewind_forgets_its_quotes_and_a_failure_is_finished_by_a_repeat()
+    {
+        var f = new Fixture();
+        f.Post(1, "user", "the refused message", "u2", T0.AddMinutes(2));
+        f.Answer(removed: ["u2"], from: T0.AddMinutes(2), at: T0.AddMinutes(10));
+        f.FailForgets = 1;
+
+        Assert.Equal(503, (await f.PostAsync("u2")).Status);
+        Assert.Empty(f.Forgotten);
+        Assert.Empty(f.Events.Published);
+
+        f.Answer(removed: ["u2"], from: T0.AddMinutes(2), at: T0.AddMinutes(10), already: true);
+        Assert.Equal(200, (await f.PostAsync("u2")).Status);
+        Assert.Equal([(f.Id, "rollback-1")], f.Forgotten);
+    }
+
+    [Fact]
+    public async Task A_refused_rewind_forgets_nothing()
+    {
+        var f = new Fixture();
+        f.Compute.RollbackStatus = HttpStatusCode.Conflict;
+        f.Compute.RollbackAnswer = """{"error":"rollback_unsupported"}""";
+
+        Assert.Equal(409, (await f.PostAsync("u2")).Status);
+        Assert.Empty(f.Forgotten);
+    }
+
+    [Fact]
     public async Task A_late_repeat_keeps_what_was_written_after_the_rollback()
     {
         var f = new Fixture();
@@ -340,6 +395,8 @@ public sealed class DiscussionRollbackTests
         public RedComputeClient Client { get; }
         public string Id { get; } = Guid.NewGuid().ToString("N")[..8];
         public LeafEntity Entity => Entities.Items.Single();
+        public List<(string DiscussionId, string RollbackId)> Forgotten { get; } = [];
+        public int FailForgets { get; set; }
 
         public Fixture(string? sessionId = Session, string owner = Me, bool confidential = false,
             string status = "idle", Guid? ownerPlugin = null, string type = "chat")
@@ -375,6 +432,22 @@ public sealed class DiscussionRollbackTests
             if (uid is not null) metadata["uid"] = uid;
             if (source is not null) metadata["source"] = source;
             Discussions.All.Add(new DiscussionMessage(id, Entity.Id, role, content, metadata, when));
+        }
+
+        public void PostNote(long id, string about, string kind, string? quotedUid, DateTimeOffset when)
+        {
+            var parts = new JsonArray(
+                new JsonObject { ["type"] = "text", ["content"] = "a quote" },
+                new JsonObject
+                {
+                    ["type"] = "event_data",
+                    ["data"] = new JsonObject { ["discussionId"] = about, ["kind"] = kind, ["messageUid"] = quotedUid },
+                });
+            Discussions.All.Add(new DiscussionMessage(id, Entity.Id, "system", "a quote", new JsonObject
+            {
+                ["source"] = "event:discussion",
+                ["parts_json"] = parts.ToJsonString(),
+            }, when));
         }
 
         public void Answer(string[] removed, DateTimeOffset from, DateTimeOffset at, bool already = false)
@@ -445,7 +518,16 @@ public sealed class DiscussionRollbackTests
             var ctx = new DefaultHttpContext();
             ctx.User = Caller(caller);
             return DiscussionRollbackEndpoints.RollbackAsync(id ?? Id, new DiscussionRollbackEndpoints.RollbackBody(uid),
-                ctx, Store, Client, Events);
+                ctx, Store, Client, Events, (discussionId, rollback, _) =>
+                {
+                    if (FailForgets > 0)
+                    {
+                        FailForgets--;
+                        throw new InvalidOperationException("LIVE said no");
+                    }
+                    Forgotten.Add((discussionId, rollback.RollbackId));
+                    return Task.CompletedTask;
+                });
         }
 
         public async Task<(int Status, JsonElement Body)> PostAsync(string uid, string? id = null, string caller = "browser")

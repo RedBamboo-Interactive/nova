@@ -2001,7 +2001,7 @@ public static class DiscussionEndpoints
                     ["readConversationRevision"] = discussion.ReadConversationRevision,
                 });
 
-            _ = activity.OnNovaMessage(id, discussion.Title, request.Content, discussion.Confidential);
+            _ = activity.OnNovaMessage(id, discussion.Title, request.Content, discussion.Confidential, uid);
             // A proactive message never settles a session turn; tell an open voice directly.
             _ = voiceForwarder.OnDirectAssistantMessageAsync(id, uid, request.Content, CancellationToken.None);
             return Results.Ok(new { success = true, discussion = DiscussionStore.ToInfo(discussion) });
@@ -2071,7 +2071,7 @@ public static class DiscussionEndpoints
                     string.IsNullOrWhiteSpace(request.Content)
                         ? request.Input is { Length: > 0 } ? "[attachment]" : "[image]"
                         : request.Content,
-                    ctx.User.FindFirstValue("name"), discussion.Confidential);
+                    ctx.User.FindFirstValue("name"), discussion.Confidential, outcome.MessageUid);
 
                 // Only a provider-accepted turn is a transcript message. Durable
                 // admission while another turn runs is represented by the shared
