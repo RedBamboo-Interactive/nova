@@ -6,6 +6,8 @@ import { describeNote, describeSentNote, isSentNotePart, notePreview, type NoteO
 interface AgentNoteRowProps {
   part: MessagePart
   queueStatus?: EventQueueStatus
+  /** Still in the queue: the dashed edge and fade a waiting message has. The status line sits below, outside the row. */
+  waiting?: boolean
   currentDiscussionId: string | null
   resolveAgent: (ref: string) => { name: string; avatarUrl?: string | null } | undefined
   resolveDiscussion: (id: string) => NoteOriginDiscussion | undefined
@@ -46,6 +48,7 @@ function formatNoteTime(iso: string | undefined): string | null {
 export const AgentNoteRow = memo(function AgentNoteRow({
   part,
   queueStatus,
+  waiting,
   currentDiscussionId,
   resolveAgent,
   resolveDiscussion,
@@ -89,8 +92,9 @@ export const AgentNoteRow = memo(function AgentNoteRow({
     <div
       data-slot="agent-note-row"
       data-direction={sent ? "sent" : "received"}
+      data-waiting={waiting || undefined}
       data-expanded={expanded || undefined}
-      className={`${sent ? "" : "ml-auto "}w-fit min-w-0 cursor-pointer bg-overlay-4 px-3.5 py-2 ${expanded ? "max-w-[92%]" : "max-w-[80%]"}`}
+      className={`${sent ? "" : "ml-auto "}w-fit min-w-0 cursor-pointer bg-overlay-4 px-3.5 py-2 ${expanded ? "max-w-[92%]" : "max-w-[80%]"} ${waiting ? "border border-dashed border-overlay-20 opacity-60 transition-opacity hover:opacity-90" : ""}`}
       style={NOTE_SHAPE}
       onClick={toggle}
     >

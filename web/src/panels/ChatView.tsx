@@ -1343,10 +1343,11 @@ export function ChatView({
 
   const eventRows = useMemo<EventRowRenderer>(() => ({
     isRow: isNoteRowPart,
-    render: (part, { queueStatus }) => (
+    render: (part, { queueStatus, waiting }) => (
       <AgentNoteRow
         part={part}
         queueStatus={queueStatus}
+        waiting={waiting}
         currentDiscussionId={activeDiscussionId}
         resolveAgent={resolveAgentInfo}
         resolveDiscussion={resolveNoteDiscussion}
