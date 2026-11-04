@@ -434,6 +434,142 @@ public sealed partial class ExternalAgentConversationProviderTests
                 true, status, stopReason, providerSessionId)));
     }
 
+    [Theory]
+    [InlineData(true, "Error", "provider_session_missing", true)]
+    [InlineData(true, "Stopped", "provider_session_missing", true)]
+    [InlineData(true, null, null, true)]
+    [InlineData(false, null, null, false)]
+    [InlineData(true, "Stopped", "maintenance_restart", false)]
+    [InlineData(true, "Error", "resume_failed", false)]
+    [InlineData(true, "Idle", null, false)]
+    public void A_session_is_lost_only_when_RedCompute_says_so(
+        bool reachable, string? status, string? stopReason, bool expected)
+    {
+        Assert.Equal(expected, ExternalAgentConversationProvider.IsSessionLost(
+            new RedComputeClient.SessionProbe(reachable, status, stopReason, "thread-1")));
+    }
+
+    [Fact]
+    public async Task A_lost_session_is_reported_before_any_review_to_a_transport_that_recovers()
+    {
+        var (provider, gateway, handle, agentId) = LostSessionHarness(
+            HttpStatusCode.OK, """{"session":{"status":"Error","stopReason":"provider_session_missing","providerSessionId":"thread-1"}}""");
+
+        var admission = await provider.SendAsync(handle, LostSessionInput(agentId, recovers: true));
+
+        Assert.Equal(ExternalAgentConversationProvider.SessionLostDisposition, admission.Disposition);
+        Assert.DoesNotContain(gateway.Requests, request => request.Method != "GET");
+    }
+
+    [Fact]
+    public async Task A_resume_that_discovers_the_lost_history_is_reported_to_a_transport_that_recovers()
+    {
+        var (provider, gateway, handle, agentId) = LostSessionHarness(
+            HttpStatusCode.OK, """{"session":{"status":"Stopped","stopReason":"maintenance_restart","providerSessionId":"thread-1"}}""");
+        gateway.ResumeFailsWith = """{"session":{"status":"Error","stopReason":"provider_session_missing","providerSessionId":"thread-1"}}""";
+
+        var admission = await provider.SendAsync(handle, LostSessionInput(agentId, recovers: true));
+
+        Assert.Equal(ExternalAgentConversationProvider.SessionLostDisposition, admission.Disposition);
+        Assert.DoesNotContain(gateway.Requests, request => request.Path.EndsWith("/message", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_transport_that_cannot_recover_still_gets_the_failure_instead_of_a_silent_admission()
+    {
+        var (provider, gateway, handle, agentId) = LostSessionHarness(
+            HttpStatusCode.OK, """{"session":{"status":"Error","stopReason":"provider_session_missing","providerSessionId":"thread-1"}}""");
+        gateway.ResumeFailsWith = gateway.SessionBody;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.SendAsync(handle, LostSessionInput(agentId, recovers: false)));
+
+        Assert.DoesNotContain(gateway.Requests, request => request.Path.EndsWith("/message", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_message_is_never_admitted_onto_a_session_whose_state_is_unknown()
+    {
+        var (provider, gateway, handle, agentId) = LostSessionHarness(
+            HttpStatusCode.ServiceUnavailable, "");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.SendAsync(handle, LostSessionInput(agentId, recovers: true)));
+
+        Assert.DoesNotContain(gateway.Requests, request => request.Path.EndsWith("/message", StringComparison.Ordinal));
+    }
+
+    private static (ExternalAgentConversationProvider Provider, LostSessionGateway Gateway,
+        ExternalConversationHandle Handle, Guid AgentId) LostSessionHarness(
+            HttpStatusCode probeStatus, string sessionBody)
+    {
+        var agentId = Guid.NewGuid();
+        var entities = new FakeEntityStore(
+            Entity(agentId, "agent", "nova", "Nova"),
+            Entity(Guid.NewGuid(), "plugin", NovaAppPlugin.PluginId, "Nova"));
+        var agents = new AgentDirectory(entities, new NoOpPluginEvents());
+        var gateway = new LostSessionGateway(probeStatus, sessionBody);
+        var verifier = new DiscordPromptInjectionVerifier(
+            new RecordingSentinel(), agents, entities,
+            NullLogger<DiscordPromptInjectionVerifier>.Instance);
+        var provider = new ExternalAgentConversationProvider(
+            null!, new RedComputeClient(gateway), agents, entities, verifier,
+            NullLogger<ExternalAgentConversationProvider>.Instance);
+        return (provider, gateway,
+            new ExternalConversationHandle("leaf-agent-session", "binding-1", 1, "conversation-1", "session-1"),
+            agentId);
+    }
+
+    private static ExternalConversationInput LostSessionInput(Guid agentId, bool recovers)
+    {
+        var metadata = new JsonObject
+        {
+            ["agent_id"] = agentId.ToString(),
+            ["sentinel_agent_id"] = agentId.ToString(),
+            ["binding_id"] = "binding-1",
+            ["owner_user_id"] = "owner-1",
+        };
+        if (recovers)
+            metadata[ExternalAgentConversationProvider.RecoversLostSessionMetadataKey] = true;
+        return new ExternalConversationInput(
+            "discord-message-1", new ExternalRequestor("user-1", "Laurent"), "hello", [], metadata);
+    }
+
+    private sealed class LostSessionGateway(HttpStatusCode probeStatus, string sessionBody) : IComputeGateway
+    {
+        public List<(string Method, string Path)> Requests { get; } = [];
+        public string SessionBody { get; private set; } = sessionBody;
+        public string? ResumeFailsWith { get; set; }
+
+        public Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            ComputeProvenance? provenance = null,
+            CancellationToken ct = default)
+        {
+            var path = request.RequestUri?.OriginalString ?? "";
+            Requests.Add((request.Method.Method, path));
+            if (request.Method == HttpMethod.Get)
+                return Task.FromResult(new HttpResponseMessage(probeStatus)
+                {
+                    Content = new StringContent(SessionBody),
+                });
+            if (path.EndsWith("/resume", StringComparison.Ordinal))
+            {
+                if (ResumeFailsWith is not null) SessionBody = ResumeFailsWith;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+            }
+            var content = path == "/ai-session/execute"
+                ? """{"success":true,"text":"{\"risk\":\"none\",\"signals\":[],\"handling\":\"normal\"}","sessionId":"s"}"""
+                : path.EndsWith("/message", StringComparison.Ordinal)
+                    ? """{"disposition":"delivered","queueItemId":"queue-1"}"""
+                    : "{}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(content),
+            });
+        }
+    }
+
     [Fact]
     public async Task Reused_session_renews_process_local_callback_before_message_admission()
     {

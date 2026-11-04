@@ -156,6 +156,11 @@ public sealed class ExternalAgentConversationProvider(
     {
         Validate(handle);
         Remember(handle);
+        // A transport that can recover asks first, before any review is spent on a message this
+        // session can never take.
+        var recoversLostSession = RecoversLostSession(input.Metadata);
+        if (recoversLostSession && IsSessionLost(await redCompute.ProbeSessionAsync(handle.SessionId, ct)))
+            return new ExternalConversationAdmission("", SessionLostDisposition);
         var agentReference = input.Metadata?["agent_id"]?.GetValue<string>()
             ?? throw new InvalidOperationException("External conversation message is missing its Agent binding");
         var agent = await ResolveAgentAsync(agentReference, ct);
@@ -293,11 +298,22 @@ public sealed class ExternalAgentConversationProvider(
             entrypointKind: transport, method: "MESSAGE",
             requestId: input.RequestId, ct: ct, cause: TurnCause(input.Metadata));
         var session = await redCompute.ProbeSessionAsync(handle.SessionId, ct);
+        // Admitting onto a session whose state is unknown can park the message in the queue of a
+        // session that will never run again, where nothing ever retries it.
+        if (!session.Reachable)
+            throw new InvalidOperationException(
+                "RedCompute could not report the state of the persistent external Agent session");
         if (RequiresResume(session))
         {
             if (!await redCompute.ResumeAsync(handle.SessionId, provenance, ct))
+            {
+                // The resume itself is what discovers that the provider history is gone.
+                if (recoversLostSession
+                    && IsSessionLost(await redCompute.ProbeSessionAsync(handle.SessionId, ct)))
+                    return new ExternalConversationAdmission("", SessionLostDisposition);
                 throw new InvalidOperationException(
                     "The persistent external Agent session could not be resumed");
+            }
         }
         // RedCompute callbacks are process-local and disappear on restart. An
         // attached external session can outlive that process, so renew the callback
@@ -386,6 +402,30 @@ public sealed class ExternalAgentConversationProvider(
             : null;
         return new ExternalConversationAdmission(messageUid, disposition, queueItemId);
     }
+
+    /// <summary>
+    /// The disposition for a session that can never take another message, returned only to a
+    /// transport that declared <see cref="RecoversLostSessionMetadataKey"/>. Any other transport
+    /// would read an unknown disposition as an admission and lose the message.
+    /// </summary>
+    internal const string SessionLostDisposition = "session-lost";
+
+    internal const string RecoversLostSessionMetadataKey = "recovers_lost_session";
+
+    private const string ProviderSessionMissingStopReason = "provider_session_missing";
+
+    private static bool RecoversLostSession(JsonObject? metadata)
+        => metadata?[RecoversLostSessionMetadataKey] is JsonValue value
+           && value.TryGetValue<bool>(out var recovers) && recovers;
+
+    /// <summary>
+    /// RedCompute answered, and the session is either gone or its provider history is. Not
+    /// reachable proves nothing: that is an outage, and the session may be perfectly healthy.
+    /// </summary>
+    internal static bool IsSessionLost(RedComputeClient.SessionProbe session)
+        => session.Reachable
+           && (session.Status is null
+               || string.Equals(session.StopReason, ProviderSessionMissingStopReason, StringComparison.Ordinal));
 
     internal static bool RequiresResume(RedComputeClient.SessionProbe session)
         => session.Status is "Stopped" or "Error"
