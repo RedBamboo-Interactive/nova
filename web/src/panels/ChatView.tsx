@@ -620,6 +620,7 @@ export function ChatView({
     list: () => api.get<ChatQueueSnapshot>(`/api/apps/nova/discussions/${activeDiscussionId}/input-queue?includeTerminal=true`),
     cancel: (itemId) => api.delete<ChatQueuedItem>(`/api/apps/nova/discussions/${activeDiscussionId}/input-queue/${itemId}`),
     retry: (itemId) => api.post<ChatQueuedItem>(`/api/apps/nova/discussions/${activeDiscussionId}/input-queue/${itemId}/retry`),
+    steer: (itemId) => api.post(`/api/apps/nova/discussions/${activeDiscussionId}/input-queue/${itemId}/steer`),
     sendNow: async () => { await api.post(`/api/apps/nova/discussions/${activeDiscussionId}/input-queue/send-now`) },
     subscribe(listener) {
       const onUpdate = (event: Event) => {
@@ -1576,6 +1577,7 @@ export function ChatView({
         onSend={handleSend}
         onSendInput={handleSendInput}
         queueTransport={queueTransport}
+        queuedEventsWait
         maintenanceStatus={maintenance.status}
         maintenanceStatusUnavailable={maintenance.unavailable}
         hasServerSession={Boolean(payloadSessionId)}

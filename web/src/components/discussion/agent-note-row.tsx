@@ -62,6 +62,8 @@ export const AgentNoteRow = memo(function AgentNoteRow({
   })
   const avatar = avatarUrl ? resolveChatMediaSrc(avatarUrl, resolveImageSrc) : undefined
   const time = expanded ? formatNoteTime(event.timestamp) : null
+  const posted = expanded ? formatNoteTime(event.postedAt) : null
+  const postedAt = posted === time ? null : posted
   const toggle = () => setExpanded(value => !value)
 
   return (
@@ -97,6 +99,7 @@ export const AgentNoteRow = memo(function AgentNoteRow({
             <span data-slot="agent-note-origin" className="min-w-0 truncate">{origin}</span>
           )}
           <span className="ml-auto flex shrink-0 items-baseline gap-2 pl-2">
+            {postedAt && <span className="font-mono text-[10px] tabular-nums text-text-disabled">Posted {postedAt}</span>}
             {time && <span className="font-mono text-[10px] tabular-nums text-text-disabled">{time}</span>}
             <button
               type="button"

@@ -76,12 +76,13 @@ public sealed class EventInjector(
     public Task<EventInjectionResult> InjectEventAsync(
         DiscussionRead discussion, string content, string? type, string? source,
         string? senderAgentId, string? replyToDiscussionId, JsonElement? metadata, string? userId,
-        string? requestIdempotencyKey, CancellationToken ct = default, EventSender? stamped = null)
+        string? requestIdempotencyKey, CancellationToken ct = default, EventSender? stamped = null,
+        string? delivery = null)
     {
         var key = requestIdempotencyKey is null ? null : $"event-request:{requestIdempotencyKey}";
         return InjectCoreAsync(discussion, content, type, source, senderAgentId, replyToDiscussionId,
             metadata, userId, key, redeliverOnReuse: key is not null, ct, key, null, keyByUid: true,
-            stamped: stamped);
+            stamped: stamped, delivery: delivery);
     }
 
     /// <summary>
@@ -117,7 +118,8 @@ public sealed class EventInjector(
         string? senderAgentId, string? replyToDiscussionId, JsonElement? metadata, string? userId,
         string? idempotencyKey, bool redeliverOnReuse, CancellationToken ct,
         string? deliveryIdempotencyKey, PluginLiveEventRecipient? recipient,
-        bool requireOpen = false, bool framed = false, bool keyByUid = false, EventSender? stamped = null)
+        bool requireOpen = false, bool framed = false, bool keyByUid = false, EventSender? stamped = null,
+        string? delivery = null)
     {
         // The signed sender replaces whatever the caller said about itself.
         if (stamped is not null) senderAgentId = stamped.AgentId;
@@ -202,6 +204,9 @@ public sealed class EventInjector(
                 ["uid"] = uid,
                 ["idempotency_key"] = idempotencyKey,
             };
+            // Only a choice is recorded: a retry under this key must ask for what the first attempt
+            // asked for, or RedCompute's fingerprint would refuse it as a different input.
+            if (delivery is not null) record[RequestedDeliveryKey] = delivery;
             stamped?.WriteTo(record);
             await discussions.PostAsync(discussion.EntityId, role, content, record, userId, ct);
             return true;
@@ -223,7 +228,9 @@ public sealed class EventInjector(
             // So is who sent it: a title changed since must not alter the frame this key admitted.
             stamped = EventSender.Read(stored.Metadata);
             senderAgentId = stored.Metadata["sender_agent_id"]?.GetValue<string>() ?? senderAgentId;
+            delivery = stored.Metadata[RequestedDeliveryKey]?.GetValue<string>();
         }
+        var requested = delivery ?? DelegateEndpoints.AfterCurrent;
 
         // Scoped projections always invalidate for authoritative retrieval, even
         // when an owner-approved summary is admitted to a non-confidential LIVE.
@@ -232,21 +239,26 @@ public sealed class EventInjector(
             await PublishEventAsync(discussion, discussion.Confidential || recipient is not null,
                 uid, content, source, senderAgentId, metadata, ct, stamped);
 
-        if (role == "system") return new(EventDelivery.Recorded, uid);
+        if (role == "system")
+            return new(EventDelivery.Recorded, uid, Report: NotForwarded(requested, null, null));
 
         // A redelivery decides against the authoritative entity too, never the caller's snapshot.
         decision ??= await DiscussionEntityGate.RunAsync(discussion.EntityId,
             () => EnqueueIfWaitingAsync(discussion.EntityId, QueueEntry(uid), ct), ct);
         if (decision.Current is null)
-            return new(EventDelivery.Undeliverable, uid, "discussion_not_found", "The discussion no longer exists.");
+            return new(EventDelivery.Undeliverable, uid, "discussion_not_found", "The discussion no longer exists.",
+                NotForwarded(requested, null, null));
         if (decision.Queued)
         {
+            // There is no turn to steer here, and a steer must not overtake the events ahead of it.
+            var waited = NotForwarded(requested, DelegateEndpoints.AfterCurrent,
+                requested == DelegateEndpoints.SteerCurrent ? SteerUnavailable : null);
             // No session yet: the event waits for the one being created, the first user message
             // of a deferred discussion, or the next send after a reset. With a session, it is
             // behind earlier queued events and goes out in order now.
-            if (decision.Current.SessionId is null) return new(EventDelivery.Queued, uid);
+            if (decision.Current.SessionId is null) return new(EventDelivery.Queued, uid, Report: waited);
             await DeliverPendingAsync(discussion.EntityId, ct);
-            return await QueuedStateAsync(discussion.EntityId, uid, ct);
+            return await QueuedStateAsync(discussion.EntityId, uid, ct) with { Report = waited };
         }
 
         var sessionId = decision.Current.SessionId!;
@@ -256,11 +268,39 @@ public sealed class EventInjector(
         // Retried callback delivery uses the existing durable admission contract.
         // Other event callers (including heartbeat redelivery) keep their policy.
         var forwarded = await ForwardAsync(discussion with { SessionId = sessionId }, sessionId, content, uid,
-            source, senderAgentId, replyToDiscussionId, framed, admissionKey, ct, stamped);
-        if (forwarded.Success) return new(EventDelivery.Delivered, uid);
+            source, senderAgentId, replyToDiscussionId, framed, admissionKey, ct, stamped, delivery);
+        var report = DelegateEndpoints.ReportDelivery(requested, forwarded.Payload);
+        if (forwarded.Success) return new(EventDelivery.Delivered, uid, Report: report);
+        // The queue drained this key as after-current while the retry asks for the steer first stored:
+        // RedCompute holds the event, once. Only that policy differs, the content came from the record.
+        if (stored is not null && delivery == DelegateEndpoints.SteerCurrent && forwarded.ErrorCode == "idempotency_conflict")
+            return new(EventDelivery.Delivered, uid,
+                Report: NotForwarded(requested, DelegateEndpoints.AfterCurrent, SteerUnavailable));
         return new(IsPermanentRefusal(forwarded.StatusCode) ? EventDelivery.Undeliverable : EventDelivery.Failed,
-            uid, forwarded.ErrorCode ?? "event_delivery_failed", forwarded.ErrorMessage);
+            uid, forwarded.ErrorCode ?? "event_delivery_failed", forwarded.ErrorMessage, report);
     }
+
+    /// <summary>Stream record key for a delivery the caller chose.</summary>
+    private const string RequestedDeliveryKey = "requested_delivery";
+
+    private const string SteerUnavailable = "steer_unavailable";
+
+    /// <summary>The report for an event RedCompute has no admission to report on.</summary>
+    private static DelegateEndpoints.DeliveryReport NotForwarded(string requested, string? effective, string? reason)
+        => new(requested, effective, EffectiveFinal: effective is not null, State: null, reason,
+            DemotionReason: reason, TurnInterrupted: false, InterruptResult: null, InputsAhead: null,
+            QueueItemId: null, Replayed: false);
+
+    /// <summary>
+    /// A steer that joined the running turn starts nothing. Everything else starts a turn, including
+    /// a steer that ran as the next turn or was demoted: RedCompute reports those as after-current.
+    /// One still pending that later runs as its own turn is discovered from the status write.
+    /// </summary>
+    private static bool JoinedRunningTurn(JsonElement? payload)
+        => payload is { ValueKind: JsonValueKind.Object } body
+            && body.TryGetProperty("item", out var item) && item.ValueKind == JsonValueKind.Object
+            && item.TryGetProperty("delivery", out var effective) && effective.ValueKind == JsonValueKind.String
+            && effective.GetString() == DelegateEndpoints.SteerCurrent;
 
     private Task PublishEventAsync(DiscussionRead discussion, bool changedOnly, string uid, string content,
         string? source, string? senderAgentId, JsonElement? metadata, CancellationToken ct, EventSender? stamped = null)
@@ -294,7 +334,7 @@ public sealed class EventInjector(
     private async Task<RedComputeClient.SendMessageResult> ForwardAsync(
         DiscussionRead discussion, string sessionId, string content, string uid, string? source,
         string? senderAgentId, string? replyToDiscussionId, bool framed, string? admissionKey,
-        CancellationToken ct, EventSender? stamped = null)
+        CancellationToken ct, EventSender? stamped = null, string? delivery = null)
     {
         discussion = await conversationUnread.EnsureBaselineAsync(discussion, ct);
 
@@ -330,9 +370,11 @@ public sealed class EventInjector(
             // `novaEvent` tells a client this record's frame came from here, not from text someone
             // typed: this is the only place that writes it (see NovaEventMarkerTests). A person's
             // send carries Nova's or the transport's own admission metadata instead.
-            object messageBody = senderAgentId is not null
-                ? new { content = taggedContent, messageUid = uid, metadata = new { novaEvent = true, senderAgentId, senderName } }
-                : new { content = taggedContent, messageUid = uid };
+            // No delivery leaves the choice to RedCompute's default, after-current, as for every other caller.
+            var messageBody = new Dictionary<string, object?> { ["content"] = taggedContent, ["messageUid"] = uid };
+            if (senderAgentId is not null)
+                messageBody["metadata"] = new { novaEvent = true, senderAgentId, senderName };
+            if (delivery is not null) messageBody["delivery"] = delivery;
             var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
             if (agent == null)
                 return new(false, null, 422, "missing_agent", "The discussion has no linked Agent entity.");
@@ -348,7 +390,7 @@ public sealed class EventInjector(
                 sessionId, messageBody, provenance, ct, idempotencyKey: admissionKey);
             // An injected event (heartbeat, automation, callback, delegation, Discord
             // reply) is never a person talking in this discussion.
-            if (result.Success) activity?.TurnAdmitted(discussion, userFacing: false);
+            if (result.Success && !JoinedRunningTurn(result.Payload)) activity?.TurnAdmitted(discussion, userFacing: false);
             return result;
         }
         catch (Exception ex)

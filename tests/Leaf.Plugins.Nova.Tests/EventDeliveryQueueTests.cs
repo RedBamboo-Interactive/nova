@@ -528,15 +528,16 @@ public sealed partial class EventDeliveryQueueTests
         public IEnumerable<DiscussionMessage> EventRecords()
             => Stream.Snapshot().Where(r => r.Metadata["source"]?.GetValue<string>()?.StartsWith("event:") == true);
 
-        public async Task<(int Status, JsonElement Body)> PostEventAsync(string content, string? type = null, string? idempotencyKey = null)
+        public async Task<(int Status, JsonElement Body)> PostEventAsync(string content, string? type = null, string? idempotencyKey = null,
+            string? delivery = null)
         {
             var ctx = new DefaultHttpContext();
             ctx.Connection.RemoteIpAddress = IPAddress.Loopback;
             var result = await DiscussionEndpoints.PostEventAsync(Discussion().Id,
-                new DiscussionEventRequest { Content = content, Type = type, Source = "insights", IdempotencyKey = idempotencyKey },
+                new DiscussionEventRequest { Content = content, Type = type, Source = "insights", IdempotencyKey = idempotencyKey, Delivery = delivery },
                 ctx, Discussions, agents, Injector, Pipeline);
             return (((IStatusCodeHttpResult)result).StatusCode ?? 200,
-                JsonSerializer.SerializeToElement(((IValueHttpResult)result).Value));
+                JsonSerializer.SerializeToElement(((IValueHttpResult)result).Value, JsonSerializerOptions.Web));
         }
 
         public Task<SendMessageOutcome> SendAsync(string content)
@@ -693,8 +694,11 @@ public sealed partial class EventDeliveryQueueTests
         public string[] Paths { get { lock (causes) return causes.Select(c => c.Path).ToArray(); } }
         public string? LastMessageCause { get { lock (causes) return causes.Last(c => c.Path.EndsWith("/message")).Cause; } }
 
+        /// <summary>The queue item RedCompute answers an admission with, as raw JSON.</summary>
+        public string? AdmissionItem { get; set; }
+
         public sealed record Admitted(string Session, string Text, string? MessageUid, string? Key,
-            string? Content = null, string? Metadata = null);
+            string? Content = null, string? Metadata = null, string? Delivery = null);
 
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
@@ -736,12 +740,13 @@ public sealed partial class EventDeliveryQueueTests
                         {
                             if (key is not null) admittedKeys.Add(key, raw);
                             Messages.Add(new(session, text, uid, key, content,
-                                body.RootElement.TryGetProperty("metadata", out var sent) ? sent.GetRawText() : null));
+                                body.RootElement.TryGetProperty("metadata", out var sent) ? sent.GetRawText() : null,
+                                body.RootElement.TryGetProperty("delivery", out var policy) ? policy.GetString() : null));
                         }
                     }
                     if (fail) throw new HttpRequestException("Simulated lost acknowledgement");
                 }
-                return Json(HttpStatusCode.OK, $$"""{"disposition":"delivered","messageUid":"{{uid ?? Guid.NewGuid().ToString("N")}}"}""");
+                return Json(HttpStatusCode.OK, $$"""{"disposition":"delivered","messageUid":"{{uid ?? Guid.NewGuid().ToString("N")}}"{{(AdmissionItem is null ? "" : $",\"item\":{AdmissionItem}")}}}""");
             }
             if (request.Method == HttpMethod.Post) return Json(HttpStatusCode.OK, "{}");
             return Json(HttpStatusCode.NotFound, """{"error":"not_found"}""");

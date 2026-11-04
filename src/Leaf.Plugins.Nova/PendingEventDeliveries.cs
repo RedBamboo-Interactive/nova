@@ -27,7 +27,9 @@ public enum EventDelivery
 }
 
 public sealed record EventInjectionResult(
-    EventDelivery Delivery, string? MessageUid, string? ErrorCode = null, string? ErrorMessage = null);
+    EventDelivery Delivery, string? MessageUid, string? ErrorCode = null, string? ErrorMessage = null,
+    // What became of the delivery policy, in the shape /delegate reports it.
+    Endpoints.DelegateEndpoints.DeliveryReport? Report = null);
 
 public enum EventDrainStatus { Drained, WaitingForSession, Failed, Busy }
 

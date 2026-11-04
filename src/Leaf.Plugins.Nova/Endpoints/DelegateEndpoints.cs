@@ -578,6 +578,12 @@ public static class DelegateEndpoints
         return null;
     }
 
+    /// <summary>The same vocabulary for an event, which is always about a session and never kills a turn.</summary>
+    internal static object? EventDeliveryError(string? delivery)
+        => delivery == InterruptCurrent || DeliveryError(delivery, isContinuation: true) is not null
+            ? new { error = "invalid_delivery", message = $"delivery must be '{AfterCurrent}' or '{SteerCurrent}'" }
+            : null;
+
     /// <summary>
     /// What RedCompute's admission response says happened to the prompt, never inferred.
     /// <para><c>effective</c> is the policy RedCompute holds for the queue item and
@@ -642,7 +648,7 @@ public static class DelegateEndpoints
             replayed);
     }
 
-    internal sealed record DeliveryReport(
+    public sealed record DeliveryReport(
         string Requested, string? Effective, bool EffectiveFinal, string? State, string? DeliveryReason,
         string? DemotionReason, bool? TurnInterrupted, string? InterruptResult, bool? InputsAhead,
         string? QueueItemId, bool Replayed);

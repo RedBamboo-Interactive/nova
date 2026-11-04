@@ -1,0 +1,231 @@
+{
+ "_comment": "Real records and overlays, read only, from queue items 16743 and 16560-16565 (78625958). Identities, order and times are as stored; message text is elided.",
+ "seq16743": {
+  "records": [
+   {
+    "id": 30220138,
+    "sessionId": "071b7709bae4",
+    "role": "assistant",
+    "eventType": "text",
+    "phase": "final_answer",
+    "messageId": "msg_011CghXmJ3u3MtZjBsPabzTX:0",
+    "epoch": "67a2b2ccdbbb94e7445a2482cf548c65",
+    "sequence": 39659,
+    "timestamp": "2026-11-04T08:57:09.7933187+01:00",
+    "recordCreatedAt": "2026-11-04T07:57:09.793318+00:00",
+    "messageUid": "3519aa09108445dea65e3fab9082f301",
+    "content": "[elided]"
+   },
+   {
+    "id": 30220139,
+    "sessionId": "071b7709bae4",
+    "role": "assistant",
+    "eventType": "status",
+    "epoch": "67a2b2ccdbbb94e7445a2482cf548c65",
+    "sequence": 39661,
+    "timestamp": "2026-11-04T08:57:10.0324379+01:00",
+    "recordCreatedAt": "2026-11-04T07:57:10.032437+00:00",
+    "content": "idle"
+   },
+   {
+    "id": 30220140,
+    "sessionId": "071b7709bae4",
+    "role": "user",
+    "eventType": "text",
+    "epoch": "67a2b2ccdbbb94e7445a2482cf548c65",
+    "sequence": 39662,
+    "timestamp": "2026-11-04T08:57:10.1068716+01:00",
+    "recordCreatedAt": "2026-11-04T07:57:10.106871+00:00",
+    "messageUid": "9100012e48eb4af78892019a63981488",
+    "content": "<nova-event source=\"agent-note\" from-agent=\"Nova\" from-agent-id=\"a7b059ac-f678-8b58-819b-1bcf3acb22db\" from-discussion=\"56c566f4\" from-title=\"[elided]\">\n[elided]\n</nova-event>",
+    "attachmentsJson": "{\"inputMessageUids\": [\"9100012e48eb4af78892019a63981488\"], \"attachments\": [], \"metadata\": {\"novaEvent\": true, \"senderAgentId\": \"a7b059ac-f678-8b58-819b-1bcf3acb22db\", \"senderName\": \"Nova\"}}"
+   },
+   {
+    "id": 30220247,
+    "sessionId": "071b7709bae4",
+    "role": "assistant",
+    "eventType": "thinking",
+    "messageId": "msg_011CghXmm6aEkExWBpRcehEV:0",
+    "epoch": "67a2b2ccdbbb94e7445a2482cf548c65",
+    "sequence": 39691,
+    "timestamp": "2026-11-04T08:57:15.4956038+01:00",
+    "recordCreatedAt": "2026-11-04T07:57:15.495603+00:00",
+    "messageUid": "08f541b900804af09c2957193b9a8325",
+    "content": "[elided]"
+   },
+   {
+    "id": 30220250,
+    "sessionId": "071b7709bae4",
+    "role": "assistant",
+    "eventType": "tool_use",
+    "messageId": "toolu_01E6HcvnKLhimZZoFxicR3ix",
+    "epoch": "67a2b2ccdbbb94e7445a2482cf548c65",
+    "sequence": 39693,
+    "timestamp": "2026-11-04T08:57:16.0945608+01:00",
+    "recordCreatedAt": "2026-11-04T07:57:16.09456+00:00",
+    "messageUid": "08f541b900804af09c2957193b9a8325",
+    "toolName": "Bash",
+    "content": "[elided]",
+    "toolInput": "{}"
+   }
+  ],
+  "overlays": [
+   {
+    "id": "30214342",
+    "messageUid": "9100012e48eb4af78892019a63981488",
+    "role": "user",
+    "timestamp": "2026-11-04T07:42:41.8978556Z",
+    "senderAgentId": "a7b059ac-f678-8b58-819b-1bcf3acb22db",
+    "source": "event:agent-note",
+    "parts": [
+     {
+      "type": "text",
+      "content": "[elided]"
+     }
+    ],
+    "stampedSender": {
+     "agentId": "a7b059ac-f678-8b58-819b-1bcf3acb22db",
+     "discussionId": "56c566f4",
+     "title": "[elided]"
+    }
+   }
+  ]
+ },
+ "batch16560": {
+  "records": [
+   {
+    "id": 29932584,
+    "sessionId": "7d9664a30a1d",
+    "role": "assistant",
+    "eventType": "text",
+    "phase": "final_answer",
+    "messageId": "msg_011Cgg3C8QXQXYzDhf5YUQh1:0",
+    "epoch": "18577e122cbebb822d2a892328b9e1d4",
+    "sequence": 13086,
+    "timestamp": "2026-11-03T14:01:49.5579282+01:00",
+    "recordCreatedAt": "2026-11-03T13:01:49.557928+00:00",
+    "messageUid": "adb2e4339b9548669656b85552cbe006",
+    "content": "[elided]"
+   },
+   {
+    "id": 29932585,
+    "sessionId": "7d9664a30a1d",
+    "role": "assistant",
+    "eventType": "status",
+    "epoch": "18577e122cbebb822d2a892328b9e1d4",
+    "sequence": 13088,
+    "timestamp": "2026-11-03T14:01:49.5862509+01:00",
+    "recordCreatedAt": "2026-11-03T13:01:49.58625+00:00",
+    "content": "idle"
+   },
+   {
+    "id": 29932586,
+    "sessionId": "7d9664a30a1d",
+    "role": "user",
+    "eventType": "text",
+    "epoch": "18577e122cbebb822d2a892328b9e1d4",
+    "sequence": 13089,
+    "timestamp": "2026-11-03T14:01:49.6454411+01:00",
+    "recordCreatedAt": "2026-11-03T13:01:49.645441+00:00",
+    "messageUid": "c65376512b50f9e6ef963ef37d5123be582f6d014d772cfcbf211e5c7703b6ff",
+    "content": "<nova-event source=\"callback:session-complete\" type=\"session-complete\" stopReason=\"completed\">\n[elided]\n</nova-event>\n<nova-event source=\"callback:session-complete\" type=\"session-complete\" stopReason=\"completed\">\n[elided]\n</nova-event>\n<nova-event source=\"callback:session-complete\" type=\"session-complete\" stopReason=\"completed\">\n[elided]\n</nova-event>\n<nova-event source=\"callback:session-complete\" type=\"session-complete\" stopReason=\"completed\">\n[elided]\n</nova-event>\n<nova-event source=\"callback:session-complete\" type=\"session-complete\" stopReason=\"completed\">\n[elided]\n</nova-event>\n<nova-event source=\"callback:session-complete\" type=\"session-complete\" stopReason=\"completed\">\n[elided]\n</nova-event>\n<nova-event source=\"callback:session-complete\" type=\"session-complete\" stopReason=\"completed\">\n[elided]\n</nova-event>\n<nova-event source=\"callback:session-complete\" type=\"session-complete\" stopReason=\"completed\">\n[elided]\n</nova-event>\n<nova-event source=\"callback:session-complete\" type=\"session-complete\" stopReason=\"completed\">\n[elided]\n</nova-event>",
+    "attachmentsJson": "{\"inputMessageUids\": [\"c65376512b50f9e6ef963ef37d5123be582f6d014d772cfcbf211e5c7703b6ff\", \"4fa945bb3eec36c277fb58c6b0f128f28a475c6adc668d1ee3b0a84c07b4704d\", \"00a55589ac5bee84a4e1432236cfbbecdc219daf2801e479dd14f8cab1d543f1\", \"ee20b4b55425a3b85c5e1b4eb04155e8a4cb44c560f4b6e36435e0a53838f6d1\", \"3a8801f6c2a7af5f5b00ddbd73563ef486881306f4352115c7102ce5ec4ee1be\", \"6e40ca4451b9e31c8d92292356d779d66093be3942a6baf6a5ec85402e58e4b7\", \"44275b47d2c1d90b4420e8b1ec51ea7b855a0e97d5d6eec736e0cf55515bed9b\", \"3a0bfef692249d669b8ea817c533a6b9842fe88649123b2e17c3e37895791a91\", \"7b6e57552668e10bfc38f36a5a1bb09856a9c4b25c31b10221e8825629195ed3\"], \"attachments\": [], \"metadata\": null}"
+   },
+   {
+    "id": 29932672,
+    "sessionId": "7d9664a30a1d",
+    "role": "assistant",
+    "eventType": "thinking",
+    "messageId": "msg_011Cgg3CGPEsDkwo3MusjYCL:0",
+    "epoch": "18577e122cbebb822d2a892328b9e1d4",
+    "sequence": 13102,
+    "timestamp": "2026-11-03T14:01:53.0724847+01:00",
+    "recordCreatedAt": "2026-11-03T13:01:53.072484+00:00",
+    "messageUid": "35ba8a3125fd4a2ab7822293dc905aaf",
+    "content": "[elided]"
+   },
+   {
+    "id": 29932673,
+    "sessionId": "7d9664a30a1d",
+    "role": "assistant",
+    "eventType": "tool_use",
+    "messageId": "toolu_01XXjBMJKrzQpy4jQ7hDvmXM",
+    "epoch": "18577e122cbebb822d2a892328b9e1d4",
+    "sequence": 13104,
+    "timestamp": "2026-11-03T14:01:53.0824495+01:00",
+    "recordCreatedAt": "2026-11-03T13:01:53.082449+00:00",
+    "messageUid": "35ba8a3125fd4a2ab7822293dc905aaf",
+    "toolName": "Bash",
+    "content": "[elided]",
+    "toolInput": "{}"
+   }
+  ],
+  "overlays": [
+   {
+    "id": "29930597",
+    "messageUid": "c65376512b50f9e6ef963ef37d5123be582f6d014d772cfcbf211e5c7703b6ff",
+    "role": "user",
+    "timestamp": "2026-11-03T12:57:54.8455527Z",
+    "source": "event:delegate:8516d9858567",
+    "parts": [
+     {
+      "type": "text",
+      "content": "[elided]"
+     }
+    ]
+   },
+   {
+    "id": "29930758",
+    "messageUid": "4fa945bb3eec36c277fb58c6b0f128f28a475c6adc668d1ee3b0a84c07b4704d",
+    "role": "user",
+    "timestamp": "2026-11-03T12:58:07.1747726Z",
+    "source": "event:delegate:2ea62feebc84",
+    "parts": [
+     {
+      "type": "text",
+      "content": "[elided]"
+     }
+    ]
+   },
+   {
+    "id": "29931081",
+    "messageUid": "00a55589ac5bee84a4e1432236cfbbecdc219daf2801e479dd14f8cab1d543f1",
+    "role": "user",
+    "timestamp": "2026-11-03T12:58:38.3180769Z",
+    "source": "event:delegate:be9dd15605ef",
+    "parts": [
+     {
+      "type": "text",
+      "content": "[elided]"
+     }
+    ]
+   },
+   {
+    "id": "29931139",
+    "messageUid": "ee20b4b55425a3b85c5e1b4eb04155e8a4cb44c560f4b6e36435e0a53838f6d1",
+    "role": "user",
+    "timestamp": "2026-11-03T12:58:45.5151395Z",
+    "source": "event:delegate:f3e8dfff95c2",
+    "parts": [
+     {
+      "type": "text",
+      "content": "[elided]"
+     }
+    ]
+   },
+   {
+    "id": "29931209",
+    "messageUid": "3a8801f6c2a7af5f5b00ddbd73563ef486881306f4352115c7102ce5ec4ee1be",
+    "role": "user",
+    "timestamp": "2026-11-03T12:58:47.9410231Z",
+    "source": "event:delegate:b0f279d08bc6",
+    "parts": [
+     {
+      "type": "text",
+      "content": "[elided]"
+     }
+    ]
+   }
+  ]
+ }
+}

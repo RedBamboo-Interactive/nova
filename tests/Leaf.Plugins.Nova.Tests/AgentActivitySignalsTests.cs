@@ -384,6 +384,39 @@ public sealed class AgentActivitySignalsTests
     }
 
     [Fact]
+    public async Task A_steer_that_joined_the_running_turn_starts_no_turn()
+    {
+        var bus = new RecordingEvents();
+        using var signals = Signals(bus, new ScriptedProbe(Observe("Active", (1, null))) { HoldAfter = 1, Hold = new TaskCompletionSource().Task });
+        using var f = new CallbackDeliveryTests.Fixture(activity: signals);
+        f.Gateway.Answer = """{"item":{"id":"q1","state":"pending","delivery":"steer-current"}}""";
+        var target = (await f.Store.GetAsync("target"))!;
+
+        var result = await f.Injector.InjectEventAsync(target, "Look at this", null, "agent-note",
+            null, null, null, null, null, delivery: "steer-current");
+
+        Assert.Equal(EventDelivery.Delivered, result.Delivery);
+        await AssertNoMoreAsync(bus, 0);
+    }
+
+    [Theory]
+    [InlineData("{\"item\":{\"id\":\"q1\",\"state\":\"pending\",\"delivery\":\"after-current\",\"deliveryReason\":\"steer_unavailable\"}}")]
+    [InlineData("{\"item\":{\"id\":\"q1\",\"state\":\"pending\",\"delivery\":\"after-current\",\"deliveryReason\":\"no_active_turn\"}}")]
+    public async Task A_steer_that_became_the_next_turn_starts_one(string answer)
+    {
+        var bus = new RecordingEvents();
+        using var signals = Signals(bus, new ScriptedProbe(Observe("Active", (1, null))) { HoldAfter = 1, Hold = new TaskCompletionSource().Task });
+        using var f = new CallbackDeliveryTests.Fixture(activity: signals);
+        f.Gateway.Answer = answer;
+        var target = (await f.Store.GetAsync("target"))!;
+
+        await f.Injector.InjectEventAsync(target, "Look at this", null, "agent-note",
+            null, null, null, null, null, delivery: "steer-current");
+
+        Assert.False(Assert.Single(await bus.WaitForAsync(1))["userFacing"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public async Task Delegation_callback_turn_is_not_user_facing()
     {
         var bus = new RecordingEvents();

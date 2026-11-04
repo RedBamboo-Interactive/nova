@@ -28,6 +28,11 @@ import { isUnregisteredEvent } from "./event-type-resolution.ts"
  * The stream opens a continuation block for later model activity, while the
  * shared activity projection joins adjacent segments into one frieze row. That
  * keeps the conversation turn intact without falsifying left-to-right order.
+ *
+ * The timestamp of an event a turn received is the moment it received it, like a
+ * person's message: mergePagedDiscussionRecordsAndOverlays stamps it from the
+ * record that carried it, and keeps the post time beside it as `postedAt`. Until
+ * then it has only its post time, and the panel holds it with the queue if it waits.
  */
 
 export type EventTypeResolver = (source: string) => EventType | undefined
@@ -49,6 +54,10 @@ export interface FriezeEvent {
   senderAgentId?: string
   /** Who wrote it, when the server stated that from a signed identity. */
   stampedSender?: NoteSender
+  /** The transcript holds it where its turn received it: `timestamp` is that moment. */
+  placed?: boolean
+  /** When it was posted, for a placed event that has a discussion copy. */
+  postedAt?: string
 }
 
 export const byTimestamp = (a: MessageBlock, b: MessageBlock) =>
@@ -184,6 +193,7 @@ export function buildEventPart(event: FriezeEvent, resolve?: EventTypeResolver):
   return {
     type: "tool_use",
     ...(event.messageUid ? { messageUid: event.messageUid } : {}),
+    ...(event.placed ? { inputPlaced: true } : {}),
     toolName: `event:${isNote ? AGENT_NOTE_KEY : eventKey(event.source)}`,
     // The timestamp rides on the part, not the block: merged groups keep only
     // the first event's block timestamp, so the modal needs its own copy.
@@ -196,6 +206,7 @@ export function buildEventPart(event: FriezeEvent, resolve?: EventTypeResolver):
       color: presentation?.color ?? null,
       data,
       timestamp: event.timestamp,
+      ...(event.postedAt ? { postedAt: event.postedAt } : {}),
     }),
     content: text,
   }
@@ -261,6 +272,8 @@ function toFriezeEvent(m: MessageBlock): FriezeEvent {
     timestamp: m.timestamp,
     senderAgentId: m.senderAgentId,
     stampedSender: readNoteSender(m.metadata?.stampedSender),
+    placed: m.metadata?.deliveryPlaced === true,
+    postedAt: typeof m.metadata?.postedAt === "string" ? m.metadata.postedAt : undefined,
   }
 }
 

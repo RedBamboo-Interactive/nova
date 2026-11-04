@@ -380,6 +380,8 @@ public sealed class CallbackDeliveryTests
         public bool AcceptBeforeFailure { get; set; }
         public List<string?> Keys { get; } = [];
         public List<string> Bodies { get; } = [];
+        /// <summary>The whole admission answer, when a test needs RedCompute to say more than accepted.</summary>
+        public string Answer { get; set; } = "{\"accepted\":true}";
         // RedCompute refuses a reused admission key whose body differs (idempotency_conflict).
         public int Conflicts { get; private set; }
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ComputeProvenance? provenance = null, CancellationToken ct = default)
@@ -405,7 +407,7 @@ public sealed class CallbackDeliveryTests
                 }
             }
             if (fail) throw new HttpRequestException("Simulated lost acknowledgement");
-            return new(HttpStatusCode.OK) { Content = new StringContent("{\"accepted\":true}") };
+            return new(HttpStatusCode.OK) { Content = new StringContent(Answer) };
         }
     }
 

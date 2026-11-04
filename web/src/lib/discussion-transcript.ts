@@ -1,7 +1,7 @@
 import type { MessageBlock, PersistedMessage } from "@redbamboo/chat"
 import { attachBackgroundRecords, isBackgroundRecord } from "@redbamboo/chat/background-work"
 import type { DiscussionHistoryOverlay } from "./types.ts"
-import { byTimestamp } from "./message-order.ts"
+import { byTimestamp, isRawEventMessage } from "./message-order.ts"
 
 export interface NovaMessageArrival {
   content: string
@@ -200,9 +200,48 @@ function orderPagedTranscriptRecords(records: PersistedMessage[]): PersistedMess
 }
 
 /**
+ * The event overlays each user record carried, by the identities RedCompute wrote on the
+ * record: its own uid and the members of a coalesced batch. Never by content or time.
+ */
+function eventOverlaysByRecord(
+  overlays: MessageBlock[],
+  records: PersistedMessage[],
+  canonicalUserBlocks: MessageBlock[],
+): Map<PersistedMessage, MessageBlock[]> {
+  const inputsOf = new Map(canonicalUserBlocks.map(block => [block.id, block.inputMessageUids ?? []]))
+  const recordOf = new Map<string, PersistedMessage>()
+  for (const record of orderPagedTranscriptRecords(records.filter(item => item.role === "user"))) {
+    const uids = [record.messageUid, ...(inputsOf.get(record.messageUid || `db-${record.id}`) ?? [])]
+    for (const uid of uids) {
+      if (!uid) continue
+      for (const key of [`uid:${uid}`, `id:${uid}`])
+        if (!recordOf.has(key)) recordOf.set(key, record)
+    }
+  }
+  const carried = new Map<PersistedMessage, MessageBlock[]>()
+  for (const overlay of overlays) {
+    const record = recordOf.get(stableBlockIdentity(overlay))
+    if (!record) continue
+    const placed = carried.get(record) ?? []
+    placed.push({
+      ...overlay,
+      timestamp: record.timestamp,
+      metadata: { ...overlay.metadata, deliveryPlaced: true, postedAt: overlay.timestamp },
+    })
+    carried.set(record, placed)
+  }
+  return carried
+}
+
+/**
  * Merge a V2 overlay window with raw transcript records before rebuilding
  * assistant turns. An ambient event is a chronological boundary: later parts
  * of a still-growing turn must remain after that event when history catches up.
+ *
+ * A delivered event's place is the record that carried it, not when it was posted: its turn
+ * received it there, at that record's time. Live catch-up and reload both come through here, so
+ * they can't disagree. An event with no record yet keeps its post time; the panel holds a waiting
+ * one with the queue, and nothing is hidden because its state is unknown.
  */
 export function mergePagedDiscussionRecordsAndOverlays(
   overlayBlocks: MessageBlock[],
@@ -232,20 +271,32 @@ export function mergePagedDiscussionRecordsAndOverlays(
       || !canonicalKeys.has(stableBlockIdentity(block))
   })
 
-  const orderedRecords = orderPagedTranscriptRecords(retainedRecords)
-  const orderedOverlays = retainedOverlays
+  const chronologicalOverlays = retainedOverlays
     .map((block, order) => ({ block, order }))
     .sort((a, b) =>
       timelineTimestamp(a.block.timestamp) - timelineTimestamp(b.block.timestamp)
       || a.order - b.order)
     .map(({ block }) => block)
+  const carriedBy = eventOverlaysByRecord(
+    chronologicalOverlays.filter(block => eventOverlayKeys.has(stableBlockIdentity(block))),
+    records,
+    canonicalUserBlocks,
+  )
+  const carriedKeys = new Set([...carriedBy.values()].flat().map(stableBlockIdentity))
+  const orderedOverlays = chronologicalOverlays.filter(block => !carriedKeys.has(stableBlockIdentity(block)))
+  // The records an overlay replaces still mark its place, so they stay in the walk.
+  const retained = new Set(retainedRecords)
+  const orderedRecords = orderPagedTranscriptRecords(records.filter(record => !isBackgroundRecord(record)))
 
   const merged: MessageBlock[] = []
   let recordSpan: PersistedMessage[] = []
   let overlayIndex = 0
   const flushRecords = () => {
     if (recordSpan.length === 0) return
-    merged.push(...rebuildRecords(recordSpan))
+    // An event drawn from its own record, with no overlay loaded, is already at its place.
+    merged.push(...rebuildRecords(recordSpan).map(block => block.role === "user" && isRawEventMessage(block)
+      ? { ...block, metadata: { ...block.metadata, deliveryPlaced: true } }
+      : block))
     recordSpan = []
   }
 
@@ -257,7 +308,12 @@ export function mergePagedDiscussionRecordsAndOverlays(
       merged.push(orderedOverlays[overlayIndex]!)
       overlayIndex++
     }
-    recordSpan.push(record)
+    const carried = carriedBy.get(record)
+    if (carried) {
+      flushRecords()
+      merged.push(...carried)
+    }
+    if (retained.has(record)) recordSpan.push(record)
   }
   flushRecords()
   while (overlayIndex < orderedOverlays.length) {

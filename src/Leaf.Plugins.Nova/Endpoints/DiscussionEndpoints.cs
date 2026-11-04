@@ -75,6 +75,8 @@ public class DiscussionEventRequest
     public string? IdempotencyKey { get; set; }
     /// <summary>Where he asked for this. Stamped with the sender; signed Agents only.</summary>
     public RequestedInBody? RequestedIn { get; set; }
+    /// <summary>after-current (default) or steer-current. Only the sender knows it is urgent.</summary>
+    public string? Delivery { get; set; }
 }
 
 public class NovaMessageRequest
@@ -153,24 +155,24 @@ public static class DiscussionEndpoints
     internal static IResult EventResponse(EventInjectionResult result) => result.Delivery switch
     {
         EventDelivery.Delivered or EventDelivery.Reused =>
-            Results.Ok(new { success = true, delivery = "delivered", messageUid = result.MessageUid }),
+            Results.Ok(new { success = true, delivery = "delivered", messageUid = result.MessageUid, deliveryReport = result.Report }),
         EventDelivery.Recorded =>
-            Results.Ok(new { success = true, delivery = "recorded", messageUid = result.MessageUid }),
+            Results.Ok(new { success = true, delivery = "recorded", messageUid = result.MessageUid, deliveryReport = result.Report }),
         EventDelivery.Queued => Results.Json(new
         {
-            success = true, delivery = "queued", messageUid = result.MessageUid,
+            success = true, delivery = "queued", messageUid = result.MessageUid, deliveryReport = result.Report,
             message = "The discussion has no AI session yet; the event is stored and will be delivered, once, when it starts.",
         }, statusCode: StatusCodes.Status202Accepted),
         EventDelivery.Failed => Results.Json(new
         {
-            success = false, delivery = "failed", messageUid = result.MessageUid, retryable = true,
+            success = false, delivery = "failed", messageUid = result.MessageUid, retryable = true, deliveryReport = result.Report,
             error = result.ErrorCode ?? "event_delivery_failed",
             message = result.ErrorMessage ?? "The event was stored but the AI session did not accept it. Retry with an idempotencyKey to avoid a duplicate.",
         }, statusCode: StatusCodes.Status502BadGateway),
         EventDelivery.Denied => Closed(),
         _ => Results.Json(new
         {
-            success = false, delivery = "undeliverable", messageUid = result.MessageUid, retryable = false,
+            success = false, delivery = "undeliverable", messageUid = result.MessageUid, retryable = false, deliveryReport = result.Report,
             error = result.ErrorCode ?? "event_undeliverable",
             message = result.ErrorMessage ?? "The event cannot be delivered to this discussion's AI session.",
         }, statusCode: StatusCodes.Status422UnprocessableEntity),
@@ -193,6 +195,8 @@ public static class DiscussionEndpoints
             return Results.BadRequest(new { error = "Content is required" });
         if (request.IdempotencyKey is { } requestKey && (string.IsNullOrWhiteSpace(requestKey) || requestKey.Length > 200))
             return Results.BadRequest(new { error = "invalid_idempotency_key", message = "idempotencyKey must be 1-200 characters" });
+        if (DelegateEndpoints.EventDeliveryError(request.Delivery) is { } deliveryError)
+            return Results.BadRequest(deliveryError);
 
         // A signed Agent's identity comes from its token, whatever the body says. Registering the
         // reply callback stays the caller's explicit choice: stamping alone must not arm it.
@@ -206,7 +210,7 @@ public static class DiscussionEndpoints
 
         var result = await injector.InjectEventAsync(discussion, request.Content, request.Type, source,
             request.SenderAgentId, replyTo, request.Metadata, UserId(ctx),
-            request.IdempotencyKey, ctx.RequestAborted, stamped);
+            request.IdempotencyKey, ctx.RequestAborted, stamped, request.Delivery);
 
         // A discussion created a moment ago is still getting its session. The event is queued
         // and the creation delivers it; wait a bounded while so the answer can say delivered.
@@ -216,7 +220,7 @@ public static class DiscussionEndpoints
             try { await creation.WaitAsync(EventSessionWait, ctx.RequestAborted); }
             catch (TimeoutException) { }
             await injector.DeliverPendingAsync(discussion.EntityId, ctx.RequestAborted);
-            result = await injector.QueuedStateAsync(discussion.EntityId, queuedUid, ctx.RequestAborted);
+            result = await injector.QueuedStateAsync(discussion.EntityId, queuedUid, ctx.RequestAborted) with { Report = result.Report };
         }
 
         return EventResponse(result);
@@ -1874,7 +1878,7 @@ public static class DiscussionEndpoints
 
         group.MapPost("/discussions/{id}/event", (string id, DiscussionEventRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, EventInjector injector, MessagePipeline pipeline)
             => PostEventAsync(id, request, ctx, store, agents, injector, pipeline))
-            .WithSummary("Injects an event into a discussion and delivers it to its session; this is how an Agent writes to a discussion, its own included. For a signed Agent the server states the sender and sending discussion from the token and ignores senderAgentId in the body, and source defaults to agent-note. Body: content (required), optional type, source, senderAgentId, replyToDiscussionId (with senderAgentId, registers a reply callback), metadata, idempotencyKey, requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, 403 for a discussion the caller can't read). Never creates a session: to a discussion without one it answers 202 queued. The id may be live for the current LIVE discussion.");
+            .WithSummary("Injects an event into a discussion and delivers it to its session; this is how an Agent writes to a discussion, its own included. For a signed Agent the server states the sender and sending discussion from the token and ignores senderAgentId in the body, and source defaults to agent-note. Body: content (required), optional type, source, senderAgentId, replyToDiscussionId (with senderAgentId, registers a reply callback), metadata, idempotencyKey, requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, 403 for a discussion the caller can't read), delivery (after-current, the default, or steer-current: into the running turn if it can take it, otherwise queued; anything else is a 400). The response's deliveryReport says what became of that: requested, effective, deliveryReason. Never creates a session: to a discussion without one it answers 202 queued. The id may be live for the current LIVE discussion.");
 
         group.MapPost("/discussions/{id}/nova-message", async (string id, NovaMessageRequest request,
             HttpContext ctx, DiscussionStore store, ConversationUnread conversationUnread,
@@ -2135,6 +2139,9 @@ public static class DiscussionEndpoints
                 HttpMethod.Post, ctx, store, redCompute))
             .WithSummary("Retries one queued input that failed to run.");
 
+        group.MapPost("/discussions/{id}/input-queue/{itemId}/steer", SteerQueuedInputAsync)
+            .WithSummary("Sends one queued input into the running turn without interrupting it. Answers outcome (steering, delivering, delivered or unavailable) and, when unavailable, the reason; the item stays queued.");
+
         group.MapPost("/discussions/{id}/input-queue/send-now", async (
             string id, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute) =>
             await ProxyInputQueueAsync(id, "/send-now",
@@ -2238,6 +2245,10 @@ public static class DiscussionEndpoints
             _ => true,
         };
     }
+
+    internal static Task<IResult> SteerQueuedInputAsync(
+        string id, string itemId, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute)
+        => ProxyInputQueueAsync(id, $"/{Uri.EscapeDataString(itemId)}/steer", HttpMethod.Post, ctx, store, redCompute);
 
     private static async Task<IResult> ProxyInputQueueAsync(
         string discussionId, string suffix, HttpMethod method, HttpContext ctx,

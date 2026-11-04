@@ -479,7 +479,8 @@ test("background records attach to their launching call across an overlay bounda
   assert.equal(square?.task?.status, "completed")
 })
 
-test("an event delivered after a user turn keeps its posted place in the discussion", () => {
+test("an event delivered after a user turn sits where the later turn received it", () => {
+  // 78625958: it used to keep its posted place; a delivered event now sits where it was received.
   // 258167da: a queued event that failed was overtaken by the user's message and delivered later.
   const event: MessageBlock = {
     id: "queued-event",
@@ -498,5 +499,7 @@ test("an event delivered after a user turn keeps its posted place in the discuss
   const merged = mergePagedDiscussionRecordsAndOverlays(
     [event], [userTurn, firstReply, lateCopy, eventReply], rebuildTestRecords)
 
-  assert.deepEqual(merged.map(block => block.id), ["queued-event", "user-turn", "reply-1", "reply-2"])
+  assert.deepEqual(merged.map(block => block.id), ["user-turn", "reply-1", "queued-event", "reply-2"])
+  assert.equal(merged[2]!.timestamp, "2026-10-25T09:00:30Z")
+  assert.equal(merged[2]!.metadata?.postedAt, "2026-10-25T09:00:00Z")
 })
