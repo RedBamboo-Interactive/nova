@@ -57,12 +57,13 @@ public static class HeartbeatEndpoints
                     ["schedule"] = automation?.Data["trigger"]?["expression"]?.DeepClone(),
                     ["timezone"] = automation?.Data["trigger"]?["timezone"]?.DeepClone(),
                     ["qualityTier"] = config.QualityTier,
+                    ["initiatives"] = HeartbeatService.AreInitiativesEnabled(agent.Data),
                     ["heartbeat"] = state,
                 });
             }
             return Results.Ok(result);
         })
-            .WithSummary("Returns the heartbeat status of each Agent that has one: schedule, timezone, enabled flag, quality tier and last tick.");
+            .WithSummary("Returns the heartbeat status of each Agent that has one: schedule, timezone, enabled flag, quality tier, whether initiatives are on, and last tick.");
 
         group.MapPost("/heartbeat/{agentId}/rotate", async (string agentId, HeartbeatService heartbeat) =>
         {

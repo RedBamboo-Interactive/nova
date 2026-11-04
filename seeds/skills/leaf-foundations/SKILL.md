@@ -36,6 +36,13 @@ meant, so read that answer instead of probing guessed URLs.
 Respect native transports. The shell is HTML; Assets and media are binary; selected operations use
 SSE or WebSocket rather than JSON polling.
 
+## Initiatives
+
+An Agent with Live on has a Heartbeat that may start work nobody asked for, each piece in its own
+discussion titled `Initiative: ...`. The owner controls this with the Agent's `Initiatives` field;
+never change that field yourself. If an owner asks how to stop them, point them to it. The rules
+an initiative follows are in the Heartbeat's morning briefing.
+
 ## Extensions
 
 Leaf grows through optional extensions. Their `kind` says what installing one changes:

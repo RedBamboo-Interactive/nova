@@ -10,6 +10,15 @@
   },
   {
     "parentType": "agent",
+    "slug": "initiatives",
+    "name": "Initiatives",
+    "fieldType": "boolean",
+    "sortOrder": 9,
+    "description": "Lets this Agent's Heartbeat start work nobody asked for, each piece in its own titled discussion. Off, it only follows through on what it was asked. Needs Live.",
+    "icon": "ph-bold ph-lightbulb"
+  },
+  {
+    "parentType": "agent",
     "slug": "heartbeat_automation",
     "name": "Heartbeat Automation",
     "fieldType": "entity_ref",

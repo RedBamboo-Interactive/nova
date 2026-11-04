@@ -142,6 +142,53 @@ public sealed class HeartbeatLifecycleTests
     }
 
     [Fact]
+    public async Task Reconcile_writes_down_that_a_live_agent_has_initiatives_on_so_the_switch_shows_the_truth()
+    {
+        var fixture = new Fixture(live: true);
+
+        await fixture.Heartbeat.ReconcileAsync();
+
+        Assert.True(fixture.Agent.Data[HeartbeatService.InitiativesField]!.GetValue<bool>());
+        // The snapshot reconcile read must not have undone its own write of the automation reference.
+        Assert.NotNull(fixture.Agent.Data[HeartbeatService.AutomationField]);
+    }
+
+    [Fact]
+    public async Task Reconcile_never_turns_back_on_initiatives_the_owner_turned_off()
+    {
+        var fixture = new Fixture(live: true);
+        await fixture.Heartbeat.ReconcileAsync();
+        await fixture.Entities.PatchAsync(fixture.Agent.Id,
+            new JsonObject { [HeartbeatService.InitiativesField] = false });
+
+        await fixture.Heartbeat.ReconcileAsync();
+
+        Assert.False(fixture.Agent.Data[HeartbeatService.InitiativesField]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task Reconcile_leaves_the_switch_unset_on_an_agent_without_live()
+    {
+        var fixture = new Fixture(live: false);
+
+        await fixture.Heartbeat.ReconcileAsync();
+
+        Assert.Null(fixture.Agent.Data[HeartbeatService.InitiativesField]);
+    }
+
+    [Fact]
+    public void Nova_seed_defines_the_agent_initiatives_switch()
+    {
+        var seedPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..", "seeds", "agent-fields.json"));
+        var fields = JsonNode.Parse(File.ReadAllText(seedPath))!.AsArray().OfType<JsonObject>().ToList();
+        var field = Assert.Single(fields, field => field["slug"]?.GetValue<string>() == HeartbeatService.InitiativesField);
+
+        Assert.Equal("agent", field["parentType"]!.GetValue<string>());
+        Assert.Equal("boolean", field["fieldType"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Reconcile_seeds_the_daily_live_rotation_once_beside_the_heartbeat()
     {
         var fixture = new Fixture(live: true, seedLiveRotation: true);
