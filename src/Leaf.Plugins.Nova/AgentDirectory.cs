@@ -16,7 +16,8 @@ public sealed record AgentInfo(
     string? Capabilities,
     string? MemoryInstructions,
     string? Provider = null,
-    string? QualityTier = null);
+    string? QualityTier = null,
+    IReadOnlyList<AgentProtocolBlock>? Protocols = null);
 
 /// <summary>
 /// Cached view of the kernel's <c>agent</c> entities (the agent SYSTEM stays kernel —
@@ -175,7 +176,8 @@ public sealed class AgentDirectory : IDisposable
                 Str(data, "capabilities"),
                 Str(data, "memory_instructions"),
                 providerRaw,
-                qualityTier));
+                qualityTier,
+                await AgentProtocols.ResolveAsync(store, data, ct)));
         }
         return agents;
     }

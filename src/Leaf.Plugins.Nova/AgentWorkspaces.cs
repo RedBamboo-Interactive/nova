@@ -52,7 +52,8 @@ public sealed class AgentWorkspace(string workspacePath, bool isDisposable = fal
     public void MaterializeAgentFiles(AgentInfo agent)
     {
         WriteIf("identity.md", agent.Identity);
-        WriteIf("output_protocol.md", agent.OutputProtocol);
+        // The selected Protocols follow the Agent's own Output Protocol, as in RedLeaf's projection.
+        WriteIf("output_protocol.md", AgentProtocols.Render(agent.OutputProtocol, agent.Protocols));
         WriteIf("capabilities.md", agent.Capabilities);
         WriteIf("memory.md", agent.MemoryInstructions);
 
