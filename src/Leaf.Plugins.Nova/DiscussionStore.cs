@@ -113,11 +113,21 @@ public sealed record ArchivedDiscussionPage(
 /// <summary>
 /// Centralized owner-scoping rules for user-owned resources. A resource is accessible
 /// when it has no owner, is owned by the local user, or the caller is the owner.
+/// The local user (<c>local-user</c>, the loopback identity) stands for the installation owner
+/// and so also reaches what that person owns, never what another user owns. With no known
+/// installation owner it reaches only unowned and local resources.
 /// </summary>
 public static class OwnerScope
 {
-    public static bool CanAccess(string? ownerId, string? userId)
-        => ownerId is null || ownerId == "local-user" || userId == "local-user" || ownerId == userId;
+    public const string LocalUser = "local-user";
+
+    public static bool IsLocalUser(string? userId) => userId == LocalUser;
+
+    public static bool CanAccess(string? ownerId, string? userId, string? installationOwnerId)
+        => ownerId is null || ownerId == LocalUser || ownerId == userId
+            || (IsLocalUser(userId)
+                && !string.IsNullOrWhiteSpace(installationOwnerId)
+                && string.Equals(ownerId, installationOwnerId, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>

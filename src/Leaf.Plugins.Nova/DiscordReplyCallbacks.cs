@@ -87,7 +87,8 @@ public sealed class DiscordReplyCallbacks(
     internal static bool Accepts(DiscussionRead discussion, DiscordReply reply)
         => !DiscussionApplicationOwner.IsForeign(discussion)
            && !DiscussionMutationPolicy.RejectSend(discussion)
-           && OwnerScope.CanAccess(discussion.OwnerId, reply.OwnerUserId)
+           // A binding's owner is a signed person; a local-user one stands for nobody here.
+           && OwnerScope.CanAccess(discussion.OwnerId, reply.OwnerUserId, installationOwnerId: null)
            && (discussion.AgentId is null
                || string.Equals(discussion.AgentId, reply.AgentEntityId, StringComparison.OrdinalIgnoreCase));
 

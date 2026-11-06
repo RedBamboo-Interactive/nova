@@ -21,7 +21,8 @@ public static class DiscussionAccessPolicy
     public static bool CanRead(DiscussionRead discussion, HttpContext context)
     {
         var userId = context.User.FindFirstValue("sub");
-        if (!OwnerScope.CanAccess(discussion.OwnerId, userId)) return false;
+        if (!OwnerScope.CanAccess(discussion.OwnerId, userId, InstallationOwner.ForRequest(context)))
+            return false;
         if (!discussion.Confidential) return true;
         if (string.IsNullOrWhiteSpace(discussion.OwnerId)
             || string.IsNullOrWhiteSpace(discussion.AgentId))

@@ -228,7 +228,9 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<MessagePipeline>>(),
                 sp.GetRequiredService<AgentActivitySignals>(),
                 sp.GetRequiredService<EventInjector>(),
-                sp.GetRequiredService<ExtensionReadinessContext>()));
+                sp.GetRequiredService<ExtensionReadinessContext>(),
+                sp.GetRequiredService<InstallationOwner>()));
+        services.AddSingleton(sp => new InstallationOwner(sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
         // Soft dependency: kernels before KernelApi 0.1.6 have no extension catalog, and then no line.
         services.AddSingleton(sp =>
         {
@@ -245,6 +247,10 @@ public sealed class NovaAppPlugin : ILeafPlugin
         group.AddEndpointFilter(async (context, next) =>
         {
             context.HttpContext.Response.Headers.CacheControl = "private, no-store";
+            // The access policy is synchronous: say up front whom a local-user request stands for.
+            // Unstamped, local-user stands for nobody, so a missing service fails closed.
+            if (context.HttpContext.RequestServices.GetService<InstallationOwner>() is { } installationOwner)
+                await installationOwner.StampAsync(context.HttpContext);
             try
             {
                 return await next(context);

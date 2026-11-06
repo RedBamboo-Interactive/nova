@@ -517,6 +517,9 @@ public sealed class DiscussionRollbackTests
         {
             var ctx = new DefaultHttpContext();
             ctx.User = Caller(caller);
+            // A single-user install that Me owns, as Nova's route filter records it for local-user.
+            if (OwnerScope.IsLocalUser(ctx.User.FindFirst("sub")?.Value))
+                ctx.Items[InstallationOwner.RequestItem] = Me;
             return DiscussionRollbackEndpoints.RollbackAsync(id ?? Id, new DiscussionRollbackEndpoints.RollbackBody(uid),
                 ctx, Store, Client, Events, (discussionId, rollback, _) =>
                 {

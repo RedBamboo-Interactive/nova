@@ -45,8 +45,10 @@ public sealed class MessagePipeline(
     ILogger<MessagePipeline> logger,
     AgentActivitySignals? activity = null,
     EventInjector? eventInjector = null,
-    ExtensionReadinessContext? extensionReadiness = null)
+    ExtensionReadinessContext? extensionReadiness = null,
+    InstallationOwner? installationOwner = null)
 {
+    private readonly InstallationOwner _installationOwner = installationOwner ?? new InstallationOwner(entities);
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly ConcurrentDictionary<string, Task<string?>> _pendingSessions = new();
@@ -319,8 +321,12 @@ public sealed class MessagePipeline(
         var now = DateTime.UtcNow;
         var cutoff = now.AddDays(-2);
 
+        // A local-user sender reaches the installation owner's discussions, never another user's.
+        var installationOwnerId = OwnerScope.IsLocalUser(userId)
+            ? await _installationOwner.ResolveAsync(ct)
+            : null;
         var all = (await store.ListOpenAndRecentlyClosedAsync(cutoff, ct: ct))
-            .Where(d => OwnerScope.CanAccess(d.OwnerId, userId))
+            .Where(d => OwnerScope.CanAccess(d.OwnerId, userId, installationOwnerId))
             // A confidential discussion is isolated even from the owning Agent's
             // ambient context in other discussions. The Agent may read it only
             // while acting inside that discussion.
