@@ -209,9 +209,11 @@ public static class NovaContextBuilder
                 sb.Append($"\n- [{d.Id}] \"{otherTitle(d)}\" . {d.MessageCount} msgs . {FormatRelativeTime(now - d.LastActivity)}");
         }
 
-        sb.Append($"\n\nRecall any discussion: curl -s {ApiBase}/discussions/{{id}}/export");
-        sb.Append($"\nSearch all discussions: curl -s \"{ApiBase}/discussions/search?q={{query}}\"");
-        sb.Append($"\nGet full context snapshot: curl -s {ApiBase}/discussions/{{id}}/context");
+        // Every recipe carries the execution bearer: a tokenless loopback call lands on the local
+        // fallback identity instead of this Agent's signed one.
+        sb.Append($"\n\nRecall any discussion: curl -s {ApiBase}/discussions/{{id}}/export -H \"Authorization: Bearer $REDLEAF_EXECUTION_TOKEN\"");
+        sb.Append($"\nSearch all discussions: curl -s \"{ApiBase}/discussions/search?q={{query}}\" -H \"Authorization: Bearer $REDLEAF_EXECUTION_TOKEN\"");
+        sb.Append($"\nGet full context snapshot: curl -s {ApiBase}/discussions/{{id}}/context -H \"Authorization: Bearer $REDLEAF_EXECUTION_TOKEN\"");
         // The emoji is a JSON escape: a cp1252 shell turns a literal emoji into "??".
         // The body goes through stdin: a Windows command line re-encodes argv through the ANSI code
         // page, so an emoji passed with -d reaches the server as "??".

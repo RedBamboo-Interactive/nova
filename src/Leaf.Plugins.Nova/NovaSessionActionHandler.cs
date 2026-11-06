@@ -180,7 +180,7 @@ public sealed class NovaSessionActionHandler(
             parts.Add($"""
                 <nova-context pre-created-discussion="{preCreated.Id}">
                 A discussion has already been created for you with ID: {preCreated.Id}.
-                Post your content to it using: POST http://127.0.0.1:18804/api/apps/nova/discussions/{preCreated.Id}/nova-message
+                Post your content to it using: POST http://127.0.0.1:18804/api/apps/nova/discussions/{preCreated.Id}/nova-message with -H "Authorization: Bearer $REDLEAF_EXECUTION_TOKEN"
                 Do NOT create a new discussion — use the one provided.
                 </nova-context>
                 """);

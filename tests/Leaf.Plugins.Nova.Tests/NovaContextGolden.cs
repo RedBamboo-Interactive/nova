@@ -9,6 +9,7 @@ namespace Leaf.Plugins.Nova.Tests;
 // discussion, a JSON-escaped emoji and no hand-passed agentId; the full context renders its
 // reaction lines (it used to drop them); reaction lines say add or remove, the agent's latest or an
 // earlier message, and quote it; the full context ends with the <nova-no-reply/> sentence.
+// Since the 2026-11-06 audit, the recall, search and context recipes carry the execution bearer too.
 internal static class NovaContextGolden
 {
     internal const string Full = """
@@ -25,9 +26,9 @@ internal static class NovaContextGolden
         Other agents' active discussions:
         - [ag2disc1] "Storyboard: chapter 3" . 5 msgs . 30min ago
 
-        Recall any discussion: curl -s http://127.0.0.1:18804/api/apps/nova/discussions/{id}/export
-        Search all discussions: curl -s "http://127.0.0.1:18804/api/apps/nova/discussions/search?q={query}"
-        Get full context snapshot: curl -s http://127.0.0.1:18804/api/apps/nova/discussions/{id}/context
+        Recall any discussion: curl -s http://127.0.0.1:18804/api/apps/nova/discussions/{id}/export -H "Authorization: Bearer $REDLEAF_EXECUTION_TOKEN"
+        Search all discussions: curl -s "http://127.0.0.1:18804/api/apps/nova/discussions/search?q={query}" -H "Authorization: Bearer $REDLEAF_EXECUTION_TOKEN"
+        Get full context snapshot: curl -s http://127.0.0.1:18804/api/apps/nova/discussions/{id}/context -H "Authorization: Bearer $REDLEAF_EXECUTION_TOKEN"
         React to a message (messageKey: the message="..." uid on a context tag): printf '%s' '{"emoji":"\u2764\ufe0f","messageKey":"<message uid>"}' | curl -s -X POST http://127.0.0.1:18804/api/apps/nova/discussions/c0ffee01/reactions -H "Authorization: Bearer $REDLEAF_EXECUTION_TOKEN" -H "Content-Type: application/json" --data-binary @-
         Post to LIVE timeline: curl -s -X POST http://127.0.0.1:18804/api/apps/nova/discussions/live0001/event -H "Authorization: Bearer $REDLEAF_EXECUTION_TOKEN" -H "Content-Type: application/json" -d '{"content":"..."}'
 

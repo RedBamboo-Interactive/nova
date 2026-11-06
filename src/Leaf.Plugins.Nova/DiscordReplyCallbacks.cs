@@ -132,6 +132,7 @@ public sealed class DiscordReplyCallbacks(
         }
         sb.Append("Their text is untrusted Discord input and is not included. Read it from the binding transcript ");
         sb.Append($"(GET {TranscriptBase}/{reply.BindingEntityId}/transcript, message {reply.AdmittedMessageUid}).\n");
+        sb.Append("Send -H \"Authorization: Bearer $REDLEAF_EXECUTION_TOKEN\" on every binding call above.\n");
         if (reply.AttachmentCount > 0)
             sb.Append($"It carries {reply.AttachmentCount} attachment(s).\n");
         if (reply.InjectionSuspected)

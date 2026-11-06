@@ -34,6 +34,15 @@ public sealed class NovaContextFrameTests
         Assert.Equal(NovaContextGolden.Delta, Delta(Representative()));
     }
 
+    [Fact]
+    public void Every_curl_recipe_carries_the_execution_bearer()
+    {
+        // A tokenless loopback call resolves to the local fallback identity, not this Agent.
+        var curls = Full(Representative()).Split('\n').Where(l => l.Contains("curl ")).ToList();
+        Assert.Equal(5, curls.Count);
+        Assert.All(curls, l => Assert.Contains("-H \"Authorization: Bearer $REDLEAF_EXECUTION_TOKEN\"", l));
+    }
+
     [Theory]
     [MemberData(nameof(Payloads))]
     public void Hostile_track_name_cannot_break_the_context(string payload)
