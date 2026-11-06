@@ -162,6 +162,11 @@ public sealed class NovaAppPlugin : ILeafPlugin
             sp.GetRequiredService<DiscussionStore>(),
             sp.GetRequiredService<EventInjector>(),
             sp.GetRequiredService<ILogger<DiscordReplyCallbacks>>()));
+        services.AddSingleton(sp => new RestartRecovery(
+            sp.GetRequiredService<DiscussionStore>(),
+            sp.GetRequiredService<RedComputeClient>(),
+            sp.GetRequiredService<EventInjector>(),
+            sp.GetRequiredService<ILogger<RestartRecovery>>()));
         services.AddSingleton(sp => new ExtensionContributions(
             sp.GetRequiredKeyedService<IPluginExtensions>(PluginId),
             sp.GetRequiredService<LiveEvents>()));
@@ -327,6 +332,11 @@ public sealed class NovaAppPlugin : ILeafPlugin
         var confidentialBackfill = host.GetRequiredService<ConfidentialSessionBackfill>();
         _ = Task.Run(() => confidentialBackfill.RunAsync(lifetime.ApplicationStopping),
             CancellationToken.None);
+        // A discussion whose own turn the restart killed: wake it once, after RedCompute is back.
+        // Started here so its boot snapshot of `thinking` precedes any client sync.
+        var restartRecovery = host.GetRequiredService<RestartRecovery>();
+        _ = Task.Run(() => restartRecovery.RunAsync(lifetime.ApplicationStopping), CancellationToken.None);
+
         // Events queued before a session existed, whose drain a restart interrupted.
         var injector = host.GetRequiredService<EventInjector>();
         _ = Task.Run(() => injector.DeliverAllPendingAsync(lifetime.ApplicationStopping),

@@ -1052,6 +1052,35 @@ public sealed class DiscussionStore(
     }
 
     /// <summary>
+    /// Persists one automatic restart wake on the discussion, under the entity gate, before the
+    /// wake is sent. The record survives the restart a resumed turn may trigger itself, so the
+    /// same interruption is never woken twice and a discussion wakes at most once per
+    /// <see cref="RestartRecoveryPolicy.ResumeWindow"/>. Closed and foreign discussions refuse.
+    /// </summary>
+    public Task<RestartRecoveryClaim> TryClaimRestartRecoveryAsync(
+        Guid entityId, string key, DateTimeOffset now, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity is null || !IsNovaDiscussion(entity) || IsForeign(entity)
+                || DiscussionStatus.IsClosed(Str(entity.Data, "status") ?? DiscussionStatus.Stopped))
+                return RestartRecoveryClaim.Refused;
+
+            var decision = RestartRecoveryPolicy.Decide(entity.Data[RestartRecoveryPolicy.DataKey], key, now);
+            if (decision != RestartRecoveryClaim.Claimed) return decision;
+
+            await entities.PatchAsync(entityId, new JsonObject
+            {
+                [RestartRecoveryPolicy.DataKey] = new JsonObject
+                {
+                    ["key"] = key,
+                    ["at"] = now.ToString("O"),
+                },
+            }, null, ct);
+            return RestartRecoveryClaim.Claimed;
+        }, ct);
+
+    /// <summary>
     /// The sole exception to closed-state terminality: an explicit user reopen may
     /// move archived to stopped. Archiving remains terminal until its finalizer has
     /// confirmed the provider stopped. Ordinary status writers never call this.
