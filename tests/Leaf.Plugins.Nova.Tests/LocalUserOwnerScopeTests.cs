@@ -11,7 +11,8 @@ namespace Leaf.Plugins.Nova.Tests;
 /// <summary>
 /// <c>local-user</c>, the loopback identity, stands for the installation owner: on a single-user
 /// install the local browser keeps the owner's discussions, on a multi-user install it never reaches
-/// another user's. Reading one discussion, listing, searching and exporting all decide through
+/// another user's. Unowned and local discussions belong to that owner too, so a second signed user
+/// neither reads nor claims them. Reading one discussion, listing, searching and exporting all decide through
 /// <see cref="DiscussionAccessPolicy.CanRead"/>, so these cases hold for each of them.
 /// </summary>
 public sealed class LocalUserOwnerScopeTests
@@ -36,7 +37,7 @@ public sealed class LocalUserOwnerScopeTests
     }
 
     [Fact]
-    public async Task Only_a_local_user_request_is_stamped()
+    public async Task Every_request_is_stamped_with_the_installation_owner()
     {
         var owner = new InstallationOwner(SingleUser().Entities);
 
@@ -46,7 +47,112 @@ public sealed class LocalUserOwnerScopeTests
 
         var signed = Human(Second);
         await owner.StampAsync(signed);
-        Assert.False(signed.Items.ContainsKey(InstallationOwner.RequestItem));
+        Assert.Equal(Owner, InstallationOwner.ForRequest(signed));
+    }
+
+    [Fact]
+    public async Task The_owner_is_cached_for_thirty_seconds()
+    {
+        var entities = new MemoryEntities();
+        var clock = new ManualClock();
+        var owner = new InstallationOwner(entities, clock);
+        Assert.Null(await owner.ResolveAsync());
+
+        entities.User(OwnerId, DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        clock.Advance(TimeSpan.FromSeconds(29));
+        Assert.Null(await owner.ResolveAsync());
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(Owner, await owner.ResolveAsync());
+    }
+
+    [Theory]
+    [InlineData("local-user")]
+    [InlineData(null)]
+    public async Task Multi_user_install_an_unowned_or_local_discussion_belongs_to_the_installation_owner(string? rowOwner)
+    {
+        var f = MultiUser();
+        f.Discussion("shr00001", rowOwner);
+
+        // A second signed user, and an Agent acting for them, are refused it.
+        var second = await f.Stamped(Human(Second));
+        Assert.False(await f.CanRead("shr00001", second));
+        Assert.Empty(await f.Listed(second));
+        Assert.False(await f.CanRead("shr00001", await f.Stamped(AgentExecution(Second))));
+
+        // The installation owner signed in, an Agent acting for them, and local-user reach it.
+        var owner = await f.Stamped(Human(Owner));
+        Assert.True(await f.CanRead("shr00001", owner));
+        Assert.Equal(["shr00001"], await f.Listed(owner));
+        Assert.True(await f.CanRead("shr00001", await f.Stamped(AgentExecution(Owner))));
+        Assert.True(await f.CanRead("shr00001", await f.Stamped(LocalDefault())));
+    }
+
+    [Fact]
+    public async Task Multi_user_install_a_second_user_cannot_claim_a_local_discussion()
+    {
+        var f = MultiUser();
+        f.Discussion("loc00001", "local-user");
+        var second = await f.Stamped(Human(Second));
+        var owner = await f.Stamped(Human(Owner));
+
+        Assert.Equal("local-user", DiscussionOwnership.ResolveForSessionStart(
+            "local-user", Second, needsSession: true, InstallationOwner.ForRequest(second)));
+        Assert.Equal(Owner, DiscussionOwnership.ResolveForSessionStart(
+            "local-user", Owner, needsSession: true, InstallationOwner.ForRequest(owner)));
+    }
+
+    [Fact]
+    public async Task An_automation_discussion_created_before_sign_in_stays_the_owners()
+    {
+        // Before any account exists, an anonymous local automation creates its delivery discussion.
+        var entities = new MemoryEntities();
+        var clock = new ManualClock();
+        var f = new Fixture(entities, clock);
+        f.Discussion("dlv00001", "local-user");
+        Assert.True(await f.CanRead("dlv00001", await f.Stamped(LocalDefault())));
+
+        // Setup creates the owner, records them, and a second account is added later.
+        entities.User(OwnerId, DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        entities.User(SecondId, DateTimeOffset.Parse("2026-03-01T00:00:00Z"));
+        entities.SetupOwner(Owner);
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        var owner = await f.Stamped(Human(Owner));
+        Assert.True(await f.CanRead("dlv00001", owner));
+        Assert.Equal(Owner, DiscussionOwnership.ResolveForSessionStart(
+            "local-user", Owner, needsSession: true, InstallationOwner.ForRequest(owner)));
+        Assert.True(await f.CanRead("dlv00001", await f.Stamped(LocalDefault())));
+
+        var second = await f.Stamped(Human(Second));
+        Assert.False(await f.CanRead("dlv00001", second));
+        Assert.Equal("local-user", DiscussionOwnership.ResolveForSessionStart(
+            "local-user", Second, needsSession: true, InstallationOwner.ForRequest(second)));
+    }
+
+    [Theory]
+    [InlineData("local-user")]
+    [InlineData(null)]
+    public async Task With_no_known_owner_unowned_and_local_discussions_stay_open(string? rowOwner)
+    {
+        var f = new Fixture(new MemoryEntities());
+        f.Discussion("shr00001", rowOwner);
+
+        Assert.True(await f.CanRead("shr00001", await f.Stamped(Human(Second))));
+        Assert.True(await f.CanRead("shr00001", Human(Second))); // unstamped: the same old rule
+        Assert.Equal("local-user", DiscussionOwnership.ResolveForSessionStart(
+            "local-user", "local-user", needsSession: true, null));
+        Assert.Equal(Second, DiscussionOwnership.ResolveForSessionStart(
+            "local-user", Second, needsSession: true, null));
+    }
+
+    [Fact]
+    public async Task Confidential_unowned_discussions_stay_closed()
+    {
+        var f = MultiUser();
+        f.Discussion("con00002", null, confidential: true);
+
+        Assert.False(await f.CanRead("con00002", await f.Stamped(Human(Owner))));
+        Assert.False(await f.CanRead("con00002", await f.Stamped(LocalDefault())));
     }
 
     [Fact]
@@ -134,6 +240,15 @@ public sealed class LocalUserOwnerScopeTests
     [InlineData("USER-A", "local-user", "user-a", true)]
     [InlineData("user-b", "local-user", "user-a", false)]
     [InlineData("user-a", "user-b", "user-a", false)]
+    [InlineData(null, "user-b", "user-a", false)]
+    [InlineData("local-user", "user-b", "user-a", false)]
+    [InlineData(null, "user-a", "user-a", true)]
+    [InlineData("local-user", "USER-A", "user-a", true)]
+    [InlineData(null, "local-user", "user-a", true)]
+    [InlineData(null, "user-b", null, true)]
+    [InlineData(null, "system", "user-a", true)]
+    [InlineData("local-user", "service:nova", "user-a", true)]
+    [InlineData("system", "user-a", "user-a", false)]
     public void Owner_scope(string? ownerId, string? userId, string? installationOwnerId, bool expected)
         => Assert.Equal(expected, OwnerScope.CanAccess(ownerId, userId, installationOwnerId));
 
@@ -159,13 +274,32 @@ public sealed class LocalUserOwnerScopeTests
     private static DefaultHttpContext LocalDefault()
         => Context(new ClaimsIdentity([new Claim("sub", "local-user")], "LocalDefault"));
 
+    private static DefaultHttpContext AgentExecution(string beneficiaryId)
+        => Context(new ClaimsIdentity([
+            new Claim("sub", beneficiaryId),
+            new Claim("token_use", "execution"),
+            new Claim("execution_identity", System.Text.Json.JsonSerializer.Serialize(new
+            {
+                app = new { id = "nova", name = "Nova" },
+                actor = new { kind = "agent", id = "nova", entityId = "agent-nova" },
+                beneficiary = new { kind = "user", id = beneficiaryId },
+            })),
+        ], "Bearer"));
+
     private static DefaultHttpContext Context(ClaimsIdentity identity)
         => new() { User = new ClaimsPrincipal(identity) };
 
-    private sealed class Fixture(MemoryEntities entities)
+    private sealed class ManualClock : TimeProvider
+    {
+        private DateTimeOffset _now = DateTimeOffset.Parse("2026-11-06T12:00:00Z");
+        public void Advance(TimeSpan by) => _now += by;
+        public override DateTimeOffset GetUtcNow() => _now;
+    }
+
+    private sealed class Fixture(MemoryEntities entities, TimeProvider? clock = null)
     {
         private readonly DiscussionStore _store = new(entities, new NoDiscussions());
-        private readonly InstallationOwner _owner = new(entities);
+        private readonly InstallationOwner _owner = new(entities, clock);
         public MemoryEntities Entities => entities;
 
         public void Discussion(string id, string? owner, bool confidential = false)

@@ -111,11 +111,11 @@ public sealed record ArchivedDiscussionPage(
     bool HasMore);
 
 /// <summary>
-/// Centralized owner-scoping rules for user-owned resources. A resource is accessible
-/// when it has no owner, is owned by the local user, or the caller is the owner.
-/// The local user (<c>local-user</c>, the loopback identity) stands for the installation owner
-/// and so also reaches what that person owns, never what another user owns. With no known
-/// installation owner it reaches only unowned and local resources.
+/// Centralized owner-scoping rules for user-owned resources. The caller always reaches what it
+/// owns. A resource with no owner, or owned by the local user (<c>local-user</c>, the loopback
+/// identity), belongs to the installation owner: local-user and the installation owner reach it,
+/// another signed person does not. Local-user also reaches what the installation owner owns, and
+/// never what another user owns.
 /// </summary>
 public static class OwnerScope
 {
@@ -124,10 +124,40 @@ public static class OwnerScope
     public static bool IsLocalUser(string? userId) => userId == LocalUser;
 
     public static bool CanAccess(string? ownerId, string? userId, string? installationOwnerId)
-        => ownerId is null || ownerId == LocalUser || ownerId == userId
-            || (IsLocalUser(userId)
-                && !string.IsNullOrWhiteSpace(installationOwnerId)
-                && string.Equals(ownerId, installationOwnerId, StringComparison.OrdinalIgnoreCase));
+    {
+        if (ownerId is not null && ownerId == userId) return true;
+        var installationOwner = string.IsNullOrWhiteSpace(installationOwnerId) ? null : installationOwnerId;
+
+        if (ownerId is null || ownerId == LocalUser)
+            // With no known installation owner (no account yet, or a request Nova's route filter
+            // did not stamp) keep the old open rule, so a fresh install is never locked out of its
+            // own unowned and local discussions. Kernel subjects such as system are not people
+            // and keep it too: the owner rule is about which person a discussion belongs to.
+            return installationOwner is null
+                || IsLocalUser(userId)
+                || !IsPerson(userId)
+                || SameUser(userId, installationOwner);
+
+        return IsLocalUser(userId) && installationOwner is not null && SameUser(ownerId, installationOwner);
+    }
+
+    /// <summary>
+    /// Whether a person may take over a local-user-owned discussion when its first session starts:
+    /// the installation owner, or anyone signed while that owner is unknown (the old rule).
+    /// Local-user itself never claims it; its work stays system-owned.
+    /// </summary>
+    public static bool MayClaim(string? userId, string? installationOwnerId)
+        => !string.IsNullOrWhiteSpace(userId) && !IsLocalUser(userId)
+            && (string.IsNullOrWhiteSpace(installationOwnerId) || SameUser(userId, installationOwnerId));
+
+    /// <summary>A subject that names a person: not blank, not local-user, not a kernel subject.</summary>
+    private static bool IsPerson(string? userId)
+        => !string.IsNullOrWhiteSpace(userId)
+            && !IsLocalUser(userId)
+            && !string.Equals(userId, "system", StringComparison.OrdinalIgnoreCase)
+            && !userId.StartsWith("service:", StringComparison.OrdinalIgnoreCase);
+
+    private static bool SameUser(string? a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>

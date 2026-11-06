@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Text.Json.Nodes;
 using Leaf.Sdk;
 using Leaf.Sdk.Services;
@@ -35,14 +34,12 @@ public sealed class InstallationOwner(IEntityStore entities, TimeProvider? time 
     }
 
     /// <summary>
-    /// Records on the request whom its <c>local-user</c> stands for, so the synchronous access
-    /// policy can read it. Only a <c>local-user</c> request pays for the lookup.
+    /// Records the installation owner on the request, so the synchronous access policy can tell
+    /// whom unowned and local discussions belong to, and whom <c>local-user</c> stands for.
+    /// Every request is stamped; the lookup is cached.
     /// </summary>
     public async Task StampAsync(HttpContext context)
-    {
-        if (OwnerScope.IsLocalUser(context.User.FindFirstValue("sub")))
-            context.Items[RequestItem] = await ResolveAsync(context.RequestAborted);
-    }
+        => context.Items[RequestItem] = await ResolveAsync(context.RequestAborted);
 
     /// <summary>What <see cref="StampAsync"/> recorded on this request; null when nothing was.</summary>
     public static string? ForRequest(HttpContext context)

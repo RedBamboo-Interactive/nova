@@ -22,7 +22,8 @@ public sealed class DiscordReplyCallbacks(
     IPluginEvents events,
     DiscussionStore store,
     EventInjector injector,
-    ILogger<DiscordReplyCallbacks> logger) : IDisposable
+    ILogger<DiscordReplyCallbacks> logger,
+    InstallationOwner? installationOwner = null) : IDisposable
 {
     public const string EventType = "leaf-discord.reply-received";
     public const string SourcePlugin = "leaf-discord";
@@ -55,7 +56,8 @@ public sealed class DiscordReplyCallbacks(
         var reply = DiscordReply.Read(payload);
         if (reply is null) return false;
         var discussion = await store.GetAsync(reply.DiscussionId, ct);
-        if (discussion is null || !Accepts(discussion, reply)) return false;
+        var installationOwnerId = installationOwner is null ? null : await installationOwner.ResolveAsync(ct);
+        if (discussion is null || !Accepts(discussion, reply, installationOwnerId)) return false;
 
         var key = $"discord-reply:{discussion.Id}:{reply.DiscordMessageId}";
         // A reply is unsolicited: it may reach an open discussion (stopped only means
@@ -84,11 +86,11 @@ public sealed class DiscordReplyCallbacks(
     /// still belong to that beneficiary and Agent, be Nova's own, and be open. Stopped is
     /// open; archiving and archived discussions are never written to or woken.
     /// </summary>
-    internal static bool Accepts(DiscussionRead discussion, DiscordReply reply)
+    internal static bool Accepts(DiscussionRead discussion, DiscordReply reply, string? installationOwnerId = null)
         => !DiscussionApplicationOwner.IsForeign(discussion)
            && !DiscussionMutationPolicy.RejectSend(discussion)
-           // A binding's owner is a signed person; a local-user one stands for nobody here.
-           && OwnerScope.CanAccess(discussion.OwnerId, reply.OwnerUserId, installationOwnerId: null)
+           // An unowned or local discussion takes a reply only from the installation owner's binding.
+           && OwnerScope.CanAccess(discussion.OwnerId, reply.OwnerUserId, installationOwnerId)
            && (discussion.AgentId is null
                || string.Equals(discussion.AgentId, reply.AgentEntityId, StringComparison.OrdinalIgnoreCase));
 

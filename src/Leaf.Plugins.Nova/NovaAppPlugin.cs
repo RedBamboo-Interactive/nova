@@ -161,7 +161,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
             sp.GetRequiredKeyedService<IPluginEvents>(PluginId),
             sp.GetRequiredService<DiscussionStore>(),
             sp.GetRequiredService<EventInjector>(),
-            sp.GetRequiredService<ILogger<DiscordReplyCallbacks>>()));
+            sp.GetRequiredService<ILogger<DiscordReplyCallbacks>>(),
+            sp.GetRequiredService<InstallationOwner>()));
         services.AddSingleton(sp => new RestartRecovery(
             sp.GetRequiredService<DiscussionStore>(),
             sp.GetRequiredService<RedComputeClient>(),
@@ -247,10 +248,11 @@ public sealed class NovaAppPlugin : ILeafPlugin
         group.AddEndpointFilter(async (context, next) =>
         {
             context.HttpContext.Response.Headers.CacheControl = "private, no-store";
-            // The access policy is synchronous: say up front whom a local-user request stands for.
-            // Unstamped, local-user stands for nobody, so a missing service fails closed.
-            if (context.HttpContext.RequestServices.GetService<InstallationOwner>() is { } installationOwner)
-                await installationOwner.StampAsync(context.HttpContext);
+            // The access policy is synchronous: record up front who owns this installation, so it
+            // knows whom unowned and local discussions belong to and whom local-user stands for.
+            // Required: an unstamped request would fall back to the open rule for those rows.
+            await context.HttpContext.RequestServices.GetRequiredService<InstallationOwner>()
+                .StampAsync(context.HttpContext);
             try
             {
                 return await next(context);

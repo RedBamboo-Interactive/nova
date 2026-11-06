@@ -57,7 +57,8 @@ public static class NovaComputeProvenance
     public static string? RequestCause(HttpContext context, string? discussionOwnerId)
     {
         var owner = DiscussionOwnership.ResolveForSessionStart(
-            discussionOwnerId, context.User.FindFirst("sub")?.Value, needsSession: true);
+            discussionOwnerId, context.User.FindFirst("sub")?.Value, needsSession: true,
+            InstallationOwner.ForRequest(context));
         return ComputeCauses.FromRequest(context, owner ?? "");
     }
 

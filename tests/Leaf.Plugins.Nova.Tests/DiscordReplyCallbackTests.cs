@@ -187,6 +187,13 @@ public sealed class DiscordReplyCallbackTests
         Assert.False(DiscordReplyCallbacks.Accepts(open with { Status = DiscussionStatus.Archived }, reply));
         Assert.False(DiscordReplyCallbacks.Accepts(open with { OwnerId = "owner-2" }, reply));
         Assert.False(DiscordReplyCallbacks.Accepts(open with { AgentId = "agent-2" }, reply));
+
+        // Unowned and local discussions belong to the installation owner: a second user's binding
+        // reaches them only while that owner is unknown.
+        Assert.True(DiscordReplyCallbacks.Accepts(open with { OwnerId = null }, reply, "owner-1"));
+        Assert.True(DiscordReplyCallbacks.Accepts(open with { OwnerId = "local-user" }, reply, "owner-1"));
+        Assert.False(DiscordReplyCallbacks.Accepts(open with { OwnerId = null }, reply, "owner-2"));
+        Assert.False(DiscordReplyCallbacks.Accepts(open with { OwnerId = "local-user" }, reply, "owner-2"));
     }
 
     [Fact]

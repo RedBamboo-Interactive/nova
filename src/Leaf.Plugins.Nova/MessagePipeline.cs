@@ -248,7 +248,8 @@ public sealed class MessagePipeline(
         if (sessionId is null)
         {
             computeOwnerId = DiscussionOwnership.ResolveForSessionStart(
-                discussion.OwnerId, userId, needsSession: true);
+                discussion.OwnerId, userId, needsSession: true,
+                await _installationOwner.ResolveAsync(ct));
             try
             {
                 sessionId = await TryCreateSessionAsync(discussion.AgentId, computeOwnerId,
@@ -321,10 +322,9 @@ public sealed class MessagePipeline(
         var now = DateTime.UtcNow;
         var cutoff = now.AddDays(-2);
 
-        // A local-user sender reaches the installation owner's discussions, never another user's.
-        var installationOwnerId = OwnerScope.IsLocalUser(userId)
-            ? await _installationOwner.ResolveAsync(ct)
-            : null;
+        // Unowned and local discussions belong to the installation owner, and a local-user sender
+        // reaches that owner's, never another user's.
+        var installationOwnerId = await _installationOwner.ResolveAsync(ct);
         var all = (await store.ListOpenAndRecentlyClosedAsync(cutoff, ct: ct))
             .Where(d => OwnerScope.CanAccess(d.OwnerId, userId, installationOwnerId))
             // A confidential discussion is isolated even from the owning Agent's
