@@ -1719,7 +1719,7 @@ public static class DiscussionEndpoints
                 ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
                 ["confidential"] = reopened.Confidential,
             }, ctx.RequestAborted);
-            _ = activity.OnReopened(id, reopened.Title, reopened.Confidential);
+            _ = activity.OnReopened(reopened);
             return Results.Ok(DiscussionStore.ToInfo(reopened));
         })
             .WithSummary("Reopens an archived discussion. LIVE and heartbeat discussions cannot be reopened, and the archive must still have its provider session.");
@@ -1750,7 +1750,7 @@ public static class DiscussionEndpoints
                 ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
                 ["confidential"] = discussion.Confidential,
             }, ctx.RequestAborted);
-            _ = activity.OnArchived(id, discussion.Title, discussion.Confidential);
+            _ = activity.OnArchived(discussion);
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Status = status }));
         })
             .WithSummary("Archives a discussion: the session is stopped and verified in the background before it shows as archived. LIVE and heartbeat discussions cannot be archived (400).");
@@ -1843,7 +1843,7 @@ public static class DiscussionEndpoints
             // Same two-phase archive as DELETE; session_id stays until the finalizer
             // confirms the stop, so the session cannot be orphaned by a rotation.
             await lifecycle.BeginArchiveAsync(discussion);
-            _ = activity.OnArchived(discussion.Id, discussion.Title, discussion.Confidential);
+            _ = activity.OnArchived(discussion);
 
             DiscussionRead fresh;
             if (!string.IsNullOrWhiteSpace(idempotencyKey))
@@ -2005,7 +2005,7 @@ public static class DiscussionEndpoints
                     ["readConversationRevision"] = discussion.ReadConversationRevision,
                 });
 
-            _ = activity.OnNovaMessage(id, discussion.Title, request.Content, discussion.Confidential, uid);
+            _ = activity.OnNovaMessage(discussion, request.Content, uid);
             // A proactive message never settles a session turn; tell an open voice directly.
             _ = voiceForwarder.OnDirectAssistantMessageAsync(id, uid, request.Content, CancellationToken.None);
             return Results.Ok(new { success = true, discussion = DiscussionStore.ToInfo(discussion) });
@@ -2071,11 +2071,11 @@ public static class DiscussionEndpoints
 
             if (outcome.Disposition == "delivered")
             {
-                _ = activity.OnUserMessage(id, discussion.Title,
+                _ = activity.OnUserMessage(discussion,
                     string.IsNullOrWhiteSpace(request.Content)
                         ? request.Input is { Length: > 0 } ? "[attachment]" : "[image]"
                         : request.Content,
-                    ctx.User.FindFirstValue("name"), discussion.Confidential, outcome.MessageUid);
+                    ctx.User.FindFirstValue("name"), outcome.MessageUid);
 
                 // Only a provider-accepted turn is a transcript message. Durable
                 // admission while another turn runs is represented by the shared

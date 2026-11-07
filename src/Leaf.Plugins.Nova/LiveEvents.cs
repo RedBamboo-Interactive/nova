@@ -759,7 +759,8 @@ public sealed class EventInjector(
 /// Posts system events onto the agent's LIVE discussion timeline (device switches,
 /// extension events, delegation callbacks, and discussion activity).
 /// </summary>
-public sealed class LiveEvents(DiscussionStore store, EventInjector injector, AgentDirectory agents)
+public sealed class LiveEvents(
+    DiscussionStore store, EventInjector injector, AgentDirectory agents, InstallationOwner? installationOwner = null)
 {
     private string? _cachedLiveId;
     private string? _lastDeviceName;
@@ -828,6 +829,62 @@ public sealed class LiveEvents(DiscussionStore store, EventInjector injector, Ag
         catch { /* the LIVE timeline is best-effort by design */ }
     }
 
+    /// <summary>
+    /// Posts a discussion-activity line (title and excerpt) onto the LIVE timeline, only when the
+    /// discussion belongs to the same Agent and the same person as that LIVE. Another Agent's
+    /// discussions, another person's, every Agent's LIVE and confidential threads post nothing.
+    /// <paramref name="format"/> receives the LIVE Agent's display name.
+    /// </summary>
+    public async Task PostActivityAsync(
+        DiscussionRead source, Func<string, string> format, object metadata, CancellationToken ct = default)
+    {
+        try
+        {
+            // Cheap refusals first: no lookup is needed to know these never leave their thread.
+            if (!RelaysCandidate(source)) return;
+            var live = await ResolveLiveAsync();
+            if (live is null) return;
+            var owner = installationOwner is null ? null : await installationOwner.ResolveAsync(ct);
+            if (!RelaysActivity(source, live, agents.NovaAgentId, owner)) return;
+            var agentId = live.AgentId ?? agents.NovaAgentId!;
+            var name = await agents.GetAgentNameAsync(agentId, ct);
+            var label = string.IsNullOrWhiteSpace(name) ? "Agent" : DiscussionActivity.NormalizeActorName(name);
+            await injector.InjectAsync(live, format(label), "system", "discussion",
+                metadata: JsonSerializer.SerializeToElement(metadata), ct: ct);
+        }
+        catch { /* the LIVE timeline is best-effort by design */ }
+    }
+
+    /// <summary>The checks <see cref="RelaysActivity"/> can make without the LIVE.</summary>
+    internal static bool RelaysCandidate(DiscussionRead source)
+        => !source.Confidential && source.Type != "live" && !string.IsNullOrEmpty(source.Title);
+
+    /// <summary>
+    /// Whether <paramref name="source"/>'s activity may appear on <paramref name="live"/>: never a
+    /// confidential, untitled or LIVE discussion (any Agent's), and only one of the same Agent and
+    /// the same person. A discussion with no Agent is Nova's, as everywhere else in the plugin; one
+    /// with no owner or owned by <c>local-user</c> is the installation owner's (<see cref="OwnerScope"/>).
+    /// </summary>
+    internal static bool RelaysActivity(
+        DiscussionRead source, DiscussionRead live, string? novaAgentId, string? installationOwnerId)
+    {
+        if (!RelaysCandidate(source)) return false;
+        if (source.EntityId == live.EntityId || source.Id == live.Id) return false;
+        if (live.Type != "live" || DiscussionStatus.IsClosed(live.Status)) return false;
+
+        var sourceAgent = source.AgentId ?? novaAgentId;
+        var liveAgent = live.AgentId ?? novaAgentId;
+        if (string.IsNullOrWhiteSpace(sourceAgent)
+            || !string.Equals(sourceAgent, liveAgent, StringComparison.OrdinalIgnoreCase)) return false;
+
+        return string.Equals(Person(source.OwnerId), Person(live.OwnerId), StringComparison.OrdinalIgnoreCase);
+
+        string? Person(string? ownerId)
+            => string.IsNullOrWhiteSpace(ownerId) || OwnerScope.IsLocalUser(ownerId)
+                ? (string.IsNullOrWhiteSpace(installationOwnerId) ? null : installationOwnerId)
+                : ownerId;
+    }
+
     /// <summary>A rewound discussion's removed messages stop being quoted to anyone from here on.</summary>
     public async Task ForgetQuotesAsync(string discussionId, DiscussionRollback rollback, CancellationToken ct)
     {
@@ -859,44 +916,34 @@ public sealed class DiscussionActivity(LiveEvents live)
     private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(2);
 
     public async Task OnUserMessage(
-        string discussionId,
-        string? title,
+        DiscussionRead discussion,
         string contentPreview,
         string? actorName,
-        bool confidential = false,
         string? messageUid = null)
     {
-        if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title) || confidential) return;
         var preview = Truncate(contentPreview, 80);
         if (preview == "…") return;
         var actor = NormalizeActorName(actorName);
-        await live.PostAsync("discussion", FormatUserActivity(actor, title, preview),
-            new { discussionId, title, kind = "user-message", actorName = actor, preview, messageUid });
+        await live.PostActivityAsync(discussion, _ => FormatUserActivity(actor, discussion.Title!, preview),
+            new { discussionId = discussion.Id, title = discussion.Title, kind = "user-message", actorName = actor, preview, messageUid });
     }
 
-    public async Task OnNovaMessage(string discussionId, string? title, string contentPreview, bool confidential = false, string? messageUid = null)
+    public async Task OnNovaMessage(DiscussionRead discussion, string contentPreview, string? messageUid = null)
     {
-        if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title) || confidential) return;
-        if (!TryThrottle(discussionId)) return;
+        if (!LiveEvents.RelaysCandidate(discussion) || !TryThrottle(discussion.Id)) return;
         var preview = Truncate(contentPreview, 80);
         if (preview == "…") return;
-        await live.PostAsync("discussion", $"Nova in \"{title}\": {preview}",
-            new { discussionId, title, kind = "nova-message", preview, messageUid });
+        await live.PostActivityAsync(discussion, agent => FormatAgentActivity(agent, discussion.Title!, preview),
+            new { discussionId = discussion.Id, title = discussion.Title, kind = "nova-message", preview, messageUid });
     }
 
-    public async Task OnArchived(string discussionId, string? title, bool confidential = false)
-    {
-        if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title) || confidential) return;
-        await live.PostAsync("discussion", $"\"{title}\" archived",
-            new { discussionId, title, kind = "archived" });
-    }
+    public Task OnArchived(DiscussionRead discussion)
+        => live.PostActivityAsync(discussion, _ => $"\"{discussion.Title}\" archived",
+            new { discussionId = discussion.Id, title = discussion.Title, kind = "archived" });
 
-    public async Task OnReopened(string discussionId, string? title, bool confidential = false)
-    {
-        if (live.DiscussionId == discussionId || string.IsNullOrEmpty(title) || confidential) return;
-        await live.PostAsync("discussion", $"\"{title}\" reopened",
-            new { discussionId, title, kind = "reopened" });
-    }
+    public Task OnReopened(DiscussionRead discussion)
+        => live.PostActivityAsync(discussion, _ => $"\"{discussion.Title}\" reopened",
+            new { discussionId = discussion.Id, title = discussion.Title, kind = "reopened" });
 
     private bool TryThrottle(string discussionId)
     {
@@ -924,4 +971,7 @@ public sealed class DiscussionActivity(LiveEvents live)
 
     internal static string FormatUserActivity(string actorName, string title, string preview)
         => $"{actorName} in \"{title}\": {preview}";
+
+    internal static string FormatAgentActivity(string agentName, string title, string preview)
+        => $"{agentName} in \"{title}\": {preview}";
 }

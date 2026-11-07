@@ -131,7 +131,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
             new LiveEvents(
                 sp.GetRequiredService<DiscussionStore>(),
                 sp.GetRequiredService<EventInjector>(),
-                sp.GetRequiredService<AgentDirectory>()));
+                sp.GetRequiredService<AgentDirectory>(),
+                sp.GetRequiredService<InstallationOwner>()));
         services.AddSingleton<DiscussionActivity>();
         services.AddSingleton(sp =>
             new DiscussionLifecycle(sp.GetRequiredService<DiscussionStore>(), sp.GetRequiredService<RedComputeClient>(),
