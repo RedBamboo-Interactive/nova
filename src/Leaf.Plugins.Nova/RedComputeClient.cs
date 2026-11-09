@@ -600,7 +600,8 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         string? StopReason = null,
         string? ProviderSessionId = null,
         bool Unattended = false,
-        string? MaxAccessLevel = null);
+        string? MaxAccessLevel = null,
+        string? AccessLevel = null);
 
     /// <summary>
     /// Provider-neutral state needed by the discussion resume path. A persisted
@@ -670,7 +671,9 @@ public sealed class RedComputeClient(IComputeGateway gateway)
                 && unattendedValue.ValueKind == JsonValueKind.True;
             var maxAccessLevel = session.TryGetProperty("maxAccessLevel", out var cap)
                 && cap.ValueKind == JsonValueKind.String ? cap.GetString() : null;
-            return new(true, status, stopReason, providerSessionId, unattended, maxAccessLevel);
+            var accessLevel = session.TryGetProperty("accessLevel", out var level)
+                && level.ValueKind == JsonValueKind.String ? level.GetString() : null;
+            return new(true, status, stopReason, providerSessionId, unattended, maxAccessLevel, accessLevel);
         }
         catch
         {

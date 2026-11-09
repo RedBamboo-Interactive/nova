@@ -179,7 +179,8 @@ public static class DiscussionEndpoints
     };
 
     internal static async Task<IResult> PostEventAsync(string id, DiscussionEventRequest request, HttpContext ctx,
-        DiscussionStore store, AgentDirectory agents, EventInjector injector, MessagePipeline pipeline)
+        DiscussionStore store, AgentDirectory agents, EventInjector injector, MessagePipeline pipeline,
+        RedComputeClient? redCompute = null)
     {
         // "live" resolves to the current LIVE discussion — the heartbeat posts
         // its note-events through this form since the LIVE id rotates daily.
@@ -197,6 +198,10 @@ public static class DiscussionEndpoints
             return Results.BadRequest(new { error = "invalid_idempotency_key", message = "idempotencyKey must be 1-200 characters" });
         if (DelegateEndpoints.EventDeliveryError(request.Delivery) is { } deliveryError)
             return Results.BadRequest(deliveryError);
+        // An event is delivered into the discussion's session: not into one above the caller's own level.
+        if (redCompute is not null
+            && await SessionLevelGuard.RefuseUpwardAsync(ctx.User, discussion.SessionId, redCompute, ctx.RequestAborted) is { } upward)
+            return upward;
 
         // A signed Agent's identity comes from its token, whatever the body says. Registering the
         // reply callback stays the caller's explicit choice: stamping alone must not arm it.
@@ -1883,8 +1888,8 @@ public static class DiscussionEndpoints
         })
             .WithSummary("Archives a LIVE discussion and creates its replacement, which is the day boundary for heartbeat. LIVE discussions only; the id may be live, and an Idempotency-Key header makes a retry reuse the replacement.");
 
-        group.MapPost("/discussions/{id}/event", (string id, DiscussionEventRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, EventInjector injector, MessagePipeline pipeline)
-            => PostEventAsync(id, request, ctx, store, agents, injector, pipeline))
+        group.MapPost("/discussions/{id}/event", (string id, DiscussionEventRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, EventInjector injector, MessagePipeline pipeline, RedComputeClient redCompute)
+            => PostEventAsync(id, request, ctx, store, agents, injector, pipeline, redCompute))
             .WithSummary("Injects an event into a discussion and delivers it to its session; this is how an Agent writes to a discussion, its own included. A note to another discussion also shows, for the reader only, in the discussion it was sent from. For a signed Agent the server states the sender and sending discussion from the token and ignores senderAgentId in the body, and source defaults to agent-note. Body: content (required), optional type, source, senderAgentId, replyToDiscussionId (with senderAgentId, registers a reply callback), metadata, idempotencyKey, requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, 403 for a discussion the caller can't read), delivery (after-current, the default, or steer-current: into the running turn if it can take it, otherwise queued; anything else is a 400). The response's deliveryReport says what became of that: requested, effective, deliveryReason. Never creates a session: to a discussion without one it answers 202 queued. The id may be live for the current LIVE discussion.");
 
         group.MapPost("/discussions/{id}/nova-message", async (string id, NovaMessageRequest request,
@@ -1901,6 +1906,9 @@ public static class DiscussionEndpoints
             if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
             if (DiscussionApplicationOwner.IsForeign(discussion)) return DiscussionApplicationOwner.Refusal(discussion);
             if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
+            // The message is injected into the session as an assistant turn: not into one above the caller's.
+            if (await SessionLevelGuard.RefuseUpwardAsync(ctx.User, discussion.SessionId, redCompute, ctx.RequestAborted) is { } upward)
+                return upward;
 
             if (string.IsNullOrWhiteSpace(request.Content))
                 return Results.BadRequest(new { error = "Content is required" });

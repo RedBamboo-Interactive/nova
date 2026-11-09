@@ -222,6 +222,9 @@ public static class DelegateEndpoints
         if (isContinuation)
         {
             sessionId = request.SessionId!;
+            // A session the caller's own level could not have started cannot be steered from it either.
+            if (await SessionLevelGuard.RefuseUpwardAsync(ctx.User, sessionId, redCompute, ctx.RequestAborted) is { } upward)
+                return upward;
             using var raw = await redCompute.GetSessionRawAsync(sessionId);
             if (raw == null)
                 return Results.Json(new { error = "session_not_found", message = $"Session '{sessionId}' not found on RedCompute" }, statusCode: 404);

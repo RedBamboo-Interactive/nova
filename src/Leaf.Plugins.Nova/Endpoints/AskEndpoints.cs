@@ -46,6 +46,11 @@ public static class AskEndpoints
                 discussion = await store.CreateAsync(TitleFrom(request.Content), agents.NovaAgentId, userId);
             }
 
+            // The ask is a turn in the discussion's session: not into one above the caller's own level.
+            if (discussion.SessionId is not null
+                && await SessionLevelGuard.RefuseUpwardAsync(ctx.User, discussion.SessionId, redCompute, ctx.RequestAborted) is { } upward)
+                return upward;
+
             // Baseline message count so we only consider assistant text produced after this send.
             var baseline = 0;
             if (discussion.SessionId is not null)
