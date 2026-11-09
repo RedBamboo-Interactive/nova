@@ -2,8 +2,9 @@ import { useState, useCallback, useEffect, useRef, useMemo, useSyncExternalStore
 import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DelegationActivitySnapshot, DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
-import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
-import { canonicalUserMessageUids, DeferredInvalidationCoordinator, DurableTranscriptPager, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
+import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, PermissionApprovals, PermissionDecisionPayload, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
+import { canonicalUserMessageUids, DeferredInvalidationCoordinator, DurableTranscriptPager, isPermissionQuestion, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
+import { answeredQuestionState, clearedQuestionState, liveQuestionFields, settleAcceptedDecision } from "../lib/permission-approvals"
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, markEventFrameSources, orderMessages, withCurrentEventPresentation } from "../lib/message-order"
 import { readNoteSender } from "../lib/agent-note"
@@ -280,6 +281,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
   // How each discussion's last question ended, so a resolved card can say
   // "timed out" rather than the flat "Answered" it used to claim regardless.
   const [questionOutcomes, setQuestionOutcomes] = useState<Record<string, QuestionOutcome | null>>({})
+  // Approvals seen in each discussion's live stream (QuestionState.permissions),
+  // so an approval card keeps its outcome after it resolves. Live control
+  // state, never transcript: a reload shows the settled tool call alone.
+  const [permissionApprovals, setPermissionApprovals] = useState<Record<string, PermissionApprovals | null>>({})
   // processStreamEvent is pure — the question lifecycle has to be threaded back
   // in on every event, and from a ref so it is current inside the updater.
   const questionStatesRef = useRef<Record<string, QuestionState>>({})
@@ -337,6 +342,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const isResumePending = activeDiscussionId ? resumePending[activeDiscussionId] ?? false : false
   const activePendingQuestion = activeDiscussionId ? pendingQuestions[activeDiscussionId] ?? null : null
   const activeQuestionOutcome = activeDiscussionId ? questionOutcomes[activeDiscussionId] ?? null : null
+  const activePermissionApprovals = activeDiscussionId ? permissionApprovals[activeDiscussionId] ?? null : null
 
   const activeIdRef = useRef(activeDiscussionId)
   activeIdRef.current = activeDiscussionId
@@ -363,11 +369,27 @@ export function useDiscussions(eventResolver?: EventResolver) {
    * that "Answered" is the bug this whole path exists to stop repeating.
    * Pass null when the history itself is gone and there is nothing to label.
    */
-  const clearQuestion = useCallback((discussionId: string, outcome: QuestionOutcome | null) => {
-    questionStatesRef.current = { ...questionStatesRef.current, [discussionId]: { pending: null, outcome } }
-    setPendingQuestions((prev) => ({ ...prev, [discussionId]: null }))
-    setQuestionOutcomes((prev) => ({ ...prev, [discussionId]: outcome }))
+  const commitQuestionState = useCallback((discussionId: string, state: QuestionState) => {
+    questionStatesRef.current = { ...questionStatesRef.current, [discussionId]: state }
+    setPendingQuestions((prev) => ({ ...prev, [discussionId]: state.pending }))
+    setQuestionOutcomes((prev) => ({ ...prev, [discussionId]: state.outcome }))
+    setPermissionApprovals((prev) => ({ ...prev, [discussionId]: state.permissions ?? null }))
   }, [])
+
+  /**
+   * `keepApprovals`: the discussion's messages stay on screen (the session
+   * ended), so approval cards keep saying how they ended. Paths that replace
+   * the history pass false and the cards go with it.
+   */
+  const clearQuestion = useCallback((discussionId: string, outcome: QuestionOutcome | null, keepApprovals = false) => {
+    const previous = questionStatesRef.current[discussionId]
+    // An approval is not an AskUserQuestion: ending under one leaves the last
+    // question's outcome as it was.
+    const questionOutcome = outcome === "session_ended" && isPermissionQuestion(previous?.pending)
+      ? previous?.outcome ?? null
+      : outcome
+    commitQuestionState(discussionId, clearedQuestionState(processStreamEvent, previous, questionOutcome, keepApprovals))
+  }, [commitQuestionState])
 
   /**
    * Put a discussion back into the "nothing is running" state. The three flags
@@ -495,7 +517,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       const read = reads.get(d.id)
       if (read && d.sessionId === read.sessionId && isClosed(d.status) && runtimeReadIsCurrent(d.id, read)) {
         clearStreamingLatch(d.id)
-        clearQuestion(d.id, pendingQuestionsRef.current[d.id] ? "session_ended" : null)
+        clearQuestion(d.id, pendingQuestionsRef.current[d.id] ? "session_ended" : null, true)
       }
     }
     setDiscussions(current => list.filter(d => historyLifecycleRef.current.canRun(d.id)).map(d => {
@@ -1504,8 +1526,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const answerQuestion = useCallback(async (discussionId: string, answer: string, payload?: QuestionAnswerPayload) => {
     const disc = discussions.find((d) => d.id === discussionId)
     if (!disc?.sessionId) return
+    // An approval is decided with its buttons (decidePermission), never with
+    // typed or spoken text: posting that as an answer would be refused.
+    if (isPermissionQuestion(pendingQuestionsRef.current[discussionId])) return
     const requestId = payload?.requestId ?? pendingQuestionsRef.current[discussionId]?.requestId ?? null
-    clearQuestion(discussionId, "answered")
+    commitQuestionState(discussionId, answeredQuestionState(processStreamEvent, questionStatesRef.current[discussionId], requestId))
     lastSendAtRef.current[discussionId] = Date.now()
     activeObservedAfterSendRef.current[discussionId] = true
     setStreaming((prev) => ({ ...prev, [discussionId]: true }))
@@ -1531,7 +1556,28 @@ export function useDiscussions(eventResolver?: EventResolver) {
       if (err instanceof ApiError && err.status === 409) return
       setStreaming((prev) => ({ ...prev, [discussionId]: false }))
     }
-  }, [discussions, clearQuestion])
+  }, [discussions, commitQuestionState])
+
+  /**
+   * A person's decision on a tool call waiting for approval. Posted to the same
+   * `/question` route with `{requestId, decision}`; RedCompute takes it only
+   * from a person (403 approval_requires_person otherwise). A refusal rejects
+   * with the server's message so the card shows it and keeps its buttons.
+   * Accepted, the card settles at once; the server's question_resolved says the same.
+   */
+  const decidePermission = useCallback(async (discussionId: string, payload: PermissionDecisionPayload) => {
+    const disc = discussions.find((d) => d.id === discussionId)
+    if (!disc?.sessionId || !payload.requestId)
+      throw new Error("This approval can no longer be answered here.")
+    await api.post(`/ai-session/sessions/${disc.sessionId}/question`, {
+      requestId: payload.requestId,
+      decision: payload.decision,
+    })
+    const settled = settleAcceptedDecision(processStreamEvent, questionStatesRef.current[discussionId], payload)
+    if (!settled) return
+    commitQuestionState(discussionId, settled.question)
+    if (settled.isStreaming) latchStreaming(discussionId)
+  }, [discussions, commitQuestionState, latchStreaming])
 
   const reopenDiscussion = useCallback(async (discussionId: string): Promise<boolean> => {
     try {
@@ -1733,7 +1779,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       // from the durable `lost` records.
       setBackgroundTasksByDiscussion((prev) => ({ ...prev, [discId]: [] }))
       // A card still up when the session died was never answered.
-      clearQuestion(discId, pendingQuestionsRef.current[discId] ? "session_ended" : questionStatesRef.current[discId]?.outcome ?? null)
+      clearQuestion(discId, pendingQuestionsRef.current[discId] ? "session_ended" : questionStatesRef.current[discId]?.outcome ?? null, true)
       setInterrupting((prev) => ({ ...prev, [discId]: false }))
       setResumePending((prev) => ({ ...prev, [discId]: false }))
       const known = discussionsRef.current.find((d) => d.id === discId)
@@ -1960,6 +2006,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
         phase: evt.phase ?? null,
         timestamp: serverTimestamp ?? new Date().toISOString(),
         requestId: evt.requestId ?? null,
+        // kind/permission/decision: a `question` of kind permission is an
+        // approval, not an AskUserQuestion; dropping kind would draw the wrong card.
+        ...liveQuestionFields(evt),
         parentToolUseId: evt.parentToolUseId ?? null,
         turnOrigin: evt.turnOrigin ?? null,
         epoch: evt.epoch ?? null,
@@ -1981,9 +2030,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           // "interrupting" is transitional and must not drop a live question, and
           // that only a question_resolved says how one actually ended. Mirror it
           // wholesale rather than second-guessing it here.
-          questionStatesRef.current = { ...questionStatesRef.current, [discId]: result.question }
-          setPendingQuestions((p) => ({ ...p, [discId]: result.question.pending }))
-          setQuestionOutcomes((p) => ({ ...p, [discId]: result.question.outcome }))
+          commitQuestionState(discId, result.question)
         }
         // "killed" is terminal but NOT safe/idle yet — the process is being
         // replaced, and the discussion list must not advertise it as available
@@ -2004,7 +2051,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discId]: reconciled.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, clearStreamingLatch, refreshDiscussions, refreshArchivedDiscussions, refreshDelegationActivity, delegationInvalidations, loadMessages, reloadAfterRollback, catchUpMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming, resetHistoryPaging, retireHistoryPaging])
+  }, [sessionToDiscussion, clearQuestion, commitQuestionState, clearStreamingLatch, refreshDiscussions, refreshArchivedDiscussions, refreshDelegationActivity, delegationInvalidations, loadMessages, reloadAfterRollback, catchUpMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming, resetHistoryPaging, retireHistoryPaging])
   handleWsEventRef.current = handleWsEvent
 
   const handleUpstreamDisconnect = useCallback(() => {
@@ -2016,6 +2063,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     questionStatesRef.current = {}
     setPendingQuestions({})
     setQuestionOutcomes({})
+    setPermissionApprovals({})
     setInterrupting({})
     setResumePending({})
   }, [])
@@ -2192,6 +2240,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     isSpawning,
     pendingQuestion: activePendingQuestion,
     questionOutcome: activeQuestionOutcome,
+    permissionApprovals: activePermissionApprovals,
     selectDiscussion,
     clearDiscussionSelection,
     setReadAcknowledgementPaused,
@@ -2201,6 +2250,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     interruptDiscussion,
     stopDiscussion,
     answerQuestion,
+    decidePermission,
     archiveDiscussion,
     rotateDiscussion,
     dismissDiscussion,

@@ -174,6 +174,15 @@ export interface ClaudeStreamEvent {
    * persisted, so a reloaded conversation never has one.
    */
   requestId?: string | null
+  /**
+   * On "question": "permission" when a tool call waits for a person's
+   * approval (see `permission`); absent or "question" for AskUserQuestion.
+   */
+  kind?: string | null
+  /** On a "question" of kind permission: {toolName, toolUseId, summary, input, cwd, options}. */
+  permission?: unknown
+  /** On "question_resolved" for an approval, when the server names the decision here. */
+  decision?: string | null
   /** Launching tool call of background work (a subagent); never a sign the turn is busy. */
   parentToolUseId?: string | null
   turnOrigin?: import("@redbamboo/chat").TurnOrigin | null

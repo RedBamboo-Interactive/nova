@@ -1,6 +1,6 @@
 import { useRef, useEffect, useMemo, useCallback } from "react"
 import { ScrollArea } from "@redbamboo/ui"
-import { Composer, MarkdownRenderer } from "@redbamboo/chat"
+import { Composer, MarkdownRenderer, answerableQuestion } from "@redbamboo/chat"
 import type { MessageBlock, ImageAttachment, PendingQuestion, QuestionAnswerPayload } from "@redbamboo/chat"
 import type { EventType } from "../../lib/types"
 
@@ -197,7 +197,8 @@ export function LiveTimeline({ messages, isStreaming, onSend, onInterrupt, resol
         isStreaming={isStreaming}
         placeholder={placeholder}
         sessionId={sessionId}
-        pendingQuestion={!!pendingQuestion}
+        // An approval is decided on its card, never by typing: text stays a message.
+        pendingQuestion={!!answerableQuestion(pendingQuestion)}
         onAnswerQuestion={onAnswerQuestion}
         draftStorageKey="nova-drafts"
       />

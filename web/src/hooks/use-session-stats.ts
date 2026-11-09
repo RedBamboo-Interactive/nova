@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useMemo } from "react"
-import type { SessionStats } from "@redbamboo/chat"
+import { useState, useEffect, useRef, useMemo, useCallback } from "react"
+import type { AccessLevel, SessionStats } from "@redbamboo/chat"
 import { api } from "../lib/api"
+import { readAccessLevel, readAccessLevels } from "../lib/session-access"
 
 interface RedComputeSession {
   provider?: string
@@ -18,6 +19,9 @@ interface RedComputeSession {
   contextWindow?: number
   effort?: string
   jobId?: string
+  accessLevel?: unknown
+  maxAccessLevel?: unknown
+  supportedAccessLevels?: unknown
 }
 
 interface DiscussionRef {
@@ -27,12 +31,21 @@ interface DiscussionRef {
   qualityTier?: string | null
 }
 
-export function useSessionStats(sessionId: string | null | undefined, isStreaming: boolean, discussion?: DiscussionRef | null): SessionStats | null {
+export interface SessionStatsState {
+  stats: SessionStats | null
+  /** Show a level the server just accepted, until the next read of the session says it too. */
+  applyAccessLevel: (sessionId: string, level: AccessLevel) => void
+}
+
+export function useSessionStats(sessionId: string | null | undefined, isStreaming: boolean, discussion?: DiscussionRef | null): SessionStatsState {
   const [sessionData, setSessionData] = useState<RedComputeSession | null>(null)
+  // Which session sessionData belongs to: a change accepted for one session never lands on another.
+  const dataSessionRef = useRef<string | null>(null)
   const prevStreaming = useRef(isStreaming)
 
   useEffect(() => {
     if (!sessionId) {
+      dataSessionRef.current = null
       setSessionData(null)
       return
     }
@@ -42,7 +55,10 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
     const fetchStats = async () => {
       try {
         const data = await api.get<{ session: RedComputeSession }>(`/ai-session/sessions/${sessionId}`)
-        if (!cancelled && data.session) setSessionData(data.session)
+        if (!cancelled && data.session) {
+          dataSessionRef.current = sessionId
+          setSessionData(data.session)
+        }
       } catch {}
     }
 
@@ -57,12 +73,21 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
 
     if (wasStreaming && !isStreaming && sessionId) {
       api.get<{ session: RedComputeSession }>(`/ai-session/sessions/${sessionId}`)
-        .then(data => { if (data.session) setSessionData(data.session) })
+        .then(data => {
+          if (!data.session) return
+          dataSessionRef.current = sessionId
+          setSessionData(data.session)
+        })
         .catch(() => {})
     }
   }, [isStreaming, sessionId])
 
-  return useMemo(() => {
+  const applyAccessLevel = useCallback((changedSessionId: string, level: AccessLevel) => {
+    if (dataSessionRef.current !== changedSessionId) return
+    setSessionData(previous => previous ? { ...previous, accessLevel: level } : previous)
+  }, [])
+
+  const stats = useMemo(() => {
     if (!sessionData || !sessionId) return null
     return {
       name: discussion?.title || undefined,
@@ -83,6 +108,11 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
       provider: discussion?.provider ?? sessionData.provider,
       providerEntity: discussion?.provider ?? sessionData.providerEntity,
       qualityTier: discussion?.qualityTier ?? sessionData.qualityTier,
+      accessLevel: readAccessLevel(sessionData.accessLevel),
+      maxAccessLevel: readAccessLevel(sessionData.maxAccessLevel),
+      supportedAccessLevels: readAccessLevels(sessionData.supportedAccessLevels),
     }
   }, [sessionData, sessionId, discussion?.id, discussion?.title, discussion?.provider, discussion?.qualityTier])
+
+  return useMemo(() => ({ stats, applyAccessLevel }), [stats, applyAccessLevel])
 }
