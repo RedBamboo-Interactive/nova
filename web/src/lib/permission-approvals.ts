@@ -166,6 +166,8 @@ function readSnapshotApproval(lifecycle: ApprovalLifecycle, entry: unknown): { r
  *
  * - one this client already knows by requestId, open or settled, is left
  *   alone, so a resolved or expired approval never reappears;
+ * - one this client holds as a plain pending question (its live event lost
+ *   `kind`) becomes the approval it is, so it never opens the question popup;
  * - one it doesn't know opens, and parks the turn unless something is already
  *   pending (an AskUserQuestion keeps the composer, as it does live);
  * - one open here that the server no longer holds was resolved while this
@@ -185,6 +187,13 @@ export function restoreApprovals(
     .filter((entry): entry is { requestId: string; request: PermissionRequest } => entry !== null)
   const held = new Set(snapshot.map(entry => entry.requestId))
   let next = state ?? NO_QUESTION
+
+  // Pending here as a plain question, but the server holds that requestId as
+  // an approval: a hop lost `kind` on the live event, and the person is being
+  // offered a free-text "Question" for a tool call. The server's kind wins, so
+  // the approval card (tool, command, the three decisions) takes its place.
+  if (next.pending && next.pending.kind !== "permission" && next.pending.requestId && held.has(next.pending.requestId))
+    next = { ...next, pending: null }
 
   for (const approval of Object.values(next.permissions ?? {}))
     if (approval.outcome === null && approval.requestId && !held.has(approval.requestId))

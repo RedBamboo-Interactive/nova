@@ -2,7 +2,8 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ChatEvent, MessageBlock, QuestionState } from "@redbamboo/chat"
 import { processStreamEvent } from "../../../../redbamboo-packages/packages/chat/src/lib/process-stream-event.ts"
-import { abandonPermissions, closePermission, permissionPendingQuestion, readPermissionRequest, visibleApprovals } from "../../../../redbamboo-packages/packages/chat/src/lib/permission-approval.ts"
+import { abandonPermissions, answerableQuestion, closePermission, permissionPendingQuestion, readPermissionRequest, visibleApprovals } from "../../../../redbamboo-packages/packages/chat/src/lib/permission-approval.ts"
+import { resolveQuestionCardContent } from "../../../../redbamboo-packages/packages/chat/src/lib/question-card.ts"
 import { answeredQuestionState, clearedQuestionState, liveQuestionFields, permissionDecisionRequest, restoreApprovals, settleAcceptedDecision, type ApprovalLifecycle } from "./permission-approvals.ts"
 
 // The same shared lifecycle use-discussions passes in.
@@ -267,4 +268,63 @@ test("an approval the server no longer holds was resolved while away: it settles
 
 test("a decision without a requestId is refused before anything is posted", () => {
   assert.throws(() => permissionDecisionRequest("s", { requestId: null, toolUseId: "toolu_rm", decision: "deny" }), /no longer be answered/)
+})
+
+// ---- The question popup is AskUserQuestion's alone ----
+
+/**
+ * What the last assistant message's question card resolves to, as ChatPanel
+ * feeds it: only an answerable (non-approval) pending question, plus the
+ * message's AskUserQuestion part. Null means no card and so no "Question" popup.
+ */
+function questionPopup(state: QuestionState, askPart?: { toolInput: string }) {
+  const part = askPart ? { type: "tool_use" as const, toolName: "AskUserQuestion", content: "", toolInput: askPart.toolInput } : undefined
+  return resolveQuestionCardContent(answerableQuestion(state.pending), part)
+}
+
+test("an approval never resolves to the question popup; it is drawn as the approval card", () => {
+  const parked = replay([toolUse, mapLive(liveApproval)]).question
+  assert.equal(questionPopup(parked), null)
+  const [card] = drawn(parked)
+  assert.equal(card.request.toolName, "Bash")
+  assert.equal(card.request.summary, "rm -rf build")
+  assert.equal(card.request.cwd, "T:/Projects/demo")
+  assert.deepEqual(card.request.options, ["allow_once", "allow_session", "deny"])
+})
+
+test("an AskUserQuestion still resolves to the question popup, with its text, and draws no approval card", () => {
+  const input = JSON.stringify({ questions: [{ question: "Which database?", options: [{ label: "Postgres" }] }] })
+  const asking = replay([
+    { type: "tool_use", toolName: "AskUserQuestion", toolInput: input, messageId: "toolu_ask", messageUid: "turn-1" },
+    mapLive({ type: "question", requestId: "req-ask", toolName: "AskUserQuestion", toolInput: input }),
+  ]).question
+  assert.equal(asking.pending?.requestId, "req-ask")
+  assert.equal(questionPopup(asking, { toolInput: input })?.question, "Which database?")
+  assert.deepEqual(drawn(asking), [])
+})
+
+test("an approval whose live event lost kind is put right by the next session read (2026-11-09 phone incident)", () => {
+  // The incident: the approval arrived without kind and parked as a plain
+  // question with the fallback text, a free-text box and no tool or buttons.
+  const { kind: _kind, permission: _permission, ...withoutKind } = liveApproval
+  const mislabelled = replay([toolUse, mapLive(withoutKind)]).question
+  assert.equal(mislabelled.pending?.requestId, "req-perm")
+  assert.equal(questionPopup(mislabelled)?.question, "The assistant is asking a question...")
+
+  // Reconnect or reload: the session read names req-perm an approval.
+  const healed = restoreApprovals(lifecycle, mislabelled, [snapshotApproval])
+  assert.equal(healed.pending?.kind, "permission")
+  assert.equal(healed.pending?.requestId, "req-perm")
+  assert.equal(questionPopup(healed), null)
+  assert.equal(drawn(healed).length, 1)
+  assert.equal(drawn(healed)[0].requestId, "req-perm")
+  assert.equal(drawn(healed)[0].request.summary, "rm -rf build")
+})
+
+test("a real AskUserQuestion is not taken for an approval with another requestId", () => {
+  const asking: QuestionState = { pending: { question: "Which database?", requestId: "req-ask" }, outcome: null }
+  assert.equal(restoreApprovals(lifecycle, asking, [snapshotQuestion]), asking)
+  const both = restoreApprovals(lifecycle, asking, [snapshotQuestion, snapshotApproval])
+  assert.equal(both.pending, asking.pending)
+  assert.equal(questionPopup(both)?.question, "Which database?")
 })
