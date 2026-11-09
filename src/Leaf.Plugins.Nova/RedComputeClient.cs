@@ -510,6 +510,45 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         return resp.IsSuccessStatusCode;
     }
 
+    /// <summary>
+    /// One-way tightening of an existing session's access: sets or lowers its cap and marks it
+    /// unattended. RedCompute takes this from any caller with write access to the session, since
+    /// it can only make the session safer; it never carries a level, so nothing here raises one.
+    /// Send only what tightens: a cap at or below the current one, and unattended only as true.
+    /// </summary>
+    public async Task<SendMessageResult> TightenSessionAccessAsync(string sessionId,
+        string? maxAccessLevel, bool unattended, ComputeProvenance? provenance, CancellationToken ct = default)
+    {
+        var body = new Dictionary<string, object>();
+        if (!string.IsNullOrWhiteSpace(maxAccessLevel)) body["maxAccessLevel"] = maxAccessLevel;
+        if (unattended) body["unattended"] = true;
+        using var request = new HttpRequestMessage(HttpMethod.Post,
+            $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}/{TightenAccessRoute}")
+        {
+            Content = JsonContent.Create(body, options: JsonOptions),
+        };
+        using var response = await gateway.SendAsync(request, provenance, ct);
+        var text = await response.Content.ReadAsStringAsync(ct);
+        if (response.IsSuccessStatusCode) return new(true, null, (int)response.StatusCode);
+        string? code = null, message = null;
+        try
+        {
+            using var error = JsonDocument.Parse(text);
+            if (error.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                if (error.RootElement.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String)
+                    code = e.GetString();
+                if (error.RootElement.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String)
+                    message = m.GetString();
+            }
+        }
+        catch (JsonException) { }
+        return new(false, null, (int)response.StatusCode, code, message);
+    }
+
+    /// <summary>The session sub-route RedCompute takes one-way access tightening on.</summary>
+    internal const string TightenAccessRoute = "access-level";
+
     public async Task DismissAsync(string sessionId, CancellationToken ct = default)
     {
         try
@@ -559,7 +598,9 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         bool Reachable,
         string? Status,
         string? StopReason = null,
-        string? ProviderSessionId = null);
+        string? ProviderSessionId = null,
+        bool Unattended = false,
+        string? MaxAccessLevel = null);
 
     /// <summary>
     /// Provider-neutral state needed by the discussion resume path. A persisted
@@ -625,7 +666,11 @@ public sealed class RedComputeClient(IComputeGateway gateway)
                 && reason.ValueKind == JsonValueKind.String ? reason.GetString() : null;
             var providerSessionId = session.TryGetProperty("providerSessionId", out var providerId)
                 && providerId.ValueKind == JsonValueKind.String ? providerId.GetString() : null;
-            return new(true, status, stopReason, providerSessionId);
+            var unattended = session.TryGetProperty("unattended", out var unattendedValue)
+                && unattendedValue.ValueKind == JsonValueKind.True;
+            var maxAccessLevel = session.TryGetProperty("maxAccessLevel", out var cap)
+                && cap.ValueKind == JsonValueKind.String ? cap.GetString() : null;
+            return new(true, status, stopReason, providerSessionId, unattended, maxAccessLevel);
         }
         catch
         {

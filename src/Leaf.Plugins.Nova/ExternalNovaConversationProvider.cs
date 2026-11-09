@@ -102,6 +102,73 @@ public sealed class ExternalAgentConversationProvider(
         => string.Equals(transport, "discord", StringComparison.OrdinalIgnoreCase)
             || string.Equals(transport, "leaf-commons", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Access levels lowest first, as RedCompute orders them.</summary>
+    private static readonly string[] AccessLevelOrder = ["plan", "ask", "auto", "full"];
+
+    /// <summary>
+    /// What an existing Discord session still lacks of what a new one starts with, or null when
+    /// it already has both. Sessions created before Discord sessions started unattended and
+    /// capped carry neither: they park approvals nobody answers, and would run uncapped at Full.
+    /// Only tightening is asked for: a cap already at or below Auto is left alone (sending Auto
+    /// would raise it), and unattended is only ever turned on. A cap RedCompute reports that is
+    /// not a known level is treated as missing; RedCompute refuses anything that would raise it.
+    /// </summary>
+    internal static (string? MaxAccessLevel, bool Unattended)? DiscordTightening(RedComputeClient.SessionProbe session)
+    {
+        var capRank = session.MaxAccessLevel is { } cap
+            ? Array.FindIndex(AccessLevelOrder, level => string.Equals(level, cap, StringComparison.OrdinalIgnoreCase))
+            : -1;
+        var lowerCap = capRank < 0 || capRank > Array.IndexOf(AccessLevelOrder, DiscordMaxAccessLevel);
+        var markUnattended = !session.Unattended;
+        return lowerCap || markUnattended
+            ? (lowerCap ? DiscordMaxAccessLevel : null, markUnattended)
+            : null;
+    }
+
+    /// <summary>How long a turn waits for its session's tightening before it is delivered anyway.</summary>
+    internal static readonly TimeSpan TighteningTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>Sessions this process already tightened, so each is retrofitted once.</summary>
+    private readonly ConcurrentDictionary<string, byte> tightenedSessions = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Brings a session created before Discord sessions started unattended and capped up to what
+    /// a new one starts with, once, before its turn. A failure never costs the message: it is
+    /// logged and the turn is delivered under RedCompute's own defaults, and the next turn tries
+    /// again. Only the caller's cancellation stops the turn. True when RedCompute applied it.
+    /// </summary>
+    private async Task<bool> TightenDiscordSessionAsync(string sessionId, RedComputeClient.SessionProbe session,
+        ComputeProvenance provenance, string transport, CancellationToken ct)
+    {
+        if (tightenedSessions.ContainsKey(sessionId) || DiscordTightening(session) is not { } tightening)
+            return false;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TighteningTimeout);
+        try
+        {
+            var result = await redCompute.TightenSessionAccessAsync(
+                sessionId, tightening.MaxAccessLevel, tightening.Unattended, provenance, timeout.Token);
+            if (result.Success)
+            {
+                tightenedSessions[sessionId] = 0;
+                logger.LogInformation(
+                    "Tightened existing {Transport} session {SessionId} (cap {MaxAccessLevel}, unattended {Unattended})",
+                    transport, sessionId, tightening.MaxAccessLevel ?? session.MaxAccessLevel, true);
+                return true;
+            }
+            logger.LogWarning(
+                "Could not tighten existing {Transport} session {SessionId} ({StatusCode} {ErrorCode}: {ErrorMessage}); delivering the turn under RedCompute's defaults",
+                transport, sessionId, result.StatusCode, result.ErrorCode, result.ErrorMessage);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex,
+                "Could not tighten existing {Transport} session {SessionId}; delivering the turn under RedCompute's defaults",
+                transport, sessionId);
+        }
+        return false;
+    }
+
     internal static string DeveloperInstructions(ExternalConversationOpenRequest request, string agentName)
         => string.Equals(request.Scope.Transport, "discord", StringComparison.OrdinalIgnoreCase)
             ? DiscordDeveloperInstructions(agentName)
@@ -318,6 +385,12 @@ public sealed class ExternalAgentConversationProvider(
             entrypointKind: transport, method: "MESSAGE",
             requestId: input.RequestId, ct: ct, cause: TurnCause(input.Metadata));
         var session = await redCompute.ProbeSessionAsync(handle.SessionId, ct);
+        // Before the resume, so a stopped session relaunches under its cap. Lowering a live
+        // session's level can stop it (RedCompute stops a harness that will not switch down), so
+        // a tightened session is read again before deciding whether it needs a resume.
+        if (session.Reachable && IsDiscordTransport(transport)
+            && await TightenDiscordSessionAsync(handle.SessionId, session, provenance, transport, ct))
+            session = await redCompute.ProbeSessionAsync(handle.SessionId, ct);
         // Admitting onto a session whose state is unknown can park the message in the queue of a
         // session that will never run again, where nothing ever retries it.
         if (!session.Reachable)
