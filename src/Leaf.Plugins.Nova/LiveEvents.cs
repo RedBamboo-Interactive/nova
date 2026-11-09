@@ -830,6 +830,47 @@ public sealed class LiveEvents(
     }
 
     /// <summary>
+    /// Posts a line about <paramref name="source"/> (a delegated session's status or approval) onto
+    /// the LIVE timeline of the person who owns that discussion, and nobody else's. <see cref="PostAsync"/>
+    /// picks the first open LIVE of Nova's Agent, which on an install with several people can be
+    /// another person's, so a line naming one person's approval would reach another. With no LIVE
+    /// of the owner's own nothing is posted.
+    /// </summary>
+    public async Task PostForOwnerAsync(
+        DiscussionRead source, string eventSource, string content,
+        string? idempotencyKey = null, CancellationToken ct = default)
+    {
+        try
+        {
+            var owner = installationOwner is null ? null : await installationOwner.ResolveAsync(ct);
+            var live = SelectLiveForOwner(await store.ListByTypeAsync("live", agents.NovaAgentId), source, owner);
+            if (live is null) return;
+            await injector.InjectAsync(live, content, "system", eventSource,
+                idempotencyKey: idempotencyKey, ct: ct);
+        }
+        catch { /* the LIVE timeline is best-effort by design */ }
+    }
+
+    /// <summary>
+    /// The open LIVE owned by the same person as <paramref name="source"/>, or null. An owner of
+    /// <c>local-user</c> or none is the installation owner (<see cref="OwnerScope"/>), as in
+    /// <see cref="RelaysActivity"/>; with no installation owner known it is only ever the same as
+    /// another local one, never a named person's.
+    /// </summary>
+    internal static DiscussionRead? SelectLiveForOwner(
+        IEnumerable<DiscussionRead> lives, DiscussionRead source, string? installationOwnerId)
+    {
+        var person = Person(source.OwnerId, installationOwnerId);
+        return lives.FirstOrDefault(live => live.Type == "live" && !DiscussionStatus.IsClosed(live.Status)
+            && string.Equals(Person(live.OwnerId, installationOwnerId), person, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? Person(string? ownerId, string? installationOwnerId)
+        => string.IsNullOrWhiteSpace(ownerId) || OwnerScope.IsLocalUser(ownerId)
+            ? (string.IsNullOrWhiteSpace(installationOwnerId) ? "local-user" : installationOwnerId)
+            : ownerId;
+
+    /// <summary>
     /// Posts a discussion-activity line (title and excerpt) onto the LIVE timeline, only when the
     /// discussion belongs to the same Agent and the same person as that LIVE. Another Agent's
     /// discussions, another person's, every Agent's LIVE and confidential threads post nothing.

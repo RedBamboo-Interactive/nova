@@ -289,6 +289,8 @@ public sealed class CallbackDeliveryTests
             });
             live = Entity("discussion", DiscussionStore.Slug("live"), new() {
                 ["discussion_id"] = "live", ["app"] = "nova", ["type"] = "live", ["status"] = "idle", ["agent"] = agent.Id.ToString(),
+                // The same person's LIVE: a delegated session's line reaches only its owner's.
+                ["owner_id"] = "test-owner",
             });
             all = new[] { Target, live, agent, Entity("plugin", "nova", new()) }.Concat(extraEntities ?? []).ToArray();
             var entities = Proxy.Create<IEntityStore>((method, args) => method switch {

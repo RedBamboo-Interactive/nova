@@ -55,6 +55,41 @@ public sealed class DiscussionActivityScopeTests
     public void Untitled_stays_silent()
         => Assert.False(LiveEvents.RelaysActivity(Read("a", Nova, title: ""), NovaLive, Nova, Owner));
 
+    // ---- a delegated session's line reaches only its owner's LIVE -----------------------------
+
+    [Fact]
+    public void A_delegated_approval_line_goes_to_the_owners_live_not_the_first_one()
+    {
+        var strangersLive = Read("live-stranger", Nova, owner: Stranger, type: "live", title: "LIVE");
+        var ownersLive = Read("live-owner", Nova, type: "live", title: "LIVE");
+        var source = Read("discussion", Nova);
+
+        Assert.Equal("live-owner", LiveEvents.SelectLiveForOwner([strangersLive, ownersLive], source, Owner)!.Id);
+    }
+
+    [Fact]
+    public void A_delegated_approval_line_reaches_nobody_when_the_owner_has_no_live()
+    {
+        var strangersLive = Read("live-stranger", Nova, owner: Stranger, type: "live", title: "LIVE");
+
+        Assert.Null(LiveEvents.SelectLiveForOwner([strangersLive], Read("discussion", Nova), Owner));
+        Assert.Null(LiveEvents.SelectLiveForOwner([strangersLive], Read("discussion", Nova, owner: null), Owner));
+        Assert.Null(LiveEvents.SelectLiveForOwner([NovaLive with { Status = "archived" }], Read("discussion", Nova), Owner));
+    }
+
+    [Fact]
+    public void A_local_discussion_is_the_installation_owners_and_never_a_named_persons()
+    {
+        var ownersLive = Read("live-owner", Nova, type: "live", title: "LIVE");
+        var localDiscussion = Read("discussion", Nova, owner: "local-user");
+
+        Assert.Equal("live-owner", LiveEvents.SelectLiveForOwner([ownersLive], localDiscussion, Owner)!.Id);
+        // No installation owner known: a local discussion still never matches a named person's LIVE.
+        Assert.Null(LiveEvents.SelectLiveForOwner([ownersLive], localDiscussion, null));
+        Assert.Equal("live-local", LiveEvents.SelectLiveForOwner(
+            [Read("live-local", Nova, owner: "local-user", type: "live", title: "LIVE")], localDiscussion, null)!.Id);
+    }
+
     [Fact]
     public void Another_persons_discussion_with_the_same_agent_is_not_relayed()
         => Assert.False(LiveEvents.RelaysActivity(Read("a", Nova, owner: Stranger), NovaLive, Nova, Owner));

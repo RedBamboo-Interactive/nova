@@ -191,7 +191,7 @@ public static class CallbackEndpoints
             return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
 
         if (!discussion.Confidential)
-            await live.PostAsync("callback", interruptedTurn
+            await live.PostForOwnerAsync(discussion, "callback", interruptedTurn
                     ? $"Delegated session turn was interrupted{InterruptedBy(interruptSource, interruptedByMessageUid)}{(title != null ? $": {title}" : "")}"
                     : backgroundTurn
                     ? $"Delegated session turn ended with {BackgroundTasks(backgroundTasksRunning)} still running{(title != null ? $": {title}" : "")}"
@@ -323,7 +323,7 @@ public static class CallbackEndpoints
             return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
 
         if (!discussion.Confidential)
-            await live.PostAsync("callback", liveLine, idempotencyKey: $"{key}:live", ct: ctx.RequestAborted);
+            await live.PostForOwnerAsync(discussion, "callback", liveLine, idempotencyKey: $"{key}:live", ct: ctx.RequestAborted);
         return Results.Ok(new { handled = true, sessionId, discussionId, requestId });
     }
 
