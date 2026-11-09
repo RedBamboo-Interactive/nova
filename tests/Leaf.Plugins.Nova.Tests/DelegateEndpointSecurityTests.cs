@@ -27,6 +27,28 @@ public sealed class DelegateEndpointSecurityTests
         Assert.Equal(subject, DelegateEndpoints.TrustedCallerId(Principal(subject)));
     }
 
+    [Fact]
+    public void Caller_session_comes_only_from_the_verified_execution_identity()
+    {
+        Assert.Equal("d0dcd679a5f1", DelegateEndpoints.CallerSessionId(Execution(
+            """{"context":[{"kind":"discussion","id":"03f50fd5"},{"kind":"session","id":"d0dcd679a5f1"}]}""")));
+        // A person, no session, two sessions, a blank id, broken JSON: no parent, policy decides.
+        Assert.Null(DelegateEndpoints.CallerSessionId(Principal("28a07bf5-3a37-47d4-a9ab-bdc09221d547")));
+        Assert.Null(DelegateEndpoints.CallerSessionId(Execution("""{"context":[{"kind":"discussion","id":"03f50fd5"}]}""")));
+        Assert.Null(DelegateEndpoints.CallerSessionId(Execution(
+            """{"context":[{"kind":"session","id":"a"},{"kind":"session","id":"b"}]}""")));
+        Assert.Null(DelegateEndpoints.CallerSessionId(Execution("""{"context":[{"kind":"session","id":""}]}""")));
+        Assert.Null(DelegateEndpoints.CallerSessionId(Execution("{not json")));
+        // The claim counts only on an execution token.
+        Assert.Null(DelegateEndpoints.CallerSessionId(new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim("sub", "u"), new Claim("execution_identity", """{"context":[{"kind":"session","id":"x"}]}""")], "Bearer"))));
+    }
+
+    private static ClaimsPrincipal Execution(string identityJson)
+        => new(new ClaimsIdentity(
+            [new Claim("sub", "28a07bf5-3a37-47d4-a9ab-bdc09221d547"), new Claim("token_use", "execution"),
+             new Claim("execution_identity", identityJson)], "Bearer"));
+
     [Theory]
     [InlineData(null)]
     [InlineData(false)]

@@ -254,9 +254,14 @@ public static class DelegateEndpoints
                         ?? request.QualityMode
                         ?? "standard";
 
+                // The delegating session, from the caller's verified token only, so RedCompute starts the
+                // worker at that session's access level and caps it there. Never from the request body.
+                var createContext = new List<ComputeContextReference>(baseContext);
+                if (CallerSessionId(ctx.User) is { } parentSessionId)
+                    createContext.Add(new ComputeContextReference("session", parentSessionId));
                 var createProvenance = await NovaComputeProvenance.CreateAsync(
                     entities, resolvedAgent, beneficiary,
-                    "/api/apps/nova/delegate", baseContext, method: "POST", ct: ctx.RequestAborted,
+                    "/api/apps/nova/delegate", createContext, method: "POST", ct: ctx.RequestAborted,
                     cause: ComputeCauses.Agent);
                 var created = await redCompute.CreateSessionAsync(createBody,
                     createProvenance, ctx.RequestAborted);
@@ -491,6 +496,41 @@ public static class DelegateEndpoints
     /// Null when the branch fields are acceptable. A branch needs a new repository session: a
     /// continuation keeps its original folder, and a physical path already names its folder.
     /// </summary>
+    /// <summary>
+    /// The RedCompute session the caller runs in, read from its verified execution identity (the
+    /// <c>execution_identity</c> claim the auth middleware validated). Null for a person, a token
+    /// without exactly one <c>session</c> context entry, or anything unreadable: then the worker
+    /// resolves its level from the policy instead of inheriting one.
+    /// </summary>
+    internal static string? CallerSessionId(ClaimsPrincipal user)
+    {
+        if (!string.Equals(user.FindFirst("token_use")?.Value, "execution", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var raw = user.FindFirst("execution_identity")?.Value;
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(raw);
+            if (!document.RootElement.TryGetProperty("context", out var context) || context.ValueKind != JsonValueKind.Array)
+                return null;
+            string? found = null;
+            foreach (var item in context.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object
+                    || !item.TryGetProperty("kind", out var kind) || kind.GetString() != "session")
+                    continue;
+                if (found is not null) return null;
+                found = item.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String ? id.GetString() : null;
+                if (string.IsNullOrWhiteSpace(found)) return null;
+            }
+            return found;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     internal static object? BranchError(DelegateRequest request, bool isContinuation)
     {
         var hasBranch = !string.IsNullOrWhiteSpace(request.Branch);
