@@ -3,11 +3,13 @@ import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DelegationActivitySnapshot, DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
 import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, PermissionApprovals, PermissionDecisionPayload, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
-import { abandonPermissions, canonicalUserMessageUids, closePermission, DeferredInvalidationCoordinator, DurableTranscriptPager, isPermissionQuestion, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
-import { answeredQuestionState, clearedQuestionState, liveQuestionFields, settleAcceptedDecision, type ApprovalLifecycle } from "../lib/permission-approvals"
+import { abandonPermissions, canonicalUserMessageUids, closePermission, DeferredInvalidationCoordinator, DurableTranscriptPager, isPermissionQuestion, permissionPendingQuestion, processStreamEvent, readPermissionRequest, rebuildBlocks, TranscriptAccumulator, visibleApprovals } from "@redbamboo/chat"
+import { answeredQuestionState, clearedQuestionState, liveQuestionFields, permissionDecisionRequest, restoreApprovals, settleAcceptedDecision, type ApprovalLifecycle } from "../lib/permission-approvals"
 
 /** The shared approval lifecycle; Nova only projects it. */
-const APPROVALS: ApprovalLifecycle = { processStreamEvent, closePermission, abandonPermissions }
+const APPROVALS: ApprovalLifecycle = {
+  processStreamEvent, closePermission, abandonPermissions, readPermissionRequest, permissionPendingQuestion, visibleApprovals,
+}
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, markEventFrameSources, orderMessages, withCurrentEventPresentation } from "../lib/message-order"
 import { readNoteSender } from "../lib/agent-note"
@@ -461,6 +463,39 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [clearStreamingLatch, latchStreaming, runtimeReadIsCurrent])
 
   /**
+   * Approvals the session is parked on, from a session read's
+   * `pendingQuestions`, so a reload or reconnect (every app switch on a phone)
+   * brings the card back with its server-minted requestId instead of letting
+   * it expire to deny. Kind permission only: AskUserQuestion recovery is
+   * untouched. `pendingQuestions` absent means the read said nothing; an empty
+   * list means nothing waits. Applied only while the read is current, so a
+   * snapshot older than a live event never overrides it.
+   */
+  const hydratePendingApprovals = useCallback((id: string, sessionId: string, pendingQuestions: unknown, read: ReturnType<typeof captureRuntimeRead>) => {
+    if (!Array.isArray(pendingQuestions) || read.sessionId !== sessionId || !runtimeReadIsCurrent(id, read)) return
+    const previous = questionStatesRef.current[id]
+    const next = restoreApprovals(APPROVALS, previous, pendingQuestions)
+    if (next === (previous ?? null) || (!previous && !next.pending && !next.permissions)) return
+    commitQuestionState(id, next)
+    // A restored approval parks the turn, as the live question event does.
+    if (isPermissionQuestion(next.pending) && !isPermissionQuestion(previous?.pending)) {
+      streamingRef.current = { ...streamingRef.current, [id]: false }
+      setStreaming(prev => ({ ...prev, [id]: false }))
+    }
+  }, [runtimeReadIsCurrent, commitQuestionState])
+
+  /** The light session read (one record) that carries `pendingQuestions`, for loads whose page doesn't. */
+  const readPendingApprovals = useCallback(async (id: string, sessionId: string) => {
+    const read = captureRuntimeRead(id)
+    try {
+      const data = await api.get<{ pendingQuestions?: unknown }>(`/ai-session/sessions/${encodeURIComponent(sessionId)}?tail=1`)
+      hydratePendingApprovals(id, sessionId, data.pendingQuestions, read)
+    } catch {
+      // Nothing restored: the live stream still opens any new approval.
+    }
+  }, [captureRuntimeRead, hydratePendingApprovals])
+
+  /**
    * Re-derive `streaming` from the server for anything still latched true.
    *
    * The flag is otherwise fed purely by pushed events, so a single one that
@@ -870,6 +905,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
             const commit = commitHistoryPage(id, generation, data, "newest", undefined, runtimeRead)
             if (commit !== "committed") loadedRef.current.delete(id)
             if (commit === "invalid") recordNewestFailure(INVALID_HISTORY_PAGE_FAILURE)
+            // The page carries no control state. An approval waits only on an
+            // active session; an open one here must also be checked against it.
+            const pageSessionId = data.session?.id
+            if (commit === "committed" && pageSessionId && !isClosed(data.discussion.status)
+              && (data.session?.status === "Active" || Object.values(questionStatesRef.current[id]?.permissions ?? {})
+                .some(approval => approval.outcome === null)))
+              void readPendingApprovals(id, pageSessionId)
             return
           }
         } catch (error) {
@@ -893,8 +935,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
         let sessionHasEarlier = false
         let sessionCursor: TranscriptCursor | null = null
         try {
-          const data = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
-          if (isCurrentLoad()) hydrateRuntime(id, data.session, runtimeRead)
+          const data = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor; pendingQuestions?: unknown }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+          if (isCurrentLoad()) {
+            hydrateRuntime(id, data.session, runtimeRead)
+            hydratePendingApprovals(id, disc.sessionId, data.pendingQuestions, runtimeRead)
+          }
           if (data.messages?.length) {
             sessionMsgs = filterInternalBootstrapBlock(
               rebuildNovaBlocks(data.messages),
@@ -937,8 +982,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
           let sessionCursor: TranscriptCursor | null = null
           if (disc.sessionId) {
             try {
-              const session = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string; supportsSteering?: boolean; supportsRollback?: boolean; backgroundTasks?: BackgroundTaskInfo[] }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
-              if (isCurrentLoad()) hydrateRuntime(id, session.session, runtimeRead)
+              const session = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string; supportsSteering?: boolean; supportsRollback?: boolean; backgroundTasks?: BackgroundTaskInfo[] }; messages: PersistedMessage[]; transcript?: TranscriptCursor; pendingQuestions?: unknown }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+              if (isCurrentLoad()) {
+                hydrateRuntime(id, session.session, runtimeRead)
+                hydratePendingApprovals(id, disc.sessionId, session.pendingQuestions, runtimeRead)
+              }
               if (session.messages?.length) {
                 sessionMsgs = filterInternalBootstrapBlock(
                   rebuildNovaBlocks(session.messages),
@@ -967,8 +1015,11 @@ export function useDiscussions(eventResolver?: EventResolver) {
 
       if (disc?.sessionId) {
         try {
-          const data = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
-          if (isCurrentLoad()) hydrateRuntime(id, data.session, runtimeRead)
+          const data = await api.get<{ session: { id: string; status?: string; stopReason?: string; title?: string }; messages: PersistedMessage[]; transcript?: TranscriptCursor; pendingQuestions?: unknown }>(`/ai-session/sessions/${disc.sessionId}?tail=${tail}`)
+          if (isCurrentLoad()) {
+            hydrateRuntime(id, data.session, runtimeRead)
+            hydratePendingApprovals(id, disc.sessionId, data.pendingQuestions, runtimeRead)
+          }
           if (data.messages?.length) {
             const sessionMsgs = filterInternalBootstrapBlock(
               rebuildNovaBlocks(data.messages),
@@ -1009,7 +1060,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     } finally {
       if (isCurrentLoad()) setLoadingDiscussionId((cur) => cur === id ? null : cur)
     }
-  }, [commitHistoryPage, durableTranscriptPager, eventResolver, transcriptAccumulator])
+  }, [commitHistoryPage, durableTranscriptPager, eventResolver, transcriptAccumulator, hydratePendingApprovals, readPendingApprovals])
 
   const loadMessages = useCallback((
     id: string,
@@ -1570,12 +1621,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
    */
   const decidePermission = useCallback(async (discussionId: string, payload: PermissionDecisionPayload) => {
     const disc = discussions.find((d) => d.id === discussionId)
-    if (!disc?.sessionId || !payload.requestId)
-      throw new Error("This approval can no longer be answered here.")
-    await api.post(`/ai-session/sessions/${disc.sessionId}/question`, {
-      requestId: payload.requestId,
-      decision: payload.decision,
-    })
+    if (!disc?.sessionId) throw new Error("This approval can no longer be answered here.")
+    const { path, body } = permissionDecisionRequest(disc.sessionId, payload)
+    await api.post(path, body)
     const settled = settleAcceptedDecision(APPROVALS, questionStatesRef.current[discussionId], payload)
     if (!settled) return
     commitQuestionState(discussionId, settled.question)

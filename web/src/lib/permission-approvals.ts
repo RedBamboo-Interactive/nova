@@ -1,7 +1,10 @@
 import type {
   ChatEvent,
   MessageBlock,
+  PendingQuestion,
   PendingQuestionKind,
+  PermissionApproval,
+  PermissionApprovals,
   PermissionDecision,
   PermissionDecisionPayload,
   PermissionOutcome,
@@ -25,6 +28,9 @@ export interface ApprovalLifecycle {
   ) => Pick<ProcessEventResult, "question">
   closePermission: (prev: QuestionState, key: string, outcome: PermissionOutcome) => QuestionState
   abandonPermissions: (state: QuestionState) => QuestionState
+  readPermissionRequest: (event: ChatEvent) => PermissionRequest
+  permissionPendingQuestion: (request: PermissionRequest, requestId: string | null) => PendingQuestion
+  visibleApprovals: (permissions: PermissionApprovals | null | undefined, pending: PendingQuestion | null | undefined) => PermissionApproval[]
 }
 
 const NO_QUESTION: QuestionState = { pending: null, outcome: null }
@@ -110,4 +116,93 @@ export function answeredQuestionState(
   if (!state?.permissions) return { pending: null, outcome: "answered" }
   return lifecycle.processStreamEvent(NO_MESSAGES, true,
     { type: "question_resolved", requestId, content: "answered" }, false, state ?? NO_QUESTION).question
+}
+
+/** The `/question` request a decision sends: the server-minted requestId and the decision, nothing else. */
+export function permissionDecisionRequest(sessionId: string, payload: PermissionDecisionPayload): { path: string; body: { requestId: string; decision: PermissionDecision } } {
+  if (!payload.requestId) throw new Error("This approval can no longer be answered here.")
+  return {
+    path: `/ai-session/sessions/${encodeURIComponent(sessionId)}/question`,
+    body: { requestId: payload.requestId, decision: payload.decision },
+  }
+}
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null
+}
+
+/**
+ * One `pendingQuestions` entry of a session read, when it is a tool call
+ * waiting for approval (`kind: "permission"`). Everything else (an
+ * AskUserQuestion above all) is not this module's business: its recovery
+ * stays exactly as it was.
+ */
+function readSnapshotApproval(lifecycle: ApprovalLifecycle, entry: unknown): { requestId: string; request: PermissionRequest } | null {
+  if (!entry || typeof entry !== "object") return null
+  const record = entry as Record<string, unknown>
+  if (record.kind !== "permission") return null
+  const requestId = text(record.requestId)
+  const permission = record.permission
+  if (!requestId || !permission || typeof permission !== "object" || Array.isArray(permission)
+    || !text((permission as { toolName?: unknown }).toolName)) return null
+  // The shared reader, as for a live `question` event, so a restored card and
+  // a live one are the same request.
+  const request = lifecycle.readPermissionRequest({
+    type: "question",
+    kind: "permission",
+    requestId,
+    permission: permission as PermissionRequest,
+    toolName: text(record.toolName),
+    messageId: text(record.toolUseId),
+  })
+  return { requestId, request }
+}
+
+/**
+ * Bring the approvals a session is parked on back after a reload or a
+ * reconnect, from the session read's `pendingQuestions` (RedCompute overlays
+ * live control state there; the transcript never holds it). Only entries of
+ * kind permission are read, each with its server-minted requestId:
+ *
+ * - one this client already knows by requestId, open or settled, is left
+ *   alone, so a resolved or expired approval never reappears;
+ * - one it doesn't know opens, and parks the turn unless something is already
+ *   pending (an AskUserQuestion keeps the composer, as it does live);
+ * - one open here that the server no longer holds was resolved while this
+ *   client wasn't listening: it settles as "answered", which says it was
+ *   resolved without claiming how.
+ *
+ * Pass only a read that is current for the discussion's session: a snapshot
+ * older than a live event must not be applied.
+ */
+export function restoreApprovals(
+  lifecycle: ApprovalLifecycle,
+  state: QuestionState | undefined,
+  pendingQuestions: readonly unknown[],
+): QuestionState {
+  const snapshot = pendingQuestions
+    .map(entry => readSnapshotApproval(lifecycle, entry))
+    .filter((entry): entry is { requestId: string; request: PermissionRequest } => entry !== null)
+  const held = new Set(snapshot.map(entry => entry.requestId))
+  let next = state ?? NO_QUESTION
+
+  for (const approval of Object.values(next.permissions ?? {}))
+    if (approval.outcome === null && approval.requestId && !held.has(approval.requestId))
+      next = lifecycle.closePermission(next, approval.key, "answered")
+
+  const known = new Set(Object.values(next.permissions ?? {}).map(approval => approval.requestId))
+  let restored: PendingQuestion | null = null
+  for (const { requestId, request } of snapshot) {
+    if (known.has(requestId)) continue
+    const pending = lifecycle.permissionPendingQuestion(request, requestId)
+    // The shared projection names the approval (its key) exactly as a live one.
+    const approval = lifecycle.visibleApprovals(null, pending).find(candidate => candidate.requestId === requestId)
+    if (!approval) continue
+    next = { ...next, permissions: { ...next.permissions, [approval.key]: approval } }
+    known.add(requestId)
+    restored = pending
+  }
+  // The newest restored approval parks the turn, as the newest live one does.
+  if (restored && !next.pending) next = { ...next, pending: restored }
+  return next
 }

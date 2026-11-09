@@ -2,11 +2,13 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ChatEvent, MessageBlock, QuestionState } from "@redbamboo/chat"
 import { processStreamEvent } from "../../../../redbamboo-packages/packages/chat/src/lib/process-stream-event.ts"
-import { abandonPermissions, closePermission } from "../../../../redbamboo-packages/packages/chat/src/lib/permission-approval.ts"
-import { answeredQuestionState, clearedQuestionState, liveQuestionFields, settleAcceptedDecision, type ApprovalLifecycle } from "./permission-approvals.ts"
+import { abandonPermissions, closePermission, permissionPendingQuestion, readPermissionRequest, visibleApprovals } from "../../../../redbamboo-packages/packages/chat/src/lib/permission-approval.ts"
+import { answeredQuestionState, clearedQuestionState, liveQuestionFields, permissionDecisionRequest, restoreApprovals, settleAcceptedDecision, type ApprovalLifecycle } from "./permission-approvals.ts"
 
 // The same shared lifecycle use-discussions passes in.
-const lifecycle: ApprovalLifecycle = { processStreamEvent, closePermission, abandonPermissions }
+const lifecycle: ApprovalLifecycle = {
+  processStreamEvent, closePermission, abandonPermissions, readPermissionRequest, permissionPendingQuestion, visibleApprovals,
+}
 
 // A Claude tool call waiting for approval, as RedCompute streams it: a `question`
 // of kind permission carrying the request, then `question_resolved` with the outcome word.
@@ -145,4 +147,124 @@ test("a session that ended leaves settled cards and marks a waiting one unresolv
   // No approvals: the exact state clearQuestion always wrote.
   assert.deepEqual(clearedQuestionState(lifecycle, { pending: { question: "q", requestId: "r" }, outcome: null }, "session_ended", true),
     { pending: null, outcome: "session_ended" })
+})
+
+// ---- Restoring waiting approvals from a session read (reload, reconnect) ----
+
+/** The pendingQuestions entry RedCompute's session read returns for the parked approval above. */
+const snapshotApproval = {
+  requestId: "req-perm",
+  kind: "permission",
+  permission,
+  toolName: "Bash",
+  toolUseId: "toolu_rm",
+  questions: [],
+  input: permission.input,
+  askedAt: "2026-11-09T12:00:00Z",
+  expiresAt: "2026-11-09T12:30:00Z",
+}
+
+const snapshotQuestion = {
+  requestId: "req-ask",
+  toolName: "AskUserQuestion",
+  toolUseId: "toolu_ask",
+  questions: [{ question: "Which database?", options: [{ label: "Postgres" }] }],
+  input: {},
+  askedAt: "2026-11-09T12:00:00Z",
+  expiresAt: "2026-11-09T12:30:00Z",
+}
+
+/** What ChatPanel draws: visibleApprovals over the host's approvals and pending question. */
+function drawn(state: QuestionState) {
+  return visibleApprovals(state.permissions, state.pending)
+}
+
+test("a stream that drops after the approval opened gets the card back from the snapshot, with the same requestId", () => {
+  // Live: the card opens, then the socket drops (the host forgets all question state).
+  const live = replay([toolUse, mapLive(liveApproval)]).question
+  assert.equal(drawn(live)[0]?.requestId, "req-perm")
+  const afterDrop: QuestionState | undefined = undefined
+
+  // Remount: the history load reads the session, whose pendingQuestions still holds it.
+  const restored = restoreApprovals(lifecycle, afterDrop, [snapshotApproval])
+  const [card] = drawn(restored)
+  assert.equal(drawn(restored).length, 1)
+  assert.equal(card.requestId, "req-perm")
+  assert.equal(card.outcome, null)
+  assert.equal(card.request.toolUseId, "toolu_rm")
+  assert.equal(card.request.summary, "rm -rf build")
+  assert.equal(card.key, live.permissions?.toolu_rm?.key)
+  // It parks the turn as an approval, never as an AskUserQuestion.
+  assert.equal(restored.pending?.kind, "permission")
+  assert.equal(restored.pending?.requestId, "req-perm")
+  assert.equal(restored.outcome, null)
+
+  // A decision on that card posts the same server-minted requestId.
+  const payload = { requestId: card.requestId, toolUseId: card.request.toolUseId ?? null, decision: "allow_session" as const }
+  assert.deepEqual(permissionDecisionRequest("session-1", payload), {
+    path: "/ai-session/sessions/session-1/question",
+    body: { requestId: "req-perm", decision: "allow_session" },
+  })
+
+  // Accepted, it settles; the server's resolution and the tool result agree.
+  const settled = settleAcceptedDecision(lifecycle, restored, payload)
+  assert.ok(settled)
+  assert.equal(settled.question.permissions?.toolu_rm?.outcome, "allow_session")
+  assert.equal(settled.question.pending, null)
+  const resolved = replay([
+    toolUse,
+    mapLive({ type: "question_resolved", requestId: "req-perm", content: "allowed_session" }),
+    { type: "tool_result", toolResult: "ok", messageId: "toolu_rm" },
+  ], settled.question).question
+  assert.equal(resolved.permissions?.toolu_rm?.outcome, "allow_session")
+  assert.equal(resolved.pending, null)
+})
+
+test("a snapshot without the approval shows nothing", () => {
+  const restored = restoreApprovals(lifecycle, undefined, [])
+  assert.deepEqual(drawn(restored), [])
+  assert.equal(restored.pending, null)
+  assert.equal(restored.permissions, undefined)
+})
+
+test("only approvals are restored: an AskUserQuestion in the snapshot is left to its own recovery", () => {
+  assert.deepEqual(restoreApprovals(lifecycle, undefined, [snapshotQuestion]), { pending: null, outcome: null })
+  // Malformed approval entries are ignored too.
+  assert.deepEqual(restoreApprovals(lifecycle, undefined, [
+    { ...snapshotApproval, requestId: "" },
+    { ...snapshotApproval, permission: null },
+    { ...snapshotApproval, permission: { summary: "no tool" } },
+    "req-perm",
+  ]), { pending: null, outcome: null })
+})
+
+test("an AskUserQuestion already pending keeps the composer; the restored approval waits on its card", () => {
+  const asking: QuestionState = { pending: { question: "Which database?", requestId: "req-ask" }, outcome: null }
+  const restored = restoreApprovals(lifecycle, asking, [snapshotQuestion, snapshotApproval])
+  assert.equal(restored.pending, asking.pending)
+  assert.equal(restored.outcome, null)
+  assert.equal(drawn(restored).length, 1)
+  assert.equal(drawn(restored)[0].requestId, "req-perm")
+})
+
+test("a resolved or expired approval never reappears, even from a stale snapshot", () => {
+  const parked = replay([toolUse, mapLive(liveApproval)]).question
+  const denied = replay([mapLive({ type: "question_resolved", requestId: "req-perm", content: "denied" })], parked).question
+  const restored = restoreApprovals(lifecycle, denied, [snapshotApproval])
+  assert.equal(restored, denied)
+  assert.equal(restored.permissions?.toolu_rm?.outcome, "deny")
+  assert.equal(restored.pending, null)
+})
+
+test("an approval the server no longer holds was resolved while away: it settles and the turn unparks", () => {
+  const parked = replay([toolUse, mapLive(liveApproval)]).question
+  const restored = restoreApprovals(lifecycle, parked, [])
+  assert.equal(restored.permissions?.toolu_rm?.outcome, "answered")
+  assert.equal(restored.pending, null)
+  // A snapshot that still holds it changes nothing.
+  assert.equal(restoreApprovals(lifecycle, parked, [snapshotApproval]), parked)
+})
+
+test("a decision without a requestId is refused before anything is posted", () => {
+  assert.throws(() => permissionDecisionRequest("s", { requestId: null, toolUseId: "toolu_rm", decision: "deny" }), /no longer be answered/)
 })
