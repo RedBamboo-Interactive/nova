@@ -228,6 +228,9 @@ public static class CallbackEndpoints
     internal const int MaxLabel = 200;
     internal const int MaxDescription = 500;
     internal const int MaxQuestionSection = 6000;
+    internal const int MaxToolName = 120;
+    internal const int MaxSummary = 1000;
+    internal const int MaxLiveSummary = 160;
 
     /// <summary>
     /// A delegated session parked on a structured question (Claude AskUserQuestion, Codex
@@ -235,6 +238,12 @@ public static class CallbackEndpoints
     /// with questionUrl. The discussion receives everything needed to answer, including the exact
     /// answer contract, so the worker is not left waiting for its timeout. The later completion
     /// callback is independent and still arrives on its own route.
+    /// <para>
+    /// <c>kind: "permission"</c> is a tool call waiting for a person's approval, not a question.
+    /// RedCompute takes that decision only from a person (an Agent's token gets 403
+    /// approval_requires_person), so the discussion is told it is its person's to give, with the
+    /// tool and what it would do, and no answer contract; LIVE tells the person.
+    /// </para>
     /// </summary>
     internal static async Task<IResult> HandleSessionQuestionAsync(
         HttpContext ctx, DiscussionStore store, EventInjector injector, LiveEvents live)
@@ -262,21 +271,50 @@ public static class CallbackEndpoints
 
         var title = Text(body, "title");
         var expiresAt = Text(body, "expiresAt");
-        var questions = body.TryGetProperty("questions", out var q) && q.ValueKind == JsonValueKind.Array
-            ? q : JsonSerializer.SerializeToElement(Array.Empty<object>());
-        var answerUrl = $"http://127.0.0.1:18800/ai-session/sessions/{sessionId}/question";
-        var eventContent = SessionQuestionEvent(sessionId, title, requestId, questions, expiresAt, answerUrl);
-
         // One delivery per parked question, whichever registration or retry carried it.
         var key = $"session-question:{sessionId}:{requestId}";
-        var metadata = JsonSerializer.SerializeToElement(new
+        string eventContent;
+        JsonElement metadata;
+        string liveLine;
+        if (IsPermission(body))
         {
-            sessionId, requestId, title,
-            toolName = Text(body, "toolName"), toolUseId = Text(body, "toolUseId"),
-            questions, askedAt = Text(body, "askedAt"), expiresAt,
-            answer = new { method = "POST", url = answerUrl },
-            outcome = "question",
-        });
+            var permission = body.TryGetProperty("permission", out var p) && p.ValueKind == JsonValueKind.Object
+                ? p : default;
+            var toolName = Text(permission, "toolName") ?? Text(body, "toolName");
+            var toolUseId = Text(permission, "toolUseId") ?? Text(body, "toolUseId");
+            var summary = Text(permission, "summary");
+            var cwd = Text(permission, "cwd");
+            eventContent = SessionPermissionEvent(sessionId, title, requestId, toolName, summary, cwd, expiresAt);
+            // No answer URL: there is nothing here an Agent may post. The tool input stays out
+            // too; the summary says what the call does, and the session holds the rest.
+            metadata = JsonSerializer.SerializeToElement(new
+            {
+                sessionId, requestId, title, kind = "permission",
+                toolName, toolUseId,
+                permission = new { toolName, toolUseId, summary, cwd },
+                askedAt = Text(body, "askedAt"), expiresAt,
+                decidedBy = "person",
+                outcome = "permission",
+            });
+            liveLine = PermissionLiveLine(title, toolName, summary);
+        }
+        else
+        {
+            var questions = body.TryGetProperty("questions", out var q) && q.ValueKind == JsonValueKind.Array
+                ? q : JsonSerializer.SerializeToElement(Array.Empty<object>());
+            var answerUrl = $"http://127.0.0.1:18800/ai-session/sessions/{sessionId}/question";
+            eventContent = SessionQuestionEvent(sessionId, title, requestId, questions, expiresAt, answerUrl);
+            metadata = JsonSerializer.SerializeToElement(new
+            {
+                sessionId, requestId, title,
+                toolName = Text(body, "toolName"), toolUseId = Text(body, "toolUseId"),
+                questions, askedAt = Text(body, "askedAt"), expiresAt,
+                answer = new { method = "POST", url = answerUrl },
+                outcome = "question",
+            });
+            var shownTitle = NovaEventText.Field(title, MaxTitle);
+            liveLine = $"Delegated session is waiting on a question{(shownTitle != null ? $": {shownTitle}" : "")}";
+        }
         var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
             metadata: metadata,
             idempotencyKey: key, redeliverOnReuse: true,
@@ -285,12 +323,55 @@ public static class CallbackEndpoints
             return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
 
         if (!discussion.Confidential)
-        {
-            var shownTitle = NovaEventText.Field(title, MaxTitle);
-            await live.PostAsync("callback", $"Delegated session is waiting on a question{(shownTitle != null ? $": {shownTitle}" : "")}",
-                idempotencyKey: $"{key}:live", ct: ctx.RequestAborted);
-        }
+            await live.PostAsync("callback", liveLine, idempotencyKey: $"{key}:live", ct: ctx.RequestAborted);
         return Results.Ok(new { handled = true, sessionId, discussionId, requestId });
+    }
+
+    /// <summary>RedCompute's <c>kind</c>: absent or <c>question</c> is an ordinary question.</summary>
+    internal static bool IsPermission(JsonElement body)
+        => string.Equals(Text(body, "kind"), "permission", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The model-facing event for a delegated tool call waiting for approval. It says plainly that
+    /// the decision is the discussion's person's, that an Agent's decision is refused, and what
+    /// the call would do; it carries no answer contract. Worker-authored values go through
+    /// <see cref="NovaEventText"/> like a question's.
+    /// </summary>
+    internal static string SessionPermissionEvent(string sessionId, string? title, string requestId,
+        string? toolName, string? summary, string? cwd, string? expiresAt)
+    {
+        var shownTitle = NovaEventText.Field(title, MaxTitle);
+        var shownTool = NovaEventText.Field(toolName, MaxToolName) ?? "a tool";
+        var shownSummary = NovaEventText.Field(summary, MaxSummary);
+        var shownCwd = NovaEventText.Field(cwd, MaxDescription);
+        var shownExpiry = NovaEventText.Field(expiresAt, MaxIdentity);
+        var text = new System.Text.StringBuilder();
+        text.Append($"Delegated session {sessionId}{(shownTitle != null ? $" ({shownTitle})" : "")} is waiting for a person's approval before it runs {shownTool}");
+        text.AppendLine(shownExpiry != null
+            ? $", until {shownExpiry}. If nobody decides by then, the call is denied."
+            : ".");
+        text.AppendLine($"Tool: {shownTool}");
+        if (shownSummary != null) text.AppendLine($"What it would do: {shownSummary}");
+        if (shownCwd != null) text.AppendLine($"Working directory: {shownCwd}");
+        text.AppendLine();
+        text.AppendLine("This approval is not yours to give. It belongs to the person who owns this discussion, and only they can decide it, with the Allow or Deny buttons on the approval card in that session's chat.");
+        text.AppendLine("You cannot answer it: RedCompute refuses an Agent's decision (your execution token gets 403 approval_requires_person), so do not post one and do not retry.");
+        text.Append("Tell them plainly what is waiting and why it matters, then let them decide. The session carries on by itself once they do.");
+        return $"""
+            <nova-event source="callback:session-question" type="session-permission" sessionId="{NovaEventText.Attribute(sessionId)}" requestId="{NovaEventText.Attribute(requestId)}" expiresAt="{NovaEventText.Attribute(expiresAt ?? "none")}">
+            {text}
+            </nova-event>
+            """;
+    }
+
+    /// <summary>The LIVE line the person reads: whose approval, which session, the tool and what it would do.</summary>
+    internal static string PermissionLiveLine(string? title, string? toolName, string? summary)
+    {
+        var shownTitle = NovaEventText.Field(title, MaxTitle);
+        var shownTool = NovaEventText.Field(toolName, MaxToolName) ?? "a tool";
+        var shownSummary = NovaEventText.Field(summary, MaxLiveSummary);
+        var where = shownTitle != null ? $" in delegated session {shownTitle}" : " in a delegated session";
+        return $"Waiting for your approval{where}: {shownTool}{(shownSummary != null && shownSummary != shownTool ? $" {shownSummary}" : "")}";
     }
 
     /// <summary>
