@@ -61,12 +61,14 @@ public static class AskEndpoints
                 : null;
             var outcome = noteSender is not null
                 ? await AskAsNoteAsync(discussion, request.Content, noteSender, userId, timeout,
-                    NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId), store, pipeline, injector, ctx.RequestAborted)
+                    NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId), store, pipeline, injector, ctx.RequestAborted,
+                    DelegateEndpoints.CallerSessionId(ctx.User))
                 : await pipeline.SendAsync(
                     discussion, userId, request.Content, images: null,
                     device: new ResolvedDevice { Name = "API", Type = "api", Platform = "api" }, input: "api",
                     humanInitiated: DiscussionAccessPolicy.IsHumanInitiated(ctx.User),
-                    cause: NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
+                    cause: NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId),
+                    callerSessionId: DelegateEndpoints.CallerSessionId(ctx.User));
 
             if (noteSender is not null)
                 await SentNote.RecordAsync(ctx.User, store, injector, discussion, request.Content, outcome.MessageUid,
@@ -121,7 +123,8 @@ public static class AskEndpoints
 
     internal static async Task<SendMessageOutcome> AskAsNoteAsync(
         DiscussionRead discussion, string content, EventSender sender, string? userId, int timeoutSeconds,
-        string? cause, DiscussionStore store, MessagePipeline pipeline, EventInjector injector, CancellationToken ct)
+        string? cause, DiscussionStore store, MessagePipeline pipeline, EventInjector injector, CancellationToken ct,
+        string? callerSessionId = null)
     {
         if (DiscussionMutationPolicy.RejectSend(discussion))
             return new(false, discussion.SessionId, "closed", "Archived discussions are read-only.");
@@ -133,7 +136,7 @@ public static class AskEndpoints
             null, null, null, userId, null, ct, sender);
 
         // Started after the note is queued, so its creation drains the note.
-        if (discussion.SessionId is null) pipeline.BeginSessionCreation(discussion, cause);
+        if (discussion.SessionId is null) pipeline.BeginSessionCreation(discussion, cause, callerSessionId);
         if (result.Delivery == EventDelivery.Queued && result.MessageUid is { } uid)
         {
             if (pipeline.PendingSessionCreation(discussion.Id) is { } creation)

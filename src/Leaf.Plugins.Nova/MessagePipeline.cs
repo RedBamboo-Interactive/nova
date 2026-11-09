@@ -58,7 +58,7 @@ public sealed class MessagePipeline(
         => _pendingSessions.TryGetValue(discussionId, out var pending) ? pending : null;
 
     /// <summary>Kick off background session creation for a fresh discussion.</summary>
-    public void BeginSessionCreation(DiscussionRead discussion, string? cause)
+    public void BeginSessionCreation(DiscussionRead discussion, string? cause, string? callerSessionId = null)
     {
         if (discussion.SessionId is not null) return;
         var discId = discussion.Id;
@@ -70,7 +70,7 @@ public sealed class MessagePipeline(
                     discussion.QualityTier, discussion.Provider,
                     discussionId: discussion.Id, confidential: discussion.Confidential,
                     keepResident: KeepsSessionResident(discussion), cause: cause,
-                    unattended: StartsUnattended(discussion));
+                    unattended: StartsUnattended(discussion), callerSessionId: callerSessionId);
                 if (sessionId is null)
                 {
                     await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped);
@@ -123,7 +123,8 @@ public sealed class MessagePipeline(
         string? correlationId = null, string? parentJobId = null,
         bool confidential = false, string? developerInstructions = null,
         string? modelOverride = null, string? effortOverride = null, bool keepResident = false,
-        string? cause = null, bool unattended = false, string? maxAccessLevel = null)
+        string? cause = null, bool unattended = false, string? maxAccessLevel = null,
+        string? callerSessionId = null)
     {
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
         if (agent == null)
@@ -168,6 +169,11 @@ public sealed class MessagePipeline(
         var context = new List<ComputeContextReference>();
         if (discussionId != null) context.Add(new ComputeContextReference("discussion", discussionId));
         if (additionalContext != null) context.AddRange(additionalContext);
+        // The session the caller runs in, from its verified token (never a request field), so RedCompute
+        // starts this one at that session's level and cap and unattended, not at the policy default.
+        if (!string.IsNullOrWhiteSpace(callerSessionId)
+            && !context.Any(item => item.Kind == "session"))
+            context.Add(new ComputeContextReference("session", callerSessionId));
         var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
             entrypointRoute, context, correlationId: correlationId, parentJobId: parentJobId, ct: ct,
             cause: cause);
@@ -183,10 +189,11 @@ public sealed class MessagePipeline(
         string content, ImageAttachmentDto[]? images, ResolvedDevice device, string input,
         string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
         string? requestedMessageUid = null,
-        CancellationToken ct = default, bool humanInitiated = true, string? cause = null)
+        CancellationToken ct = default, bool humanInitiated = true, string? cause = null,
+        string? callerSessionId = null)
         => SendCoreAsync(discussion, userId, content, images, null, device, input,
             delivery, idempotencyKey, displayContent, persistUserMessage: true,
-            requestedMessageUid, ct, humanInitiated, cause);
+            requestedMessageUid, ct, humanInitiated, cause, callerSessionId);
 
     /// <summary>
     /// Starts a real discussion turn while keeping its bootstrap instruction out of
@@ -220,14 +227,15 @@ public sealed class MessagePipeline(
         InputPartDto[] parts, ResolvedDevice device, string input,
         string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
         string? requestedMessageUid = null,
-        CancellationToken ct = default, bool humanInitiated = true, string? cause = null)
+        CancellationToken ct = default, bool humanInitiated = true, string? cause = null,
+        string? callerSessionId = null)
     {
         var content = string.Join("\n", parts
             .Where(part => string.Equals(part.Type, "text", StringComparison.OrdinalIgnoreCase))
             .Select(part => part.Text ?? ""));
         return SendCoreAsync(discussion, userId, content, null, parts, device, input,
             delivery, idempotencyKey, displayContent, persistUserMessage: true,
-            requestedMessageUid, ct, humanInitiated, cause);
+            requestedMessageUid, ct, humanInitiated, cause, callerSessionId);
     }
 
     private async Task<SendMessageOutcome> SendCoreAsync(
@@ -235,7 +243,8 @@ public sealed class MessagePipeline(
         string content, ImageAttachmentDto[]? images, InputPartDto[]? inputParts,
         ResolvedDevice device, string input, string? delivery, string? idempotencyKey,
         string? displayContent, bool persistUserMessage, string? requestedMessageUid,
-        CancellationToken ct = default, bool humanInitiated = true, string? cause = null)
+        CancellationToken ct = default, bool humanInitiated = true, string? cause = null,
+        string? callerSessionId = null)
     {
         // Endpoint checks provide the immediate 409, while this authoritative
         // re-read protects every internal caller that sends by explicit record.
@@ -271,7 +280,8 @@ public sealed class MessagePipeline(
                     discussion.QualityTier, discussion.Provider, ct, discussion.Id,
                     confidential: discussion.Confidential,
                     keepResident: KeepsSessionResident(discussion),
-                    cause: cause, unattended: StartsUnattended(discussion));
+                    cause: cause, unattended: StartsUnattended(discussion),
+                    callerSessionId: callerSessionId);
             }
             catch (ComputeMaintenanceException ex)
             {

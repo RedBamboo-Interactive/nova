@@ -692,6 +692,9 @@ public sealed partial class EventDeliveryQueueTests
         public List<(string Session, string? Key)> Attempts { get; } = [];
         private readonly List<(string Path, string? Cause)> causes = [];
         public string? CauseOf(string path) { lock (causes) return causes.Single(c => c.Path == path).Cause; }
+        private readonly List<(string Path, string[] Sessions)> sessionContexts = [];
+        /// <summary>The <c>session</c> context references the (single) request to the path carried.</summary>
+        public string[] SessionContextOf(string path) { lock (causes) return sessionContexts.Single(c => c.Path == path).Sessions; }
         public string[] Paths { get { lock (causes) return causes.Select(c => c.Path).ToArray(); } }
         public string? LastMessageCause { get { lock (causes) return causes.Last(c => c.Path.EndsWith("/message")).Cause; } }
 
@@ -704,7 +707,12 @@ public sealed partial class EventDeliveryQueueTests
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
             var path = request.RequestUri!.OriginalString;
-            lock (causes) causes.Add((path, provenance?.Cause));
+            lock (causes)
+            {
+                causes.Add((path, provenance?.Cause));
+                sessionContexts.Add((path, provenance?.Context.Where(c => c.Kind == "session")
+                    .Select(c => c.Id ?? "").ToArray() ?? []));
+            }
             if (request.Method == HttpMethod.Post && path == "/ai-session/sessions")
             {
                 var number = Interlocked.Increment(ref SessionsRequested);

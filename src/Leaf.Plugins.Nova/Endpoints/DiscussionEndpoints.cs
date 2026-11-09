@@ -365,7 +365,8 @@ public static class DiscussionEndpoints
         // when MessagePipeline can also replay the persisted assistant post.
         if (createReq?.DeferSession != true)
             pipeline.BeginSessionCreation(discussion,
-                NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
+                NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId),
+                DelegateEndpoints.CallerSessionId(ctx.User));
 
         if (briefResult is null) return Results.Ok(DiscussionStore.ToInfo(discussion));
 
@@ -1827,7 +1828,8 @@ public static class DiscussionEndpoints
                 if (prior is not null)
                 {
                     pipeline.BeginSessionCreation(prior,
-                        NovaComputeProvenance.RequestCause(ctx, prior.OwnerId));
+                        NovaComputeProvenance.RequestCause(ctx, prior.OwnerId),
+                        DelegateEndpoints.CallerSessionId(ctx.User));
                     heartbeat.OnLiveRotated(prior.AgentId, idempotencyKey);
                     return Results.Ok(new
                     {
@@ -1870,7 +1872,8 @@ public static class DiscussionEndpoints
             heartbeat.OnLiveRotated(fresh.AgentId, idempotencyKey);
 
             pipeline.BeginSessionCreation(fresh,
-                NovaComputeProvenance.RequestCause(ctx, fresh.OwnerId));
+                NovaComputeProvenance.RequestCause(ctx, fresh.OwnerId),
+                DelegateEndpoints.CallerSessionId(ctx.User));
 
             return Results.Ok(new
             {
@@ -2044,12 +2047,14 @@ public static class DiscussionEndpoints
                     discussion, userId, request.Input, resolved,
                     request.InputMethod ?? "typed", request.Delivery,
                     idempotencyKey, request.DisplayContent, request.MessageUid,
-                    humanInitiated: humanInitiated, cause: cause)
+                    humanInitiated: humanInitiated, cause: cause,
+                    callerSessionId: DelegateEndpoints.CallerSessionId(ctx.User))
                 : await pipeline.SendAsync(
                     discussion, userId, request.Content, request.Images, resolved,
                     request.InputMethod ?? "typed", request.Delivery,
                     idempotencyKey, request.DisplayContent, request.MessageUid,
-                    humanInitiated: humanInitiated, cause: cause);
+                    humanInitiated: humanInitiated, cause: cause,
+                    callerSessionId: DelegateEndpoints.CallerSessionId(ctx.User));
 
             if (!outcome.Success)
             {
