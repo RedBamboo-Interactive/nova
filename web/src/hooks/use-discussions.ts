@@ -4,6 +4,7 @@ import { api, ApiError } from "../lib/api"
 import type { DelegationActivitySnapshot, DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
 import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, PermissionApprovals, PermissionDecisionPayload, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
 import { abandonPermissions, canonicalUserMessageUids, closePermission, DeferredInvalidationCoordinator, DurableTranscriptPager, isPermissionQuestion, permissionPendingQuestion, processStreamEvent, readPermissionRequest, rebuildBlocks, TranscriptAccumulator, visibleApprovals } from "@redbamboo/chat"
+import { addPermissionNotice, readPermissionNotice, type PermissionNotice } from "../lib/permission-notices"
 import { answeredQuestionState, clearedQuestionState, liveQuestionFields, mayHoldPendingApproval, permissionDecisionRequest, restoreApprovals, settleAcceptedDecision, type ApprovalLifecycle } from "../lib/permission-approvals"
 
 /** The shared approval lifecycle; Nova only projects it. */
@@ -292,6 +293,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
   // so an approval card keeps its outcome after it resolves. Live control
   // state, never transcript: a reload shows the settled tool call alone.
   const [permissionApprovals, setPermissionApprovals] = useState<Record<string, PermissionApprovals | null>>({})
+  /** Asks an unattended session denied: live notices only, never transcript, never a card. */
+  const [permissionNotices, setPermissionNotices] = useState<Record<string, PermissionNotice[]>>({})
   // processStreamEvent is pure — the question lifecycle has to be threaded back
   // in on every event, and from a ref so it is current inside the updater.
   const questionStatesRef = useRef<Record<string, QuestionState>>({})
@@ -350,6 +353,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const activePendingQuestion = activeDiscussionId ? pendingQuestions[activeDiscussionId] ?? null : null
   const activeQuestionOutcome = activeDiscussionId ? questionOutcomes[activeDiscussionId] ?? null : null
   const activePermissionApprovals = activeDiscussionId ? permissionApprovals[activeDiscussionId] ?? null : null
+  const activePermissionNotices = activeDiscussionId ? permissionNotices[activeDiscussionId] : undefined
 
   const activeIdRef = useRef(activeDiscussionId)
   activeIdRef.current = activeDiscussionId
@@ -2061,6 +2065,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
         runtimeReadGenerationRef.current[discId] = (runtimeReadGenerationRef.current[discId] ?? 0) + 1
       const known = getDiscussionList().find(d => d.id === discId)
       if (!known || isClosed(known.status) || isDiscussionArchivePending(discId) || !historyLifecycleRef.current.canRun(discId)) return
+      // A denied ask: a small live notice beside the timeline, kept out of the transcript
+      // accumulator and the turn state. The denial also reaches the transcript as that tool
+      // call's result, so a reload shows the tool call and this notice is gone.
+      if ((evt.type as string) === "permission_denied") {
+        setPermissionNotices(prev => ({ ...prev, [discId]: addPermissionNotice(prev[discId], readPermissionNotice(evt)) }))
+        return
+      }
       // Copied field by field rather than spread, so keep this in step with
       // ChatEvent: anything missed here is silently dropped, and `requestId` in
       // particular is the only handle on a parked question — without it the
@@ -2316,6 +2327,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     pendingQuestion: activePendingQuestion,
     questionOutcome: activeQuestionOutcome,
     permissionApprovals: activePermissionApprovals,
+    permissionNotices: activePermissionNotices,
     selectDiscussion,
     clearDiscussionSelection,
     setReadAcknowledgementPaused,

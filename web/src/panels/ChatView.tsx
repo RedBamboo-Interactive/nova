@@ -16,6 +16,7 @@ import { TransitioningAgentAvatar } from "../components/transitioning-agent-avat
 import { NovaStatusLine } from "../components/nova-status-line"
 import { DelegationsInfo, delegationActivityGroup } from "../components/delegation-activity"
 import { withWaitingActivity } from "../lib/waiting-activity"
+import { permissionNoticeText } from "../lib/permission-notices"
 import { WorktreeChips } from "../components/discussion/worktree-chips"
 import { ReactionPills, AddReactionButton, useReactionEmoji } from "../components/discussion/reactions"
 import { reactionMenuEntries } from "../components/discussion/reaction-actions"
@@ -202,6 +203,7 @@ export function ChatView({
     pendingQuestion,
     questionOutcome,
     permissionApprovals,
+    permissionNotices,
     selectDiscussion,
     clearDiscussionSelection,
     setReadAcknowledgementPaused,
@@ -1332,6 +1334,22 @@ export function ChatView({
   const handleStopBackgroundTask = useCallback((taskId: string) =>
     activeDiscussionId ? stopBackgroundTask(activeDiscussionId, taskId) : undefined,
   [activeDiscussionId, stopBackgroundTask])
+  // Asks an unattended session denied: small notes under the newest assistant message, not cards and
+  // not answerable. Live only; the denial also reaches the transcript as that tool call's result.
+  const renderPermissionNotices = useCallback((_block: MessageBlock, index: number) => {
+    if (!permissionNotices?.length) return null
+    if (index !== activeMessages.findLastIndex(message => message.role === "assistant")) return null
+    return (
+      <div data-testid="permission-denied-notices" className="mt-1 space-y-0.5">
+        {permissionNotices.map((notice, i) => (
+          <p key={i} className="flex items-start gap-1.5 text-xs text-text-muted">
+            <i className="ph-bold ph-prohibit mt-0.5 text-amber-400" aria-hidden />
+            <span>{permissionNoticeText(notice)}</span>
+          </p>
+        ))}
+      </div>
+    )
+  }, [permissionNotices, activeMessages])
   const renderStatusLine = useCallback(({ isStreaming, isReconnecting, messages }: { isStreaming: boolean; isReconnecting: boolean; messages: import("@redbamboo/chat").MessageBlock[] }) => (
     <NovaStatusLine isStreaming={isStreaming} isReconnecting={isReconnecting} messages={messages} />
   ), [])
@@ -1598,6 +1616,7 @@ export function ChatView({
         backgroundTasks={backgroundTasks}
         onStopBackgroundTask={handleStopBackgroundTask}
         hostActivity={hostRowActivity}
+        renderMessageExtra={renderPermissionNotices}
         isReconnecting={!upstreamConnected}
         interrupting={isInterrupting}
         resumePending={isResumePending}
