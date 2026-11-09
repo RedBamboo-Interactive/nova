@@ -327,16 +327,12 @@ public sealed partial class ExternalAgentConversationProviderTests
             var root = body.RootElement;
             // Never a requested level: RedCompute resolves it from policy, then the cap clamps it.
             Assert.False(root.TryGetProperty("accessLevel", out _));
+            // Every external conversation is unattended: Nova shows no approval buttons for it.
+            Assert.True(root.GetProperty("unattended").GetBoolean());
             if (discord)
-            {
-                Assert.True(root.GetProperty("unattended").GetBoolean());
                 Assert.Equal("auto", root.GetProperty("maxAccessLevel").GetString());
-            }
             else
-            {
-                Assert.False(root.TryGetProperty("unattended", out _));
                 Assert.False(root.TryGetProperty("maxAccessLevel", out _));
-            }
         }
         finally
         {

@@ -104,23 +104,60 @@ public sealed partial class ExternalAgentConversationProviderTests
         Assert.False(body.RootElement.TryGetProperty("unattended", out _));
     }
 
+    private const string MessagePath = "/ai-session/sessions/session-1/message";
+
+    // A passing failure: Discord content is not delivered into a session that may be attended and
+    // uncapped. Nothing is admitted, the call fails, and the bridge keeps the message and retries.
     [Theory]
     [InlineData(HttpStatusCode.InternalServerError, false)]
-    [InlineData(HttpStatusCode.NotFound, false)]
-    [InlineData(HttpStatusCode.Forbidden, false)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, false)]
+    [InlineData(HttpStatusCode.RequestTimeout, false)]
+    [InlineData(HttpStatusCode.TooManyRequests, false)]
     [InlineData(HttpStatusCode.OK, true)]
-    public async Task A_tightening_failure_still_delivers_the_turn(HttpStatusCode tightenStatus, bool throws)
+    public async Task A_transient_tightening_failure_refuses_the_discord_turn_so_it_is_retried(HttpStatusCode tightenStatus, bool throws)
     {
         var (provider, gateway, handle, agentId, logs) = TighteningHarness(LegacySession);
         gateway.TightenStatus = tightenStatus;
         gateway.TightenThrows = throws;
 
-        var admission = await provider.SendAsync(handle, TighteningInput(agentId));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.SendAsync(handle, TighteningInput(agentId, recoversLostSession: true)));
 
-        Assert.Equal("delivered", admission.Disposition);
+        Assert.Contains("will be retried", error.Message, StringComparison.Ordinal);
         Assert.Contains(gateway.Requests, request => request.Path == TightenPath);
-        Assert.Contains(gateway.Requests, request => request.Path == "/ai-session/sessions/session-1/message");
+        Assert.DoesNotContain(gateway.Requests, request => request.Path == MessagePath);
         Assert.Contains(logs, line => line.StartsWith("Warning: Could not tighten existing discord session session-1", StringComparison.Ordinal));
+    }
+
+    // A refusal that asking again cannot change: the bridge opens a fresh session (RedCompute creates
+    // it unattended and capped) and replays the message there; the loose session never sees it.
+    [Theory]
+    [InlineData(HttpStatusCode.UnprocessableEntity)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.Conflict)]
+    public async Task A_permanent_tightening_refusal_hands_a_recovering_transport_a_fresh_session(HttpStatusCode tightenStatus)
+    {
+        var (provider, gateway, handle, agentId, _) = TighteningHarness(LegacySession);
+        gateway.TightenStatus = tightenStatus;
+
+        var admission = await provider.SendAsync(handle, TighteningInput(agentId, recoversLostSession: true));
+
+        Assert.Equal(ExternalAgentConversationProvider.SessionLostDisposition, admission.Disposition);
+        Assert.DoesNotContain(gateway.Requests, request => request.Path == MessagePath);
+    }
+
+    [Fact]
+    public async Task A_permanent_tightening_refusal_fails_the_turn_for_a_transport_that_cannot_recover()
+    {
+        var (provider, gateway, handle, agentId, _) = TighteningHarness(LegacySession, "leaf-commons");
+        gateway.TightenStatus = HttpStatusCode.UnprocessableEntity;
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.SendAsync(handle, TighteningInput(agentId, "leaf-commons")));
+
+        Assert.Contains("cannot be restricted", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(gateway.Requests, request => request.Path == MessagePath);
     }
 
     [Fact]
@@ -129,25 +166,67 @@ public sealed partial class ExternalAgentConversationProviderTests
         var (provider, gateway, handle, agentId, _) = TighteningHarness(LegacySession);
         gateway.TightenStatus = HttpStatusCode.ServiceUnavailable;
 
-        await provider.SendAsync(handle, TighteningInput(agentId, requestId: "discord-message-1"));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.SendAsync(handle, TighteningInput(agentId, requestId: "discord-message-1")));
         gateway.TightenStatus = HttpStatusCode.OK;
         await provider.SendAsync(handle, TighteningInput(agentId, requestId: "discord-message-2"));
         // RedCompute still reporting the old fields (a stale read) does not make it try again.
         await provider.SendAsync(handle, TighteningInput(agentId, requestId: "discord-message-3"));
 
         Assert.Equal(2, gateway.Requests.Count(request => request.Path == TightenPath));
-        Assert.Equal(3, gateway.Requests.Count(request => request.Path == "/ai-session/sessions/session-1/message"));
+        Assert.Equal(2, gateway.Requests.Count(request => request.Path == MessagePath));
+    }
+
+    [Theory]
+    [InlineData(400, true)]
+    [InlineData(404, true)]
+    [InlineData(409, true)]
+    [InlineData(422, true)]
+    [InlineData(408, false)]
+    [InlineData(429, false)]
+    [InlineData(500, false)]
+    [InlineData(503, false)]
+    [InlineData(0, false)]
+    public void Only_a_client_error_is_a_permanent_refusal(int status, bool permanent)
+        => Assert.Equal(permanent, ExternalAgentConversationProvider.IsPermanentTighteningRefusal(status));
+
+    // An embedded app without approval UI only lacks unattended, and a parked approval is a hang,
+    // not an escalation: its turn goes in even when the tightening fails.
+    [Fact]
+    public async Task An_embedded_app_session_is_marked_unattended_with_no_cap()
+    {
+        var (provider, gateway, handle, agentId, _) = TighteningHarness(LegacySession, "storyboard");
+
+        var admission = await provider.SendAsync(handle, TighteningInput(agentId, "storyboard"));
+
+        Assert.Equal("delivered", admission.Disposition);
+        var tighten = Assert.Single(gateway.Requests, request => request.Path == TightenPath);
+        using var body = JsonDocument.Parse(tighten.Body);
+        Assert.True(body.RootElement.GetProperty("unattended").GetBoolean());
+        Assert.False(body.RootElement.TryGetProperty("maxAccessLevel", out _));
     }
 
     [Fact]
-    public async Task Other_embedding_apps_are_not_tightened()
+    public async Task An_embedded_app_turn_is_still_delivered_when_its_tightening_fails()
     {
         var (provider, gateway, handle, agentId, _) = TighteningHarness(LegacySession, "storyboard");
+        gateway.TightenStatus = HttpStatusCode.UnprocessableEntity;
+
+        var admission = await provider.SendAsync(handle, TighteningInput(agentId, "storyboard"));
+
+        Assert.Equal("delivered", admission.Disposition);
+        Assert.Contains(gateway.Requests, request => request.Path == MessagePath);
+    }
+
+    [Fact]
+    public async Task An_unattended_embedded_app_session_is_left_alone()
+    {
+        var (provider, gateway, handle, agentId, _) = TighteningHarness(
+            """{"session":{"status":"Idle","providerSessionId":"thread-1","accessLevel":"full","unattended":true}}""", "storyboard");
 
         await provider.SendAsync(handle, TighteningInput(agentId, "storyboard"));
 
         Assert.DoesNotContain(gateway.Requests, request => request.Path == TightenPath);
-        Assert.Contains(gateway.Requests, request => request.Path == "/ai-session/sessions/session-1/message");
     }
 
     [Theory]
@@ -198,7 +277,7 @@ public sealed partial class ExternalAgentConversationProviderTests
     }
 
     private static ExternalConversationInput TighteningInput(
-        Guid agentId, string transport = "discord", string requestId = "discord-message-1")
+        Guid agentId, string transport = "discord", string requestId = "discord-message-1", bool recoversLostSession = false)
     {
         var metadata = new JsonObject
         {
@@ -209,6 +288,8 @@ public sealed partial class ExternalAgentConversationProviderTests
             ["transport"] = transport,
             ["application_id"] = transport,
         };
+        if (recoversLostSession)
+            metadata[ExternalAgentConversationProvider.RecoversLostSessionMetadataKey] = true;
         return new ExternalConversationInput(
             requestId, new ExternalRequestor("user-1", "Laurent"), "hello", [], metadata);
     }
