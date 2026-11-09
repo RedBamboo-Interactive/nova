@@ -4,7 +4,7 @@ import { api, ApiError } from "../lib/api"
 import type { DelegationActivitySnapshot, DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
 import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, PermissionApprovals, PermissionDecisionPayload, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
 import { abandonPermissions, canonicalUserMessageUids, closePermission, DeferredInvalidationCoordinator, DurableTranscriptPager, isPermissionQuestion, permissionPendingQuestion, processStreamEvent, readPermissionRequest, rebuildBlocks, TranscriptAccumulator, visibleApprovals } from "@redbamboo/chat"
-import { answeredQuestionState, clearedQuestionState, liveQuestionFields, permissionDecisionRequest, restoreApprovals, settleAcceptedDecision, type ApprovalLifecycle } from "../lib/permission-approvals"
+import { answeredQuestionState, clearedQuestionState, liveQuestionFields, mayHoldPendingApproval, permissionDecisionRequest, restoreApprovals, settleAcceptedDecision, type ApprovalLifecycle } from "../lib/permission-approvals"
 
 /** The shared approval lifecycle; Nova only projects it. */
 const APPROVALS: ApprovalLifecycle = {
@@ -516,9 +516,18 @@ export function useDiscussions(eventResolver?: EventResolver) {
     for (const d of getDiscussionList()) {
       const read = reads.get(d.id)
       const session = list?.find(s => s.id === read?.sessionId)
-      if (read && session) hydrateRuntime(d.id, session, read)
+      if (read && session) {
+        hydrateRuntime(d.id, session, read)
+        // The sessions list carries no pendingQuestions. Visibility return and
+        // reconnect run this, so an Active session of the open discussion (or
+        // any with an approval still shown open) is re-read for its approvals.
+        if (read.sessionId && !isClosed(d.status)
+          && (d.id === activeIdRef.current || mayHoldPendingApproval(undefined, questionStatesRef.current[d.id]))
+          && mayHoldPendingApproval(session.status, questionStatesRef.current[d.id]))
+          void readPendingApprovals(d.id, read.sessionId)
+      }
     }
-  }, [captureRuntimeRead, hydrateRuntime])
+  }, [captureRuntimeRead, hydrateRuntime, readPendingApprovals])
 
   // The two moments this client has reason to distrust its own event history:
   // coming back to a tab that may have been suspended, and a socket that just
@@ -909,8 +918,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             // active session; an open one here must also be checked against it.
             const pageSessionId = data.session?.id
             if (commit === "committed" && pageSessionId && !isClosed(data.discussion.status)
-              && (data.session?.status === "Active" || Object.values(questionStatesRef.current[id]?.permissions ?? {})
-                .some(approval => approval.outcome === null)))
+              && mayHoldPendingApproval(data.session?.status, questionStatesRef.current[id]))
               void readPendingApprovals(id, pageSessionId)
             return
           }
@@ -1116,6 +1124,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
             return
           }
           const commit = commitHistoryPage(id, requestId, data, "after", expectedCursor, runtimeRead)
+          // A forward catch-up carries no control state either: after a phone
+          // app switch the approval that parked meanwhile only shows in the
+          // session read, exactly as after a full reload.
+          const pageSessionId = data.session?.id
+          if (commit === "committed" && pageSessionId && !isClosed(data.discussion.status)
+            && mayHoldPendingApproval(data.session?.status, questionStatesRef.current[id]))
+            void readPendingApprovals(id, pageSessionId)
           if (commit !== "committed") {
             loadedRef.current.delete(id)
             if (commit === "invalid") {
@@ -1139,7 +1154,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         }
       }
     }, true)
-  }, [commitHistoryPage, loadMessages, resetHistoryPaging, transcriptAccumulator])
+  }, [commitHistoryPage, loadMessages, readPendingApprovals, resetHistoryPaging, transcriptAccumulator])
 
   const loadEarlierMessages = useCallback(async (id: string) => {
     if (!historyLifecycleRef.current.canRun(id)) return

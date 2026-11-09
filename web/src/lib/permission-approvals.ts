@@ -159,6 +159,18 @@ function readSnapshotApproval(lifecycle: ApprovalLifecycle, entry: unknown): { r
 }
 
 /**
+ * Whether a catch-up (reload, reconnect, reselect, visibility return) must
+ * re-read the session's `pendingQuestions`. An approval waits only on an Active
+ * session (RedCompute keeps status Active and sets workState awaiting_answer),
+ * and an approval this client still shows as open must be checked against the
+ * session too, so one resolved while it wasn't listening settles.
+ */
+export function mayHoldPendingApproval(sessionStatus: string | null | undefined, state: QuestionState | undefined): boolean {
+  if (sessionStatus === "Active") return true
+  return Object.values(state?.permissions ?? {}).some(approval => approval.outcome === null)
+}
+
+/**
  * Bring the approvals a session is parked on back after a reload or a
  * reconnect, from the session read's `pendingQuestions` (RedCompute overlays
  * live control state there; the transcript never holds it). Only entries of
