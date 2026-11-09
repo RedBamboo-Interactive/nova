@@ -1832,9 +1832,10 @@ public static class DiscussionEndpoints
                     $"live-rotation:{idempotencyKey}", ctx.RequestAborted);
                 if (prior is not null)
                 {
+                    // The person's new LIVE: never a child of whatever session rotated it (an automation's would
+                    // leave it unattended and capped for good). Its level comes from the policy.
                     pipeline.BeginSessionCreation(prior,
-                        NovaComputeProvenance.RequestCause(ctx, prior.OwnerId),
-                        DelegateEndpoints.CallerSessionId(ctx.User));
+                        NovaComputeProvenance.RequestCause(ctx, prior.OwnerId));
                     heartbeat.OnLiveRotated(prior.AgentId, idempotencyKey);
                     return Results.Ok(new
                     {
@@ -1876,9 +1877,10 @@ public static class DiscussionEndpoints
             // handoff, session reset (§5 of the heartbeat design).
             heartbeat.OnLiveRotated(fresh.AgentId, idempotencyKey);
 
+            // The person's new LIVE: never a child of whatever session rotated it (an automation's would
+            // leave it unattended and capped for good). Its level comes from the policy.
             pipeline.BeginSessionCreation(fresh,
-                NovaComputeProvenance.RequestCause(ctx, fresh.OwnerId),
-                DelegateEndpoints.CallerSessionId(ctx.User));
+                NovaComputeProvenance.RequestCause(ctx, fresh.OwnerId));
 
             return Results.Ok(new
             {

@@ -500,10 +500,6 @@ public static class DelegateEndpoints
     }
 
     /// <summary>
-    /// Null when the branch fields are acceptable. A branch needs a new repository session: a
-    /// continuation keeps its original folder, and a physical path already names its folder.
-    /// </summary>
-    /// <summary>
     /// Whether the worker starts unattended (its permission asks are denied, never parked), decided
     /// from the caller's verified token only. RedCompute already inherits the level, the cap and
     /// <c>unattended</c> from a parent session named in the token, so this covers the callers that
@@ -556,6 +552,10 @@ public static class DelegateEndpoints
         }
     }
 
+    /// <summary>
+    /// Null when the branch fields are acceptable. A branch needs a new repository session: a
+    /// continuation keeps its original folder, and a physical path already names its folder.
+    /// </summary>
     internal static object? BranchError(DelegateRequest request, bool isContinuation)
     {
         var hasBranch = !string.IsNullOrWhiteSpace(request.Branch);

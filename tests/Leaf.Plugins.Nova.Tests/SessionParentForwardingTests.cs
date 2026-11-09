@@ -59,7 +59,7 @@ public sealed partial class EventDeliveryQueueTests
     [Theory]
     [InlineData("Endpoints/AskEndpoints.cs", "AskAsNoteAsync(discussion")]
     [InlineData("Endpoints/AskEndpoints.cs", "pipeline.SendAsync(")]
-    [InlineData("Endpoints/DiscussionEndpoints.cs", "pipeline.BeginSessionCreation(")]
+    [InlineData("Endpoints/DiscussionEndpoints.cs", "pipeline.BeginSessionCreation(discussion")]
     [InlineData("Endpoints/DiscussionEndpoints.cs", "pipeline.SendInputAsync(")]
     [InlineData("Endpoints/DiscussionEndpoints.cs", "pipeline.SendAsync(")]
     public void Every_route_that_creates_a_session_forwards_the_verified_callers_session(string file, string call)
@@ -74,6 +74,20 @@ public sealed partial class EventDeliveryQueueTests
             Assert.Contains("DelegateEndpoints.CallerSessionId(ctx.User)", statement, StringComparison.Ordinal);
         }
         Assert.True(calls >= 1, $"{file} no longer calls {call}");
+    }
+
+    [Fact]
+    public void A_rotated_LIVE_never_inherits_the_session_that_rotated_it()
+    {
+        // An automation rotating LIVE would otherwise leave the person's main discussion unattended
+        // and capped for good: its level comes from the policy.
+        var source = File.ReadAllText(FindSource("Endpoints/DiscussionEndpoints.cs"));
+        foreach (var call in new[] { "pipeline.BeginSessionCreation(prior", "pipeline.BeginSessionCreation(fresh" })
+        {
+            var at = source.IndexOf(call, StringComparison.Ordinal);
+            Assert.True(at >= 0, call);
+            Assert.DoesNotContain("CallerSessionId", source[at..source.IndexOf(';', at)], StringComparison.Ordinal);
+        }
     }
 
     private static string FindSource(string relative)
