@@ -282,6 +282,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
   // Live background work per discussion (session.backgroundTasks). It never
   // makes a discussion busy; it only feeds the background status line.
   const [backgroundTasksByDiscussion, setBackgroundTasksByDiscussion] = useState<Record<string, BackgroundTaskInfo[]>>({})
+  /** Discussions whose session is parked on a question or an approval (workState awaiting_answer), for the list. */
+  const [awaitingAnswerByDiscussion, setAwaitingAnswerByDiscussion] = useState<Record<string, boolean>>({})
   const [pendingQuestions, setPendingQuestions] = useState<Record<string, PendingQuestion | null>>({})
   // How each discussion's last question ended, so a resolved card can say
   // "timed out" rather than the flat "Answered" it used to claim regardless.
@@ -379,6 +381,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     setPendingQuestions((prev) => ({ ...prev, [discussionId]: state.pending }))
     setQuestionOutcomes((prev) => ({ ...prev, [discussionId]: state.outcome }))
     setPermissionApprovals((prev) => ({ ...prev, [discussionId]: state.permissions ?? null }))
+    // The live state is fresher than the last session read: the list badge follows it.
+    setAwaitingAnswerByDiscussion((prev) => !!prev[discussionId] === !!state.pending ? prev : { ...prev, [discussionId]: !!state.pending })
   }, [])
 
   /**
@@ -437,12 +441,16 @@ export function useDiscussions(eventResolver?: EventResolver) {
       && (runtimeReadGenerationRef.current[id] ?? 0) === read.generation
       && connectionGenerationRef.current === read.connection
   }, [])
-  const hydrateRuntime = useCallback((id: string, session: { id: string; status?: string; stopReason?: string | null; supportsSteering?: boolean; supportsRollback?: boolean; backgroundTasks?: BackgroundTaskInfo[] } | null | undefined, read: ReturnType<typeof captureRuntimeRead>) => {
+  const hydrateRuntime = useCallback((id: string, session: { id: string; status?: string; workState?: string | null; stopReason?: string | null; supportsSteering?: boolean; supportsRollback?: boolean; backgroundTasks?: BackgroundTaskInfo[] } | null | undefined, read: ReturnType<typeof captureRuntimeRead>) => {
     if (!session?.status || session.id !== read.sessionId || !runtimeReadIsCurrent(id, read)) return
     if (typeof session.supportsSteering === "boolean")
       setSteeringSupport(previous => ({ ...previous, [id]: session.supportsSteering! }))
     if (typeof session.supportsRollback === "boolean")
       setRollbackSupport(previous => ({ ...previous, [id]: session.supportsRollback! }))
+    if (typeof session.workState === "string") {
+      const awaiting = session.workState === "awaiting_answer"
+      setAwaitingAnswerByDiscussion(previous => previous[id] === awaiting || (!awaiting && !previous[id]) ? previous : { ...previous, [id]: awaiting })
+    }
     if (Array.isArray(session.backgroundTasks))
       setBackgroundTasksByDiscussion(previous => ({ ...previous, [id]: session.backgroundTasks! }))
     const status = session.status
@@ -509,7 +517,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
    */
   const reconcileStreaming = useCallback(async () => {
     const reads = new Map(getDiscussionList().map(d => [d.id, captureRuntimeRead(d.id)]))
-    let list: { id: string; status: string; stopReason?: string; supportsSteering?: boolean; supportsRollback?: boolean; backgroundTasks?: BackgroundTaskInfo[] }[]
+    let list: { id: string; status: string; workState?: string; stopReason?: string; supportsSteering?: boolean; supportsRollback?: boolean; backgroundTasks?: BackgroundTaskInfo[] }[]
     try {
       list = await api.get<{ id: string; status: string; stopReason?: string }[]>("/ai-session/sessions?limit=200")
     } catch { return }
@@ -2300,6 +2308,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     rollbackDiscussion,
     backgroundTasks,
     backgroundTasksByDiscussion,
+    awaitingAnswerByDiscussion,
     stopBackgroundTask,
     isInterrupting,
     isResumePending,

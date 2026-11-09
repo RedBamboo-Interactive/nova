@@ -15,6 +15,7 @@ import { AgentPicker } from "../components/agent-picker"
 import { TransitioningAgentAvatar } from "../components/transitioning-agent-avatar"
 import { NovaStatusLine } from "../components/nova-status-line"
 import { DelegationsInfo, delegationActivityGroup } from "../components/delegation-activity"
+import { withWaitingActivity } from "../lib/waiting-activity"
 import { WorktreeChips } from "../components/discussion/worktree-chips"
 import { ReactionPills, AddReactionButton, useReactionEmoji } from "../components/discussion/reactions"
 import { reactionMenuEntries } from "../components/discussion/reaction-actions"
@@ -193,6 +194,7 @@ export function ChatView({
     rollbackDiscussion,
     backgroundTasks,
     backgroundTasksByDiscussion,
+    awaitingAnswerByDiscussion,
     stopBackgroundTask,
     isInterrupting,
     isResumePending,
@@ -1325,6 +1327,7 @@ export function ChatView({
   // Delegations are host work in the chat's one activity row, after the
   // session, its agents and its background tasks.
   const delegationRowActivity = useMemo(() => delegationActivityGroup(activeDelegations), [activeDelegations])
+  const hostRowActivity = useMemo(() => withWaitingActivity(delegationRowActivity, pendingQuestion), [delegationRowActivity, pendingQuestion])
   const handleStopBackgroundTask = useCallback((taskId: string) =>
     activeDiscussionId ? stopBackgroundTask(activeDiscussionId, taskId) : undefined,
   [activeDiscussionId, stopBackgroundTask])
@@ -1593,7 +1596,7 @@ export function ChatView({
         rollback={conversationRollback}
         backgroundTasks={backgroundTasks}
         onStopBackgroundTask={handleStopBackgroundTask}
-        hostActivity={delegationRowActivity}
+        hostActivity={hostRowActivity}
         isReconnecting={!upstreamConnected}
         interrupting={isInterrupting}
         resumePending={isResumePending}
@@ -1760,6 +1763,7 @@ export function ChatView({
                 onRetryLoad={handleRetryDiscussionList}
                 delegationActivity={delegationActivity}
                 backgroundTasks={backgroundTasksByDiscussion}
+                awaitingAnswer={awaitingAnswerByDiscussion}
                 activeDiscussionId={synchronizedDiscussionId ?? activeDiscussionId}
                 onSelect={handleSelectDiscussion}
                 onArchive={handleCloseDiscussion}

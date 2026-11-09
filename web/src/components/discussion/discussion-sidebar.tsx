@@ -42,7 +42,13 @@ function hasBackgroundWork(discussion: DiscussionInfo, activity: DiscussionDeleg
  * the session working, then its agents, then other background tasks, then
  * its delegations, then its idle or stopped state.
  */
-function DiscussionStatusIcon({ discussion, activity, backgroundTasks }: { discussion: DiscussionInfo; activity?: DiscussionDelegationActivity; backgroundTasks?: readonly BackgroundTaskInfo[] }) {
+function DiscussionStatusIcon({ discussion, activity, backgroundTasks, awaitingAnswer }: { discussion: DiscussionInfo; activity?: DiscussionDelegationActivity; backgroundTasks?: readonly BackgroundTaskInfo[]; awaitingAnswer?: boolean }) {
+  // Parked on a question or an approval: waiting on the person, whatever else runs.
+  if (awaitingAnswer && discussion.status !== "archived" && discussion.status !== "archiving") return (
+    <span data-slot="discussion-activity" data-activity-source="awaiting-answer" role="img" aria-label="Waiting for your answer" title="Waiting for your answer" className="inline-flex shrink-0">
+      <MorphSpinner color="var(--color-amber-300, #fcd34d)" paused />
+    </span>
+  )
   const indicator = discussionActivityIndicator(discussion.status, activity, backgroundTasks)
   if (indicator.source === "session" || indicator.source === "none") return (
     <MorphSpinner color={statusColor[discussion.status] || "var(--color-text-disabled)"} paused={discussion.status !== "thinking"} />
@@ -69,6 +75,7 @@ interface Props {
   delegationActivity: DelegationActivitySnapshot
   /** Live background tasks (subagents, shells) per discussion id. */
   backgroundTasks: Record<string, BackgroundTaskInfo[]>
+  awaitingAnswer?: Record<string, boolean>
   activeDiscussionId: string | null
   onSelect: (id: string) => void
   onArchive: (id: string) => void
@@ -90,7 +97,7 @@ interface Props {
   onLoadMoreArchived?: () => void
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars = true, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars = true, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -140,11 +147,11 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                     onError={(e) => { e.currentTarget.style.display = "none" }}
                   />
                   <div className="absolute -bottom-1 right-0 origin-bottom-right scale-75">
-                    <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} />
+                    <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} awaitingAnswer={awaitingAnswer[discussion.id]} />
                   </div>
                 </>
               ) : (
-                <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} />
+                <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} awaitingAnswer={awaitingAnswer[discussion.id]} />
               )}
             </div>
           </LiveQuotaBorder>
@@ -171,7 +178,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
       </DiscussionRowTarget>
     )
-  }, [sidebarSelectionId, activeDiscussionId, onSelect, onRotate, onRowAction, onFloat, getAgent, showAvatars, delegationActivity, backgroundTasks])
+  }, [sidebarSelectionId, activeDiscussionId, onSelect, onRotate, onRowAction, onFloat, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer])
 
   const renderChatItem = useCallback((discussion: DiscussionInfo) => {
     const alive = discussion.status !== "archived" && discussion.status !== "stopped"
@@ -222,11 +229,11 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                   onError={(e) => { e.currentTarget.style.display = "none" }}
                 />
                 <div className="absolute -bottom-1 right-0 origin-bottom-right scale-75">
-                  <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} />
+                  <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} awaitingAnswer={awaitingAnswer[discussion.id]} />
                 </div>
               </>
             ) : (
-              <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} />
+              <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} awaitingAnswer={awaitingAnswer[discussion.id]} />
             )}
           </div>
         }
@@ -258,7 +265,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
       </DiscussionRowTarget>
     )
-  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, titleOf])
+  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer, titleOf])
 
   const renderArchivedItem = useCallback((discussion: DiscussionInfo) => {
     const item = discussion as ArchiveDiscussionItem
