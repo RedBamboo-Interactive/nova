@@ -52,7 +52,7 @@ import { applyPendingVisibleContext } from "../lib/pending-visible-context-store
 import { isDiscussionSelectionCurrent, resolveRequestedDiscussionId } from "../lib/discussion-view-selection"
 import { NOVA_DRAFT_STORAGE_KEY, opensChat } from "../lib/new-discussion-draft"
 import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToContext, type MonitorVisualSource } from "../lib/visual-capture"
-import { delegationSessionPath } from "../lib/delegation-session-link"
+import { delegationEventPath } from "../lib/delegation-session-link"
 import { AGENT_NOTE_KEY } from "../lib/agent-note"
 import { isNoteRowPart, type NoteOriginDiscussion } from "../lib/agent-note-row"
 import { AgentNoteRow } from "../components/discussion/agent-note-row"
@@ -765,8 +765,9 @@ export function ChatView({
       if (typeof discussionId !== "string" || !discussionId) return undefined
       return () => handleSelectDiscussion(discussionId)
     }
-    if (event.key === "delegation") {
-      const path = delegationSessionPath(event.data)
+    // The marker and the delegated-session notices (status, approval waiting) both open the worker.
+    if (event.key === "delegation" || event.key === "delegate") {
+      const path = delegationEventPath(event.key, event.data)
       return path ? () => navigate(path) : undefined
     }
     return undefined
