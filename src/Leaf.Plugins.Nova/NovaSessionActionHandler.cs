@@ -86,6 +86,8 @@ public sealed class NovaSessionActionHandler(
             ["env"] = scratch.Environment,
             ["addDirs"] = new[] { scratch.Path },
             ["confidential"] = context.Confidential,
+            // An automation run: nobody is there to approve a tool call, as for the kernel's ai-session.
+            ["unattended"] = true,
         };
 
         var provenanceContext = new List<ComputeContextReference>

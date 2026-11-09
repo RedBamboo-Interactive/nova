@@ -69,7 +69,8 @@ public sealed class MessagePipeline(
                 var sessionId = await TryCreateSessionAsync(discussion.AgentId, discussion.OwnerId,
                     discussion.QualityTier, discussion.Provider,
                     discussionId: discussion.Id, confidential: discussion.Confidential,
-                    keepResident: KeepsSessionResident(discussion), cause: cause);
+                    keepResident: KeepsSessionResident(discussion), cause: cause,
+                    unattended: StartsUnattended(discussion));
                 if (sessionId is null)
                 {
                     await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped);
@@ -107,6 +108,14 @@ public sealed class MessagePipeline(
     internal static bool KeepsSessionResident(DiscussionRead discussion)
         => discussion.Type is "live" or HeartbeatService.DiscussionType;
 
+    /// <summary>
+    /// A heartbeat discussion is driven by its automation and has no composer: nobody is there to
+    /// approve a tool call, so its session starts unattended (RedCompute denies permission asks at
+    /// once instead of parking them). Every other discussion has a person and passes no level.
+    /// </summary>
+    internal static bool StartsUnattended(DiscussionRead discussion)
+        => discussion.Type == HeartbeatService.DiscussionType;
+
     public async Task<string?> TryCreateSessionAsync(string? agentId, string? ownerId,
         string? qualityTierOverride = null, string? providerOverride = null, CancellationToken ct = default,
         string? discussionId = null, string entrypointRoute = "/api/apps/nova/discussions/{id}/messages",
@@ -114,7 +123,7 @@ public sealed class MessagePipeline(
         string? correlationId = null, string? parentJobId = null,
         bool confidential = false, string? developerInstructions = null,
         string? modelOverride = null, string? effortOverride = null, bool keepResident = false,
-        string? cause = null)
+        string? cause = null, bool unattended = false, string? maxAccessLevel = null)
     {
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
         if (agent == null)
@@ -148,6 +157,12 @@ public sealed class MessagePipeline(
             body["keepResident"] = true;
         if (!string.IsNullOrWhiteSpace(developerInstructions))
             body["developerInstructions"] = developerInstructions;
+        // No accessLevel: RedCompute resolves it from RedLeaf's policy for this Agent. Callers only
+        // say when nobody watches the session and, for exposed surfaces, the highest level it may reach.
+        if (unattended)
+            body["unattended"] = true;
+        if (!string.IsNullOrWhiteSpace(maxAccessLevel))
+            body["maxAccessLevel"] = maxAccessLevel;
 
         var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ct);
         var context = new List<ComputeContextReference>();
@@ -256,7 +271,7 @@ public sealed class MessagePipeline(
                     discussion.QualityTier, discussion.Provider, ct, discussion.Id,
                     confidential: discussion.Confidential,
                     keepResident: KeepsSessionResident(discussion),
-                    cause: cause);
+                    cause: cause, unattended: StartsUnattended(discussion));
             }
             catch (ComputeMaintenanceException ex)
             {

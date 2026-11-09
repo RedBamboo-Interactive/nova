@@ -85,6 +85,23 @@ public sealed class ExternalAgentConversationProvider(
         {{PublicSelfContextInstructions}}
         """;
 
+    /// <summary>The highest access level a session behind a Discord conversation may reach.</summary>
+    internal const string DiscordMaxAccessLevel = "auto";
+
+    /// <summary>
+    /// Discord conversations (private Discord and Public Nova's Leaf Community) are read and
+    /// steered by people who cannot approve anything: no approval card reaches them, and content
+    /// they post may try to talk the Agent into acting. Their sessions start unattended, so a
+    /// permission ask is denied at once, and capped at Auto, so nobody can raise them to Full.
+    /// Other embedding apps keep the defaults (RedCompute resolves the level from policy).
+    /// </summary>
+    internal static (bool Unattended, string? MaxAccessLevel) SessionAccess(ExternalConversationOpenRequest request)
+        => IsDiscordTransport(request.Scope.Transport) ? (true, DiscordMaxAccessLevel) : (false, null);
+
+    private static bool IsDiscordTransport(string? transport)
+        => string.Equals(transport, "discord", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(transport, "leaf-commons", StringComparison.OrdinalIgnoreCase);
+
     internal static string DeveloperInstructions(ExternalConversationOpenRequest request, string agentName)
         => string.Equals(request.Scope.Transport, "discord", StringComparison.OrdinalIgnoreCase)
             ? DiscordDeveloperInstructions(agentName)
@@ -117,6 +134,7 @@ public sealed class ExternalAgentConversationProvider(
         if (handles.TryGetValue(key, out var existing)) return existing;
         var agent = await ResolveAgentAsync(request.AgentId, ct);
         var context = Context(request);
+        var access = SessionAccess(request);
         var sessionId = await pipeline.TryCreateSessionAsync(
             agent.Id, request.OwnerUserId,
             qualityTierOverride: request.SessionCompute?.QualityTier,
@@ -128,7 +146,9 @@ public sealed class ExternalAgentConversationProvider(
             developerInstructions: DeveloperInstructions(request, agent.Name),
             modelOverride: request.SessionCompute?.Model,
             effortOverride: request.SessionCompute?.Effort,
-            cause: request.Cause)
+            cause: request.Cause,
+            unattended: access.Unattended,
+            maxAccessLevel: access.MaxAccessLevel)
             ?? throw new InvalidOperationException("RedCompute refused to create the external Agent session");
         var handle = new ExternalConversationHandle(
             ProviderId, request.BindingId, request.Generation, key, sessionId);

@@ -291,6 +291,105 @@ public sealed partial class ExternalAgentConversationProviderTests
         }
     }
 
+    [Theory]
+    [InlineData("discord", "guild-channel", true)]
+    [InlineData("leaf-commons", "guild-channel", true)]
+    [InlineData("embedded", "campaign", false)]
+    public async Task Discord_sessions_start_unattended_and_capped_at_auto(string transport, string kind, bool discord)
+    {
+        var scratchPath = Path.Combine(
+            Path.GetTempPath(), $"nova-discord-access-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(scratchPath);
+        try
+        {
+            var agentId = Guid.NewGuid();
+            var entities = new FakeEntityStore(
+                Entity(agentId, "agent", "nova", "Nova", new JsonObject()),
+                Entity(Guid.NewGuid(), "plugin", NovaAppPlugin.PluginId, "Nova"));
+            using var agents = new AgentDirectory(entities, new NoOpPluginEvents());
+            var gateway = new RecordingComputeGateway();
+            var redCompute = new RedComputeClient(gateway);
+            var pipeline = new MessagePipeline(
+                null!, null!, entities, null!, redCompute, agents,
+                new AgentWorkspaces(agents, new NoWorkspacePathResolver()),
+                new FixedScratchSpace(scratchPath), null!, null!,
+                NullLogger<MessagePipeline>.Instance);
+            var provider = new ExternalAgentConversationProvider(
+                pipeline, redCompute, agents, entities, null!,
+                NullLogger<ExternalAgentConversationProvider>.Instance);
+
+            await provider.OpenAsync(new ExternalConversationOpenRequest(
+                "binding-1", 1, agentId.ToString(), "owner-1", "audience-1",
+                new ExternalConversationScope(transport, discord ? "application-1" : "storyboard", "channel-1", kind),
+                "open-1"));
+
+            using var body = JsonDocument.Parse(gateway.SessionCreateBody!);
+            var root = body.RootElement;
+            // Never a requested level: RedCompute resolves it from policy, then the cap clamps it.
+            Assert.False(root.TryGetProperty("accessLevel", out _));
+            if (discord)
+            {
+                Assert.True(root.GetProperty("unattended").GetBoolean());
+                Assert.Equal("auto", root.GetProperty("maxAccessLevel").GetString());
+            }
+            else
+            {
+                Assert.False(root.TryGetProperty("unattended", out _));
+                Assert.False(root.TryGetProperty("maxAccessLevel", out _));
+            }
+        }
+        finally
+        {
+            Directory.Delete(scratchPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Ordinary_discussion_sessions_pass_no_access_level_and_are_attended()
+    {
+        var scratchPath = Path.Combine(
+            Path.GetTempPath(), $"nova-discussion-access-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(scratchPath);
+        try
+        {
+            var agentId = Guid.NewGuid();
+            var entities = new FakeEntityStore(
+                Entity(agentId, "agent", "nova", "Nova", new JsonObject()),
+                Entity(Guid.NewGuid(), "plugin", NovaAppPlugin.PluginId, "Nova"));
+            using var agents = new AgentDirectory(entities, new NoOpPluginEvents());
+            var gateway = new RecordingComputeGateway();
+            var pipeline = new MessagePipeline(
+                null!, null!, entities, null!, new RedComputeClient(gateway), agents,
+                new AgentWorkspaces(agents, new NoWorkspacePathResolver()),
+                new FixedScratchSpace(scratchPath), null!, null!,
+                NullLogger<MessagePipeline>.Instance);
+
+            await pipeline.TryCreateSessionAsync(agentId.ToString(), "owner-1", discussionId: "chat-1");
+
+            using var body = JsonDocument.Parse(gateway.SessionCreateBody!);
+            Assert.False(body.RootElement.TryGetProperty("accessLevel", out _));
+            Assert.False(body.RootElement.TryGetProperty("maxAccessLevel", out _));
+            Assert.False(body.RootElement.TryGetProperty("unattended", out _));
+        }
+        finally
+        {
+            Directory.Delete(scratchPath, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(HeartbeatService.DiscussionType, true)]
+    [InlineData("live", false)]
+    [InlineData("chat", false)]
+    public void Only_heartbeat_discussions_start_their_session_unattended(string type, bool expected)
+    {
+        var discussion = new DiscussionRead(
+            "discussion-1", null, null, "idle", DateTime.UtcNow, DateTime.UtcNow, 0, null,
+            "owner-1", Guid.NewGuid(), "agent-1", Type: type);
+
+        Assert.Equal(expected, MessagePipeline.StartsUnattended(discussion));
+    }
+
     [Fact]
     public async Task Presence_session_creation_asks_RedCompute_to_keep_the_process_resident()
     {

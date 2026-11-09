@@ -317,6 +317,74 @@ public sealed class HeartbeatLifecycleTests
     }
 
     [Fact]
+    public async Task Heartbeat_tick_session_starts_unattended_with_no_level_of_its_own()
+    {
+        var gateway = new SessionCreateGateway();
+        var scratch = Path.Combine(Path.GetTempPath(), $"nova-heartbeat-access-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(scratch);
+        try
+        {
+            var fixture = new Fixture(live: true, computeGateway: gateway, scratchPath: scratch);
+            var discussion = await fixture.DiscussionStore.CreateAsync("Nova Heartbeat",
+                fixture.Agent.Id.ToString(), "owner-1", HeartbeatService.DiscussionType, "deep");
+
+            var (sessionId, isNew) = await fixture.Heartbeat.EnsureSessionAsync(discussion, HeartbeatConfig.Default);
+
+            Assert.Equal("session-1", sessionId);
+            Assert.True(isNew);
+            using var body = JsonDocument.Parse(Assert.Single(gateway.CreateBodies));
+            // Nobody can approve a tool call in a heartbeat: RedCompute denies asks at once.
+            Assert.True(body.RootElement.GetProperty("unattended").GetBoolean());
+            // The level itself comes from RedLeaf's policy for this Agent, and there is no cap.
+            Assert.False(body.RootElement.TryGetProperty("accessLevel", out _));
+            Assert.False(body.RootElement.TryGetProperty("maxAccessLevel", out _));
+        }
+        finally
+        {
+            Directory.Delete(scratch, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Nova_session_automation_node_runs_unattended()
+    {
+        var gateway = new SessionCreateGateway();
+        var scratch = Path.Combine(Path.GetTempPath(), $"nova-session-node-access-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(scratch);
+        try
+        {
+            var fixture = new Fixture(live: false, computeGateway: gateway);
+            var directory = new AgentDirectory(fixture.Entities, new InMemoryPluginEvents());
+            var handler = new NovaSessionActionHandler(directory,
+                new AgentWorkspaces(directory, new NoWorkspacePathResolver()),
+                fixture.DiscussionStore, null!, new RedComputeClient(gateway), fixture.Entities,
+                new FixedScratchSpace(scratch));
+            var automation = Entity("automation", "nightly-review", "Nightly review", new JsonObject
+            {
+                ["agent"] = fixture.Agent.Id.ToString(),
+                ["prompt"] = "Review the day.",
+            });
+
+            var result = await handler.ExecuteAsync(new AutomationActionContext
+            {
+                Automation = automation,
+                Beneficiary = new ComputeBeneficiary("system", Reason: "test"),
+                AttemptJobId = Guid.NewGuid(),
+                CorrelationId = "test",
+            }, CancellationToken.None);
+
+            Assert.Equal("done", result!["summary"]!.GetValue<string>());
+            using var body = JsonDocument.Parse(Assert.Single(gateway.ExecuteBodies));
+            Assert.True(body.RootElement.GetProperty("unattended").GetBoolean());
+            Assert.False(body.RootElement.TryGetProperty("accessLevel", out _));
+        }
+        finally
+        {
+            Directory.Delete(scratch, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Disabled_live_tick_skips_before_it_can_self_heal_a_heartbeat_discussion()
     {
         var fixture = new Fixture(live: false, heartbeat: new JsonObject());
@@ -490,7 +558,7 @@ public sealed class HeartbeatLifecycleTests
     private sealed class Fixture
     {
         public Fixture(bool live, JsonObject? heartbeat = null, IComputeGateway? computeGateway = null,
-            bool seedLiveRotation = false)
+            bool seedLiveRotation = false, string? scratchPath = null)
         {
             var deep = Entity("quality-tier", "deep", "Deep", new JsonObject());
             var standard = Entity("quality-tier", "standard", "Standard", new JsonObject());
@@ -505,8 +573,13 @@ public sealed class HeartbeatLifecycleTests
             var compute = new RedComputeClient(computeGateway ?? new UnusedComputeGateway());
             Lifecycle = new DiscussionLifecycle(DiscussionStore, compute);
             var directory = new AgentDirectory(Entities, new InMemoryPluginEvents());
+            // A real pipeline only where a test creates a session; elsewhere nothing may reach it.
+            var pipeline = scratchPath is null ? null! : new MessagePipeline(
+                DiscussionStore, Discussions, Entities, null!, compute, directory,
+                new AgentWorkspaces(directory, new NoWorkspacePathResolver()),
+                new FixedScratchSpace(scratchPath), null!, null!, NullLogger<MessagePipeline>.Instance);
             Heartbeat = new HeartbeatService(Entities, Automations, Discussions, DiscussionStore,
-                Lifecycle, null!, compute, null!, directory, null!, NullLogger<HeartbeatService>.Instance,
+                Lifecycle, pipeline, compute, null!, directory, null!, NullLogger<HeartbeatService>.Instance,
                 seedLiveRotation
                     ? new LiveRotationSeeder(Entities, Automations, NullLogger<LiveRotationSeeder>.Instance)
                     : null);
@@ -726,6 +799,48 @@ public sealed class HeartbeatLifecycleTests
         public Task SetReactionAsync(Guid discussionId, ReactionChange change, CancellationToken ct = default) => Task.CompletedTask;
         public Task<IReadOnlyList<LeafRecord>> GetReactionsAsync(Guid discussionId, DateTimeOffset? since = null, int limit = 1000, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<LeafRecord>>([]);
         public IDisposable Subscribe(Guid discussionId, Func<DiscussionMessage, Task> onMessage) => new NoopDisposable();
+    }
+
+    /// <summary>Answers a session start with session-1 and a oneshot with "done", keeping each body.</summary>
+    private sealed class SessionCreateGateway : IComputeGateway
+    {
+        public List<string> CreateBodies { get; } = [];
+        public List<string> ExecuteBodies { get; } = [];
+
+        public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            ComputeProvenance? provenance = null, CancellationToken ct = default)
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri?.OriginalString == "/ai-session/execute")
+            {
+                ExecuteBodies.Add(await request.Content!.ReadAsStringAsync(ct));
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"success":true,"text":"done","sessionId":"oneshot-1"}""",
+                        System.Text.Encoding.UTF8, "application/json"),
+                };
+            }
+            if (request.Method == HttpMethod.Post && request.RequestUri?.OriginalString == "/ai-session/sessions")
+            {
+                CreateBodies.Add(await request.Content!.ReadAsStringAsync(ct));
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"id":"session-1"}""", System.Text.Encoding.UTF8, "application/json"),
+                };
+            }
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("{}") };
+        }
+    }
+
+    private sealed class NoWorkspacePathResolver : IAgentWorkspacePathResolver
+    {
+        public Task<string?> ResolveAsync(Guid agentId, CancellationToken ct = default)
+            => Task.FromResult<string?>(null);
+    }
+
+    private sealed class FixedScratchSpace(string path) : IAgentScratchSpace
+    {
+        public AgentScratchAllocation PrepareExecution(string owner, string executionKey)
+            => new(path, new Dictionary<string, string>());
     }
 
     private sealed class UnusedComputeGateway : IComputeGateway

@@ -852,7 +852,9 @@ public sealed class HeartbeatService(
             correlationId: correlationId,
             parentJobId: parentJobId?.ToString(),
             keepResident: true,
-            cause: ComputeCauses.Agent)
+            cause: ComputeCauses.Agent,
+            // The heartbeat-tick automation drives this session: nobody is there to approve.
+            unattended: true)
             ?? throw new InvalidOperationException("RedCompute refused to create a heartbeat session");
 
         await store.PatchAsync(discussion.EntityId, new JsonObject
