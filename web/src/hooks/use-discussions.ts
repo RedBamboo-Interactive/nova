@@ -3,8 +3,11 @@ import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DelegationActivitySnapshot, DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
 import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, PermissionApprovals, PermissionDecisionPayload, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
-import { canonicalUserMessageUids, DeferredInvalidationCoordinator, DurableTranscriptPager, isPermissionQuestion, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
-import { answeredQuestionState, clearedQuestionState, liveQuestionFields, settleAcceptedDecision } from "../lib/permission-approvals"
+import { abandonPermissions, canonicalUserMessageUids, closePermission, DeferredInvalidationCoordinator, DurableTranscriptPager, isPermissionQuestion, processStreamEvent, rebuildBlocks, TranscriptAccumulator } from "@redbamboo/chat"
+import { answeredQuestionState, clearedQuestionState, liveQuestionFields, settleAcceptedDecision, type ApprovalLifecycle } from "../lib/permission-approvals"
+
+/** The shared approval lifecycle; Nova only projects it. */
+const APPROVALS: ApprovalLifecycle = { processStreamEvent, closePermission, abandonPermissions }
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, markEventFrameSources, orderMessages, withCurrentEventPresentation } from "../lib/message-order"
 import { readNoteSender } from "../lib/agent-note"
@@ -388,7 +391,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     const questionOutcome = outcome === "session_ended" && isPermissionQuestion(previous?.pending)
       ? previous?.outcome ?? null
       : outcome
-    commitQuestionState(discussionId, clearedQuestionState(processStreamEvent, previous, questionOutcome, keepApprovals))
+    commitQuestionState(discussionId, clearedQuestionState(APPROVALS, previous, questionOutcome, keepApprovals))
   }, [commitQuestionState])
 
   /**
@@ -1530,7 +1533,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     // typed or spoken text: posting that as an answer would be refused.
     if (isPermissionQuestion(pendingQuestionsRef.current[discussionId])) return
     const requestId = payload?.requestId ?? pendingQuestionsRef.current[discussionId]?.requestId ?? null
-    commitQuestionState(discussionId, answeredQuestionState(processStreamEvent, questionStatesRef.current[discussionId], requestId))
+    commitQuestionState(discussionId, answeredQuestionState(APPROVALS, questionStatesRef.current[discussionId], requestId))
     lastSendAtRef.current[discussionId] = Date.now()
     activeObservedAfterSendRef.current[discussionId] = true
     setStreaming((prev) => ({ ...prev, [discussionId]: true }))
@@ -1573,7 +1576,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       requestId: payload.requestId,
       decision: payload.decision,
     })
-    const settled = settleAcceptedDecision(processStreamEvent, questionStatesRef.current[discussionId], payload)
+    const settled = settleAcceptedDecision(APPROVALS, questionStatesRef.current[discussionId], payload)
     if (!settled) return
     commitQuestionState(discussionId, settled.question)
     if (settled.isStreaming) latchStreaming(discussionId)

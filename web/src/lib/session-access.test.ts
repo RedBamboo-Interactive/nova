@@ -4,7 +4,6 @@ import {
   AGENT_PERMISSIONS_SETTINGS_SECTION,
   FULL_ACCESS_SETTINGS_HREF,
   changeAccessLevel,
-  currentOptionOnly,
   openSettingsFromLink,
   readAccessLevel,
   readAccessLevels,
@@ -50,7 +49,8 @@ test("a level the provider could not apply is a refusal, naming the level it sta
 })
 
 test("the Full access link opens RedLeaf Settings on Agent permissions", () => {
-  assert.equal(FULL_ACCESS_SETTINGS_HREF, "#settings=agent-permissions")
+  // The same harmless in-page href Code uses.
+  assert.equal(FULL_ACCESS_SETTINGS_HREF, "#agent-permissions")
   const dispatched: Event[] = []
   const target = { dispatchEvent: (event: Event) => { dispatched.push(event); return true } }
   let prevented = false
@@ -71,12 +71,4 @@ test("other clicks in the modal pass through untouched", () => {
   assert.equal(openSettingsFromLink({ target: null, preventDefault: () => { prevented = true } }, target), false)
   assert.equal(prevented, false)
   assert.equal(dispatched.length, 0)
-})
-
-test("Quality shows the session's own tier alone while Nova offers the access level", () => {
-  const tiers = [{ value: "fast", label: "Fast" }, { value: "deep", label: "Deep", aliases: ["opus"] }]
-  assert.deepEqual(currentOptionOnly(tiers, "deep"), [tiers[1]])
-  assert.deepEqual(currentOptionOnly(tiers, "opus"), [tiers[1]])
-  assert.equal(currentOptionOnly(tiers, "unknown"), undefined)
-  assert.equal(currentOptionOnly(tiers, null), undefined)
 })

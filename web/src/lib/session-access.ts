@@ -7,11 +7,10 @@ export const AGENT_PERMISSIONS_SETTINGS_SECTION = "agent-permissions"
 
 /**
  * RedLeaf has no URL for a Settings section: the shell opens one on an
- * `open-settings` window event. The Info modal only takes an href, so the link
- * carries this inert fragment and {@link openSettingsFromLink} turns the click
- * into that event.
+ * `open-settings` window event. The link keeps this harmless in-page href (as
+ * in Code) and {@link openSettingsFromLink} turns the click into that event.
  */
-export const FULL_ACCESS_SETTINGS_HREF = `#settings=${AGENT_PERMISSIONS_SETTINGS_SECTION}`
+export const FULL_ACCESS_SETTINGS_HREF = `#${AGENT_PERMISSIONS_SETTINGS_SECTION}`
 
 /** The shared Info modal's "Enable Full access in Settings" link. */
 const FULL_ACCESS_LINK_SELECTOR = 'a[data-slot="full-access-settings-link"]'
@@ -61,23 +60,6 @@ export function readFullAccessEnabled(policy: unknown): boolean | undefined {
     ? (fullAccess as { enabled?: unknown }).enabled
     : undefined
   return typeof enabled === "boolean" ? enabled : undefined
-}
-
-interface ConfigOption {
-  value: string
-  aliases?: string[]
-}
-
-/**
- * The Info modal turns every option row into a selector once it has
- * `onConfigChange`. Nova changes only the access level there, so the Quality
- * row gets the session's own option alone: it keeps its label and colour and
- * offers nothing Nova could not do. Undefined when no option matches.
- */
-export function currentOptionOnly<T extends ConfigOption>(options: readonly T[], value: string | null | undefined): T[] | undefined {
-  if (!value) return undefined
-  const current = options.filter(option => option.value === value || option.aliases?.includes(value))
-  return current.length ? current.slice(0, 1) : undefined
 }
 
 type Post = <T>(path: string, body: unknown) => Promise<T>

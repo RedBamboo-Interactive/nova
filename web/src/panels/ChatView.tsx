@@ -4,7 +4,7 @@ import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
 import { MESSAGE_PARAM, messageDeepLinkStep, withoutMessageParam } from "../lib/message-deep-link"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type EventRowRenderer, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type QuestionAnswerPayload, type SessionConfigChange, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
+import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type EventRowRenderer, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
 import { isMobileClient } from "../components/floating-nova-support"
@@ -28,7 +28,7 @@ import { useReactions } from "../hooks/use-reactions"
 import { useDisc, useNovaPendingContext } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
 import { useFullAccessEnabled } from "../hooks/use-full-access-enabled"
-import { FULL_ACCESS_SETTINGS_HREF, changeAccessLevel, currentOptionOnly, openSettingsFromLink } from "../lib/session-access"
+import { FULL_ACCESS_SETTINGS_HREF, changeAccessLevel, openSettingsFromLink } from "../lib/session-access"
 import { useMaintenanceStatus } from "../hooks/use-maintenance-status"
 import { useShare } from "../hooks/use-share"
 import { setSettings } from "../lib/settings-store"
@@ -914,18 +914,14 @@ export function ChatView({
   // Read RedLeaf's policy each time Info opens, so Full turned on in Settings shows next time.
   const fullAccessEnabled = useFullAccessEnabled(sessionInfoOpen)
   const activeSessionId = activeDiscussion?.sessionId ?? null
-  // Nova changes only the access level from Info; a read-only discussion changes nothing.
+  // A read-only discussion changes nothing.
   const accessChangeable = !!activeSessionId && !discussionClosed && !owningApp
-  const handleSessionConfigChange = useCallback(async (change: SessionConfigChange) => {
-    if (!change.accessLevel) return
+  const handleAccessLevelChange = useCallback(async (requested: AccessLevel) => {
     if (!activeSessionId) throw new Error("This discussion has no session yet.")
     // A refusal rejects with RedCompute's message, shown under the Permissions row.
-    const level = await changeAccessLevel(api.post, activeSessionId, change.accessLevel)
+    const level = await changeAccessLevel(api.post, activeSessionId, requested)
     applyAccessLevel(activeSessionId, level)
   }, [activeSessionId, applyAccessLevel])
-  const qualityTierOptions = useMemo(
-    () => qualityTiers.map(t => ({ value: t.slug, label: t.label, color: t.color, icon: t.icon })),
-    [qualityTiers])
   const sessionInfoProps = {
     stats: sessionStats,
     messages: activeMessages,
@@ -935,11 +931,7 @@ export function ChatView({
       avatarUrl: activeAgent.avatarUrl,
       href: getEntityHref("agent", activeAgent.id),
     } : null,
-    // With onConfigChange every option row becomes a selector; Nova can't change
-    // quality from here, so Quality shows the session's own tier alone.
-    qualityTierOptions: accessChangeable
-      ? currentOptionOnly(qualityTierOptions, sessionStats?.qualityTier)
-      : qualityTierOptions,
+    qualityTierOptions: qualityTiers.map(t => ({ value: t.slug, label: t.label, color: t.color, icon: t.icon })),
     providerOptions: providers.map(p => ({
       value: p.slug,
       aliases: [p.backend],
@@ -949,7 +941,9 @@ export function ChatView({
       iconSvgPath: p.iconSvgPath,
     })),
     loadProviderUsage: recordedUsageLoader,
-    onConfigChange: accessChangeable ? handleSessionConfigChange : undefined,
+    // Only the Permissions row: Nova can't change a running session's model or
+    // quality from Info, so no other row becomes a picker (no onConfigChange).
+    onAccessLevelChange: accessChangeable ? handleAccessLevelChange : undefined,
     fullAccessEnabled,
     // The floating window has no RedLeaf shell to open Settings in: the link stays text there.
     fullAccessSettingsHref: floating ? undefined : FULL_ACCESS_SETTINGS_HREF,

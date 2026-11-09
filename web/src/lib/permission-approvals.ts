@@ -4,23 +4,28 @@ import type {
   PendingQuestionKind,
   PermissionDecision,
   PermissionDecisionPayload,
+  PermissionOutcome,
   PermissionRequest,
   ProcessEventResult,
   QuestionState,
 } from "@redbamboo/chat"
 
 /**
- * The shared question lifecycle (`processStreamEvent`), passed in so this
+ * The shared approval lifecycle from `@redbamboo/chat`, passed in so this
  * module stays loadable by the node test runner, which cannot import the
- * package's React entry point.
+ * package's React entry point. Nova reuses it rather than copying it.
  */
-export type QuestionLifecycle = (
-  messages: MessageBlock[],
-  isStreaming: boolean,
-  event: ChatEvent,
-  resumePending: boolean,
-  question: QuestionState,
-) => Pick<ProcessEventResult, "question" | "isStreaming">
+export interface ApprovalLifecycle {
+  processStreamEvent: (
+    messages: MessageBlock[],
+    isStreaming: boolean,
+    event: ChatEvent,
+    resumePending: boolean,
+    question: QuestionState,
+  ) => Pick<ProcessEventResult, "question">
+  closePermission: (prev: QuestionState, key: string, outcome: PermissionOutcome) => QuestionState
+  abandonPermissions: (state: QuestionState) => QuestionState
+}
 
 const NO_QUESTION: QuestionState = { pending: null, outcome: null }
 const NO_MESSAGES: MessageBlock[] = []
@@ -51,67 +56,58 @@ export function liveQuestionFields(evt: LiveQuestionFields): Pick<ChatEvent, "ki
   return { kind, permission, decision }
 }
 
-/** Run one control event (question / question_resolved) through the shared lifecycle; messages are untouched. */
-function control(lifecycle: QuestionLifecycle, state: QuestionState | undefined, event: ChatEvent) {
-  // Hosts pass isStreaming=true, as for every live event: the lifecycle turns it
-  // off while something is still pending.
-  return lifecycle(NO_MESSAGES, true, event, false, state ?? NO_QUESTION)
-}
-
 /**
- * After the server took a decision: the transition its own `question_resolved`
- * makes, so the card settles even when that event is lost on a reconnect. The
- * server's event, when it comes, says the same and changes nothing. Null when
- * the approval is not open here any more (the server already settled it, or it
- * belongs to an earlier stream): committing then could resurrect a turn that
- * ended in between.
+ * After the server took a decision: settle that approval with the decision,
+ * so the card settles even when the server's `question_resolved` is lost on a
+ * reconnect (that event, when it comes, says the same). `isStreaming`: nothing
+ * is left waiting, so the turn runs again. Null when the approval is not open
+ * here any more (the server already settled it, or it belongs to an earlier
+ * stream): committing then could resurrect a turn that ended in between.
  */
 export function settleAcceptedDecision(
-  lifecycle: QuestionLifecycle,
+  lifecycle: ApprovalLifecycle,
   state: QuestionState | undefined,
   payload: PermissionDecisionPayload,
-): Pick<ProcessEventResult, "question" | "isStreaming"> | null {
-  if (!payload.requestId) return null
-  const open = Object.values(state?.permissions ?? {})
-    .some(approval => approval.requestId === payload.requestId && approval.outcome === null)
+): { question: QuestionState; isStreaming: boolean } | null {
+  if (!payload.requestId || !state) return null
+  const open = Object.values(state.permissions ?? {})
+    .find(approval => approval.requestId === payload.requestId && approval.outcome === null)
   if (!open) return null
-  return control(lifecycle, state, {
-    type: "question_resolved",
-    requestId: payload.requestId,
-    decision: payload.decision,
-    content: payload.decision,
-  })
+  const question = lifecycle.closePermission(state, open.key, payload.decision)
+  return { question, isStreaming: !question.pending }
 }
 
 /**
  * Nothing is pending any more and `outcome` says how the last AskUserQuestion
  * ended. With `keepApprovals` (the session ended, the discussion stays on
  * screen) approval cards keep how they ended, and one still waiting becomes
- * "unresolved", exactly as a terminal status event leaves them. Without it (the
- * history is gone or belongs to another session) they go with it.
+ * "unresolved". Without it (the history is gone or belongs to another session)
+ * they go with it.
  */
 export function clearedQuestionState(
-  lifecycle: QuestionLifecycle,
+  lifecycle: ApprovalLifecycle,
   state: QuestionState | undefined,
   outcome: QuestionState["outcome"],
   keepApprovals: boolean,
 ): QuestionState {
   if (!keepApprovals || !state?.permissions) return { pending: null, outcome }
-  const closed = lifecycle(NO_MESSAGES, false, { type: "status", content: "idle" }, false, state).question
-  return closed.permissions ? { pending: null, outcome, permissions: closed.permissions } : { pending: null, outcome }
+  const { permissions } = lifecycle.abandonPermissions(state)
+  return permissions ? { pending: null, outcome, permissions } : { pending: null, outcome }
 }
 
 /**
  * An AskUserQuestion answered from this client, cleared optimistically. With
  * no approvals in the stream this is exactly the state it always was. With
- * approvals, it is the transition the server's resolution makes: their cards
- * keep their outcomes, and one still waiting keeps the turn parked.
+ * approvals, it is the transition the server's resolution makes, run through
+ * the shared lifecycle: their cards keep their outcomes, and one still
+ * waiting keeps the turn parked.
  */
 export function answeredQuestionState(
-  lifecycle: QuestionLifecycle,
+  lifecycle: ApprovalLifecycle,
   state: QuestionState | undefined,
   requestId: string | null,
 ): QuestionState {
   if (!state?.permissions) return { pending: null, outcome: "answered" }
-  return control(lifecycle, state, { type: "question_resolved", requestId, content: "answered" }).question
+  return lifecycle.processStreamEvent(NO_MESSAGES, true,
+    { type: "question_resolved", requestId, content: "answered" }, false, state ?? NO_QUESTION).question
 }

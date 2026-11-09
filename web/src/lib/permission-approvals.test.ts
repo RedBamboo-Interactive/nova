@@ -2,7 +2,11 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ChatEvent, MessageBlock, QuestionState } from "@redbamboo/chat"
 import { processStreamEvent } from "../../../../redbamboo-packages/packages/chat/src/lib/process-stream-event.ts"
-import { answeredQuestionState, clearedQuestionState, liveQuestionFields, settleAcceptedDecision } from "./permission-approvals.ts"
+import { abandonPermissions, closePermission } from "../../../../redbamboo-packages/packages/chat/src/lib/permission-approval.ts"
+import { answeredQuestionState, clearedQuestionState, liveQuestionFields, settleAcceptedDecision, type ApprovalLifecycle } from "./permission-approvals.ts"
+
+// The same shared lifecycle use-discussions passes in.
+const lifecycle: ApprovalLifecycle = { processStreamEvent, closePermission, abandonPermissions }
 
 // A Claude tool call waiting for approval, as RedCompute streams it: a `question`
 // of kind permission carrying the request, then `question_resolved` with the outcome word.
@@ -85,7 +89,7 @@ test("only contract values cross the mapper", () => {
 
 test("an accepted decision settles the card at once, and the server's own resolution agrees", () => {
   const parked = replay([toolUse, mapLive(liveApproval)]).question
-  const settled = settleAcceptedDecision(processStreamEvent, parked, { requestId: "req-perm", toolUseId: "toolu_rm", decision: "allow_once" })
+  const settled = settleAcceptedDecision(lifecycle, parked, { requestId: "req-perm", toolUseId: "toolu_rm", decision: "allow_once" })
   assert.ok(settled)
   assert.equal(settled.question.pending, null)
   assert.equal(settled.question.permissions?.toolu_rm?.outcome, "allow_once")
@@ -105,15 +109,15 @@ test("a decision the server already resolved is not committed again", () => {
   const parked = replay([toolUse, mapLive(liveApproval)]).question
   const resolved = replay([mapLive({ type: "question_resolved", requestId: "req-perm", content: "denied" })], parked).question
   assert.equal(resolved.permissions?.toolu_rm?.outcome, "deny")
-  assert.equal(settleAcceptedDecision(processStreamEvent, resolved, { requestId: "req-perm", toolUseId: "toolu_rm", decision: "allow_once" }), null)
-  assert.equal(settleAcceptedDecision(processStreamEvent, undefined, { requestId: "req-perm", toolUseId: null, decision: "deny" }), null)
-  assert.equal(settleAcceptedDecision(processStreamEvent, parked, { requestId: null, toolUseId: "toolu_rm", decision: "deny" }), null)
+  assert.equal(settleAcceptedDecision(lifecycle, resolved, { requestId: "req-perm", toolUseId: "toolu_rm", decision: "allow_once" }), null)
+  assert.equal(settleAcceptedDecision(lifecycle, undefined, { requestId: "req-perm", toolUseId: null, decision: "deny" }), null)
+  assert.equal(settleAcceptedDecision(lifecycle, parked, { requestId: null, toolUseId: "toolu_rm", decision: "deny" }), null)
 })
 
 test("answering an AskUserQuestion without approvals is exactly the old optimistic clear", () => {
   const askState: QuestionState = { pending: { question: "Which database?", requestId: "req-ask" }, outcome: null }
-  assert.deepEqual(answeredQuestionState(processStreamEvent, askState, "req-ask"), { pending: null, outcome: "answered" })
-  assert.deepEqual(answeredQuestionState(processStreamEvent, undefined, null), { pending: null, outcome: "answered" })
+  assert.deepEqual(answeredQuestionState(lifecycle, askState, "req-ask"), { pending: null, outcome: "answered" })
+  assert.deepEqual(answeredQuestionState(lifecycle, undefined, null), { pending: null, outcome: "answered" })
 })
 
 test("answering an AskUserQuestion keeps an approval opened under it, and the turn stays parked on it", () => {
@@ -124,7 +128,7 @@ test("answering an AskUserQuestion keeps an approval opened under it, and the tu
   assert.equal(both.pending?.requestId, "req-ask")
   assert.equal(both.permissions?.toolu_rm?.outcome, null)
 
-  const answered = answeredQuestionState(processStreamEvent, both, "req-ask")
+  const answered = answeredQuestionState(lifecycle, both, "req-ask")
   assert.equal(answered.outcome, "answered")
   assert.equal(answered.pending?.kind, "permission")
   assert.equal(answered.permissions?.toolu_rm?.outcome, null)
@@ -132,13 +136,13 @@ test("answering an AskUserQuestion keeps an approval opened under it, and the tu
 
 test("a session that ended leaves settled cards and marks a waiting one unresolved; a replaced history drops them", () => {
   const parked = replay([toolUse, mapLive(liveApproval)]).question
-  const kept = clearedQuestionState(processStreamEvent, parked, null, true)
+  const kept = clearedQuestionState(lifecycle, parked, null, true)
   assert.equal(kept.pending, null)
   assert.equal(kept.outcome, null)
   assert.equal(kept.permissions?.toolu_rm?.outcome, "unresolved")
 
-  assert.deepEqual(clearedQuestionState(processStreamEvent, parked, "session_ended", false), { pending: null, outcome: "session_ended" })
+  assert.deepEqual(clearedQuestionState(lifecycle, parked, "session_ended", false), { pending: null, outcome: "session_ended" })
   // No approvals: the exact state clearQuestion always wrote.
-  assert.deepEqual(clearedQuestionState(processStreamEvent, { pending: { question: "q", requestId: "r" }, outcome: null }, "session_ended", true),
+  assert.deepEqual(clearedQuestionState(lifecycle, { pending: { question: "q", requestId: "r" }, outcome: null }, "session_ended", true),
     { pending: null, outcome: "session_ended" })
 })
