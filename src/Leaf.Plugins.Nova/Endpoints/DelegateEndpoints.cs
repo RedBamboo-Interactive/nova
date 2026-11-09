@@ -254,6 +254,10 @@ public static class DelegateEndpoints
                         ?? request.QualityMode
                         ?? "standard";
 
+                // Nobody to approve anything: from the verified token only, never the body.
+                if (StartsUnattended(ctx.User))
+                    createBody["unattended"] = true;
+
                 // The delegating session, from the caller's verified token only, so RedCompute starts the
                 // worker at that session's access level and caps it there. Never from the request body.
                 var createContext = new List<ComputeContextReference>(baseContext);
@@ -496,6 +500,24 @@ public static class DelegateEndpoints
     /// Null when the branch fields are acceptable. A branch needs a new repository session: a
     /// continuation keeps its original folder, and a physical path already names its folder.
     /// </summary>
+    /// <summary>
+    /// Whether the worker starts unattended (its permission asks are denied, never parked), decided
+    /// from the caller's verified token only. RedCompute already inherits the level, the cap and
+    /// <c>unattended</c> from a parent session named in the token, so this covers the callers that
+    /// have none: an automation, and an Agent execution with neither a session nor a discussion
+    /// (a one-shot, or a token that cannot be read), where an approval would park in a Code
+    /// session nobody opens. A person, a person's browser, and an Agent working in a discussion
+    /// stay attended.
+    /// </summary>
+    internal static bool StartsUnattended(ClaimsPrincipal user)
+    {
+        if (DiscussionAccessPolicy.IsHumanInitiated(user)) return false;
+        var actor = DiscussionAccessPolicy.ReadSignedActor(user);
+        if (actor is null || actor.Kind.Equals("automation", StringComparison.OrdinalIgnoreCase)) return true;
+        if (CallerSessionId(user) is not null) return false;
+        return string.IsNullOrWhiteSpace(actor.DiscussionId);
+    }
+
     /// <summary>
     /// The RedCompute session the caller runs in, read from its verified execution identity (the
     /// <c>execution_identity</c> claim the auth middleware validated). Null for a person, a token

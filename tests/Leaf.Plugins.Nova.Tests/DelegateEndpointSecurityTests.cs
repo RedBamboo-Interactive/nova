@@ -44,6 +44,47 @@ public sealed class DelegateEndpointSecurityTests
             [new Claim("sub", "u"), new Claim("execution_identity", """{"context":[{"kind":"session","id":"x"}]}""")], "Bearer"))));
     }
 
+    private static ClaimsPrincipal SignedExecution(string actorKind, string context, string? parent = null, string beneficiaryKind = "user")
+        => Execution($$"""
+            {"app":{"id":"nova"},"actor":{"kind":"{{actorKind}}","id":"actor-1","entityId":"actor-1"},"beneficiary":{"kind":"{{beneficiaryKind}}","id":"28a07bf5-3a37-47d4-a9ab-bdc09221d547"},"context":{{context}}{{(parent is null ? "" : $",\"parentExecutionId\":\"{parent}\"")}}}
+            """);
+
+    [Fact]
+    public void An_automation_delegation_starts_unattended_even_with_a_session()
+    {
+        Assert.True(DelegateEndpoints.StartsUnattended(SignedExecution("automation", "[]")));
+        Assert.True(DelegateEndpoints.StartsUnattended(SignedExecution("automation",
+            """[{"kind":"discussion","id":"d1"},{"kind":"session","id":"s1"}]""")));
+    }
+
+    [Fact]
+    public void An_agent_with_no_session_and_no_discussion_starts_unattended()
+    {
+        // A one-shot's token has no session context: nobody would ever open the worker's approval.
+        Assert.True(DelegateEndpoints.StartsUnattended(SignedExecution("agent", "[]")));
+        Assert.True(DelegateEndpoints.StartsUnattended(SignedExecution("agent", """[{"kind":"origin-entrypoint","route":"/x"}]""")));
+        // An execution identity that cannot be read has no one to approve either.
+        Assert.True(DelegateEndpoints.StartsUnattended(Execution("{not json")));
+    }
+
+    [Fact]
+    public void An_agent_in_a_discussion_or_a_session_is_left_to_its_parent()
+    {
+        // RedCompute inherits level, cap and unattended from the session the token names.
+        Assert.False(DelegateEndpoints.StartsUnattended(SignedExecution("agent", """[{"kind":"session","id":"s1"}]""")));
+        Assert.False(DelegateEndpoints.StartsUnattended(SignedExecution("agent", """[{"kind":"discussion","id":"d1"}]""")));
+    }
+
+    [Fact]
+    public void A_person_and_a_person_at_the_browser_stay_attended()
+    {
+        Assert.False(DelegateEndpoints.StartsUnattended(Principal("28a07bf5-3a37-47d4-a9ab-bdc09221d547")));
+        Assert.False(DelegateEndpoints.StartsUnattended(SignedExecution("user", "[]")));
+        Assert.False(DelegateEndpoints.StartsUnattended(SignedExecution("app", """[{"kind":"browser","route":"/apps/nova"}]""")));
+        // A derived child of a browser token is not the person.
+        Assert.True(DelegateEndpoints.StartsUnattended(SignedExecution("app", """[{"kind":"browser","route":"/apps/nova"}]""", parent: "exec-1")));
+    }
+
     private static ClaimsPrincipal Execution(string identityJson)
         => new(new ClaimsIdentity(
             [new Claim("sub", "28a07bf5-3a37-47d4-a9ab-bdc09221d547"), new Claim("token_use", "execution"),
