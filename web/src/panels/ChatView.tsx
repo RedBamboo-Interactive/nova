@@ -73,6 +73,104 @@ interface ProviderInfo {
   color?: string
 }
 
+interface DiscussionShortcutsProps {
+  discussionId: string
+  voiceAvailable: boolean
+  canManage: boolean
+  canShare: boolean
+  isLive: boolean
+  openVoice: () => void
+  openSessionInfo: () => void
+  toggleArtifacts: () => void
+  startRename: () => void
+  updateTitle: (id: string) => Promise<void> | void
+  share: () => void
+  rotate: (id: string) => Promise<void> | void
+}
+
+// Desktop shortcuts for the open discussion; the menus show the same keys.
+// Mounted only for the docked chat: the floating window is a shell service that
+// lives outside the shell's CommandProvider, where useCommand throws.
+function DiscussionShortcuts({
+  discussionId,
+  voiceAvailable,
+  canManage,
+  canShare,
+  isLive,
+  openVoice,
+  openSessionInfo,
+  toggleArtifacts,
+  startRename,
+  updateTitle,
+  share,
+  rotate,
+}: DiscussionShortcutsProps) {
+  useCommand("nova-discussion-voice", {
+    label: "Open Voice",
+    description: "Open voice call controls for the current discussion",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.voice,
+    enabled: voiceAvailable,
+    action: openVoice,
+  })
+
+  useCommand("nova-discussion-info", {
+    label: "Discussion Info",
+    description: "Show the session, model and delegations of the open discussion",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.info,
+    action: openSessionInfo,
+  })
+
+  useCommand("nova-discussion-artifacts", {
+    label: "Toggle Artifacts",
+    description: "Show or hide the media, documents, links and entities of the open discussion",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.artifacts,
+    keywords: ["images", "media", "files", "links", "gallery"],
+    action: toggleArtifacts,
+  })
+
+  useCommand("nova-discussion-rename", {
+    label: "Rename Discussion",
+    description: "Edit the title of the open discussion",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.rename,
+    enabled: canManage,
+    action: startRename,
+  })
+
+  useCommand("nova-discussion-update-title", {
+    label: "Update Discussion Title",
+    description: "Regenerate the title of the open discussion from its conversation",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.updateTitle,
+    enabled: canManage,
+    action: () => void updateTitle(discussionId),
+  })
+
+  useCommand("nova-discussion-share", {
+    label: "Share Discussion",
+    description: "Create a share link for the open discussion",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.share,
+    enabled: canShare,
+    action: share,
+  })
+
+  useCommand("nova-reset-live-timeline", {
+    label: "Reset Live Timeline",
+    description: "Rotate Live onto a fresh timeline",
+    group: "Discussions",
+    shortcut: DISCUSSION_SHORTCUTS.reset,
+    keywords: ["rotate", "reset", "live"],
+    enabled: isLive,
+    action: () => void rotate(discussionId),
+  })
+
+  return null
+}
+
 function ChatHeaderAction({
   icon,
   label,
@@ -972,71 +1070,6 @@ export function ChatView({
 
   // Desktop shortcuts for the open discussion; the menus show the same keys.
   const canManageDiscussion = activeDiscussion?.type === "chat" && !discussionClosed && !owningApp
-  const docked = !floating && !!activeDiscussion
-  useCommand("nova-discussion-voice", {
-    label: "Open Voice",
-    description: "Open voice call controls for the current discussion",
-    group: "Discussions",
-    shortcut: DISCUSSION_SHORTCUTS.voice,
-    enabled: docked && voiceAvailable,
-    action: openVoice,
-  })
-
-  useCommand("nova-discussion-info", {
-    label: "Discussion Info",
-    description: "Show the session, model and delegations of the open discussion",
-    group: "Discussions",
-    shortcut: DISCUSSION_SHORTCUTS.info,
-    enabled: docked,
-    action: openSessionInfo,
-  })
-
-  useCommand("nova-discussion-artifacts", {
-    label: "Toggle Artifacts",
-    description: "Show or hide the media, documents, links and entities of the open discussion",
-    group: "Discussions",
-    shortcut: DISCUSSION_SHORTCUTS.artifacts,
-    keywords: ["images", "media", "files", "links", "gallery"],
-    enabled: docked,
-    action: toggleArtifacts,
-  })
-
-  useCommand("nova-discussion-rename", {
-    label: "Rename Discussion",
-    description: "Edit the title of the open discussion",
-    group: "Discussions",
-    shortcut: DISCUSSION_SHORTCUTS.rename,
-    enabled: docked && canManageDiscussion,
-    action: () => setTitleEditing(true),
-  })
-
-  useCommand("nova-discussion-update-title", {
-    label: "Update Discussion Title",
-    description: "Regenerate the title of the open discussion from its conversation",
-    group: "Discussions",
-    shortcut: DISCUSSION_SHORTCUTS.updateTitle,
-    enabled: docked && canManageDiscussion,
-    action: () => { if (activeDiscussionId) void handleUpdateTitle(activeDiscussionId) },
-  })
-
-  useCommand("nova-discussion-share", {
-    label: "Share Discussion",
-    description: "Create a share link for the open discussion",
-    group: "Discussions",
-    shortcut: DISCUSSION_SHORTCUTS.share,
-    enabled: docked && !discussionClosed && !owningApp && !activeDiscussion?.confidential,
-    action: handleShare,
-  })
-
-  useCommand("nova-reset-live-timeline", {
-    label: "Reset Live Timeline",
-    description: "Rotate Live onto a fresh timeline",
-    group: "Discussions",
-    shortcut: DISCUSSION_SHORTCUTS.reset,
-    keywords: ["rotate", "reset", "live"],
-    enabled: docked && activeDiscussion?.type === "live",
-    action: () => { if (activeDiscussionId) void handleRotateDiscussion(activeDiscussionId) },
-  })
 
   const liveViews = findLiveHeartbeatPair(discussions, journalOpen ? journalLive : activeDiscussion)
   // Without the Journal tab, a lone Live has nothing to switch to.
@@ -1732,6 +1765,22 @@ export function ChatView({
       data-streaming={floating ? (isStreaming || undefined) : undefined}
       data-ui-shortcuts={floating ? FLOATING_NOVA_SHORTCUT_LIST : undefined}
     >
+      {!floating && activeDiscussion && (
+        <DiscussionShortcuts
+          discussionId={activeDiscussion.id}
+          voiceAvailable={voiceAvailable}
+          canManage={canManageDiscussion}
+          canShare={!discussionClosed && !owningApp && !activeDiscussion.confidential}
+          isLive={activeDiscussion.type === "live"}
+          openVoice={openVoice}
+          openSessionInfo={openSessionInfo}
+          toggleArtifacts={toggleArtifacts}
+          startRename={() => setTitleEditing(true)}
+          updateTitle={handleUpdateTitle}
+          share={handleShare}
+          rotate={handleRotateDiscussion}
+        />
+      )}
       {showAvatar && (
         <div
           data-avatar-bounce-frame
