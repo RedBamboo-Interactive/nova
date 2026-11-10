@@ -2315,8 +2315,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [])
 
   // The server answers with the discussion, effective value and source included.
-  const setPersonalContext = useCallback(async (id: string, personalContext: boolean) => {
-    const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/personal-context`, { personalContext })
+  const setLiveTimeline = useCallback(async (id: string, liveTimeline: boolean) => {
+    const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/live-timeline`, { liveTimeline })
     upsertDiscussion(updated)
   }, [])
 
@@ -2365,7 +2365,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     renameDiscussion,
     updateDiscussionTitle,
     setConfidential,
-    setPersonalContext,
+    setLiveTimeline,
     reopenDiscussion,
     loadEarlierMessages,
     refreshDiscussions,

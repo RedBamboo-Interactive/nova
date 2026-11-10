@@ -317,7 +317,7 @@ export function ChatView({
     renameDiscussion,
     updateDiscussionTitle,
     setConfidential,
-    setPersonalContext,
+    setLiveTimeline,
     reopenDiscussion,
     loadEarlierMessages,
     retryHistoryLoad,
@@ -516,7 +516,7 @@ export function ChatView({
   const [titleUpdatePending, setTitleUpdatePending] = useState(false)
   const [reopenPending, setReopenPending] = useState(false)
   const [confidentialityPending, setConfidentialityPending] = useState(false)
-  const [personalContextPending, setPersonalContextPending] = useState(false)
+  const [liveTimelinePending, setLiveTimelinePending] = useState(false)
   const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const providersRef = useRef(providers)
@@ -938,21 +938,21 @@ export function ChatView({
     }
   }, [activeDiscussionId, confidentialityPending, setConfidential, toast])
 
-  const handlePersonalContextToggle = useCallback(async (checked: boolean) => {
-    if (!activeDiscussionId || personalContextPending) return
-    setPersonalContextPending(true)
+  const handleLiveTimelineToggle = useCallback(async (checked: boolean) => {
+    if (!activeDiscussionId || liveTimelinePending) return
+    setLiveTimelinePending(true)
     try {
-      await setPersonalContext(activeDiscussionId, checked)
+      await setLiveTimeline(activeDiscussionId, checked)
     } catch (error) {
       toast({
         variant: "error",
-        title: "Could not update personal context",
+        title: "Could not update the LIVE timeline setting",
         description: error instanceof Error ? error.message : "Unknown error",
       })
     } finally {
-      setPersonalContextPending(false)
+      setLiveTimelinePending(false)
     }
-  }, [activeDiscussionId, personalContextPending, setPersonalContext, toast])
+  }, [activeDiscussionId, liveTimelinePending, setLiveTimeline, toast])
 
   const handleShare = useCallback(() => {
     share.reset()
@@ -1181,25 +1181,24 @@ export function ChatView({
           aria-label="Confidential discussion"
         />
       </div>
-      <div data-setting-path="discussion.personalContext" className="flex items-start justify-between gap-3 rounded-lg border border-overlay-6 bg-overlay-3 px-3 py-2.5">
+      <div data-setting-path="discussion.liveTimeline" className="flex items-start justify-between gap-3 rounded-lg border border-overlay-6 bg-overlay-3 px-3 py-2.5">
         <div className="flex min-w-0 items-start gap-2.5">
-          <i className="ph-bold ph-user-circle mt-0.5 text-sm text-text-muted" aria-hidden="true" />
+          <i className="ph-bold ph-broadcast mt-0.5 text-sm text-text-muted" aria-hidden="true" />
           <div className="min-w-0">
-            <div className="text-xs font-medium text-contrast">Personal context</div>
+            <div className="text-xs font-medium text-contrast">LIVE timeline</div>
             <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
-              Lets Nova see mail, heartbeat notes and other personal LIVE events here. Off, it sees only automations, callbacks, discussion activity, presence and devices. On by default for LIVE and Heartbeat.
-              {activeDiscussion.personalContextSource !== "explicit" && " This discussion uses its default."}
+              Include recent LIVE events (mail, automations, lights, music, other discussions) in this discussion&apos;s context
             </p>
           </div>
         </div>
         <Switch
           size="sm"
           className="mt-0.5 shrink-0"
-          checked={activeDiscussion.personalContext ?? (activeDiscussion.type === "live" || activeDiscussion.type === "heartbeat")}
-          onCheckedChange={handlePersonalContextToggle}
-          disabled={personalContextPending || discussionClosed}
-          aria-busy={personalContextPending}
-          aria-label="Personal context"
+          checked={activeDiscussion.liveTimeline ?? (activeDiscussion.type === "live" || activeDiscussion.type === "heartbeat")}
+          onCheckedChange={handleLiveTimelineToggle}
+          disabled={liveTimelinePending || discussionClosed}
+          aria-busy={liveTimelinePending}
+          aria-label="LIVE timeline"
         />
       </div>
       <DelegationsInfo activity={activeDelegations} />

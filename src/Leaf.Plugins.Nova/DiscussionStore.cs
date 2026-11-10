@@ -104,13 +104,13 @@ public sealed record DiscussionRead(
     string? OwnerApp = null,
     IReadOnlyList<WorktreeAttachment>? Worktrees = null,
     ReactionCursor? ReactionsNoted = null,
-    bool? PersonalContextSetting = null)
+    bool? LiveTimelineSetting = null)
 {
     /// <summary>
-    /// Whether this discussion's context includes personal LIVE events: the explicit choice when
-    /// someone made one, else on for LIVE and Heartbeat and off for everything else.
+    /// Whether this discussion's context carries the LIVE timeline: the explicit choice when someone
+    /// made one, else on for LIVE and Heartbeat and off for everything else.
     /// </summary>
-    public bool PersonalContext => LiveEventScope.IsPersonal(this);
+    public bool LiveTimeline => LiveTimelineContext.IsOn(this);
 }
 
 public sealed record ArchivedDiscussionPage(
@@ -674,25 +674,27 @@ public sealed class DiscussionStore(
                 new JsonObject { ["last_activity"] = DateTimeOffset.UtcNow.ToString("O") }, null, ct);
         }, ct);
 
-    /// <summary>Applies an explicit user rename and returns the canonical entity view.</summary>
     /// <summary>
-    /// Sets whether the discussion's context includes personal LIVE events. Null forgets the choice,
-    /// so the discussion follows its type's default again.
+    /// Sets whether the discussion's context carries the LIVE timeline. Null forgets the choice, so
+    /// the discussion follows its type's default again. The legacy key is cleared either way: from
+    /// here on the record has one answer.
     /// </summary>
-    public Task<DiscussionRead?> SetPersonalContextAsync(
-        Guid entityId, bool? personalContext, CancellationToken ct = default)
+    public Task<DiscussionRead?> SetLiveTimelineAsync(
+        Guid entityId, bool? liveTimeline, CancellationToken ct = default)
         => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
         {
             var entity = await RequireNovaOwnedAsync(entityId, ct);
             if (entity is null || Map(entity) is null) return null;
             await entities.PatchAsync(entityId, new JsonObject
             {
-                [LiveEventScope.DataKey] = personalContext is { } value ? JsonValue.Create(value) : null,
+                [LiveTimelineContext.DataKey] = liveTimeline is { } value ? JsonValue.Create(value) : null,
+                [LiveTimelineContext.LegacyDataKey] = null,
             }, ct: ct);
             var updated = await entities.GetAsync(entityId, ct);
             return updated is null ? null : Map(updated);
         }, ct);
 
+    /// <summary>Applies an explicit user rename and returns the canonical entity view.</summary>
     public Task<DiscussionRead?> SetManualTitleAsync(
         Guid entityId, string? title, CancellationToken ct = default)
         => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
@@ -1250,7 +1252,7 @@ public sealed class DiscussionStore(
             Str(d, "source_app"),
             WorktreeAttachment.Read(d),
             ReactionCursor.Read(d),
-            Bool(d, LiveEventScope.DataKey));
+            Bool(d, LiveTimelineContext.DataKey) ?? Bool(d, LiveTimelineContext.LegacyDataKey));
     }
 
     public static object ToInfo(DiscussionRead d) => new
@@ -1273,8 +1275,8 @@ public sealed class DiscussionStore(
         provider = d.Provider,
         confidential = d.Confidential,
         // Effective value, and whether someone chose it ("explicit") or it follows the type ("default").
-        personalContext = d.PersonalContext,
-        personalContextSource = d.PersonalContextSetting is null ? "default" : "explicit",
+        liveTimeline = d.LiveTimeline,
+        liveTimelineSource = d.LiveTimelineSetting is null ? "default" : "explicit",
         setupBootstrapMessageUid = d.SetupBootstrapMessageUid,
         worktrees = d.Worktrees ?? [],
         ownedBy = DiscussionApplicationOwner.IsForeign(d)

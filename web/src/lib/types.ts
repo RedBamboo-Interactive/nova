@@ -55,10 +55,10 @@ export interface DiscussionInfo {
   qualityTier?: string | null
   provider?: string | null
   confidential?: boolean
-  /** Whether its context includes personal LIVE events (mail, heartbeat notes...): the effective value. */
-  personalContext?: boolean
+  /** Whether its context carries the recent LIVE timeline events: the effective value. */
+  liveTimeline?: boolean
   /** "explicit" when someone chose it; "default" when it follows the type (on for LIVE and Heartbeat). */
-  personalContextSource?: "explicit" | "default"
+  liveTimelineSource?: "explicit" | "default"
   /** Worktrees this discussion works in, newest last. */
   worktrees?: WorktreeAttachment[]
   /** Internal first-turn identity. Raw RedCompute history includes this turn;

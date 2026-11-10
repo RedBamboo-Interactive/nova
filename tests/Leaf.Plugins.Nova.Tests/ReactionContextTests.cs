@@ -433,9 +433,9 @@ public sealed class ReactionContextTests
         public MessagePipeline Pipeline { get; }
         public ReactionTriggers Triggers { get; }
 
-        public World(string discussionType = "chat", string? injectedContext = null, bool? personalContext = null)
+        public World(string discussionType = "chat", string? injectedContext = null, bool? liveTimeline = null)
         {
-            Store = new Entities(discussionType, injectedContext, personalContext);
+            Store = new Entities(discussionType, injectedContext, liveTimeline);
             Directory.CreateDirectory(scratch);
             Stream = new Discussions(Store.DiscussionId);
             var events = CallbackDeliveryTests.Proxy.Create<IPluginEvents>((method, _) => method == "Subscribe" ? new Noop() : Task.CompletedTask);
@@ -494,7 +494,7 @@ public sealed class ReactionContextTests
         private readonly List<LeafEntity> entities = [];
         public Guid DiscussionId { get; }
 
-        public Entities(string discussionType = "chat", string? injectedContext = null, bool? personalContext = null)
+        public Entities(string discussionType = "chat", string? injectedContext = null, bool? liveTimeline = null)
         {
             var agent = New("agent", "nova", new JsonObject(), Guid.Parse(Agent));
             entities.Add(agent);
@@ -508,7 +508,7 @@ public sealed class ReactionContextTests
                 ["last_processed_session_assistant_uid"] = "",
             });
             if (injectedContext is not null) discussion.Data["injected_context"] = injectedContext;
-            if (personalContext is not null) discussion.Data[LiveEventScope.DataKey] = personalContext;
+            if (liveTimeline is not null) discussion.Data[LiveTimelineContext.DataKey] = liveTimeline;
             entities.Add(discussion);
             DiscussionId = discussion.Id;
         }

@@ -397,16 +397,16 @@ public sealed class MessagePipeline(
         var extensionContexts = await extensions.CollectContextAsync(
             userId, discussion.AgentId, discussion.Id, "conversation", ct);
 
-        // Personal context (the discussion's choice, else on for LIVE and Heartbeat) reads the whole
-        // LIVE timeline; work reads only its operational sources. Scoped here, so the stored snapshot,
-        // and so every later delta, never holds the rest.
-        var personal = LiveEventScope.IsPersonal(discussion);
+        // The LIVE timeline switch (the discussion's choice, else on for LIVE and Heartbeat): on, the
+        // context carries the latest LIVE events; off, none. Decided here, so the stored snapshot,
+        // and so every later delta, holds exactly that.
+        var liveTimeline = LiveTimelineContext.IsOn(discussion);
         List<ContextSnapshot.LiveEventEntry>? liveEvents = null;
         var liveDiscussion = ownDiscussions.FirstOrDefault(d => d.Type == "live");
-        if (liveDiscussion != null)
+        if (liveDiscussion != null && liveTimeline)
         {
             var liveMessages = await discussions.GetMessagesAsync(liveDiscussion.EntityId, ct: ct);
-            liveEvents = LiveEventScope.Select(liveMessages, personal);
+            liveEvents = LiveTimelineContext.Select(liveMessages, liveTimeline);
         }
 
         var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
@@ -426,7 +426,7 @@ public sealed class MessagePipeline(
             liveEvents: liveEvents,
             extensionContexts: extensionContexts,
             extensionsAttention: extensionsAttention,
-            scope: LiveEventScope.ScopeOf(personal),
+            liveTimeline: liveTimeline,
             takenAt: now);
 
         var reactions = await GetReactionNotesAsync(discussion, ct);
@@ -774,7 +774,7 @@ public sealed class MessagePipeline(
              new ComputeContextReference("session", current.SessionId)], method: "POST", ct: ct);
 
         var content = NovaContextBuilder.BuildReactionNote(notes.Lines, DateTime.UtcNow, device,
-            current.Id, agent.Name, steer, LiveEventScope.ScopeOf(LiveEventScope.IsPersonal(current)));
+            current.Id, agent.Name, steer);
         var messageUid = Guid.NewGuid().ToString("N");
         var result = await redCompute.SendMessageDetailedAsync(current.SessionId, new
         {

@@ -28,10 +28,10 @@ public class CreateDiscussionRequest
     /// <summary>Where he asked for this. Stamped on the brief's record; signed Agents only.</summary>
     public RequestedInBody? RequestedIn { get; set; }
     /// <summary>
-    /// Whether its context includes personal LIVE events (mail, heartbeat notes...). Omitted: the
-    /// type's default, on for live and heartbeat, off otherwise.
+    /// Whether its context carries the LIVE timeline. Omitted: the type's default, on for live and
+    /// heartbeat, off otherwise.
     /// </summary>
-    public bool? PersonalContext { get; set; }
+    public bool? LiveTimeline { get; set; }
 }
 
 /// <summary>"He asked for this there": a discussion and the message in it.</summary>
@@ -52,12 +52,12 @@ public class DiscussionConfidentialRequest
 }
 
 /// <summary>
-/// <c>personalContext</c>: true or false to choose, null to follow the type's default again. Kept as
+/// <c>liveTimeline</c>: true or false to choose, null to follow the type's default again. Kept as
 /// raw JSON so a missing field (Undefined, a 400) is not mistaken for null.
 /// </summary>
-public class DiscussionPersonalContextRequest
+public class DiscussionLiveTimelineRequest
 {
-    public JsonElement PersonalContext { get; set; }
+    public JsonElement LiveTimeline { get; set; }
 }
 
 public class AttachWorktreeRequest
@@ -349,9 +349,9 @@ public static class DiscussionEndpoints
             if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
         }
 
-        // Chosen before anything is published or briefed, so the first turn already has its scope.
-        if (created && createReq?.PersonalContext is { } personalContext)
-            discussion = await store.SetPersonalContextAsync(discussion.EntityId, personalContext, ctx.RequestAborted)
+        // Chosen before anything is published or briefed, so the first turn already follows it.
+        if (created && createReq?.LiveTimeline is { } liveTimeline)
+            discussion = await store.SetLiveTimelineAsync(discussion.EntityId, liveTimeline, ctx.RequestAborted)
                 ?? discussion;
 
         if (created)
@@ -480,15 +480,15 @@ public static class DiscussionEndpoints
     }
 
     /// <summary>
-    /// Sets whether a discussion's context includes personal LIVE events. Whoever may modify the
+    /// Sets whether a discussion's context carries the LIVE timeline. Whoever may access the
     /// discussion (as for its title and worktrees) may choose: the person, or an Agent acting for them.
     /// </summary>
-    internal static async Task<IResult> SetPersonalContextAsync(DiscussionRead discussion,
-        DiscussionPersonalContextRequest? request, HttpContext ctx, DiscussionStore store, IPluginEvents? events = null)
+    internal static async Task<IResult> SetLiveTimelineAsync(DiscussionRead discussion,
+        DiscussionLiveTimelineRequest? request, HttpContext ctx, DiscussionStore store, IPluginEvents? events = null)
     {
         if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
         bool? value;
-        switch (request?.PersonalContext.ValueKind)
+        switch (request?.LiveTimeline.ValueKind)
         {
             case JsonValueKind.True: value = true; break;
             case JsonValueKind.False: value = false; break;
@@ -497,15 +497,60 @@ public static class DiscussionEndpoints
                 return Results.BadRequest(new
                 {
                     error = "invalid_request",
-                    message = "personalContext must be true, false, or null to follow the discussion type's default",
+                    message = "liveTimeline must be true, false, or null to follow the discussion type's default",
                 });
         }
 
-        var updated = await store.SetPersonalContextAsync(discussion.EntityId, value, ctx.RequestAborted);
+        var updated = await store.SetLiveTimelineAsync(discussion.EntityId, value, ctx.RequestAborted);
         if (updated is null) return NotFound();
-        if (updated.PersonalContextSetting != discussion.PersonalContextSetting)
+        if (updated.LiveTimelineSetting != discussion.LiveTimelineSetting)
             await PublishChangedAsync(events, updated, ctx.RequestAborted);
         return Results.Ok(DiscussionStore.ToInfo(updated));
+    }
+
+    /// <summary>
+    /// The caller's current LIVE timeline: the open LIVE they can read (a signed Agent's own first,
+    /// as the <c>live</c> alias resolves), read exactly as reading that discussion is authorized.
+    /// Query: limit (1-100, default 15), before and since (ISO 8601, exclusive), source (as a
+    /// context line names it, e.g. <c>mail</c>).
+    /// </summary>
+    internal static async Task<IResult> ReadLiveTimelineAsync(HttpContext ctx, DiscussionStore store,
+        IDiscussions discussions, AgentDirectory agents)
+    {
+        var query = ctx.Request.Query;
+        var limit = LiveTimelineContext.MaxEvents;
+        if (query["limit"].FirstOrDefault() is { Length: > 0 } rawLimit
+            && (!int.TryParse(rawLimit, out limit) || limit < 1 || limit > LiveTimelineContext.MaxPage))
+            return Results.BadRequest(new { error = "invalid_request", message = $"limit must be 1-{LiveTimelineContext.MaxPage}" });
+        if (!LiveTimelineContext.TryParseTime(query["before"].FirstOrDefault(), out var before))
+            return Results.BadRequest(new { error = "invalid_request", message = "before must be an ISO 8601 timestamp" });
+        if (!LiveTimelineContext.TryParseTime(query["since"].FirstOrDefault(), out var since))
+            return Results.BadRequest(new { error = "invalid_request", message = "since must be an ISO 8601 timestamp" });
+        var source = query["source"].FirstOrDefault();
+
+        // On an install with several people the first open LIVE can be someone else's: pick among
+        // those the caller may read, and only when there is none answer as reading the alias would.
+        var lives = await store.ListByTypeAsync("live", ct: ctx.RequestAborted);
+        var callerAgent = SignedAgentId(ctx);
+        var live = LiveDiscussionAlias.FirstOpenFor(
+                lives.Where(d => DiscussionAccessPolicy.CanRead(d, ctx)).ToList(), callerAgent, agents.NovaAgentId)
+            ?? LiveDiscussionAlias.FirstOpenFor(lives, callerAgent, agents.NovaAgentId);
+        if (live is null) return NotFound();
+        if (!DiscussionAccessPolicy.CanRead(live, ctx)) return AccessDenied(live);
+
+        var messages = await discussions.GetMessagesAsync(live.EntityId, ct: ctx.RequestAborted);
+        var (events, hasMore) = LiveTimelineContext.Page(messages, limit, before, since, source);
+        return Results.Ok(new
+        {
+            discussionId = live.Id,
+            events = events.Select(e => new
+            {
+                source = LiveTimelineContext.SourceName(e.Source),
+                content = e.Content,
+                timestamp = e.Timestamp,
+            }),
+            hasMore,
+        });
     }
 
     // The header chips read the discussion record; this is the event that makes clients re-read it.
@@ -705,7 +750,7 @@ public static class DiscussionEndpoints
             catch { /* body is optional */ }
             return await CreateDiscussionAsync(createReq, ctx, store, agents, pipeline, events, live, injector);
         })
-            .WithSummary("Creates a discussion and starts its provider session, owned by the signed-in person or the calling Agent's beneficiary. The body is optional: agentId, type, qualityTier, provider, deferSession, idempotencyKey, title (kept: automatic titling won't overwrite it), personalContext (boolean: whether its context includes personal LIVE events; omitted follows the type: on for live and heartbeat, off otherwise), brief (what it should do: posted as an event the new session takes, the server stating who sent it), requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, needs a brief, 403 for a discussion the caller can't read). brief with deferSession is a 400; a retry under idempotencyKey reuses the discussion and its brief. A second open live or heartbeat discussion for the same Agent returns 409.")
+            .WithSummary("Creates a discussion and starts its provider session, owned by the signed-in person or the calling Agent's beneficiary. The body is optional: agentId, type, qualityTier, provider, deferSession, idempotencyKey, title (kept: automatic titling won't overwrite it), liveTimeline (boolean: whether its context carries the LIVE timeline; omitted follows the type: on for live and heartbeat, off otherwise), brief (what it should do: posted as an event the new session takes, the server stating who sent it), requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, needs a brief, 403 for a discussion the caller can't read). brief with deferSession is a 400; a retry under idempotencyKey reuses the discussion and its brief. A second open live or heartbeat discussion for the same Agent returns 409.")
             .WithMetadata(new AcceptsMetadata([], typeof(CreateDiscussionRequest)));
 
         group.MapGet("/discussions/live", async (HttpContext ctx, DiscussionStore store) =>
@@ -1598,14 +1643,18 @@ public static class DiscussionEndpoints
         })
             .WithSummary("Sets or clears the confidential flag of a discussion. Body: confidential (boolean). Only callers allowed to manage confidentiality; making it confidential also applies the boundary to its session.");
 
-        group.MapPut("/discussions/{id}/personal-context", async (string id,
-            DiscussionPersonalContextRequest request, HttpContext ctx, DiscussionStore store,
+        group.MapPut("/discussions/{id}/live-timeline", async (string id,
+            DiscussionLiveTimelineRequest request, HttpContext ctx, DiscussionStore store,
             [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
         {
             var discussion = await store.GetAsync(id, ctx.RequestAborted);
-            return discussion is null ? NotFound() : await SetPersonalContextAsync(discussion, request, ctx, store, events);
+            return discussion is null ? NotFound() : await SetLiveTimelineAsync(discussion, request, ctx, store, events);
         })
-            .WithSummary("Sets whether a discussion's context includes personal LIVE events (mail, heartbeat notes, other instances' notes, any source not on the work list). Body: personalContext (true or false; null follows the type's default again: on for live and heartbeat, off otherwise). Same access as renaming; the discussion carries personalContext and personalContextSource (explicit or default).");
+            .WithSummary("Sets whether a discussion's context carries the LIVE timeline (the latest 15 LIVE events from every source: mail, automations, lights, music, other discussions...). Off, its context lists no LIVE events and says how to read them from GET /live/timeline. Body: liveTimeline (true or false; null follows the type's default again: on for live and heartbeat, off otherwise). Same access as renaming; the discussion carries liveTimeline and liveTimelineSource (explicit or default).");
+
+        group.MapGet("/live/timeline", (HttpContext ctx, DiscussionStore store, IDiscussions discussions, AgentDirectory agents)
+                => ReadLiveTimelineAsync(ctx, store, discussions, agents))
+            .WithSummary("Reads the caller's current LIVE timeline: events of the open LIVE discussion they can read, newest last, each with source (e.g. mail, automation), content (the text a context line shows) and timestamp. Query: limit (1-100, default 15), before and since (ISO 8601, exclusive), source. hasMore is true when older matching events exist: pass the first event's timestamp as before. Authorized exactly as reading that LIVE discussion.");
 
         // Worktree attachments: where a discussion works inside a repository. The discussion keeps
         // its Agent-workspace cwd; this records the folders it touches so every turn can say so.
