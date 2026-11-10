@@ -10,10 +10,13 @@ namespace Leaf.Plugins.Nova.Tests;
 // reaction lines (it used to drop them); reaction lines say add or remove, the agent's latest or an
 // earlier message, and quote it; the full context ends with the <nova-no-reply/> sentence.
 // Since the 2026-11-06 audit, the recall, search and context recipes carry the execution bearer too.
+// Since 2026-11-10 every opening tag states its scope (scope="personal" or scope="work"): whether
+// the discussion has personal context, which decides the LIVE events it holds. The representative
+// discussion has it (its Sonos event is personal); the reaction notes below are work.
 internal static class NovaContextGolden
 {
     internal const string Full = """
-        <nova-context timestamp="2026-10-24T14:30:00Z" day="Saturday" device="Pixel 9" device_type="phone" platform="android" input="text" discussion="c0ffee01" message="5d1f0c2a9b8e47c3a6f4e2d1c0b9a876" agent="Nova" room="Living room">
+        <nova-context timestamp="2026-10-24T14:30:00Z" day="Saturday" device="Pixel 9" device_type="phone" platform="android" input="text" discussion="c0ffee01" scope="personal" message="5d1f0c2a9b8e47c3a6f4e2d1c0b9a876" agent="Nova" room="Living room">
         Mood: Curious, a little tired
         Active discussions:
         - [c0ffee01] "Plan "v2" & rollout <beta>" . 12 msgs . 5min ago <- you are here
@@ -52,7 +55,7 @@ internal static class NovaContextGolden
         """;
 
     internal const string Delta = """
-        <nova-context timestamp="2026-10-24T14:30:00Z" day="Saturday" device="Pixel 9" device_type="phone" platform="android" input="text" discussion="c0ffee01" message="5d1f0c2a9b8e47c3a6f4e2d1c0b9a876" agent="Nova" room="Living room">
+        <nova-context timestamp="2026-10-24T14:30:00Z" day="Saturday" device="Pixel 9" device_type="phone" platform="android" input="text" discussion="c0ffee01" scope="personal" message="5d1f0c2a9b8e47c3a6f4e2d1c0b9a876" agent="Nova" room="Living room">
         Changes since last message:
         - New discussion [fam00001] "Family trip 👨‍👩‍👧 ‏שלום" (thinking)
         - New discussion [old00001] "Archived notes" (archived)
@@ -78,7 +81,7 @@ internal static class NovaContextGolden
     // A reaction note carries no message of its own (no message="..."), only the reaction lines and
     // one constant sentence: a triggered turn may settle silently, a steered note needs no reply.
     internal const string TriggeredNote = """
-        <nova-context timestamp="2026-10-24T14:30:00Z" day="Saturday" device="Pixel 9" device_type="phone" platform="android" input="reaction" discussion="c0ffee01" agent="Nova" room="Living room">
+        <nova-context timestamp="2026-10-24T14:30:00Z" day="Saturday" device="Pixel 9" device_type="phone" platform="android" input="reaction" discussion="c0ffee01" scope="work" agent="Nova" room="Living room">
         Reactions since your last message:
         - Laurent reacted 👍 to your latest message: "Shipped & tested"
         - Laurent removed ❤️ from an earlier message of yours: "Draft <v1> plan"
@@ -87,7 +90,7 @@ internal static class NovaContextGolden
         """;
 
     internal const string SteeredNote = """
-        <nova-context timestamp="2026-10-24T14:30:00Z" day="Saturday" device="Pixel 9" device_type="phone" platform="android" input="reaction" discussion="c0ffee01" agent="Nova" room="Living room">
+        <nova-context timestamp="2026-10-24T14:30:00Z" day="Saturday" device="Pixel 9" device_type="phone" platform="android" input="reaction" discussion="c0ffee01" scope="work" agent="Nova" room="Living room">
         Reactions since your last message:
         - Laurent reacted 👍 to your latest message: "Shipped & tested"
         - Laurent removed ❤️ from an earlier message of yours: "Draft <v1> plan"

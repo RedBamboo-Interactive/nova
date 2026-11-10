@@ -397,21 +397,16 @@ public sealed class MessagePipeline(
         var extensionContexts = await extensions.CollectContextAsync(
             userId, discussion.AgentId, discussion.Id, "conversation", ct);
 
+        // Personal context (the discussion's choice, else on for LIVE and Heartbeat) reads the whole
+        // LIVE timeline; work reads only its operational sources. Scoped here, so the stored snapshot,
+        // and so every later delta, never holds the rest.
+        var personal = LiveEventScope.IsPersonal(discussion);
         List<ContextSnapshot.LiveEventEntry>? liveEvents = null;
         var liveDiscussion = ownDiscussions.FirstOrDefault(d => d.Type == "live");
         if (liveDiscussion != null)
         {
             var liveMessages = await discussions.GetMessagesAsync(liveDiscussion.EntityId, ct: ct);
-            liveEvents = liveMessages
-                .Where(m => (m.Metadata["source"]?.GetValue<string>() ?? "").StartsWith("event:"))
-                .TakeLast(15)
-                .Select(m => new ContextSnapshot.LiveEventEntry
-                {
-                    Source = m.Metadata["source"]?.GetValue<string>() ?? "",
-                    Content = m.Content,
-                    Timestamp = ParseTimestamp(m) ?? m.CreatedAt.UtcDateTime,
-                })
-                .ToList();
+            liveEvents = LiveEventScope.Select(liveMessages, personal);
         }
 
         var previousSnapshot = NovaContextBuilder.DeserializeSnapshot(discussion.LastContextJson);
@@ -430,7 +425,9 @@ public sealed class MessagePipeline(
             mood: moodSummary,
             liveEvents: liveEvents,
             extensionContexts: extensionContexts,
-            extensionsAttention: extensionsAttention);
+            extensionsAttention: extensionsAttention,
+            scope: LiveEventScope.ScopeOf(personal),
+            takenAt: now);
 
         var reactions = await GetReactionNotesAsync(discussion, ct);
 
@@ -548,6 +545,9 @@ public sealed class MessagePipeline(
         var hasAttachments = claimedAttachments.Length > 0;
         var acceptedMessageUid = messageUid ?? Guid.NewGuid().ToString("N");
         var visibleContent = displayContent ?? content;
+        // Exactly what the agent read ahead of this message, so Message Info can show it later.
+        // last_context_json is overwritten every turn; this copy stays with its own message.
+        var injectedContext = NovaMessageContext.ToRecord(metadata, contextBlock + priorBlock);
         var patch = new JsonObject
         {
             ["last_activity"] = new DateTimeOffset(now).ToString("O"),
@@ -580,6 +580,7 @@ public sealed class MessagePipeline(
                 ["parts_json"] = JsonSerializer.Serialize(parts, JsonOptions),
                 ["source"] = disposition == "delivered" ? "user-message" : "queued-user-message",
                 ["uid"] = acceptedMessageUid,
+                [NovaMessageContext.RecordKey] = injectedContext.DeepClone(),
             }, acceptedMessageUid, userId, idempotencyKey, ct);
         }
         else if (hasImages)
@@ -598,6 +599,7 @@ public sealed class MessagePipeline(
                 ["parts_json"] = JsonSerializer.Serialize(parts, JsonOptions),
                 ["source"] = disposition == "delivered" ? "user-message" : "queued-user-message",
                 ["uid"] = acceptedMessageUid,
+                [NovaMessageContext.RecordKey] = injectedContext.DeepClone(),
             }, acceptedMessageUid, userId, idempotencyKey, ct);
         }
         else
@@ -609,6 +611,7 @@ public sealed class MessagePipeline(
             {
                 ["source"] = disposition == "delivered" ? "user-message" : "queued-user-message",
                 ["uid"] = acceptedMessageUid,
+                [NovaMessageContext.RecordKey] = injectedContext.DeepClone(),
             }, acceptedMessageUid, userId, idempotencyKey, ct);
         }
 
@@ -771,7 +774,7 @@ public sealed class MessagePipeline(
              new ComputeContextReference("session", current.SessionId)], method: "POST", ct: ct);
 
         var content = NovaContextBuilder.BuildReactionNote(notes.Lines, DateTime.UtcNow, device,
-            current.Id, agent.Name, steer);
+            current.Id, agent.Name, steer, LiveEventScope.ScopeOf(LiveEventScope.IsPersonal(current)));
         var messageUid = Guid.NewGuid().ToString("N");
         var result = await redCompute.SendMessageDetailedAsync(current.SessionId, new
         {
@@ -791,11 +794,5 @@ public sealed class MessagePipeline(
         // A turn it starts is work for the Agent, but nobody is talking.
         if (!steer) activity?.TurnAdmitted(current, userFacing: false);
         return new(true, current.SessionId, null, null, MessageUid: messageUid);
-    }
-
-    private static DateTime? ParseTimestamp(DiscussionMessage m)
-    {
-        var ts = m.Metadata["timestamp"]?.GetValue<string>();
-        return ts != null && DateTimeOffset.TryParse(ts, out var t) ? t.UtcDateTime : null;
     }
 }

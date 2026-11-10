@@ -27,6 +27,11 @@ public class CreateDiscussionRequest
     public string? Brief { get; set; }
     /// <summary>Where he asked for this. Stamped on the brief's record; signed Agents only.</summary>
     public RequestedInBody? RequestedIn { get; set; }
+    /// <summary>
+    /// Whether its context includes personal LIVE events (mail, heartbeat notes...). Omitted: the
+    /// type's default, on for live and heartbeat, off otherwise.
+    /// </summary>
+    public bool? PersonalContext { get; set; }
 }
 
 /// <summary>"He asked for this there": a discussion and the message in it.</summary>
@@ -44,6 +49,15 @@ public class DiscussionTitleRequest
 public class DiscussionConfidentialRequest
 {
     public bool Confidential { get; set; }
+}
+
+/// <summary>
+/// <c>personalContext</c>: true or false to choose, null to follow the type's default again. Kept as
+/// raw JSON so a missing field (Undefined, a 400) is not mistaken for null.
+/// </summary>
+public class DiscussionPersonalContextRequest
+{
+    public JsonElement PersonalContext { get; set; }
 }
 
 public class AttachWorktreeRequest
@@ -335,6 +349,11 @@ public static class DiscussionEndpoints
             if (DiscussionMutationPolicy.RejectSend(discussion)) return Closed();
         }
 
+        // Chosen before anything is published or briefed, so the first turn already has its scope.
+        if (created && createReq?.PersonalContext is { } personalContext)
+            discussion = await store.SetPersonalContextAsync(discussion.EntityId, personalContext, ctx.RequestAborted)
+                ?? discussion;
+
         if (created)
         {
             await events.PublishAsync("discussion.created", new JsonObject
@@ -458,6 +477,35 @@ public static class DiscussionEndpoints
         if (detached is not var (items, removed)) return NotFound();
         if (removed) await PublishChangedAsync(events, discussion, ctx.RequestAborted);
         return Results.Ok(new { detached = removed, items });
+    }
+
+    /// <summary>
+    /// Sets whether a discussion's context includes personal LIVE events. Whoever may modify the
+    /// discussion (as for its title and worktrees) may choose: the person, or an Agent acting for them.
+    /// </summary>
+    internal static async Task<IResult> SetPersonalContextAsync(DiscussionRead discussion,
+        DiscussionPersonalContextRequest? request, HttpContext ctx, DiscussionStore store, IPluginEvents? events = null)
+    {
+        if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+        bool? value;
+        switch (request?.PersonalContext.ValueKind)
+        {
+            case JsonValueKind.True: value = true; break;
+            case JsonValueKind.False: value = false; break;
+            case JsonValueKind.Null: value = null; break;
+            default:
+                return Results.BadRequest(new
+                {
+                    error = "invalid_request",
+                    message = "personalContext must be true, false, or null to follow the discussion type's default",
+                });
+        }
+
+        var updated = await store.SetPersonalContextAsync(discussion.EntityId, value, ctx.RequestAborted);
+        if (updated is null) return NotFound();
+        if (updated.PersonalContextSetting != discussion.PersonalContextSetting)
+            await PublishChangedAsync(events, updated, ctx.RequestAborted);
+        return Results.Ok(DiscussionStore.ToInfo(updated));
     }
 
     // The header chips read the discussion record; this is the event that makes clients re-read it.
@@ -657,7 +705,7 @@ public static class DiscussionEndpoints
             catch { /* body is optional */ }
             return await CreateDiscussionAsync(createReq, ctx, store, agents, pipeline, events, live, injector);
         })
-            .WithSummary("Creates a discussion and starts its provider session, owned by the signed-in person or the calling Agent's beneficiary. The body is optional: agentId, type, qualityTier, provider, deferSession, idempotencyKey, title (kept: automatic titling won't overwrite it), brief (what it should do: posted as an event the new session takes, the server stating who sent it), requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, needs a brief, 403 for a discussion the caller can't read). brief with deferSession is a 400; a retry under idempotencyKey reuses the discussion and its brief. A second open live or heartbeat discussion for the same Agent returns 409.")
+            .WithSummary("Creates a discussion and starts its provider session, owned by the signed-in person or the calling Agent's beneficiary. The body is optional: agentId, type, qualityTier, provider, deferSession, idempotencyKey, title (kept: automatic titling won't overwrite it), personalContext (boolean: whether its context includes personal LIVE events; omitted follows the type: on for live and heartbeat, off otherwise), brief (what it should do: posted as an event the new session takes, the server stating who sent it), requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, needs a brief, 403 for a discussion the caller can't read). brief with deferSession is a 400; a retry under idempotencyKey reuses the discussion and its brief. A second open live or heartbeat discussion for the same Agent returns 409.")
             .WithMetadata(new AcceptsMetadata([], typeof(CreateDiscussionRequest)));
 
         group.MapGet("/discussions/live", async (HttpContext ctx, DiscussionStore store) =>
@@ -1040,6 +1088,9 @@ public static class DiscussionEndpoints
                 session = transcript?.Session,
                 messages = canonicalMessages,
                 overlays,
+                // Additive: the stored context of each user message on this page, by its uid. The
+                // canonical row stays RedCompute's; the client stamps this onto the same-uid block.
+                messageContexts = NovaMessageContext.ForUserMessages(overlayPage.Messages),
                 page = new
                 {
                     epoch,
@@ -1149,6 +1200,9 @@ public static class DiscussionEndpoints
                                 senderAgentId = (string?)null,
                                 source = (string?)"session-transcript",
                                 stampedSender = (object?)null,
+                                // The context the agent read ahead of this user message, from the
+                                // record that shares its uid (null for older records and replies).
+                                metadata = NovaMessageContext.Read(saved),
                             };
                         });
 
@@ -1172,6 +1226,7 @@ public static class DiscussionEndpoints
                             senderAgentId = (string?)null,
                             source = (string?)"user-message",
                             stampedSender = (object?)null,
+                            metadata = NovaMessageContext.Read(m),
                         });
 
                     // Automation-created discussions exist before their RedCompute
@@ -1195,6 +1250,7 @@ public static class DiscussionEndpoints
                             senderAgentId = m.Metadata["sender_agent_id"]?.GetValue<string>(),
                             source = (string?)"nova-message",
                             stampedSender = (object?)null,
+                            metadata = (JsonObject?)null,
                         });
 
                     var eventMsgs = records
@@ -1214,6 +1270,7 @@ public static class DiscussionEndpoints
                                 senderAgentId = m.Metadata["sender_agent_id"]?.GetValue<string>(),
                                 source = m.Metadata["source"]?.GetValue<string>(),
                                 stampedSender = EventSender.Read(m.Metadata)?.ToDto(),
+                                metadata = (JsonObject?)null,
                             };
                         });
 
@@ -1256,6 +1313,7 @@ public static class DiscussionEndpoints
                     timestamp = ts.ToString("o"),
                     senderAgentId = m.Metadata["sender_agent_id"]?.GetValue<string>(),
                     source = m.Metadata["source"]?.GetValue<string>(),
+                    metadata = isUserMessage ? NovaMessageContext.Read(m) : null,
                 };
             }).AsEnumerable();
 
@@ -1539,6 +1597,15 @@ public static class DiscussionEndpoints
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Confidential = request.Confidential }));
         })
             .WithSummary("Sets or clears the confidential flag of a discussion. Body: confidential (boolean). Only callers allowed to manage confidentiality; making it confidential also applies the boundary to its session.");
+
+        group.MapPut("/discussions/{id}/personal-context", async (string id,
+            DiscussionPersonalContextRequest request, HttpContext ctx, DiscussionStore store,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
+        {
+            var discussion = await store.GetAsync(id, ctx.RequestAborted);
+            return discussion is null ? NotFound() : await SetPersonalContextAsync(discussion, request, ctx, store, events);
+        })
+            .WithSummary("Sets whether a discussion's context includes personal LIVE events (mail, heartbeat notes, other instances' notes, any source not on the work list). Body: personalContext (true or false; null follows the type's default again: on for live and heartbeat, off otherwise). Same access as renaming; the discussion carries personalContext and personalContextSource (explicit or default).");
 
         // Worktree attachments: where a discussion works inside a repository. The discussion keeps
         // its Agent-workspace cwd; this records the folders it touches so every turn can say so.

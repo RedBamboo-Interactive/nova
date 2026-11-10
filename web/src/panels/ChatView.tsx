@@ -317,6 +317,7 @@ export function ChatView({
     renameDiscussion,
     updateDiscussionTitle,
     setConfidential,
+    setPersonalContext,
     reopenDiscussion,
     loadEarlierMessages,
     retryHistoryLoad,
@@ -515,6 +516,7 @@ export function ChatView({
   const [titleUpdatePending, setTitleUpdatePending] = useState(false)
   const [reopenPending, setReopenPending] = useState(false)
   const [confidentialityPending, setConfidentialityPending] = useState(false)
+  const [personalContextPending, setPersonalContextPending] = useState(false)
   const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const providersRef = useRef(providers)
@@ -936,6 +938,22 @@ export function ChatView({
     }
   }, [activeDiscussionId, confidentialityPending, setConfidential, toast])
 
+  const handlePersonalContextToggle = useCallback(async (checked: boolean) => {
+    if (!activeDiscussionId || personalContextPending) return
+    setPersonalContextPending(true)
+    try {
+      await setPersonalContext(activeDiscussionId, checked)
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "Could not update personal context",
+        description: error instanceof Error ? error.message : "Unknown error",
+      })
+    } finally {
+      setPersonalContextPending(false)
+    }
+  }, [activeDiscussionId, personalContextPending, setPersonalContext, toast])
+
   const handleShare = useCallback(() => {
     share.reset()
     share.createShare()
@@ -1161,6 +1179,27 @@ export function ChatView({
           disabled={confidentialityPending || discussionClosed}
           aria-busy={confidentialityPending}
           aria-label="Confidential discussion"
+        />
+      </div>
+      <div data-setting-path="discussion.personalContext" className="flex items-start justify-between gap-3 rounded-lg border border-overlay-6 bg-overlay-3 px-3 py-2.5">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <i className="ph-bold ph-user-circle mt-0.5 text-sm text-text-muted" aria-hidden="true" />
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-contrast">Personal context</div>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
+              Lets Nova see mail, heartbeat notes and other personal LIVE events here. Off, it sees only automations, callbacks, discussion activity, presence and devices. On by default for LIVE and Heartbeat.
+              {activeDiscussion.personalContextSource !== "explicit" && " This discussion uses its default."}
+            </p>
+          </div>
+        </div>
+        <Switch
+          size="sm"
+          className="mt-0.5 shrink-0"
+          checked={activeDiscussion.personalContext ?? (activeDiscussion.type === "live" || activeDiscussion.type === "heartbeat")}
+          onCheckedChange={handlePersonalContextToggle}
+          disabled={personalContextPending || discussionClosed}
+          aria-busy={personalContextPending}
+          aria-label="Personal context"
         />
       </div>
       <DelegationsInfo activity={activeDelegations} />

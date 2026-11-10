@@ -27,6 +27,19 @@ public sealed class ContextSnapshot
     [JsonPropertyName("liveEvents")]
     public List<LiveEventEntry> LiveEvents { get; set; } = [];
 
+    /// <summary>
+    /// "personal" or "work" (<see cref="LiveEventScope"/>): which LIVE events this snapshot holds, and
+    /// the context tag's scope. Null in snapshots stored before scopes existed.
+    /// </summary>
+    [JsonPropertyName("scope")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Scope { get; set; }
+
+    /// <summary>When the snapshot was taken; after a scope change only later events read as new.</summary>
+    [JsonPropertyName("takenAt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? TakenAt { get; set; }
+
     [JsonPropertyName("extensionContexts")]
     public List<ExtensionContextEntry> ExtensionContexts { get; set; } = [];
 
@@ -132,10 +145,14 @@ public static class NovaContextBuilder
         string? mood = null,
         List<ContextSnapshot.LiveEventEntry>? liveEvents = null,
         IReadOnlyList<PluginContextFragment>? extensionContexts = null,
-        string? extensionsAttention = null)
+        string? extensionsAttention = null,
+        string? scope = null,
+        DateTime? takenAt = null)
     {
         return new ContextSnapshot
         {
+            Scope = scope,
+            TakenAt = takenAt,
             Discussions = ownDiscussions.Select(ToEntry).ToList(),
             OtherAgentDiscussions = otherAgentDiscussions?.Select(ToEntry).ToList() ?? [],
             Outfit = outfit,
@@ -255,7 +272,7 @@ public static class NovaContextBuilder
 
         AppendWorktrees(sb, worktrees, leadingBlankLine: true);
 
-        return Frame(sb, now, device, input, currentId, agentName, messageUid, NoReplyHint);
+        return Frame(sb, now, device, input, currentId, agentName, ScopeOf(snapshot), messageUid, NoReplyHint);
     }
 
     // Constant text appended after neutralization: inside the body the marker would be made inert
@@ -273,10 +290,10 @@ public static class NovaContextBuilder
 
     // The opening tag, the neutralized body, any constant trusted text, the closing tag.
     private static string Frame(StringBuilder body, DateTime now, ResolvedDevice device,
-        string input, string currentId, string? agentName, string? messageUid = null, string? trusted = null)
+        string input, string currentId, string? agentName, string scope, string? messageUid = null, string? trusted = null)
     {
         var sb = new StringBuilder();
-        AppendOpenTag(sb, now, device, input, currentId, agentName, messageUid);
+        AppendOpenTag(sb, now, device, input, currentId, agentName, scope, messageUid);
         sb.Append(NovaEventText.Neutralize(body.ToString()));
         sb.Append(trusted);
         sb.Append("\n</nova-context>");
@@ -289,12 +306,12 @@ public static class NovaContextBuilder
     /// running turn (<paramref name="steered"/>).
     /// </summary>
     public static string BuildReactionNote(IReadOnlyList<string> reactionLines, DateTime now,
-        ResolvedDevice device, string currentId, string? agentName, bool steered)
+        ResolvedDevice device, string currentId, string? agentName, bool steered, string scope)
     {
         var sb = new StringBuilder("\nReactions since your last message:");
         foreach (var r in reactionLines)
             sb.Append($"\n- {r}");
-        return Frame(sb, now, device, "reaction", currentId, agentName,
+        return Frame(sb, now, device, "reaction", currentId, agentName, scope,
             trusted: steered ? SteeredNoteHint : TriggeredNoteHint);
     }
 
@@ -371,9 +388,16 @@ public static class NovaContextBuilder
         if (current.Mood != previous.Mood && current.Mood != null)
             changes.Add($"Mood changed: {current.Mood}");
 
+        // A scope switch changes which events the window holds, not what happened. Say so once, and
+        // count as new only what arrived after the last turn: turning personal never dumps the old
+        // personal window as news, and turning work leaves nothing personal in the current window.
+        var scopeChanged = previous.Scope is { } scopeBefore && current.Scope is { } scopeNow && scopeBefore != scopeNow;
+        if (scopeChanged)
+            changes.Add(current.Scope == LiveEventScope.Personal ? PersonalContextOn : PersonalContextOff);
         var prevEventTimestamps = previous.LiveEvents.Select(e => e.Timestamp).ToHashSet();
         var newEvents = current.LiveEvents
             .Where(e => !prevEventTimestamps.Contains(e.Timestamp))
+            .Where(e => !scopeChanged || (previous.TakenAt is { } taken && e.Timestamp > taken))
             .ToList();
         foreach (var ev in newEvents)
         {
@@ -423,8 +447,18 @@ public static class NovaContextBuilder
 
         AppendWorktrees(sb, worktrees, leadingBlankLine: false);
 
-        return Frame(sb, now, device, input, currentId, agentName, messageUid);
+        return Frame(sb, now, device, input, currentId, agentName, ScopeOf(current), messageUid);
     }
+
+    // The scope a context states. A snapshot built without one is work: it is never assumed personal.
+    private static string ScopeOf(ContextSnapshot snapshot)
+        => snapshot.Scope == LiveEventScope.Personal ? LiveEventScope.Personal : LiveEventScope.Work;
+
+    internal const string PersonalContextOn =
+        "Personal context turned on: LIVE events here now include mail, heartbeat notes and other personal events";
+
+    internal const string PersonalContextOff =
+        "Personal context turned off: LIVE events here are now only automation, callbacks, discussion activity, presence and devices";
 
     /// <summary>
     /// Where this discussion works, stated on every turn (not only when it changes) so a model
@@ -475,7 +509,7 @@ public static class NovaContextBuilder
     }
 
     private static void AppendOpenTag(StringBuilder sb, DateTime now, ResolvedDevice device,
-        string input, string currentId, string? agentName, string? messageUid)
+        string input, string currentId, string? agentName, string scope, string? messageUid)
     {
         // Device name, type and platform come from the client's User-Agent; the agent name and room
         // are user-editable entities; a caller can choose the message uid.
@@ -483,7 +517,7 @@ public static class NovaContextBuilder
         var messageAttr = messageUid != null ? $" message=\"{A(messageUid)}\"" : "";
         var agentAttr = agentName != null ? $" agent=\"{A(agentName)}\"" : "";
         var roomAttr = device.Room != null ? $" room=\"{A(device.Room)}\"" : "";
-        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{A(device.ShortLabel)}\" device_type=\"{A(device.Type)}\" platform=\"{A(device.Platform)}\" input=\"{A(input)}\" discussion=\"{A(currentId)}\"{messageAttr}{agentAttr}{roomAttr}>");
+        sb.Append($"<nova-context timestamp=\"{now:yyyy-MM-ddTHH:mm:ssZ}\" day=\"{now.ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)}\" device=\"{A(device.ShortLabel)}\" device_type=\"{A(device.Type)}\" platform=\"{A(device.Platform)}\" input=\"{A(input)}\" discussion=\"{A(currentId)}\" scope=\"{A(scope)}\"{messageAttr}{agentAttr}{roomAttr}>");
     }
 
     private static string FormatRelativeTime(TimeSpan elapsed)

@@ -103,7 +103,15 @@ public sealed record DiscussionRead(
     string? OwnerPlugin = null,
     string? OwnerApp = null,
     IReadOnlyList<WorktreeAttachment>? Worktrees = null,
-    ReactionCursor? ReactionsNoted = null);
+    ReactionCursor? ReactionsNoted = null,
+    bool? PersonalContextSetting = null)
+{
+    /// <summary>
+    /// Whether this discussion's context includes personal LIVE events: the explicit choice when
+    /// someone made one, else on for LIVE and Heartbeat and off for everything else.
+    /// </summary>
+    public bool PersonalContext => LiveEventScope.IsPersonal(this);
+}
 
 public sealed record ArchivedDiscussionPage(
     IReadOnlyList<DiscussionRead> Items,
@@ -667,6 +675,24 @@ public sealed class DiscussionStore(
         }, ct);
 
     /// <summary>Applies an explicit user rename and returns the canonical entity view.</summary>
+    /// <summary>
+    /// Sets whether the discussion's context includes personal LIVE events. Null forgets the choice,
+    /// so the discussion follows its type's default again.
+    /// </summary>
+    public Task<DiscussionRead?> SetPersonalContextAsync(
+        Guid entityId, bool? personalContext, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
+            if (entity is null || Map(entity) is null) return null;
+            await entities.PatchAsync(entityId, new JsonObject
+            {
+                [LiveEventScope.DataKey] = personalContext is { } value ? JsonValue.Create(value) : null,
+            }, ct: ct);
+            var updated = await entities.GetAsync(entityId, ct);
+            return updated is null ? null : Map(updated);
+        }, ct);
+
     public Task<DiscussionRead?> SetManualTitleAsync(
         Guid entityId, string? title, CancellationToken ct = default)
         => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
@@ -1223,7 +1249,8 @@ public sealed class DiscussionStore(
             Str(d, "owner_plugin"),
             Str(d, "source_app"),
             WorktreeAttachment.Read(d),
-            ReactionCursor.Read(d));
+            ReactionCursor.Read(d),
+            Bool(d, LiveEventScope.DataKey));
     }
 
     public static object ToInfo(DiscussionRead d) => new
@@ -1245,6 +1272,9 @@ public sealed class DiscussionStore(
         qualityTier = d.QualityTier,
         provider = d.Provider,
         confidential = d.Confidential,
+        // Effective value, and whether someone chose it ("explicit") or it follows the type ("default").
+        personalContext = d.PersonalContext,
+        personalContextSource = d.PersonalContextSetting is null ? "default" : "explicit",
         setupBootstrapMessageUid = d.SetupBootstrapMessageUid,
         worktrees = d.Worktrees ?? [],
         ownedBy = DiscussionApplicationOwner.IsForeign(d)

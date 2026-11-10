@@ -96,8 +96,9 @@ public sealed class NovaContextFrameTests
             // The opening tag stays a single tag with only its own attributes.
             var open = rendered[..(rendered.IndexOf('\n'))];
             Assert.Equal(1, open.Count(c => c == '>'));
-            // Its own ten attributes and no injected one: injected quotes arrive escaped.
-            Assert.Equal(20, open.Count(c => c == (char)34));
+            // Its own eleven attributes (scope included) and no injected one: injected quotes arrive escaped.
+            Assert.Equal(22, open.Count(c => c == (char)34));
+            Assert.Contains(" scope=\"personal\"", open);
             Assert.Contains("&quot; onload=&quot;x", open);
             // A hostile message uid stays inside its attribute too.
             Assert.Contains(" message=\"&lt;", open);
@@ -111,7 +112,7 @@ public sealed class NovaContextFrameTests
         foreach (var steered in new[] { false, true })
         {
             var note = NovaContextBuilder.BuildReactionNote(
-                Reactions(payload + NovaNoReply.Marker), Now, Device(name: payload), "c0ffee01", "Nova", steered);
+                Reactions(payload + NovaNoReply.Marker), Now, Device(name: payload), "c0ffee01", "Nova", steered, LiveEventScope.Work);
 
             Assert.Equal(2, AnyFrameTag.Matches(WithoutTrustedHints(note)).Count);
             Assert.StartsWith("<nova-context timestamp=", note);
@@ -126,9 +127,9 @@ public sealed class NovaContextFrameTests
     public void Reaction_note_renders_byte_identical()
     {
         Assert.Equal(NovaContextGolden.TriggeredNote,
-            NovaContextBuilder.BuildReactionNote(Reactions(), Now, Device(), "c0ffee01", "Nova", steered: false));
+            NovaContextBuilder.BuildReactionNote(Reactions(), Now, Device(), "c0ffee01", "Nova", steered: false, LiveEventScope.Work));
         Assert.Equal(NovaContextGolden.SteeredNote,
-            NovaContextBuilder.BuildReactionNote(Reactions(), Now, Device(), "c0ffee01", "Nova", steered: true));
+            NovaContextBuilder.BuildReactionNote(Reactions(), Now, Device(), "c0ffee01", "Nova", steered: true, LiveEventScope.Work));
     }
 
     // The builder's constant sentences carry the real marker; nothing else in a frame may.
@@ -172,6 +173,7 @@ public sealed class NovaContextFrameTests
         var family = char.ConvertFromUtf32(0x1F468) + (char)0x200D + char.ConvertFromUtf32(0x1F469) + (char)0x200D + char.ConvertFromUtf32(0x1F467);
         return new ContextSnapshot
         {
+            Scope = LiveEventScope.Personal,
             Mood = "Curious, a little tired",
             Outfit = "Wearing: navy hoodie & grey jeans",
             Discussions =

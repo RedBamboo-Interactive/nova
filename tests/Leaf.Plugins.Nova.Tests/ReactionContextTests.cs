@@ -421,20 +421,21 @@ public sealed class ReactionContextTests
         return new ClaimsPrincipal(new ClaimsIdentity(claims, "Bearer"));
     }
 
-    private sealed class World : IDisposable
+    internal sealed class World : IDisposable
     {
         private readonly string scratch = Path.Combine(Path.GetTempPath(), $"nova-reaction-test-{Guid.NewGuid():N}");
         private readonly AgentDirectory agents;
         private readonly TaskCompletionSource window = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Entities Store { get; } = new();
+        public Entities Store { get; }
         public Discussions Stream { get; }
         public Gateway Gateway { get; } = new();
         public MessagePipeline Pipeline { get; }
         public ReactionTriggers Triggers { get; }
 
-        public World()
+        public World(string discussionType = "chat", string? injectedContext = null, bool? personalContext = null)
         {
+            Store = new Entities(discussionType, injectedContext, personalContext);
             Directory.CreateDirectory(scratch);
             Stream = new Discussions(Store.DiscussionId);
             var events = CallbackDeliveryTests.Proxy.Create<IPluginEvents>((method, _) => method == "Subscribe" ? new Noop() : Task.CompletedTask);
@@ -493,21 +494,36 @@ public sealed class ReactionContextTests
         private readonly List<LeafEntity> entities = [];
         public Guid DiscussionId { get; }
 
-        public Entities()
+        public Entities(string discussionType = "chat", string? injectedContext = null, bool? personalContext = null)
         {
             var agent = New("agent", "nova", new JsonObject(), Guid.Parse(Agent));
             entities.Add(agent);
             entities.Add(New("plugin", NovaAppPlugin.PluginId, new JsonObject()));
             var discussion = New("discussion", DiscussionStore.Slug("disc1234"), new JsonObject
             {
-                ["discussion_id"] = "disc1234", ["app"] = "nova", ["type"] = "chat", ["status"] = "idle",
+                ["discussion_id"] = "disc1234", ["app"] = "nova", ["type"] = discussionType, ["status"] = "idle",
                 ["agent"] = Agent, ["owner_id"] = "owner-1", ["session_id"] = "session-1",
                 ["last_activity"] = T0.AddDays(-1).ToString("O"), ["message_count"] = 3,
                 ["conversation_revision"] = 0, ["read_conversation_revision"] = 0,
                 ["last_processed_session_assistant_uid"] = "",
             });
+            if (injectedContext is not null) discussion.Data["injected_context"] = injectedContext;
+            if (personalContext is not null) discussion.Data[LiveEventScope.DataKey] = personalContext;
             entities.Add(discussion);
             DiscussionId = discussion.Id;
+        }
+
+        /// <summary>Another open discussion of the same Agent and owner, such as the LIVE timeline.</summary>
+        public Guid AddDiscussion(string id, string type)
+        {
+            var discussion = New("discussion", DiscussionStore.Slug(id), new JsonObject
+            {
+                ["discussion_id"] = id, ["app"] = "nova", ["type"] = type, ["status"] = "idle",
+                ["agent"] = Agent, ["owner_id"] = "owner-1",
+                ["last_activity"] = T0.AddHours(-1).ToString("O"), ["message_count"] = 0,
+            });
+            lock (entities) entities.Add(discussion);
+            return discussion.Id;
         }
 
         public LeafEntity Get(Guid id) { lock (entities) return entities.Single(e => e.Id == id); }

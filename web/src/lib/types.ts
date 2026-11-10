@@ -55,6 +55,10 @@ export interface DiscussionInfo {
   qualityTier?: string | null
   provider?: string | null
   confidential?: boolean
+  /** Whether its context includes personal LIVE events (mail, heartbeat notes...): the effective value. */
+  personalContext?: boolean
+  /** "explicit" when someone chose it; "default" when it follows the type (on for LIVE and Heartbeat). */
+  personalContextSource?: "explicit" | "default"
   /** Worktrees this discussion works in, newest last. */
   worktrees?: WorktreeAttachment[]
   /** Internal first-turn identity. Raw RedCompute history includes this turn;
@@ -88,6 +92,8 @@ export interface DiscussionMessage {
   source?: string
   /** Who wrote it, when the server stated that from a signed identity. */
   stampedSender?: { agentId: string; discussionId?: string | null; title?: string | null } | null
+  /** A user message's stored context (Nova Context fields and `novaContextBlock`); null otherwise. */
+  metadata?: Record<string, unknown> | null
 }
 
 export interface EventType {
@@ -148,6 +154,8 @@ export interface DiscussionHistoryPageResponse {
   session: DiscussionHistorySession | null
   messages: import("@redbamboo/chat").PersistedMessage[]
   overlays: DiscussionHistoryOverlay[]
+  /** Additive: each user message's stored context on this page, by uid. Absent on older servers. */
+  messageContexts?: import("./message-context").DiscussionMessageContext[]
   page: DiscussionHistoryPageMetadata
 }
 

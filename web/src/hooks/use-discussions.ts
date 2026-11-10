@@ -60,6 +60,7 @@ import {
 } from "../lib/archive-discussion-store"
 import { unwrapApplicationEnvelope } from "../lib/application-envelope"
 import { hideSilentSettle, markInternalInputs } from "../lib/silent-settle"
+import { accumulateMessageContexts, withMessageContexts, type MessageContexts } from "../lib/message-context"
 
 function isClosed(status: string | undefined): boolean {
   return status === "archived" || status === "archiving"
@@ -183,7 +184,8 @@ function toChatMessages(messages: DiscussionMessage[]): MessageBlock[] {
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) eventData = parsed
       } catch { /* legacy or garbled — text-only event */ }
     }
-    const metadata: Record<string, unknown> = {}
+    // A user message's stored context first, so the projection's own keys below win.
+    const metadata: Record<string, unknown> = m.metadata && typeof m.metadata === "object" ? { ...m.metadata } : {}
     if (m.source) metadata.source = m.source
     if (m.messageUid) metadata.messageUid = m.messageUid
     if (eventData) metadata.eventData = eventData
@@ -256,6 +258,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const transcriptAccumulatorsRef = useRef(new Map<string, TranscriptAccumulator>())
   const durableTranscriptPagersRef = useRef(new Map<string, DurableTranscriptPager>())
   const historyOverlaysRef = useRef(new Map<string, Map<string, DiscussionHistoryOverlay>>())
+  // Each user message's stored context by uid, kept and dropped with the overlays.
+  const historyMessageContextsRef = useRef(new Map<string, MessageContexts>())
   const historySessionIdsRef = useRef(new Map<string, string | null>())
   const historyModesRef = useRef(new Map<string, HistoryMode>())
   const historyHardResetRef = useRef(new Set<string>())
@@ -687,6 +691,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     invalidateHistoryGeneration(loadGenerationRef.current, id)
     durableTranscriptPagersRef.current.get(id)?.reset()
     historyOverlaysRef.current.delete(id)
+    historyMessageContextsRef.current.delete(id)
     historySessionIdsRef.current.delete(id)
     historyHardResetRef.current.add(id)
     transcriptAccumulatorsRef.current.get(id)?.reset()
@@ -704,6 +709,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     transcriptAccumulatorsRef.current.delete(id)
     durableTranscriptPagersRef.current.delete(id)
     historyOverlaysRef.current.delete(id)
+    historyMessageContextsRef.current.delete(id)
     historySessionIdsRef.current.delete(id)
     historyModesRef.current.delete(id)
     historyHardResetRef.current.delete(id)
@@ -755,6 +761,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       pager.reset()
       accumulator.reset()
       historyOverlaysRef.current.delete(id)
+      historyMessageContextsRef.current.delete(id)
       pager.startNewestPage(generation)
       accumulator.startSnapshot(generation)
     }
@@ -779,11 +786,17 @@ export function useDiscussions(eventResolver?: EventResolver) {
     const epochChanged = previousEpoch !== null && previousEpoch !== result.epoch
     if (epochChanged)
       historyOverlaysRef.current.delete(id)
+      historyMessageContextsRef.current.delete(id)
     const overlays = accumulateHistoryOverlays(
       historyOverlaysRef.current.get(id) ?? new Map(),
       data.overlays,
     )
     historyOverlaysRef.current.set(id, overlays)
+    const messageContexts = accumulateMessageContexts(
+      historyMessageContextsRef.current.get(id) ?? new Map(),
+      data.messageContexts,
+    )
+    historyMessageContextsRef.current.set(id, messageContexts)
     historySessionIdsRef.current.set(id, responseSessionId)
     historyHardResetRef.current.delete(id)
     historyModesRef.current.set(id, "v2")
@@ -812,10 +825,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
           record.messageUid !== data.discussion.setupBootstrapMessageUid)
       : result.records
     const overlayBlocks = toChatMessages([...overlays.values()])
-    const authoritative = cleanMessages(
+    const authoritative = withMessageContexts(cleanMessages(
       mergePagedDiscussionRecordsAndOverlays(overlayBlocks, sessionRecords, rebuildNovaBlocks),
       eventResolver,
-    )
+    ), messageContexts)
     const cursor: TranscriptCursor | null = result.epoch && result.throughSequence !== null
       ? { epoch: result.epoch, throughSequence: result.throughSequence }
       : null
@@ -922,6 +935,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
             // not a partially valid page. Fall back as one complete legacy path.
             historyModesRef.current.set(id, "legacy")
             historyOverlaysRef.current.delete(id)
+            historyMessageContextsRef.current.delete(id)
           } else {
             const commit = commitHistoryPage(id, generation, data, "newest", undefined, runtimeRead)
             if (commit !== "committed") loadedRef.current.delete(id)
@@ -938,6 +952,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
           if (error instanceof ApiError && error.status === 404) {
             historyModesRef.current.set(id, "legacy")
             historyOverlaysRef.current.delete(id)
+            historyMessageContextsRef.current.delete(id)
           } else {
             // V2 server errors preserve the loaded window. Never reinterpret a
             // failed cursor/page response as an old rolling-tail snapshot.
@@ -2299,6 +2314,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
     setDiscussions((prev) => prev.map((d) => d.id === id ? { ...d, confidential } : d))
   }, [])
 
+  // The server answers with the discussion, effective value and source included.
+  const setPersonalContext = useCallback(async (id: string, personalContext: boolean) => {
+    const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/personal-context`, { personalContext })
+    upsertDiscussion(updated)
+  }, [])
+
   return {
     discussions: visibleDiscussions,
     discussionListLoadState,
@@ -2344,6 +2365,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     renameDiscussion,
     updateDiscussionTitle,
     setConfidential,
+    setPersonalContext,
     reopenDiscussion,
     loadEarlierMessages,
     refreshDiscussions,
