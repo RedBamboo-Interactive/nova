@@ -84,8 +84,19 @@ public static class CallbackEndpoints
         var resumablePause = status is "Stopped" or "Ended"
             && DiscussionStatus.IsAutoResumableStop(stopReason);
         var idleParking = stopReason is "idle_timeout" or "idle_ttl_expired";
+        // RedCompute continues a delegated prompt a restart cut, by itself, once it is back
+        // (RestartContinuations): the supervisor must not write that continuation by hand.
+        var autoContinue = resumablePause && !idleParking
+            && body.TryGetProperty("autoContinue", out var continues) && continues.ValueKind == JsonValueKind.True;
+        // The completion of a continuation RedCompute sent after a restart.
+        var restartContinuation = body.TryGetProperty("trigger", out var triggerValue) && triggerValue.ValueKind == JsonValueKind.String
+            && triggerValue.GetString() == "restart-continuation";
+        // Background turns RedCompute absorbed since its last report (at most one report per window).
+        var coalescedTurns = body.TryGetProperty("coalescedTurns", out var coalesced)
+            && coalesced.ValueKind == JsonValueKind.Number && coalesced.TryGetInt32(out var absorbed) && absorbed > 0 ? absorbed : 0;
         var pauseSuffix = !resumablePause ? ""
             : idleParking ? " — parked; resumes on the next message"
+            : autoContinue ? " — RedCompute resumes it after the restart"
             : " — waiting to resume after restart";
         // An interrupted turn did not complete, whatever status the session went idle with.
         var interruptedTurn = turnOutcome == "interrupted" && status is "Idle" or "Ended"
@@ -105,6 +116,7 @@ public static class CallbackEndpoints
         var summary = (status, stopReason) switch
         {
             _ when idleParking => $"Session {shownSession} parked after inactivity; it will resume on the next message",
+            _ when autoContinue => $"Session {shownSession} paused for restart; RedCompute resumes it with a continuation once it is back, and its completion will follow. Don't send a continuation yourself",
             _ when resumablePause => $"Session {shownSession} paused for restart; awaiting recovery, completion has not been reported",
             (_, "usage_limit") => $"Session {shownSession} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
             _ when interruptedTurn => $"Session {shownSession} turn was interrupted{InterruptedBy(interruptSource, interruptedByMessageUid)}{(title != null ? $" ({title})" : "")}; it did not complete"
@@ -122,6 +134,8 @@ public static class CallbackEndpoints
             _ => $"Session {shownSession} status: {NovaEventText.Field(status, MaxIdentity)}",
         };
         if (unprompted && !unpromptedTurn) summary += " (in a turn it started on its own)";
+        if (restartContinuation) summary += " (after RedCompute resumed it from a restart)";
+        if (coalescedTurns > 0) summary += $" ({coalescedTurns} more background {(coalescedTurns == 1 ? "turn" : "turns")} since the last report)";
 
         var eventKind = unpromptedTurn ? "unprompted-turn"
             : outcome switch { "paused" => "paused", "background" => "turn-ended", "interrupted" => "interrupted", _ => "complete" };
@@ -176,7 +190,9 @@ public static class CallbackEndpoints
         var metadata = JsonSerializer.SerializeToElement(new {
             sessionId, callbackId, promptMessageUid, status, stopReason, reason, deliveredMessageUid, executionObserved, outcome,
             backgroundTasksRunning, deliverySequence, workState, pendingInputs, title = rawTitle,
-            trigger = unprompted ? "unprompted" : null,
+            trigger = unprompted ? "unprompted" : restartContinuation ? "restart-continuation" : null,
+            autoContinue = autoContinue ? true : (bool?)null,
+            coalescedTurns = coalescedTurns > 0 ? coalescedTurns : (int?)null,
             turnId, turnOutcome,
             interruptedBy = interruptSource is null && interruptedByMessageUid is null ? null
                 : new { source = interruptSource, messageUid = interruptedByMessageUid },

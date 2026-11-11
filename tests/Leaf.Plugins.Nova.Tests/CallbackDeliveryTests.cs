@@ -117,6 +117,34 @@ public sealed class CallbackDeliveryTests
         Assert.Contains(f.TargetMessages.Single().Metadata["uid"]!.GetValue<string>(), f.Gateway.Bodies[1]);
     }
 
+    // 2026-11-11: RedCompute continues a cut delegated prompt itself and says so; the supervisor
+    // reads that it must not write the continuation, and the continuation's completion says what it was.
+    [Fact]
+    public async Task RestartPauseThatRedComputeContinuesTellsTheSupervisorNotToWriteOne()
+    {
+        using var f = new Fixture();
+        Assert.Equal(200, await f.Complete("prompt-one", "Stopped", "maintenance_restart", autoContinue: true));
+        var pause = f.TargetMessages.Single().Content;
+        Assert.Contains("RedCompute resumes it with a continuation", pause);
+        Assert.Contains("Don't send a continuation yourself", pause);
+        Assert.Contains("RedCompute resumes it after the restart", f.LiveMessages.Single().Content);
+
+        Assert.Equal(200, await f.Complete("continuation", deliveredMessageUid: "continuation", promptMessageUid: "continuation",
+            executionObserved: true, trigger: "restart-continuation", coalescedTurns: 3, turnId: "turn-c"));
+        var done = f.TargetMessages.Last().Content;
+        Assert.Contains("completed", done);
+        Assert.Contains("after RedCompute resumed it from a restart", done);
+        Assert.Contains("3 more background turns since the last report", done);
+    }
+
+    [Fact]
+    public async Task AutoContinueNeverRewordsIdleParking()
+    {
+        using var f = new Fixture();
+        Assert.Equal(200, await f.Complete("prompt-one", "Stopped", "idle_timeout", autoContinue: true));
+        Assert.Contains("parked after inactivity", f.TargetMessages.Single().Content);
+    }
+
     [Theory]
     [InlineData("maintenance_restart")]
     [InlineData("orphaned_on_restart")]
@@ -348,7 +376,8 @@ public sealed class CallbackDeliveryTests
             string? reason = null, string? deliveredMessageUid = null, string? promptMessageUid = null, bool executionObserved = false,
             int? backgroundTasksRunning = null, int? deliverySequence = null, string? workState = null,
             string? title = "same title", int? pendingInputs = null,
-            string? turnId = null, string? turnOutcome = null, string? interruptSource = null, string? interruptedBy = null)
+            string? turnId = null, string? turnOutcome = null, string? interruptSource = null, string? interruptedBy = null,
+            bool? autoContinue = null, string? trigger = null, int? coalescedTurns = null)
         {
             var ctx = new DefaultHttpContext();
             ctx.Connection.RemoteIpAddress = IPAddress.Loopback;
@@ -367,6 +396,9 @@ public sealed class CallbackDeliveryTests
             if (turnId is not null) body["turnId"] = turnId;
             if (turnOutcome is not null) body["turnOutcome"] = turnOutcome;
             if (interruptSource is not null) body["interruptedBy"] = new JsonObject { ["source"] = interruptSource, ["messageUid"] = interruptedBy };
+            if (autoContinue is not null) body["autoContinue"] = autoContinue;
+            if (trigger is not null) body["trigger"] = trigger;
+            if (coalescedTurns is not null) body["coalescedTurns"] = coalescedTurns;
             ctx.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body.ToJsonString()));
             var result = await CallbackEndpoints.HandleSessionCompleteAsync(ctx, Store, Injector, liveEvents);
             return ((IStatusCodeHttpResult)result).StatusCode ?? 200;
