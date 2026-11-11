@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import { dispatchGlobalPushToTalk, usePushToTalkSettings } from "@redbamboo/chat"
-import { ContextMenuHost, ToastProvider, UiEnvironmentProvider } from "@redbamboo/ui"
+import { ContextMenuHost, Toaster, UiEnvironmentProvider } from "@redbamboo/ui"
 import {
   notifyUiSurfaceChanged,
   registerUiSurface,
@@ -470,17 +470,17 @@ export function FloatingNovaService() {
     <UiEnvironmentProvider document={pipWindow.document} portalContainer={pipWindow.document.body}>
       {/* One host per document: the floating window has its own. It has no page to navigate. */}
       <ContextMenuHost pageActions={false} />
-      <ToastProvider>
-        <NovaRuntimeProvider>
-          <FloatingNovaContent
-            selectedDiscussionId={selectedDiscussionId}
-            globalInputState={globalInputState}
-            pushToTalkKey={pushToTalkKey}
-            onSelectedDiscussionChange={updateSelectedDiscussion}
-            onDock={dockSurface}
-          />
-        </NovaRuntimeProvider>
-      </ToastProvider>
+      {/* Likewise its own toast stack: useToast() in this window addresses this document. */}
+      <Toaster />
+      <NovaRuntimeProvider>
+        <FloatingNovaContent
+          selectedDiscussionId={selectedDiscussionId}
+          globalInputState={globalInputState}
+          pushToTalkKey={pushToTalkKey}
+          onSelectedDiscussionChange={updateSelectedDiscussion}
+          onDock={dockSurface}
+        />
+      </NovaRuntimeProvider>
     </UiEnvironmentProvider>,
     portalRoot,
   )

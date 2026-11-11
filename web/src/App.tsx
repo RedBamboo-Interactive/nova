@@ -4,7 +4,7 @@ import {
   useWsSubscribe,
   usePluginBreadcrumbs,
 } from "@redbamboo/utility"
-import { ToastProvider, useUiEnvironment } from "@redbamboo/ui"
+import { useUiEnvironment } from "@redbamboo/ui"
 import { AppShell } from "./components/layout/app-shell"
 import { useDiscussions } from "./hooks/use-discussions"
 import { useEventTypes } from "./hooks/use-event-types"
@@ -86,10 +86,7 @@ export function NovaRuntimeProvider({
   )
 }
 
+// Toasts render in the shell's single stack; the plugin mounts none of its own.
 export function NovaApp() {
-  return (
-    <ToastProvider>
-      <NovaAppInner />
-    </ToastProvider>
-  )
+  return <NovaAppInner />
 }

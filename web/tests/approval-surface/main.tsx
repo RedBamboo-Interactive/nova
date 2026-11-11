@@ -1,6 +1,6 @@
 import { useCallback } from "react"
 import { createRoot } from "react-dom/client"
-import { ToastProvider } from "@redbamboo/ui"
+import { Toaster } from "@redbamboo/ui"
 import { ChatPanel, type PermissionDecisionPayload, type QuestionAnswerPayload } from "@redbamboo/chat"
 import { api } from "../../src/lib/api"
 import { useDiscussions } from "../../src/hooks/use-discussions"
@@ -76,4 +76,4 @@ function App() {
   )
 }
 ;(window as unknown as { approvalTest: typeof test }).approvalTest = test
-createRoot(document.getElementById("root")!).render(<ToastProvider><App /></ToastProvider>)
+createRoot(document.getElementById("root")!).render(<><App /><Toaster /></>)

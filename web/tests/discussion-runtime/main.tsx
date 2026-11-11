@@ -1,6 +1,6 @@
 import React from "react"
 import { createRoot } from "react-dom/client"
-import { ToastProvider } from "@redbamboo/ui"
+import { Toaster } from "@redbamboo/ui"
 import { api } from "../../src/lib/api"
 import { useDiscussions } from "../../src/hooks/use-discussions"
 import { setDiscussionList } from "../../src/lib/discussion-list-store"
@@ -53,4 +53,4 @@ function App() {
   return <><button onClick={() => runtime.selectDiscussion("live")}>Open LIVE</button><output data-testid="state">{JSON.stringify({ streaming: runtime.isStreaming, resumePending: runtime.isResumePending, question: !!runtime.pendingQuestion, status: runtime.activeDiscussion?.status, sessionId: runtime.activeDiscussion?.sessionId })}</output></>
 }
 ;(window as unknown as { runtimeTest: typeof test }).runtimeTest = test
-createRoot(document.getElementById("root")!).render(<ToastProvider><App /></ToastProvider>)
+createRoot(document.getElementById("root")!).render(<><App /><Toaster /></>)
