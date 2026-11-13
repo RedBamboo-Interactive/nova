@@ -136,17 +136,8 @@ export interface DiscussionHistorySession {
   backgroundTasks?: import("@redbamboo/chat").BackgroundTaskInfo[]
 }
 
-export interface DiscussionHistoryPageMetadata {
-  epoch: string | null
-  direction: "newest" | "before" | "after"
-  oldestCursor: string | null
-  newestCursor: string | null
-  hasEarlier: boolean
-  hasLater: boolean
-  fromSequence: number | null
-  throughSequence: number | null
-  boundaryComplete: boolean
-}
+/** The canonical transcript page metadata; Nova's outer cursors cover transcript + overlays. */
+export type DiscussionHistoryPageMetadata = import("@redbamboo/chat").TranscriptPageMetadata
 
 /** Additive V2 history contract. The outer cursors cover transcript + overlays. */
 export interface DiscussionHistoryPageResponse {

@@ -1,82 +1,48 @@
 // Descriptor builder only (no runtime imports), so node tests load it directly.
 import type { ContextMenuEntry } from "@redbamboo/ui"
+import {
+  CONVERSATION_SHORTCUTS,
+  conversationActionEntries,
+  conversationShortcut,
+  type ConversationActionHandlers,
+} from "@redbamboo/chat/conversation-actions"
 import { FLOATING_NOVA_SHORTCUT } from "../../lib/floating-navigation.ts"
 
-/** Keyboard shortcuts for the open discussion, registered as commands by the chat view. */
+/**
+ * Keyboard shortcuts for the open discussion: the shared conversation map plus Nova's own Voice,
+ * Float and Reset timeline, registered as commands by the chat view.
+ */
 export const DISCUSSION_SHORTCUTS = {
   voice: "Alt+V",
-  info: "Alt+I",
-  artifacts: "Alt+A",
-  rename: "Alt+R",
-  updateTitle: "Alt+T",
-  share: "Alt+S",
+  ...CONVERSATION_SHORTCUTS,
   float: FLOATING_NOVA_SHORTCUT,
   reset: "Alt+Shift+L",
-  close: "Alt+W",
 } as const
 
-export interface DiscussionActionHandlers {
+export interface DiscussionActionHandlers extends Omit<ConversationActionHandlers, "leading" | "afterShare" | "trailing"> {
   onVoice?: () => void
   voiceDisabled?: boolean
-  onInfo: () => void
-  /** Opens the Artifacts panel for the discussion. */
-  onArtifacts?: () => void
-  onRename?: () => void
-  onUpdateTitle?: () => void
-  updateTitlePending?: boolean
-  onShare?: () => void
   onFloat?: () => void
   onReset?: () => void
-  /** Stops the session process to free memory; the next send resumes it. */
-  onStop?: () => void
-  onClose?: () => void
-  /** Shortcuts act on the open discussion, so only its menus advertise them. */
-  showShortcuts?: boolean
 }
 
-/** The conversation actions shared by the chat header menu, each sidebar row menu and the
- *  rows' context menu: one descriptor array, so the menus cannot drift.
- *  Info leads, Artifacts follows it, and Close sits alone at the end so a one-handed tap cannot mistake them. */
-export function discussionActionEntries({
-  onVoice,
-  voiceDisabled = false,
-  onInfo,
-  onArtifacts,
-  onRename,
-  onUpdateTitle,
-  updateTitlePending = false,
-  onShare,
-  onFloat,
-  onReset,
-  onStop,
-  onClose,
-  showShortcuts = false,
-}: DiscussionActionHandlers): ContextMenuEntry[] {
-  const shortcut = (keys: string) => (showShortcuts ? keys : undefined)
-  const entries: ContextMenuEntry[] = []
+/**
+ * Nova's conversation actions: the shared builder (Info, Artifacts, Rename, Update title, Share,
+ * Stop, Close) with Nova's entries in its slots. Voice leads, Float and Reset timeline follow Share.
+ * The header menu, each sidebar row menu and the rows' context menu render this one array.
+ */
+export function discussionActionEntries({ onVoice, voiceDisabled = false, onFloat, onReset, ...handlers }: DiscussionActionHandlers): ContextMenuEntry[] {
+  const shortcut = (keys: string) => conversationShortcut(keys, handlers.showShortcuts)
+  const leading: ContextMenuEntry[] = []
   if (onVoice) {
-    entries.push({
+    leading.push({
       id: "voice", label: "Voice", icon: "ph-bold ph-waveform", disabled: voiceDisabled,
       shortcut: shortcut(DISCUSSION_SHORTCUTS.voice), run: () => onVoice(), attributes: { "aria-haspopup": "dialog" },
     })
   }
-  entries.push({ id: "info", label: "Info", icon: "ph-bold ph-info", shortcut: shortcut(DISCUSSION_SHORTCUTS.info), run: () => onInfo() })
-  if (onArtifacts) entries.push({ id: "artifacts", label: "Artifacts", icon: "ph-bold ph-squares-four", shortcut: shortcut(DISCUSSION_SHORTCUTS.artifacts), run: () => onArtifacts() })
-  if (onRename) entries.push({ id: "rename", label: "Rename", icon: "ph-bold ph-pen", shortcut: shortcut(DISCUSSION_SHORTCUTS.rename), run: () => onRename() })
-  if (onUpdateTitle) {
-    entries.push({
-      id: "update-title",
-      label: "Update title",
-      icon: updateTitlePending ? "ph-bold ph-spinner-gap animate-spin" : "ph-bold ph-sparkle",
-      disabled: updateTitlePending,
-      shortcut: shortcut(DISCUSSION_SHORTCUTS.updateTitle),
-      run: () => onUpdateTitle(),
-      attributes: { "aria-busy": updateTitlePending },
-    })
-  }
-  if (onShare) entries.push({ id: "share", label: "Share", icon: "ph-bold ph-share-network", shortcut: shortcut(DISCUSSION_SHORTCUTS.share), run: () => onShare() })
+  const afterShare: ContextMenuEntry[] = []
   if (onFloat) {
-    entries.push({
+    afterShare.push({
       id: "float",
       label: "Float",
       icon: "ph-bold ph-picture-in-picture",
@@ -87,14 +53,6 @@ export function discussionActionEntries({
       attributes: { "data-slot": "floating-surface-trigger", "data-ui-surface": "nova:floating-chat", "data-ui-action": "open" },
     })
   }
-  if (onReset) entries.push({ id: "reset", label: "Reset timeline", icon: "ph-bold ph-arrows-clockwise", shortcut: shortcut(DISCUSSION_SHORTCUTS.reset), run: () => onReset() })
-  if (onStop) entries.push({ id: "stop", label: "Stop", icon: "ph-bold ph-stop", run: () => onStop() })
-  if (onClose) {
-    entries.push(
-      { id: "close-separator", separator: true },
-      { id: "close", label: "Close", icon: "ph-bold ph-x", danger: true, shortcut: shortcut(DISCUSSION_SHORTCUTS.close), run: () => onClose() },
-    )
-  }
-  return entries
+  if (onReset) afterShare.push({ id: "reset", label: "Reset timeline", icon: "ph-bold ph-arrows-clockwise", shortcut: shortcut(DISCUSSION_SHORTCUTS.reset), run: () => onReset() })
+  return conversationActionEntries({ ...handlers, leading, afterShare })
 }
-

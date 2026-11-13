@@ -2,8 +2,8 @@ import { useState, useCallback, useEffect, useRef, useMemo, useSyncExternalStore
 import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
 import type { DelegationActivitySnapshot, DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
-import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, PermissionApprovals, PermissionDecisionPayload, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, PersistedTranscriptPage, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
-import { abandonPermissions, canonicalUserMessageUids, closePermission, DeferredInvalidationCoordinator, DurableTranscriptPager, isPermissionQuestion, permissionPendingQuestion, processStreamEvent, readPermissionRequest, rebuildBlocks, TranscriptAccumulator, visibleApprovals } from "@redbamboo/chat"
+import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, PermissionApprovals, PermissionDecisionPayload, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
+import { abandonPermissions, canonicalUserMessageUids, isTranscriptPageMetadata, toPersistedTranscriptPage, closePermission, DeferredInvalidationCoordinator, DurableTranscriptPager, isPermissionQuestion, permissionPendingQuestion, processStreamEvent, readPermissionRequest, rebuildBlocks, TranscriptAccumulator, visibleApprovals } from "@redbamboo/chat"
 import { addPermissionNotice, readPermissionNotice, type PermissionNotice } from "../lib/permission-notices"
 import { answeredQuestionState, clearedQuestionState, liveQuestionFields, mayHoldPendingApproval, permissionDecisionRequest, restoreApprovals, settleAcceptedDecision, type ApprovalLifecycle } from "../lib/permission-approvals"
 
@@ -29,7 +29,7 @@ import {
   type HistoryLoadFailure,
   type HistoryPageCommit,
 } from "../lib/discussion-history-errors"
-import { LatestTaskCoordinator } from "../lib/latest-task-coordinator"
+import { LatestTaskCoordinator } from "@redbamboo/chat/latest-task-coordinator"
 import { invalidatesDelegationActivity, unavailableDelegationActivity } from "../lib/delegation-activity"
 import {
   clearDiscussionArchivePending,
@@ -95,36 +95,15 @@ const ARCHIVE_UNDO_WINDOW_MS = 5_000
 
 type HistoryMode = "v2" | "legacy"
 
+/** Nova's envelope around the canonical transcript page, whose shape the shared contract checks. */
 function isHistoryPageResponse(value: unknown): value is DiscussionHistoryPageResponse {
   if (!value || typeof value !== "object") return false
   const candidate = value as Partial<DiscussionHistoryPageResponse>
-  const page = candidate.page
   return !!candidate.discussion
     && (candidate.session === null || (!!candidate.session && typeof candidate.session.id === "string"))
     && Array.isArray(candidate.messages)
     && Array.isArray(candidate.overlays)
-    && !!page
-    && (page.direction === "newest" || page.direction === "before" || page.direction === "after")
-    && (page.epoch === null || typeof page.epoch === "string")
-    && (page.oldestCursor === null || typeof page.oldestCursor === "string")
-    && (page.newestCursor === null || typeof page.newestCursor === "string")
-    && typeof page.hasEarlier === "boolean"
-    && typeof page.hasLater === "boolean"
-    && typeof page.boundaryComplete === "boolean"
-}
-
-function toPersistedTranscriptPage(data: DiscussionHistoryPageResponse): PersistedTranscriptPage {
-  return {
-    epoch: data.page.epoch,
-    records: data.messages,
-    oldestCursor: data.page.oldestCursor,
-    newestCursor: data.page.newestCursor,
-    hasEarlier: data.page.hasEarlier,
-    hasLater: data.page.hasLater,
-    fromSequence: data.page.fromSequence,
-    throughSequence: data.page.throughSequence,
-    boundaryComplete: data.page.boundaryComplete,
-  }
+    && isTranscriptPageMetadata(candidate.page)
 }
 
 function historyResponseSessionId(data: DiscussionHistoryPageResponse): string | null {
@@ -767,7 +746,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     }
 
     const previousEpoch = pager.current().epoch
-    const page = toPersistedTranscriptPage(data)
+    const page = toPersistedTranscriptPage(data.messages, data.page)
     const result = direction === "newest"
       ? pager.commitNewestPage(generation, page)
       : direction === "before"

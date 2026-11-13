@@ -2,14 +2,12 @@ import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, typ
 import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
-import { MESSAGE_PARAM, messageDeepLinkStep, withoutMessageParam } from "../lib/message-deep-link"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, PendingContextAttachment, SessionInfoButton, ShareDialog, fetchTranscriptPayload, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type EventRowRenderer, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
+import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type EventRowRenderer, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
 import { isMobileClient } from "../components/floating-nova-support"
-import { EditableTitle } from "../components/discussion/editable-title"
-import { DISCUSSION_SHORTCUTS, DiscussionActionItems } from "../components/discussion/discussion-actions-menu"
+import { DISCUSSION_SHORTCUTS, discussionActionEntries } from "../components/discussion/discussion-actions"
 import { ArtifactsSurface } from "../components/discussion/artifacts-surface"
 import { AgentPicker } from "../components/agent-picker"
 import { TransitioningAgentAvatar } from "../components/transitioning-agent-avatar"
@@ -31,12 +29,9 @@ import { useDisc, useNovaPendingContext } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
 import { useFullAccessEnabled } from "../hooks/use-full-access-enabled"
 import { FULL_ACCESS_SETTINGS_HREF, changeAccessLevel, openSettingsFromLink } from "../lib/session-access"
-import { useMaintenanceStatus } from "../hooks/use-maintenance-status"
-import { useShare } from "../hooks/use-share"
 import { setSettings } from "../lib/settings-store"
 import { api, novaExecution } from "../lib/api"
 import { findCurrentLive, findLiveHeartbeatPair } from "../lib/live-heartbeat"
-import { GoToMessageController } from "../lib/go-to-message"
 import { getAdjacentSidebarDiscussion, getSidebarDiscussionOrder } from "../lib/discussion-navigation"
 import { createDiscussionTitleResolver } from "../lib/discussion-display-title"
 import {
@@ -62,6 +57,7 @@ import { useVoiceSession } from "../hooks/use-voice-session"
 import { VoiceSessionPanel } from "../components/voice-session-panel"
 
 const speechBackend = createNovaSpeechBackend()
+const loadNovaMaintenanceStatus = () => api.get<unknown>("/api/apps/nova/maintenance")
 
 interface QualityTierInfo { slug: string; label: string; color?: string; icon?: string }
 interface ProviderInfo {
@@ -114,48 +110,16 @@ function DiscussionShortcuts({
     action: openVoice,
   })
 
-  useCommand("nova-discussion-info", {
-    label: "Discussion Info",
-    description: "Show the session, model and delegations of the open discussion",
+  // Close stays app-wide in the shell (nova-close-discussion), so it is not registered here.
+  useConversationShortcuts({
+    idPrefix: "nova-discussion",
     group: "Discussions",
-    shortcut: DISCUSSION_SHORTCUTS.info,
-    action: openSessionInfo,
-  })
-
-  useCommand("nova-discussion-artifacts", {
-    label: "Toggle Artifacts",
-    description: "Show or hide the media, documents, links and entities of the open discussion",
-    group: "Discussions",
-    shortcut: DISCUSSION_SHORTCUTS.artifacts,
-    keywords: ["images", "media", "files", "links", "gallery"],
-    action: toggleArtifacts,
-  })
-
-  useCommand("nova-discussion-rename", {
-    label: "Rename Discussion",
-    description: "Edit the title of the open discussion",
-    group: "Discussions",
-    shortcut: DISCUSSION_SHORTCUTS.rename,
-    enabled: canManage,
-    action: startRename,
-  })
-
-  useCommand("nova-discussion-update-title", {
-    label: "Update Discussion Title",
-    description: "Regenerate the title of the open discussion from its conversation",
-    group: "Discussions",
-    shortcut: DISCUSSION_SHORTCUTS.updateTitle,
-    enabled: canManage,
-    action: () => void updateTitle(discussionId),
-  })
-
-  useCommand("nova-discussion-share", {
-    label: "Share Discussion",
-    description: "Create a share link for the open discussion",
-    group: "Discussions",
-    shortcut: DISCUSSION_SHORTCUTS.share,
-    enabled: canShare,
-    action: share,
+    noun: "Discussion",
+    info: { action: openSessionInfo, description: "Show the session, model and delegations of the open discussion" },
+    artifacts: { action: toggleArtifacts },
+    rename: { action: startRename, enabled: canManage },
+    updateTitle: { action: () => void updateTitle(discussionId), enabled: canManage },
+    share: { action: share, enabled: canShare },
   })
 
   useCommand("nova-reset-live-timeline", {
@@ -351,7 +315,10 @@ export function ChatView({
     defaultDiscussionId,
   )
 
-  const maintenance = useMaintenanceStatus()
+  const maintenance = useMaintenanceStatus({
+    load: loadNovaMaintenanceStatus,
+    refreshEvent: "nova:maintenance-refresh",
+  })
   const voiceSession = useVoiceSession(activeDiscussionId)
   const conversationRollback = useMemo(() => activeDiscussionId
     ? {
@@ -509,11 +476,12 @@ export function ChatView({
     api.get<ProviderUsageSnapshot>(
       `/ai-session/providers/${encodeURIComponent(provider)}/usage${forceRefresh ? "?refresh=true" : ""}`,
     ), [])
-  const share = useShare(activeDiscussion?.entityId)
+  const shareEntityId = activeDiscussion?.entityId
+  const shareSource = useMemo(() => shareEntityId ? discussionShareSource(api, shareEntityId) : null, [shareEntityId])
+  const share = useShare(shareSource)
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false)
   const [titleEditing, setTitleEditing] = useState(false)
-  const [titleUpdatePending, setTitleUpdatePending] = useState(false)
   const [reopenPending, setReopenPending] = useState(false)
   const [confidentialityPending, setConfidentialityPending] = useState(false)
   const [liveTimelinePending, setLiveTimelinePending] = useState(false)
@@ -547,7 +515,6 @@ export function ChatView({
   useEffect(() => {
     setSessionInfoOpen(false)
     setTitleEditing(false)
-    setTitleUpdatePending(false)
   }, [activeDiscussionId])
 
   useEffect(() => {
@@ -779,31 +746,15 @@ export function ChatView({
   // to centre a message and, while it is not loaded, reads earlier history through the same pager
   // that scrolling up uses.
   const [artifactsOpen, setArtifactsOpen] = useState(false)
-  const [focusRequest, setFocusRequest] = useState<{ uid: string; nonce: number } | null>(null)
-  const [seekingEarlier, setSeekingEarlier] = useState(false)
-  const goToView = {
-    hasEarlier: () => hasEarlierMessages && !earlierHistoryLoadFailure,
-    isLoadingEarlier: () => isLoadingEarlier,
-    loadEarlier: () => handleLoadEarlier(),
-    focus: (request: { uid: string; nonce: number }) => setFocusRequest(request),
-    missing: () => toast({ variant: "error", title: "That message is no longer in this conversation" }),
-    seeking: (active: boolean) => setSeekingEarlier(active),
-  }
-  const goToViewRef = useRef(goToView)
-  goToViewRef.current = goToView
-  const goToMessage = useMemo(() => new GoToMessageController({
-    hasEarlier: () => goToViewRef.current.hasEarlier(),
-    isLoadingEarlier: () => goToViewRef.current.isLoadingEarlier(),
-    loadEarlier: () => goToViewRef.current.loadEarlier(),
-    focus: (request) => goToViewRef.current.focus(request),
-    missing: () => goToViewRef.current.missing(),
-    seeking: (active) => goToViewRef.current.seeking(active),
-  }), [])
-  useEffect(() => {
-    goToMessage.cancel()
-    setFocusRequest(null)
-  }, [activeDiscussionId, goToMessage])
-  useEffect(() => () => goToMessage.cancel(), [goToMessage])
+  const goToMessage = useGoToMessage({
+    conversationId: activeDiscussionId,
+    hasEarlier: hasEarlierMessages && !earlierHistoryLoadFailure,
+    isLoadingEarlier,
+    loadEarlier: handleLoadEarlier,
+    onMissing: () => toast({ variant: "error", title: "That message is no longer in this conversation" }),
+  })
+  const focusRequest = goToMessage.focusRequest
+  const seekingEarlier = goToMessage.seeking
   // A link to one message: go there once its discussion is on screen, then drop the parameter, so
   // Back and a reload don't repeat it. Archived discussions come through the same selection.
   const linkedMessage = floating ? null : new URLSearchParams(location.search).get(MESSAGE_PARAM)
@@ -815,8 +766,8 @@ export function ChatView({
     }
     const step = messageDeepLinkStep({
       uid: linkedMessage,
-      discussionId: urlDiscussionId ?? null,
-      activeDiscussionId,
+      conversationId: urlDiscussionId ?? null,
+      activeConversationId: activeDiscussionId,
       loading: isLoadingMessages || isResolvingDiscussion,
       handled: handledLink.current,
     })
@@ -828,14 +779,12 @@ export function ChatView({
       { pathname: location.pathname, search: withoutMessageParam(location.search) },
       { replace: true, state: location.state },
     )
-  }, [activeDiscussionId, goToMessage, isLoadingMessages, isResolvingDiscussion, linkedMessage, location.pathname, location.search, location.state, navigate, urlDiscussionId])
-  const handleFocusMessageResult = useCallback((result: { uid: string; nonce: number; found: boolean }) => {
-    goToMessage.result(result)
-  }, [goToMessage])
+  }, [activeDiscussionId, goToMessage.go, isLoadingMessages, isResolvingDiscussion, linkedMessage, location.pathname, location.search, location.state, navigate, urlDiscussionId])
+  const handleFocusMessageResult = goToMessage.onFocusMessageResult
   const closeArtifacts = useCallback(() => setArtifactsOpen(false), [])
   const openArtifacts = useCallback(() => setArtifactsOpen(true), [])
   const toggleArtifacts = useCallback(() => setArtifactsOpen(open => !open), [])
-  const jumpToMessage = useCallback((uid: string) => goToMessage.go(uid), [goToMessage])
+  const jumpToMessage = goToMessage.go
 
   const handleRetryHistory = useCallback(() => {
     if (!activeDiscussionId) return
@@ -987,22 +936,9 @@ export function ChatView({
     }
   }, [activeDiscussionId, reopenDiscussion, reopenPending])
 
-  const handleUpdateTitle = useCallback(async (id: string) => {
-    if (titleUpdatePending) return
-    setTitleUpdatePending(true)
-    try {
-      const updated = await updateDiscussionTitle(id)
-      toast({ variant: "success", title: "Title updated", description: updated.title || "New discussion" })
-    } catch (error) {
-      toast({
-        variant: "error",
-        title: "Could not update title",
-        description: error instanceof Error ? error.message : "Unknown error",
-      })
-    } finally {
-      setTitleUpdatePending(false)
-    }
-  }, [titleUpdatePending, toast, updateDiscussionTitle])
+  const titleUpdate = useTitleUpdate(updateDiscussionTitle, "New discussion", activeDiscussionId)
+  const handleUpdateTitle = titleUpdate.run
+  const titleUpdatePending = titleUpdate.pending
 
   const handleCloseDiscussion = useCallback((id: string) => {
     if (id !== activeDiscussionId) {
@@ -1217,6 +1153,9 @@ export function ChatView({
             onRename={(title) => renameDiscussion(activeDiscussion.id, title)}
             editing={titleEditing}
             onEditingChange={setTitleEditing}
+            inputLabel="Discussion title"
+            buttonTitle="Rename discussion"
+            name="discussion-title"
           />
         )
       }
@@ -1234,33 +1173,24 @@ export function ChatView({
               {sessionInfoContent}
             </SessionInfoButton>
           </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              ref={voiceSessionTriggerRef}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
-              aria-label="Conversation actions"
-              title="Conversation actions"
-            >
-              <i aria-hidden="true" className="ph-bold ph-dots-three-vertical text-base" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" sideOffset={4}>
-              <DiscussionActionItems
-                showShortcuts
-                onVoice={owningApp ? undefined : openVoice}
-                voiceDisabled={!voiceAvailable}
-                onInfo={openSessionInfo}
-                onArtifacts={openArtifacts}
-                onRename={canManageDiscussion ? () => setTitleEditing(true) : undefined}
-                onUpdateTitle={canManageDiscussion ? () => void handleUpdateTitle(activeDiscussion.id) : undefined}
-                updateTitlePending={titleUpdatePending}
-                onShare={!discussionClosed && !owningApp && !activeDiscussion.confidential ? handleShare : undefined}
-                onFloat={floatingSurface?.supported ? () => handleFloatDiscussion(activeDiscussion.id) : undefined}
-                onReset={activeDiscussion.type === "live" ? () => void handleRotateDiscussion(activeDiscussion.id) : undefined}
-                onStop={canManageDiscussion && activeDiscussion.sessionId && activeDiscussion.status !== "stopped" ? () => void stopDiscussion(activeDiscussion.id) : undefined}
-                onClose={canManageDiscussion ? () => handleCloseDiscussion(activeDiscussion.id) : undefined}
-              />
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <ConversationActionsMenu
+            triggerRef={voiceSessionTriggerRef}
+            entries={discussionActionEntries({
+              showShortcuts: true,
+              onVoice: owningApp ? undefined : openVoice,
+              voiceDisabled: !voiceAvailable,
+              onInfo: openSessionInfo,
+              onArtifacts: openArtifacts,
+              onRename: canManageDiscussion ? () => setTitleEditing(true) : undefined,
+              onUpdateTitle: canManageDiscussion ? () => void handleUpdateTitle(activeDiscussion.id) : undefined,
+              updateTitlePending: titleUpdatePending,
+              onShare: !discussionClosed && !owningApp && !activeDiscussion.confidential ? handleShare : undefined,
+              onFloat: floatingSurface?.supported ? () => handleFloatDiscussion(activeDiscussion.id) : undefined,
+              onReset: activeDiscussion.type === "live" ? () => void handleRotateDiscussion(activeDiscussion.id) : undefined,
+              onStop: canManageDiscussion && activeDiscussion.sessionId && activeDiscussion.status !== "stopped" ? () => void stopDiscussion(activeDiscussion.id) : undefined,
+              onClose: canManageDiscussion ? () => handleCloseDiscussion(activeDiscussion.id) : undefined,
+            })}
+          />
         </>
       )}
       {floating && onDock && (

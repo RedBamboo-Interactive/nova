@@ -47,3 +47,17 @@ test("a pending title update disables the item and spins its icon", () => {
   assert.match(item.icon ?? "", /animate-spin/)
   assert.deepEqual(item.attributes, { "aria-busy": true })
 })
+
+test("every menu Nova renders is identical to the one it had before the shared builder", async () => {
+  const { readFile } = await import("node:fs/promises")
+  const before = JSON.parse(await readFile(new URL("./discussion-actions.snapshot.json", import.meta.url), "utf8"))
+  const combos: Record<string, Parameters<typeof discussionActionEntries>[0]> = {
+    headerFull: { showShortcuts: true, onVoice: noop, voiceDisabled: false, onInfo: noop, onArtifacts: noop, onRename: noop, onUpdateTitle: noop, updateTitlePending: false, onShare: noop, onFloat: noop, onReset: noop, onStop: noop, onClose: noop },
+    headerPending: { showShortcuts: true, onVoice: noop, voiceDisabled: true, onInfo: noop, onArtifacts: noop, onUpdateTitle: noop, updateTitlePending: true },
+    liveRow: { showShortcuts: false, onVoice: noop, voiceDisabled: false, onInfo: noop, onArtifacts: noop, onShare: noop, onFloat: noop, onReset: noop },
+    ownedRow: { showShortcuts: true, onInfo: noop, onArtifacts: noop, onFloat: noop },
+    chatRow: { showShortcuts: false, onVoice: noop, voiceDisabled: true, onInfo: noop, onArtifacts: noop, onRename: noop, onUpdateTitle: noop, onShare: noop, onFloat: noop, onStop: noop, onClose: noop },
+  }
+  for (const [name, handlers] of Object.entries(combos))
+    assert.deepEqual(JSON.parse(JSON.stringify(discussionActionEntries(handlers))), before[name], name)
+})

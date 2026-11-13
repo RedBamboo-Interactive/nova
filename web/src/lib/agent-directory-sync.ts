@@ -1,5 +1,5 @@
 import type { AgentInfo } from "./types.ts"
-import { LatestTaskCoordinator } from "./latest-task-coordinator.ts"
+import { LatestTaskCoordinator } from "@redbamboo/chat/latest-task-coordinator"
 
 /** Dispatched on the opener window by the live bridge and by the Outfits panel. */
 export const AVATAR_CHANGED_EVENT = "nova:avatar-changed"

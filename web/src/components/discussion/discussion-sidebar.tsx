@@ -10,7 +10,7 @@ import { resolveArchiveSearchEscape, type ArchiveDiscussionItem } from "../../li
 import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
 import { discussionActivityIndicator } from "../../lib/delegation-activity"
-import { discussionActionEntries } from "./discussion-actions-menu"
+import { discussionActionEntries } from "./discussion-actions"
 import { LiveQuotaBorder } from "./live-quota-ring"
 import { formatOwningApp } from "../../lib/discussion-owner"
 import { createDiscussionTitleResolver } from "../../lib/discussion-display-title"

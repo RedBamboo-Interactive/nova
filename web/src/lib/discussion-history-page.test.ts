@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import type { MessageBlock } from "@redbamboo/chat"
-import { LatestTaskCoordinator } from "./latest-task-coordinator.ts"
+import { LatestTaskCoordinator } from "@redbamboo/chat/latest-task-coordinator"
 import type { DiscussionHistoryOverlay } from "./types.ts"
 import {
   accumulateHistoryOverlays,

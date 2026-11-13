@@ -40,7 +40,7 @@ test("opening voice mode is free and only the green Call control starts admissio
   assert.match(hookSource, /const open = useCallback\(\(\) => \{[\s\S]*setPhase\("ready"\)/)
   assert.match(hookSource, /if \(discussionRef\.current && discussionRef\.current !== discussionId\) void stop\(\)/)
   assert.match(chatViewSource, /const openVoice = useCallback\(\(\) => \{ voiceSession\.open\(\) \}/)
-  assert.match(chatViewSource, /onVoice=\{owningApp \? undefined : openVoice\}/)
+  assert.match(chatViewSource, /onVoice: owningApp \? undefined : openVoice,/)
   assert.match(panelSource, /onClick=\{canStart \? onStart : onEnd\}/)
   assert.match(cssSource, /--nova-voice-call: #22c55e/)
   assert.match(cssSource, /\.nova-voice-mode__control--call[\s\S]*background: var\(--nova-voice-call\)/)
