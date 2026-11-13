@@ -49,7 +49,7 @@ public sealed class SessionTitleGenerationClientTests
         Assert.Equal("job-1", result.JobId);
         var (request, sentProvenance) = Assert.Single(sent);
         Assert.Equal(HttpMethod.Post, request.Method);
-        Assert.Equal("/ai-session/sessions/s%2F1/title/generate?apply=false", request.RequestUri!.OriginalString);
+        Assert.Equal("/ai-session/sessions/s%2F1/title/generate?apply=false&assistantLabel=Nova", request.RequestUri!.OriginalString);
         Assert.Equal("Update Nova discussion title", request.Headers.GetValues("X-Job-Name").Single());
         Assert.Same(provenance, sentProvenance);
     }

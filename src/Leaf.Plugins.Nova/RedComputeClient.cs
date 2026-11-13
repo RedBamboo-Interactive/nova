@@ -216,7 +216,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post,
-                $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}/title/generate?apply=false")
+                $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}/title/generate?apply=false&assistantLabel=Nova")
             {
                 Content = JsonContent.Create(new { }, options: JsonOptions),
             };
