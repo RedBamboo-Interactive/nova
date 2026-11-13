@@ -1519,14 +1519,6 @@ public static class DiscussionEndpoints
             if (agent is null)
                 return Results.Json(new { error = "missing_agent", message = "The discussion agent is unavailable." }, statusCode: 422);
 
-            var snapshot = await redCompute.GetSessionAsync(
-                discussion.SessionId, ctx.RequestAborted, tail: 500);
-            if (snapshot is null)
-                return Results.Json(new { error = "session_unavailable", message = "The discussion transcript is unavailable." }, statusCode: 503);
-            var prompt = DiscussionTitleGeneration.BuildPrompt(discussion.Title, snapshot.Messages);
-            if (prompt is null)
-                return Results.Json(new { error = "transcript_empty", message = "There is not enough conversation to generate a title." }, statusCode: 409);
-
             var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(
                 entities, discussion.OwnerId, ctx.RequestAborted);
             var provenance = await NovaComputeProvenance.CreateAsync(
@@ -1536,24 +1528,24 @@ public static class DiscussionEndpoints
                  new ComputeContextReference("session", discussion.SessionId)],
                 method: "POST", ct: ctx.RequestAborted,
                 cause: NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId));
-            var generated = await redCompute.GenerateAsync(new
+            // RedCompute owns the one title generator (prompt, fast tier, cleaning, confidentiality);
+            // it stores nothing here, and the discussion store's policy decides what is kept.
+            var generated = await redCompute.GenerateSessionTitleAsync(
+                discussion.SessionId, "Update Nova discussion title", provenance, ctx.RequestAborted);
+            if (!generated.Success)
             {
-                mode = "oneshot",
-                qualityTier = "fast",
-                system = "Write a concise, specific title for this conversation in at most six words. Output only the title, with no label, quotes, or ending punctuation.",
-                messages = new[] { new { role = "user", content = prompt } },
-                maxTokens = 48,
-                confidential = discussion.Confidential,
-            }, "Update Nova discussion title", provenance, ctx.RequestAborted);
-
-            var title = DiscussionTitleGeneration.CleanGeneratedTitle(generated.Text);
-            if (!generated.Success || title is null)
+                if (generated.StatusCode == 404)
+                    return Results.Json(new { error = "session_unavailable", message = "The discussion transcript is unavailable." }, statusCode: 503);
+                if (generated.ErrorCode == "transcript_empty")
+                    return Results.Json(new { error = "transcript_empty", message = "There is not enough conversation to generate a title." }, statusCode: 409);
                 return Results.Json(new
                 {
                     error = "title_generation_failed",
                     message = generated.Error ?? "The fast model did not return a usable title.",
                     jobId = generated.JobId,
                 }, statusCode: generated.StatusCode is >= 400 and < 600 ? generated.StatusCode : 502);
+            }
+            var title = generated.Title!;
 
             var updated = await store.SetGeneratedTitleAsync(
                 discussion.EntityId, title, ctx.RequestAborted);
@@ -1566,7 +1558,7 @@ public static class DiscussionEndpoints
                     qualityTier = "fast",
                 });
         })
-            .WithSummary("Generates a title for a chat discussion from its transcript with the fast model and saves it. Needs a session with enough conversation, otherwise 409.");
+            .WithSummary("Generates a title for a chat discussion from its session transcript with RedCompute's title generator (fast model) and saves it under the discussion's title policy. Needs a session with enough conversation, otherwise 409.");
 
         group.MapPut("/discussions/{id}/title/fallback", async (string id, DiscussionTitleRequest request, HttpContext ctx, DiscussionStore store) =>
         {

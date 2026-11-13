@@ -201,6 +201,72 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     public sealed record GenerateResult(
         bool Success, string? Text, string? Error, Guid? JobId, int StatusCode);
 
+    /// <summary>RedCompute's answer to a session title generation; <c>ErrorCode</c> is its machine-readable error.</summary>
+    public sealed record SessionTitleResult(
+        bool Success, string? Title, string? Error, string? ErrorCode, string? JobId, int StatusCode);
+
+    /// <summary>
+    /// Generates a title from a session's transcript with RedCompute's one title generator (fast
+    /// tier, at most six words, cleaned), under the caller's provenance. <c>apply=false</c>: RedCompute
+    /// stores nothing, so the discussion store's own title policy decides what is kept.
+    /// </summary>
+    public async Task<SessionTitleResult> GenerateSessionTitleAsync(
+        string sessionId, string jobName, ComputeProvenance provenance, CancellationToken ct = default)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post,
+                $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}/title/generate?apply=false")
+            {
+                Content = JsonContent.Create(new { }, options: JsonOptions),
+            };
+            request.Headers.Add("X-Job-Name", jobName);
+            using var response = await gateway.SendAsync(request, provenance, ct);
+            var raw = await response.Content.ReadAsStringAsync(ct);
+
+            JsonElement root = default;
+            try
+            {
+                using var document = JsonDocument.Parse(raw);
+                root = document.RootElement.Clone();
+            }
+            catch { }
+
+            string? Text(string name) => root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty(name, out var value)
+                && value.ValueKind == JsonValueKind.String
+                    ? value.GetString() : null;
+            var jobId = Text("jobId");
+            var title = Text("title");
+            var code = Text("error");
+            var message = Text("message");
+            var success = response.IsSuccessStatusCode && !string.IsNullOrWhiteSpace(title);
+            if (!success && string.IsNullOrWhiteSpace(message))
+                message = response.IsSuccessStatusCode
+                    ? "RedCompute returned no title"
+                    : $"RedCompute HTTP {(int)response.StatusCode}";
+            return new(success, success ? title : null, success ? null : message, success ? null : code,
+                jobId, (int)response.StatusCode);
+        }
+        catch (Exception ex) when (ex.GetType().Name.Equals(
+            "ExecutionIdentityValidationException", StringComparison.Ordinal))
+        {
+            return new(false, null, ex.Message, null, null, 403);
+        }
+        catch (TaskCanceledException ex)
+        {
+            return new(false, null, ex.Message, null, null, 504);
+        }
+        catch (HttpRequestException ex)
+        {
+            return new(false, null, ex.Message, null, null, 502);
+        }
+        catch (Exception ex)
+        {
+            return new(false, null, ex.Message, null, null, 500);
+        }
+    }
+
     /// <summary>Provider-neutral stateless generation with a signed execution identity.</summary>
     public async Task<GenerateResult> GenerateAsync(
         object body, string jobName, ComputeProvenance provenance,
