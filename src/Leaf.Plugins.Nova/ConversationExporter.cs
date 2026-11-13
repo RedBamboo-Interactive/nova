@@ -209,8 +209,13 @@ public sealed class ConversationExporter(RedComputeClient redCompute, IDiscussio
     internal static List<CollapsedMessage> CollapseMessages(List<SessionMessage> raw)
     {
         var result = new List<CollapsedMessage>();
+        // (epoch, sequence) is one event's identity. RedLeaf may hold two rows for it (a write
+        // retried after an ambiguous timeout, before writes were idempotent): keep the first
+        // stored, so a final answer is never concatenated with itself. Content is not identity.
+        var seenSequences = new HashSet<(string?, long)>();
 
         foreach (var msg in raw
+            .Where(message => message.Sequence is not { } sequence || seenSequences.Add((message.Epoch, sequence)))
             .Select((message, index) => (message, index))
             .OrderBy(item => item.message.Timestamp)
             .ThenBy(item => item.index)

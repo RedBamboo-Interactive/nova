@@ -84,6 +84,50 @@ public sealed class ConversationExporterTests
         Assert.Equal("done", result[1].ToolResult);
     }
 
+    // LIVE fe9ef992, 13 Nov 2026: rows 32966552 and 32966571 are one event (epoch, sequence 1387)
+    // stored twice after a timed-out write was re-queued without its idempotency key.
+    [Fact]
+    public void CollapseMessagesRendersTwoRowsOfOneSequenceOnce()
+    {
+        const string epoch = "6a7d3edbb34ba46017a965ffbca1a3b5";
+        const string text = "It's 16:00, time for Tinder's gaba.";
+        var at = new DateTime(2026, 11, 13, 14, 56, 1, 148, DateTimeKind.Utc);
+        SessionMessage Final(long id) => new()
+        {
+            Id = id, Role = "assistant", EventType = "text", Content = text, Phase = "final_answer",
+            MessageId = "msg_011Ch17yu7PQXCekAdQvTEPa:1", MessageUid = "7bccab843c4748c1aece1d9fadce7b37",
+            Epoch = epoch, Sequence = 1387, Timestamp = at,
+        };
+
+        var result = ConversationExporter.CollapseMessages(
+        [
+            Final(32966552),
+            new SessionMessage
+            {
+                Id = 32966559, Role = "assistant", EventType = "status", Content = "idle",
+                Epoch = epoch, Sequence = 1389, Timestamp = at.AddSeconds(15),
+            },
+            Final(32966571),
+        ]);
+
+        Assert.Equal(text, Assert.Single(result).Content);
+    }
+
+    [Fact]
+    public void CollapseMessagesKeepsIdenticalTextAtDistinctSequences()
+    {
+        var at = new DateTime(2026, 11, 13, 14, 56, 1, DateTimeKind.Utc);
+        var result = ConversationExporter.CollapseMessages(
+        [
+            new SessionMessage { Role = "assistant", EventType = "text", Content = "ha", MessageUid = "t", Epoch = "e", Sequence = 1, Timestamp = at },
+            new SessionMessage { Role = "assistant", EventType = "text", Content = "ha", MessageUid = "t", Epoch = "e", Sequence = 2, Timestamp = at },
+            new SessionMessage { Role = "assistant", EventType = "text", Content = "!", MessageUid = "t", Timestamp = at },
+            new SessionMessage { Role = "assistant", EventType = "text", Content = "!", MessageUid = "t", Timestamp = at },
+        ]);
+
+        Assert.Equal("haha!!", Assert.Single(result).Content);
+    }
+
     [Fact]
     public void CollapseMessagesKeepsCommentaryAndFinalAnswerSeparate()
     {
