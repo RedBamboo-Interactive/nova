@@ -34,6 +34,7 @@ import {
   FLOATING_NOVA_CAPTURE_CONTEXT_EVENT,
   type FloatingNovaCaptureContextRequest,
 } from "../lib/floating-context"
+import { createFloatingNovaRoots, mirrorNovaCssTheme } from "../lib/floating-css-scope"
 
 export const FLOATING_NOVA_SURFACE_ID = "nova:floating-chat"
 export const FLOATING_NOVA_COMMAND_ID = "nova:float-chat"
@@ -42,7 +43,7 @@ export { FLOATING_NOVA_SHORTCUT }
 const SELECTED_DISCUSSION_KEY = "nova-floating:selected-discussion"
 const TRIGGER_SELECTOR = '[data-ui-surface="nova:floating-chat"][data-ui-action="open"]'
 
-function copyDocumentPresentation(target: Document): () => void {
+function copyDocumentPresentation(target: Document, scopeRoots: readonly HTMLElement[]): () => void {
   target.title = "Nova"
   const viewport = target.createElement("meta")
   viewport.name = "viewport"
@@ -68,6 +69,7 @@ function copyDocumentPresentation(target: Document): () => void {
       if (attribute.name.startsWith("data-")) target.documentElement.setAttribute(attribute.name, attribute.value)
     }
     target.documentElement.style.height = "100%"
+    for (const scopeRoot of scopeRoots) mirrorNovaCssTheme(scopeRoot, document.documentElement)
   }
   syncRoot()
   target.body.className = "h-full min-h-0 overflow-hidden bg-background text-foreground antialiased"
@@ -132,6 +134,7 @@ export function FloatingNovaService() {
   const [surfaceState, setSurfaceState] = useState<UiSurfaceState>(support.supported ? "closed" : "unsupported")
   const [pipWindow, setPipWindow] = useState<Window | null>(null)
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null)
+  const [overlayRoot, setOverlayRoot] = useState<HTMLElement | null>(null)
   const [globalInputState, setGlobalInputState] = useState<GlobalInputLeaseState>("inactive")
   const [selectedDiscussionId, setSelectedDiscussionId] = useState<string | null>(() =>
     localStorage.getItem(SELECTED_DISCUSSION_KEY),
@@ -302,11 +305,10 @@ export function FloatingNovaService() {
       preferInitialWindowPlacement: false,
     }).then((openedWindow) => {
       presentationCleanupRef.current?.()
-      presentationCleanupRef.current = copyDocumentPresentation(openedWindow.document)
-      const root = openedWindow.document.createElement("div")
-      root.id = "nova-floating-root"
-      root.style.height = "100%"
-      openedWindow.document.body.replaceChildren(root)
+      // RedLeaf scopes Nova's stylesheet to [data-plugin-css="nova"]; this window is
+      // outside the shell's PluginCssBoundary, so both roots must carry the scope.
+      const { root, portalContainer } = createFloatingNovaRoots<HTMLDivElement>(openedWindow.document, document.documentElement)
+      presentationCleanupRef.current = copyDocumentPresentation(openedWindow.document, [root, portalContainer])
 
       const persistBounds = () => writeFloatingWindowBounds(localStorage, openedWindow)
       const handleClosed = () => {
@@ -317,6 +319,7 @@ export function FloatingNovaService() {
         windowRef.current = null
         stateRef.current = "closed"
         setPortalRoot(null)
+        setOverlayRoot(null)
         setPipWindow(null)
         setSurfaceState("closed")
         notifyUiSurfaceChanged(FLOATING_NOVA_SURFACE_ID)
@@ -334,6 +337,7 @@ export function FloatingNovaService() {
       stateRef.current = "open"
       setPipWindow(openedWindow)
       setPortalRoot(root)
+      setOverlayRoot(portalContainer)
       setSurfaceState("open")
       notifyUiSurfaceChanged(FLOATING_NOVA_SURFACE_ID)
       void api.post(`/api/ui/window-placements/${encodeURIComponent(FLOATING_NOVA_SURFACE_ID)}/attachments`, {
@@ -464,10 +468,10 @@ export function FloatingNovaService() {
     if (current && !current.closed) current.close()
   }, [])
 
-  if (!pipWindow || !portalRoot) return null
+  if (!pipWindow || !portalRoot || !overlayRoot) return null
 
   return createPortal(
-    <UiEnvironmentProvider document={pipWindow.document} portalContainer={pipWindow.document.body}>
+    <UiEnvironmentProvider document={pipWindow.document} portalContainer={overlayRoot}>
       {/* One host per document: the floating window has its own. It has no page to navigate. */}
       <ContextMenuHost pageActions={false} />
       {/* Likewise its own toast stack: useToast() in this window addresses this document. */}
