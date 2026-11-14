@@ -1149,6 +1149,35 @@ public sealed class DiscussionStore(
         }, ct);
 
     /// <summary>
+    /// Decides a transient-failure retry against the record stored on the discussion, under its
+    /// write gate, and stores a Wake or Exhausted decision before the caller acts on it, so the same
+    /// failed turn is never woken twice. Closed, foreign and missing discussions return null.
+    /// </summary>
+    public Task<TransientTurnRecoveryPolicy.Decision?> TryClaimTransientRetryAsync(
+        Guid entityId, RedComputeClient.SessionLastTurn probe, DateTimeOffset now, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<TransientTurnRecoveryPolicy.Decision?>(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity is null || !IsNovaDiscussion(entity) || IsForeign(entity)) return null;
+            var current = Map(entity);
+            if (current is null || DiscussionStatus.IsClosed(current.Status)) return null;
+
+            var decision = TransientTurnRecoveryPolicy.Qualify(current, probe, entity.Data[TransientTurnRecoveryPolicy.DataKey], now);
+            if (decision.Verdict is not (TransientTurnVerdict.Wake or TransientTurnVerdict.Exhausted)) return decision;
+            await entities.PatchAsync(entityId, new JsonObject
+            {
+                [TransientTurnRecoveryPolicy.DataKey] = new JsonObject
+                {
+                    ["turnId"] = probe.TurnId,
+                    ["attempt"] = decision.Attempt,
+                    ["at"] = now.ToString("O"),
+                    ["state"] = decision.Verdict == TransientTurnVerdict.Wake ? "woken" : "exhausted",
+                },
+            }, null, ct);
+            return decision;
+        }, ct);
+
+    /// <summary>
     /// The sole exception to closed-state terminality: an explicit user reopen may
     /// move archived to stopped. Archiving remains terminal until its finalizer has
     /// confirmed the provider stopped. Ordinary status writers never call this.

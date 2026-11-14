@@ -39,6 +39,44 @@ public sealed class TurnOutcomeCallbackTests
         Assert.Contains(expected, Assert.Single(f.TargetMessages).Content);
     }
 
+    // 2026-11-14: a DNS outage. The worker's turn failed and the session went idle; the discussion
+    // and LIVE were told "Delegated session completed".
+    [Fact]
+    public async Task Failed_turn_says_it_failed_with_the_provider_error_and_never_that_it_completed()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        const string error = "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)";
+
+        Assert.Equal(200, await f.Complete("p1", deliveredMessageUid: "p1", promptMessageUid: "p1", executionObserved: true,
+            turnId: "p1", turnOutcome: "failed", turnError: error));
+
+        var content = Assert.Single(f.TargetMessages).Content;
+        Assert.Contains("type=\"session-failed\"", content);
+        Assert.Contains($"Session delegated-session turn failed (same title): {error}; it did not complete", content);
+        Assert.DoesNotContain("completed", content);
+        var live = Assert.Single(f.LiveMessages).Content;
+        Assert.Contains("Delegated session failed: same title (API Error: Can't reach the API server", live);
+        Assert.DoesNotContain("completed", live);
+    }
+
+    [Fact]
+    public async Task A_failure_after_RedCompute_retries_says_so_and_a_successful_retry_reads_as_a_completion()
+    {
+        using var failed = new CallbackDeliveryTests.Fixture();
+        await failed.Complete("r6", deliveredMessageUid: "r6", promptMessageUid: "r6", executionObserved: true,
+            turnId: "r6", turnOutcome: "failed", turnError: "API Error: Connection error.", trigger: "transient-retry");
+        var content = Assert.Single(failed.TargetMessages).Content;
+        Assert.Contains("turn failed (same title): API Error: Connection error.; it did not complete", content);
+        Assert.Contains("RedCompute had already retried it after a transient network or provider failure", content);
+
+        using var retried = new CallbackDeliveryTests.Fixture();
+        await retried.Complete("r1", deliveredMessageUid: "r1", promptMessageUid: "r1", executionObserved: true,
+            turnId: "r1", turnOutcome: "completed", trigger: "transient-retry");
+        var done = Assert.Single(retried.TargetMessages).Content;
+        Assert.Contains("type=\"session-complete\"", done);
+        Assert.Contains("(after RedCompute retried it following a transient network or provider failure)", done);
+    }
+
     [Fact]
     public async Task A_completed_turn_reads_as_before()
     {

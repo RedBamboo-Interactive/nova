@@ -377,7 +377,7 @@ public sealed class CallbackDeliveryTests
             int? backgroundTasksRunning = null, int? deliverySequence = null, string? workState = null,
             string? title = "same title", int? pendingInputs = null,
             string? turnId = null, string? turnOutcome = null, string? interruptSource = null, string? interruptedBy = null,
-            bool? autoContinue = null, string? trigger = null, int? coalescedTurns = null)
+            bool? autoContinue = null, string? trigger = null, int? coalescedTurns = null, string? turnError = null)
         {
             var ctx = new DefaultHttpContext();
             ctx.Connection.RemoteIpAddress = IPAddress.Loopback;
@@ -399,6 +399,7 @@ public sealed class CallbackDeliveryTests
             if (autoContinue is not null) body["autoContinue"] = autoContinue;
             if (trigger is not null) body["trigger"] = trigger;
             if (coalescedTurns is not null) body["coalescedTurns"] = coalescedTurns;
+            if (turnError is not null) body["turnError"] = turnError;
             ctx.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body.ToJsonString()));
             var result = await CallbackEndpoints.HandleSessionCompleteAsync(ctx, Store, Injector, liveEvents);
             return ((IStatusCodeHttpResult)result).StatusCode ?? 200;

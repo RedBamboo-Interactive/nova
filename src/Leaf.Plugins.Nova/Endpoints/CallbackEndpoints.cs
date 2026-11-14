@@ -67,6 +67,10 @@ public static class CallbackEndpoints
             ? turnValue.GetString() : null;
         var turnOutcome = body.TryGetProperty("turnOutcome", out var turnOutcomeValue) && turnOutcomeValue.ValueKind == JsonValueKind.String
             ? turnOutcomeValue.GetString() : null;
+        // The provider's error for a failed turn (RedCompute's turn ledger). Worker-visible text: inert and bounded.
+        var rawTurnError = body.TryGetProperty("turnError", out var turnErrorValue) && turnErrorValue.ValueKind == JsonValueKind.String
+            ? turnErrorValue.GetString() : null;
+        var turnError = NovaEventText.Field(rawTurnError, MaxTurnError);
         string? interruptSource = null, interruptedByMessageUid = null;
         if (body.TryGetProperty("interruptedBy", out var interruptedBy) && interruptedBy.ValueKind == JsonValueKind.Object)
         {
@@ -91,6 +95,8 @@ public static class CallbackEndpoints
         // The completion of a continuation RedCompute sent after a restart.
         var restartContinuation = body.TryGetProperty("trigger", out var triggerValue) && triggerValue.ValueKind == JsonValueKind.String
             && triggerValue.GetString() == "restart-continuation";
+        // The completion of a retry RedCompute sent after a transient (network or provider) failure.
+        var transientRetry = triggerValue.ValueKind == JsonValueKind.String && triggerValue.GetString() == "transient-retry";
         // Background turns RedCompute absorbed since its last report (at most one report per window).
         var coalescedTurns = body.TryGetProperty("coalescedTurns", out var coalesced)
             && coalesced.ValueKind == JsonValueKind.Number && coalesced.TryGetInt32(out var absorbed) && absorbed > 0 ? absorbed : 0;
@@ -101,8 +107,13 @@ public static class CallbackEndpoints
         // An interrupted turn did not complete, whatever status the session went idle with.
         var interruptedTurn = turnOutcome == "interrupted" && status is "Idle" or "Ended"
             && !resumablePause && stopReason != "usage_limit";
+        // A failed turn did not complete either, though the session is idle (2026-11-14: a DNS outage's
+        // failures were announced as "Delegated session completed").
+        var failedTurn = turnOutcome == "failed" && status is "Idle" or "Ended"
+            && !resumablePause && stopReason != "usage_limit";
         var outcome = resumablePause || stopReason == "usage_limit" ? "paused"
             : interruptedTurn ? "interrupted"
+            : failedTurn ? "failed"
             : backgroundTurn ? "background"
             : status == "Idle" || provenEndedCompletion ? "completed"
             : status == "Cancelled" ? reason == "superseded" ? "superseded" : "cancelled"
@@ -122,6 +133,9 @@ public static class CallbackEndpoints
             _ when interruptedTurn => $"Session {shownSession} turn was interrupted{InterruptedBy(interruptSource, interruptedByMessageUid)}{(title != null ? $" ({title})" : "")}; it did not complete"
                 + (backgroundTurn ? $", and {BackgroundTasks(backgroundTasksRunning)} still running" : "")
                 + (pendingInputs > 0 ? $"; it has {QueuedPrompts(pendingInputs)}, which it will run next" : ""),
+            _ when failedTurn => $"Session {shownSession} turn failed{(title != null ? $" ({title})" : "")}{(turnError != null ? $": {turnError}" : "")}; it did not complete"
+                + (transientRetry ? $". RedCompute had already retried it after a transient network or provider failure; check what it got done before continuing it" : "")
+                + (pendingInputs > 0 ? $"; it has {QueuedPrompts(pendingInputs)}, which it will run next" : ""),
             _ when backgroundTurn => $"Session {shownSession} ended its turn{(title != null ? $" ({title})" : "")} with {BackgroundTasks(backgroundTasksRunning)} still running; it is not finished and will report again when that work wakes it",
             _ when unpromptedTurn => $"Session {shownSession} finished a turn it started on its own{(title != null ? $" ({title})" : "")}"
                 + (pendingInputs > 0 ? $"; it has {QueuedPrompts(pendingInputs)}, which it will run next" : ""),
@@ -135,10 +149,11 @@ public static class CallbackEndpoints
         };
         if (unprompted && !unpromptedTurn) summary += " (in a turn it started on its own)";
         if (restartContinuation) summary += " (after RedCompute resumed it from a restart)";
+        if (transientRetry && !failedTurn) summary += " (after RedCompute retried it following a transient network or provider failure)";
         if (coalescedTurns > 0) summary += $" ({coalescedTurns} more background {(coalescedTurns == 1 ? "turn" : "turns")} since the last report)";
 
         var eventKind = unpromptedTurn ? "unprompted-turn"
-            : outcome switch { "paused" => "paused", "background" => "turn-ended", "interrupted" => "interrupted", _ => "complete" };
+            : outcome switch { "paused" => "paused", "background" => "turn-ended", "interrupted" => "interrupted", "failed" => "failed", _ => "complete" };
         var eventContent = interruptedTurn
             ? $"""
             <nova-event source="callback:session-{eventKind}" type="session-{eventKind}" stopReason="{NovaEventText.Attribute(stopReason ?? "unknown")}" interruptSource="{NovaEventText.Attribute(interruptSource ?? "unknown")}">
@@ -190,10 +205,10 @@ public static class CallbackEndpoints
         var metadata = JsonSerializer.SerializeToElement(new {
             sessionId, callbackId, promptMessageUid, status, stopReason, reason, deliveredMessageUid, executionObserved, outcome,
             backgroundTasksRunning, deliverySequence, workState, pendingInputs, title = rawTitle,
-            trigger = unprompted ? "unprompted" : restartContinuation ? "restart-continuation" : null,
+            trigger = unprompted ? "unprompted" : restartContinuation ? "restart-continuation" : transientRetry ? "transient-retry" : null,
             autoContinue = autoContinue ? true : (bool?)null,
             coalescedTurns = coalescedTurns > 0 ? coalescedTurns : (int?)null,
-            turnId, turnOutcome,
+            turnId, turnOutcome, turnError = rawTurnError,
             interruptedBy = interruptSource is null && interruptedByMessageUid is null ? null
                 : new { source = interruptSource, messageUid = interruptedByMessageUid },
         });
@@ -207,7 +222,9 @@ public static class CallbackEndpoints
             return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
 
         if (!discussion.Confidential)
-            await live.PostForOwnerAsync(discussion, "callback", interruptedTurn
+            await live.PostForOwnerAsync(discussion, "callback", failedTurn
+                    ? $"Delegated session failed{(title != null ? $": {title}" : "")}{(turnError != null ? $" ({NovaEventText.Field(rawTurnError, MaxLiveSummary)})" : "")}"
+                    : interruptedTurn
                     ? $"Delegated session turn was interrupted{InterruptedBy(interruptSource, interruptedByMessageUid)}{(title != null ? $": {title}" : "")}"
                     : backgroundTurn
                     ? $"Delegated session turn ended with {BackgroundTasks(backgroundTasksRunning)} still running{(title != null ? $": {title}" : "")}"
@@ -247,6 +264,7 @@ public static class CallbackEndpoints
     internal const int MaxToolName = 120;
     internal const int MaxSummary = 1000;
     internal const int MaxLiveSummary = 160;
+    internal const int MaxTurnError = 500;
 
     /// <summary>
     /// A delegated session parked on a structured question (Claude AskUserQuestion, Codex

@@ -747,6 +747,32 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         }
     }
 
+    /// <summary>
+    /// The session's status and RedCompute's record of its most recent turn (lastTurn): how it
+    /// ended, the provider's error when it failed, and whether RedCompute judges that error transient.
+    /// <c>Reachable</c> false: no answer. Absent fields read as null (an older RedCompute).
+    /// </summary>
+    public sealed record SessionLastTurn(
+        bool Reachable, string? Status, string? StopReason = null,
+        string? TurnId = null, string? Outcome = null, DateTimeOffset? EndedAt = null,
+        string? Error = null, bool Transient = false);
+
+    public async Task<SessionLastTurn> ProbeLastTurnAsync(string sessionId, CancellationToken ct = default)
+    {
+        using var doc = await GetSessionRawAsync(sessionId, ct, tail: 1);
+        if (doc is null || !doc.RootElement.TryGetProperty("session", out var session)) return new(false, null);
+        string? Str(JsonElement e, string name) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v)
+            && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        var turn = session.TryGetProperty("lastTurn", out var t) && t.ValueKind == JsonValueKind.Object ? t : default;
+        DateTimeOffset? endedAt = Str(turn, "endedAt") is { } at
+            && DateTimeOffset.TryParse(at, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var parsed) ? parsed : null;
+        var transient = turn.ValueKind == JsonValueKind.Object && turn.TryGetProperty("transient", out var tr)
+            && tr.ValueKind == JsonValueKind.True;
+        return new(true, Str(session, "status"), Str(session, "stopReason"),
+            Str(turn, "turnId"), Str(turn, "outcome"), endedAt, Str(turn, "error"), transient);
+    }
+
     /// <summary>Status of a single session ("Active", "Idle", ...), or null when unreachable/missing.</summary>
     public async Task<string?> GetSessionStatusAsync(string sessionId, CancellationToken ct = default)
     {

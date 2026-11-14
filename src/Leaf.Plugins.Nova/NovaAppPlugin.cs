@@ -169,6 +169,12 @@ public sealed class NovaAppPlugin : ILeafPlugin
             sp.GetRequiredService<RedComputeClient>(),
             sp.GetRequiredService<EventInjector>(),
             sp.GetRequiredService<ILogger<RestartRecovery>>()));
+        services.AddSingleton(sp => new TransientTurnRecovery(
+            sp.GetRequiredService<DiscussionStore>(),
+            sp.GetRequiredService<RedComputeClient>(),
+            sp.GetRequiredService<EventInjector>(),
+            sp.GetRequiredService<LiveEvents>(),
+            sp.GetRequiredService<ILogger<TransientTurnRecovery>>()));
         services.AddSingleton(sp => new ExtensionContributions(
             sp.GetRequiredKeyedService<IPluginExtensions>(PluginId),
             sp.GetRequiredService<LiveEvents>()));
@@ -345,6 +351,9 @@ public sealed class NovaAppPlugin : ILeafPlugin
         // Started here so its boot snapshot of `thinking` precedes any client sync.
         var restartRecovery = host.GetRequiredService<RestartRecovery>();
         _ = Task.Run(() => restartRecovery.RunAsync(lifetime.ApplicationStopping), CancellationToken.None);
+        // A discussion whose own turn failed on a network or provider blip: wake it with backoff.
+        var transientRecovery = host.GetRequiredService<TransientTurnRecovery>();
+        _ = Task.Run(() => transientRecovery.RunAsync(lifetime.ApplicationStopping), CancellationToken.None);
 
         // Events queued before a session existed, whose drain a restart interrupted.
         var injector = host.GetRequiredService<EventInjector>();
