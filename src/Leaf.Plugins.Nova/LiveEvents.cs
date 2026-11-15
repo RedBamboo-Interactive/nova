@@ -851,6 +851,21 @@ public sealed class LiveEvents(
         catch { /* the LIVE timeline is best-effort by design */ }
     }
 
+    // Provider-limit episodes already said in this process. The durable once is the idempotency key
+    // (InjectAsync finds it in LIVE's records after a restart); this only spares the scan on every pass.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _saidProviderLimits = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Says a provider-account failure (usage limit, failed sign-in) in the owner's LIVE once per
+    /// episode (<see cref="ProviderLimitNotice.EpisodeKey"/>), however many sessions die on it. A
+    /// system row: it never wakes LIVE's session, which may be on the same exhausted model.
+    /// </summary>
+    public async Task PostProviderLimitAsync(DiscussionRead source, string episodeKey, string content, CancellationToken ct = default)
+    {
+        if (!_saidProviderLimits.TryAdd(episodeKey, 0)) return;
+        await PostForOwnerAsync(source, ProviderLimitNotice.EventSource, content, episodeKey, ct);
+    }
+
     /// <summary>
     /// The open LIVE owned by the same person as <paramref name="source"/>, or null. An owner of
     /// <c>local-user</c> or none is the installation owner (<see cref="OwnerScope"/>), as in

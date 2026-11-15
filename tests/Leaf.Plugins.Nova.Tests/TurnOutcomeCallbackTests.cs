@@ -59,6 +59,76 @@ public sealed class TurnOutcomeCallbackTests
         Assert.DoesNotContain("completed", live);
     }
 
+    // 2026-11-15: the Fable allowance ran out. The worker's turn failed on it and the orchestrator was
+    // told "Session cd6e22042916 completed". The exact Claude Code message.
+    internal const string FableLimit = "You've hit your Fable limit · resets Nov 20, 9pm (Europe/Zurich). Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.";
+
+    [Theory]
+    [InlineData("usage_limit", "usage_limit")] // current RedCompute: error kind and Claude's stop reason
+    [InlineData(null, "usage_limit")]          // an older RedCompute: the stop reason alone
+    [InlineData("usage_limit", null)]          // a provider that sets no stop reason
+    public async Task A_turn_that_hit_a_usage_limit_failed_with_its_reason_and_is_neither_completed_nor_paused(
+        string? kind, string? stopReason)
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+
+        Assert.Equal(200, await f.Complete("p1", stopReason: stopReason, deliveredMessageUid: "p1", promptMessageUid: "p1",
+            executionObserved: true, turnId: "p1", turnOutcome: "failed", turnError: FableLimit, turnErrorKind: kind));
+
+        var content = Assert.Single(f.TargetMessages).Content;
+        Assert.Contains("type=\"session-failed\"", content);
+        Assert.Contains("turn failed (same title): You've hit your Fable limit · resets Nov 20, 9pm (Europe/Zurich).", content);
+        Assert.Contains("a provider usage limit, not the session's work", content);
+        Assert.DoesNotContain("completed", content);
+        Assert.DoesNotContain("paused", content);
+        var live = Assert.Single(f.LiveMessages).Content;
+        Assert.StartsWith("Provider usage limit hit at ", live);
+        Assert.Contains("(\"same title\" stopped on it): You've hit your Fable limit · resets Nov 20, 9pm (Europe/Zurich).", live);
+        Assert.DoesNotContain("https://", live);
+    }
+
+    [Fact]
+    public async Task Every_session_one_usage_limit_stops_reports_failed_but_LIVE_reads_it_once()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+
+        await f.Complete("a", stopReason: "usage_limit", deliveredMessageUid: "a", promptMessageUid: "a", executionObserved: true,
+            turnId: "a", turnOutcome: "failed", turnError: FableLimit, turnErrorKind: "usage_limit", sessionId: "worker-a");
+        await f.Complete("b", stopReason: "usage_limit", deliveredMessageUid: "b", promptMessageUid: "b", executionObserved: true,
+            turnId: "b", turnOutcome: "failed", turnError: FableLimit, turnErrorKind: "usage_limit", sessionId: "worker-b");
+
+        Assert.Equal(2, f.TargetMessages.Count(m => m.Content.Contains("type=\"session-failed\"")));
+        Assert.Single(f.LiveMessages);
+    }
+
+    [Fact]
+    public async Task A_failed_sign_in_is_said_as_one_and_a_plain_failure_keeps_its_own_line()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+
+        await f.Complete("a", stopReason: "authentication_failed", deliveredMessageUid: "a", promptMessageUid: "a", executionObserved: true,
+            turnId: "a", turnOutcome: "failed", turnError: "Invalid API key · Please run /login", turnErrorKind: "authentication");
+        await f.Complete("b", deliveredMessageUid: "b", promptMessageUid: "b", executionObserved: true,
+            turnId: "b", turnOutcome: "failed", turnError: "Prompt is too long", turnErrorKind: "other", sessionId: "worker-b");
+
+        var lines = f.LiveMessages.Select(m => m.Content).ToList();
+        Assert.Equal(2, lines.Count);
+        Assert.StartsWith("Provider sign-in failed at ", lines[0]);
+        Assert.Contains("Delegated session failed: same title (Prompt is too long)", lines[1]);
+    }
+
+    // The usage_limit pause RedCompute holds a registration across is a Stopped session; it still reads as a pause.
+    [Fact]
+    public async Task A_stopped_usage_limit_session_without_a_failed_turn_still_reads_as_paused()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+
+        await f.Complete("p1", status: "Stopped", stopReason: "usage_limit", deliveredMessageUid: "p1", promptMessageUid: "p1",
+            executionObserved: true);
+
+        Assert.Contains("paused — usage limit reached", Assert.Single(f.TargetMessages).Content);
+    }
+
     [Fact]
     public async Task A_failure_after_RedCompute_retries_says_so_and_a_successful_retry_reads_as_a_completion()
     {

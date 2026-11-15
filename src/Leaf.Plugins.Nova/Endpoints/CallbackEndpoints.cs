@@ -71,6 +71,9 @@ public static class CallbackEndpoints
         var rawTurnError = body.TryGetProperty("turnError", out var turnErrorValue) && turnErrorValue.ValueKind == JsonValueKind.String
             ? turnErrorValue.GetString() : null;
         var turnError = NovaEventText.Field(rawTurnError, MaxTurnError);
+        // RedCompute's class of that error (usage_limit, authentication, transient, other). Absent from older senders.
+        var turnErrorKind = body.TryGetProperty("turnErrorKind", out var turnErrorKindValue) && turnErrorKindValue.ValueKind == JsonValueKind.String
+            ? turnErrorKindValue.GetString() : null;
         string? interruptSource = null, interruptedByMessageUid = null;
         if (body.TryGetProperty("interruptedBy", out var interruptedBy) && interruptedBy.ValueKind == JsonValueKind.Object)
         {
@@ -108,10 +111,13 @@ public static class CallbackEndpoints
         var interruptedTurn = turnOutcome == "interrupted" && status is "Idle" or "Ended"
             && !resumablePause && stopReason != "usage_limit";
         // A failed turn did not complete either, though the session is idle (2026-11-14: a DNS outage's
-        // failures were announced as "Delegated session completed").
-        var failedTurn = turnOutcome == "failed" && status is "Idle" or "Ended"
-            && !resumablePause && stopReason != "usage_limit";
-        var outcome = resumablePause || stopReason == "usage_limit" ? "paused"
+        // failures were announced as "Delegated session completed"). A turn that failed on a usage limit
+        // is a failure too, with its reason: an idle session is not paused, nothing resumes it
+        // (2026-11-15, "You've hit your Fable limit").
+        var failedTurn = turnOutcome == "failed" && status is "Idle" or "Ended" && !resumablePause;
+        // The provider account, not this session: every session on that model or provider fails the same way.
+        var accountLimit = failedTurn && ProviderLimitNotice.IsAccountLevel(turnErrorKind, stopReason);
+        var outcome = resumablePause || stopReason == "usage_limit" && !failedTurn ? "paused"
             : interruptedTurn ? "interrupted"
             : failedTurn ? "failed"
             : backgroundTurn ? "background"
@@ -129,11 +135,14 @@ public static class CallbackEndpoints
             _ when idleParking => $"Session {shownSession} parked after inactivity; it will resume on the next message",
             _ when autoContinue => $"Session {shownSession} paused for restart; RedCompute resumes it with a continuation once it is back, and its completion will follow. Don't send a continuation yourself",
             _ when resumablePause => $"Session {shownSession} paused for restart; awaiting recovery, completion has not been reported",
-            (_, "usage_limit") => $"Session {shownSession} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
+            (_, "usage_limit") when !failedTurn => $"Session {shownSession} paused — usage limit reached{(title != null ? $" ({title})" : "")}",
             _ when interruptedTurn => $"Session {shownSession} turn was interrupted{InterruptedBy(interruptSource, interruptedByMessageUid)}{(title != null ? $" ({title})" : "")}; it did not complete"
                 + (backgroundTurn ? $", and {BackgroundTasks(backgroundTasksRunning)} still running" : "")
                 + (pendingInputs > 0 ? $"; it has {QueuedPrompts(pendingInputs)}, which it will run next" : ""),
             _ when failedTurn => $"Session {shownSession} turn failed{(title != null ? $" ({title})" : "")}{(turnError != null ? $": {turnError}" : "")}; it did not complete"
+                + (accountLimit ? ProviderLimitNotice.Kind(turnErrorKind, stopReason) == "authentication"
+                    ? ". That is the provider's sign-in, not the session's work: it fails the same way until it is signed in again, so don't re-send or re-delegate on it"
+                    : ". That is a provider usage limit, not the session's work: every session on that model fails the same way until it resets, so don't re-send or re-delegate on it" : "")
                 + (transientRetry ? $". RedCompute had already retried it after a transient network or provider failure; check what it got done before continuing it" : "")
                 + (pendingInputs > 0 ? $"; it has {QueuedPrompts(pendingInputs)}, which it will run next" : ""),
             _ when backgroundTurn => $"Session {shownSession} ended its turn{(title != null ? $" ({title})" : "")} with {BackgroundTasks(backgroundTasksRunning)} still running; it is not finished and will report again when that work wakes it",
@@ -208,7 +217,7 @@ public static class CallbackEndpoints
             trigger = unprompted ? "unprompted" : restartContinuation ? "restart-continuation" : transientRetry ? "transient-retry" : null,
             autoContinue = autoContinue ? true : (bool?)null,
             coalescedTurns = coalescedTurns > 0 ? coalescedTurns : (int?)null,
-            turnId, turnOutcome, turnError = rawTurnError,
+            turnId, turnOutcome, turnError = rawTurnError, turnErrorKind,
             interruptedBy = interruptSource is null && interruptedByMessageUid is null ? null
                 : new { source = interruptSource, messageUid = interruptedByMessageUid },
         });
@@ -221,7 +230,15 @@ public static class CallbackEndpoints
         if (key is not null && !forwarded && discussion.SessionId is not null)
             return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
 
-        if (!discussion.Confidential)
+        if (accountLimit)
+        {
+            // One LIVE line for the episode, shared with every other session and thread it stops.
+            var failedAt = DateTimeOffset.UtcNow;
+            await live.PostProviderLimitAsync(discussion, ProviderLimitNotice.EpisodeKey(rawTurnError, failedAt),
+                ProviderLimitNotice.Line(ProviderLimitNotice.Kind(turnErrorKind, stopReason), rawTurnError, failedAt,
+                    discussion.Confidential ? null : title ?? shownSession), ctx.RequestAborted);
+        }
+        else if (!discussion.Confidential)
             await live.PostForOwnerAsync(discussion, "callback", failedTurn
                     ? $"Delegated session failed{(title != null ? $": {title}" : "")}{(turnError != null ? $" ({NovaEventText.Field(rawTurnError, MaxLiveSummary)})" : "")}"
                     : interruptedTurn

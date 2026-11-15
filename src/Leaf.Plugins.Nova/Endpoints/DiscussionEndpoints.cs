@@ -3001,6 +3001,9 @@ public static class DiscussionEndpoints
             "tool_result" => !string.IsNullOrWhiteSpace(message.ToolResult)
                 || !string.IsNullOrWhiteSpace(message.Content)
                 || message.PayloadRef is not null,
+            // The error a turn ended on, in the provider's words. Dropping it made a thread killed by
+            // a usage limit read as two unanswered notes (2026-11-15, "You've hit your Fable limit").
+            "error" => message.Role != "user" && !string.IsNullOrWhiteSpace(message.Content),
             _ => false,
         };
 
@@ -3041,6 +3044,17 @@ public static class DiscussionEndpoints
                     toolInput = (string?)null,
                     payloadRef = (JsonElement?)null,
                     phase = message.Phase,
+                },
+            ],
+            "error" =>
+            [
+                new
+                {
+                    type = (string?)"error",
+                    content = (string?)content,
+                    toolName = (string?)null,
+                    toolInput = (string?)null,
+                    payloadRef = (JsonElement?)null,
                 },
             ],
             _ => MapParts(null, content),

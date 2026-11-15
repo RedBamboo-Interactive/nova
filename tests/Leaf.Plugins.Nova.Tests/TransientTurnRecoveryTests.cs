@@ -136,7 +136,66 @@ public sealed class TransientTurnRecoveryTests
         Assert.Equal(2, port.Wakes.Count);
     }
 
+    // ---- Provider limits (2026-11-15: "You've hit your Fable limit") ----
+
+    [Fact]
+    public async Task A_usage_limit_is_never_retried_and_LIVE_hears_one_line_for_every_thread_it_stops()
+    {
+        var now = FailedAt.AddMinutes(1);
+        var nature = Discussion(id: "6a6be852", sessionId: "069f571f36a9") with { Title = "Nature Environment AAA Visual Uplift" };
+        var songes = Discussion(id: "917b2dfe", sessionId: "49d71f1e105a");
+        var heartbeat = Discussion(id: "d36e66e6", sessionId: "313db7ee006a", type: HeartbeatService.DiscussionType);
+        var secret = Discussion(id: "secret", sessionId: "s-secret") with { Confidential = true, Title = "Do not name me" };
+        var port = new FakePort([nature, songes, heartbeat, secret]);
+        foreach (var session in new[] { "069f571f36a9", "49d71f1e105a", "313db7ee006a", "s-secret" })
+            port.Probes[session] = LimitProbe(endedAt: FailedAt);
+        var recovery = new TransientTurnRecovery(port, NullLogger.Instance, () => now);
+
+        Assert.Equal(0, await recovery.RunOnceAsync(default));
+        Assert.Empty(port.Wakes);
+        Assert.Empty(port.Notices);
+        // Every thread it stopped reports it, including Heartbeat, under one episode key: LiveEvents says it once.
+        Assert.Equal(4, port.LimitNotices.Count);
+        Assert.Single(port.LimitNotices.Select(n => n.Key).Distinct());
+        var nat = port.LimitNotices.Single(n => n.DiscussionId == "6a6be852").Content;
+        Assert.StartsWith("Provider usage limit hit at 08:03 Zurich time (\"Nature Environment AAA Visual Uplift\" stopped on it): ", nat);
+        Assert.Contains("You've hit your Fable limit · resets Nov 20, 9pm (Europe/Zurich).", nat);
+        Assert.DoesNotContain("Do not name me", port.LimitNotices.Single(n => n.DiscussionId == "secret").Content);
+
+        // Still never retried: the ladder's first step has long passed.
+        now = FailedAt + TransientTurnRecoveryPolicy.Delays[2];
+        Assert.Equal(0, await recovery.RunOnceAsync(default));
+        Assert.Empty(port.Wakes);
+    }
+
+    [Fact]
+    public async Task An_older_RedCompute_without_an_error_kind_is_read_from_the_stop_reason()
+    {
+        var port = new FakePort([Discussion()]);
+        port.Probes["49d71f1e105a"] = LimitProbe(endedAt: FailedAt, kind: null, stopReason: "usage_limit");
+        await new TransientTurnRecovery(port, NullLogger.Instance, () => FailedAt.AddMinutes(1)).RunOnceAsync(default);
+        Assert.Single(port.LimitNotices);
+    }
+
+    [Fact]
+    public async Task A_limit_older_than_the_window_or_an_ordinary_failure_says_nothing()
+    {
+        var port = new FakePort([Discussion(), Discussion(id: "other", sessionId: "s-other")]);
+        port.Probes["49d71f1e105a"] = LimitProbe(endedAt: FailedAt);
+        port.Probes["s-other"] = new LastTurn(true, "Idle", null, "t9", "failed", FailedAt, "Prompt is too long", false, "other");
+        var now = FailedAt + TransientTurnRecoveryPolicy.Window + TimeSpan.FromMinutes(1);
+        await new TransientTurnRecovery(port, NullLogger.Instance, () => now).RunOnceAsync(default);
+        Assert.Empty(port.LimitNotices);
+        await new TransientTurnRecovery(port, NullLogger.Instance, () => FailedAt.AddMinutes(1)).RunOnceAsync(default);
+        Assert.Equal(["917b2dfe"], port.LimitNotices.Select(n => n.DiscussionId));
+    }
+
     // ---- helpers ----
+
+    private const string FableLimit = "You've hit your Fable limit · resets Nov 20, 9pm (Europe/Zurich). Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.";
+
+    private static LastTurn LimitProbe(DateTimeOffset endedAt, string? kind = "usage_limit", string? stopReason = null)
+        => new(true, "Idle", stopReason, "limit-turn", "failed", endedAt, FableLimit, false, kind);
 
     private static TransientTurnRecoveryPolicy.Decision Qualify(DiscussionRead? discussion = null, LastTurn? probe = null,
         JsonNode? previous = null, DateTimeOffset? now = null)
@@ -163,6 +222,7 @@ public sealed class TransientTurnRecoveryTests
         public Dictionary<Guid, JsonNode?> Records { get; } = [];
         public List<Sent> Wakes { get; } = [];
         public List<Sent> Notices { get; } = [];
+        public List<Sent> LimitNotices { get; } = [];
 
         public Task<IReadOnlyList<DiscussionRead>> ListOpenAsync(CancellationToken ct) => Task.FromResult(discussions);
 
@@ -192,6 +252,12 @@ public sealed class TransientTurnRecoveryTests
         public Task NotifyOwnerAsync(DiscussionRead discussion, string content, string key, CancellationToken ct)
         {
             Notices.Add(new(discussion.Id, content, default, key));
+            return Task.CompletedTask;
+        }
+
+        public Task NotifyProviderLimitAsync(DiscussionRead discussion, string content, string episodeKey, CancellationToken ct)
+        {
+            LimitNotices.Add(new(discussion.Id, content, default, episodeKey));
             return Task.CompletedTask;
         }
     }

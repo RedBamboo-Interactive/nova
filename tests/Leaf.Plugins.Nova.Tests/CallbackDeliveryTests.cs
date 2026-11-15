@@ -377,13 +377,14 @@ public sealed class CallbackDeliveryTests
             int? backgroundTasksRunning = null, int? deliverySequence = null, string? workState = null,
             string? title = "same title", int? pendingInputs = null,
             string? turnId = null, string? turnOutcome = null, string? interruptSource = null, string? interruptedBy = null,
-            bool? autoContinue = null, string? trigger = null, int? coalescedTurns = null, string? turnError = null)
+            bool? autoContinue = null, string? trigger = null, int? coalescedTurns = null, string? turnError = null,
+            string? turnErrorKind = null, string sessionId = "delegated-session")
         {
             var ctx = new DefaultHttpContext();
             ctx.Connection.RemoteIpAddress = IPAddress.Loopback;
             ctx.Request.QueryString = new("?discussionId=target");
             ctx.Request.ContentType = "application/json";
-            var body = new JsonObject { ["sessionId"] = "delegated-session", ["status"] = status, ["title"] = title, ["stopReason"] = stopReason };
+            var body = new JsonObject { ["sessionId"] = sessionId, ["status"] = status, ["title"] = title, ["stopReason"] = stopReason };
             body["reason"] = reason;
             body["deliveredMessageUid"] = deliveredMessageUid;
             body["promptMessageUid"] = promptMessageUid;
@@ -400,6 +401,7 @@ public sealed class CallbackDeliveryTests
             if (trigger is not null) body["trigger"] = trigger;
             if (coalescedTurns is not null) body["coalescedTurns"] = coalescedTurns;
             if (turnError is not null) body["turnError"] = turnError;
+            if (turnErrorKind is not null) body["turnErrorKind"] = turnErrorKind;
             ctx.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body.ToJsonString()));
             var result = await CallbackEndpoints.HandleSessionCompleteAsync(ctx, Store, Injector, liveEvents);
             return ((IStatusCodeHttpResult)result).StatusCode ?? 200;

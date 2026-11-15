@@ -751,11 +751,13 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     /// The session's status and RedCompute's record of its most recent turn (lastTurn): how it
     /// ended, the provider's error when it failed, and whether RedCompute judges that error transient.
     /// <c>Reachable</c> false: no answer. Absent fields read as null (an older RedCompute).
+    /// <c>ErrorKind</c> is RedCompute's class of a failed turn's error: usage_limit, authentication,
+    /// transient or other.
     /// </summary>
     public sealed record SessionLastTurn(
         bool Reachable, string? Status, string? StopReason = null,
         string? TurnId = null, string? Outcome = null, DateTimeOffset? EndedAt = null,
-        string? Error = null, bool Transient = false);
+        string? Error = null, bool Transient = false, string? ErrorKind = null);
 
     public async Task<SessionLastTurn> ProbeLastTurnAsync(string sessionId, CancellationToken ct = default)
     {
@@ -770,7 +772,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         var transient = turn.ValueKind == JsonValueKind.Object && turn.TryGetProperty("transient", out var tr)
             && tr.ValueKind == JsonValueKind.True;
         return new(true, Str(session, "status"), Str(session, "stopReason"),
-            Str(turn, "turnId"), Str(turn, "outcome"), endedAt, Str(turn, "error"), transient);
+            Str(turn, "turnId"), Str(turn, "outcome"), endedAt, Str(turn, "error"), transient, Str(turn, "errorKind"));
     }
 
     /// <summary>Status of a single session ("Active", "Idle", ...), or null when unreachable/missing.</summary>

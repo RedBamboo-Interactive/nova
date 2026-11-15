@@ -105,7 +105,7 @@ public static class TransientTurnRecoveryPolicy
         => Text(record, name) is { } at && DateTimeOffset.TryParse(at, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var t)
             ? t : null;
 
-    private static DateTimeOffset Zurich(DateTimeOffset instant)
+    internal static DateTimeOffset Zurich(DateTimeOffset instant)
     {
         foreach (var id in new[] { "Europe/Zurich", "W. Europe Standard Time" })
         {
@@ -128,6 +128,8 @@ internal interface ITransientTurnRecoveryPort
         DateTimeOffset now, CancellationToken ct);
     Task<bool> WakeAsync(DiscussionRead discussion, string content, JsonElement metadata, string key, CancellationToken ct);
     Task NotifyOwnerAsync(DiscussionRead discussion, string content, string key, CancellationToken ct);
+    /// <summary>One LIVE line per provider-limit episode (<paramref name="episodeKey"/>), however many discussions report it.</summary>
+    Task NotifyProviderLimitAsync(DiscussionRead discussion, string content, string episodeKey, CancellationToken ct);
 }
 
 /// <summary>
@@ -176,15 +178,28 @@ public sealed class TransientTurnRecovery
     {
         var now = clock();
         var woken = 0;
+        // Heartbeat is probed too: it is never woken, but a provider limit that kills it is still said.
         var candidates = (await port.ListOpenAsync(ct))
             .Where(d => d.SessionId is not null && d.Status != DiscussionStatus.Thinking)
-            .Where(d => d.Type != HeartbeatService.DiscussionType && !DiscussionApplicationOwner.IsForeign(d))
+            .Where(d => !DiscussionApplicationOwner.IsForeign(d))
             .Where(d => now - Utc(d.LastActivity) <= TransientTurnRecoveryPolicy.Window + TransientTurnRecoveryPolicy.Delays[^1]);
         foreach (var discussion in candidates)
         {
             var probe = await port.ProbeAsync(discussion.SessionId!, ct);
+            if (!probe.Reachable || probe.Outcome != "failed" || probe.TurnId is null) continue;
+            // A usage limit or failed sign-in is never retried (RedCompute marks it non-transient):
+            // LIVE hears it once per episode, at once, instead of the thread just going quiet.
+            if (ProviderLimitNotice.IsAccountLevel(probe.ErrorKind, probe.StopReason)
+                && probe.EndedAt is { } limitedAt && now - limitedAt <= TransientTurnRecoveryPolicy.Window)
+            {
+                var kind = ProviderLimitNotice.Kind(probe.ErrorKind, probe.StopReason);
+                await port.NotifyProviderLimitAsync(discussion,
+                    ProviderLimitNotice.Line(kind, probe.Error, limitedAt, discussion.Confidential ? null : discussion.Title ?? discussion.Id),
+                    ProviderLimitNotice.EpisodeKey(probe.Error, limitedAt), ct);
+                continue;
+            }
             // Most discussions stop here; the stored record is read only for a transient failure.
-            if (!probe.Reachable || probe.Outcome != "failed" || !probe.Transient || probe.TurnId is null) continue;
+            if (!probe.Transient || discussion.Type == HeartbeatService.DiscussionType) continue;
             var decision = await port.TryClaimAsync(discussion, probe, now, ct);
             if (decision is null) continue;
             var key = TransientTurnRecoveryPolicy.Key(discussion.Id, discussion.SessionId!, probe.TurnId!);
@@ -244,5 +259,8 @@ public sealed class TransientTurnRecovery
 
         public Task NotifyOwnerAsync(DiscussionRead discussion, string content, string key, CancellationToken ct)
             => live.PostForOwnerAsync(discussion, TransientTurnRecoveryPolicy.EventSource, content, key, ct);
+
+        public Task NotifyProviderLimitAsync(DiscussionRead discussion, string content, string episodeKey, CancellationToken ct)
+            => live.PostProviderLimitAsync(discussion, episodeKey, content, ct);
     }
 }
