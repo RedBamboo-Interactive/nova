@@ -3,6 +3,7 @@ import { composerFocusSettingsStore, normalizePushToTalkKey, pushToTalkSettingsS
 import { useLocalSettings } from "../hooks/use-local-settings"
 import { setSettings as setLocalSettings } from "../lib/settings-store"
 import { VoiceDeviceSettings } from "./VoiceDeviceSettings"
+import { FriezeMarkerSettings } from "./FriezeMarkerSettings"
 
 export function NovaSettingsPanel() {
   const localSettings = useLocalSettings()
@@ -42,6 +43,7 @@ export function NovaSettingsPanel() {
           </SelectContent>
         </Select>
       </SettingRow>
+      <FriezeMarkerSettings />
       <SectionHeader>Voice</SectionHeader>
       <VoiceDeviceSettings />
       <SettingRow label="Push-to-talk key" hint="Hold this key to record a voice reply. Float Nova leases the same key globally while open.">

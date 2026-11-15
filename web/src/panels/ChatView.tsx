@@ -20,6 +20,7 @@ import { ReactionPills, AddReactionButton, useReactionEmoji } from "../component
 import { reactionMenuEntries } from "../components/discussion/reaction-actions"
 import { createNovaSpeechBackend } from "../lib/speech"
 import { useLocalSettings } from "../hooks/use-local-settings"
+import { friezeMarkerScope, friezeMarkerVisibility, normalizeHiddenFriezeMarkers } from "../lib/frieze-marker-settings"
 import { useAgents } from "../hooks/use-agents"
 import { versionedAvatarSrc } from "../lib/agent-directory-sync"
 import { recordingUsageLoader, resolveLiveProvider, usageKey } from "../lib/provider-usage-store"
@@ -1549,7 +1550,14 @@ export function ChatView({
   ) : null, [activeDiscussionId, activePendingContext, pendingContext])
 
   const { opacity: avatarOpacity } = useAvatarStyle()
-  const { showAvatar: avatarEnabled, showDiscussionAvatars } = useLocalSettings()
+  const { showAvatar: avatarEnabled, showDiscussionAvatars, hiddenFriezeMarkers } = useLocalSettings()
+  // Live and every other discussion keep separate marker preferences.
+  const markerScope = friezeMarkerScope(activeDiscussion?.type)
+  // The store keeps one object until the setting changes, so this stays stable.
+  const isFriezeMarkerVisible = useMemo(
+    () => friezeMarkerVisibility(normalizeHiddenFriezeMarkers(hiddenFriezeMarkers)[markerScope]),
+    [hiddenFriezeMarkers, markerScope],
+  )
   const { autoFocusMode } = useComposerFocusSettings()
   const showAvatar = !floating && avatarEnabled && !!activeDiscussion
   const showFloatingTabAvatar = floating && avatarEnabled && !!activeDiscussion
@@ -1661,6 +1669,7 @@ export function ChatView({
         assistantAvatar={avatarSrc}
         resolveAgentInfo={resolveAgentInfo}
         eventRows={eventRows}
+        isFriezeMarkerVisible={isFriezeMarkerVisible}
         renderStatusLine={renderStatusLine}
         renderComposerAttachments={renderWhatISeeAttachment}
         renderAttachmentActions={renderWhatISeeAction}

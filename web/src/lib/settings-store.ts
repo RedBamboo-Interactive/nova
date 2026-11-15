@@ -1,4 +1,5 @@
 import { createLocalStore } from "@redbamboo/utility"
+import type { HiddenFriezeMarkers } from "./frieze-marker-settings"
 
 export type LocalSettings = {
   showAvatar: boolean
@@ -11,6 +12,8 @@ export type LocalSettings = {
   voiceOutputDeviceId: string | null
   voiceOutputDeviceLabel: string | null
   voiceProcessing: boolean
+  /** Timeline marker kinds hidden in Live and in other discussions (display only). */
+  hiddenFriezeMarkers: HiddenFriezeMarkers
 }
 
 export const settingsStore = createLocalStore<LocalSettings>("nova_settings", {
@@ -23,6 +26,7 @@ export const settingsStore = createLocalStore<LocalSettings>("nova_settings", {
   voiceOutputDeviceId: null,
   voiceOutputDeviceLabel: null,
   voiceProcessing: true,
+  hiddenFriezeMarkers: { live: [], discussions: [] },
 })
 
 export const getSettings = settingsStore.get
