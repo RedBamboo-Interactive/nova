@@ -333,6 +333,11 @@ public sealed partial class ExternalAgentConversationProviderTests
                 Assert.Equal("auto", root.GetProperty("maxAccessLevel").GetString());
             else
                 Assert.False(root.TryGetProperty("maxAccessLevel", out _));
+            // A Discord reply is delivered as one message, so its first launch has no progress-line reminder.
+            if (discord)
+                Assert.True(root.GetProperty("deliveredAsOneMessage").GetBoolean());
+            else
+                Assert.False(root.TryGetProperty("deliveredAsOneMessage", out _));
         }
         finally
         {
@@ -366,6 +371,7 @@ public sealed partial class ExternalAgentConversationProviderTests
             Assert.False(body.RootElement.TryGetProperty("accessLevel", out _));
             Assert.False(body.RootElement.TryGetProperty("maxAccessLevel", out _));
             Assert.False(body.RootElement.TryGetProperty("unattended", out _));
+            Assert.False(body.RootElement.TryGetProperty("deliveredAsOneMessage", out _));
         }
         finally
         {

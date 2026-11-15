@@ -124,7 +124,7 @@ public sealed class MessagePipeline(
         bool confidential = false, string? developerInstructions = null,
         string? modelOverride = null, string? effortOverride = null, bool keepResident = false,
         string? cause = null, bool unattended = false, string? maxAccessLevel = null,
-        string? callerSessionId = null)
+        string? callerSessionId = null, bool deliveredAsOneMessage = false)
     {
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
         if (agent == null)
@@ -164,6 +164,10 @@ public sealed class MessagePipeline(
             body["unattended"] = true;
         if (!string.IsNullOrWhiteSpace(maxAccessLevel))
             body["maxAccessLevel"] = maxAccessLevel;
+        // The reply reaches its reader as one message (Discord): RedCompute launches the CLI without its
+        // progress-line reminder, whose status sentence would open the public reply. An older RedCompute ignores it.
+        if (deliveredAsOneMessage)
+            body["deliveredAsOneMessage"] = true;
 
         var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ct);
         var context = new List<ComputeContextReference>();

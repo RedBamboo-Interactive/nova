@@ -247,7 +247,8 @@ public sealed class ExternalAgentConversationProvider(
             effortOverride: request.SessionCompute?.Effort,
             cause: request.Cause,
             unattended: access.Unattended,
-            maxAccessLevel: access.MaxAccessLevel)
+            maxAccessLevel: access.MaxAccessLevel,
+            deliveredAsOneMessage: IsDiscordTransport(request.Scope.Transport))
             ?? throw new InvalidOperationException("RedCompute refused to create the external Agent session");
         var handle = new ExternalConversationHandle(
             ProviderId, request.BindingId, request.Generation, key, sessionId);
