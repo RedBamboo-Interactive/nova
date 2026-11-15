@@ -120,6 +120,7 @@ public sealed class HeartbeatSkillsTests
         {
             "/api/apps/nova/discussions", "Initiative: <what changes>", "idempotencyKey", "Never open one to ask for a yes",
             "One new one per tick", "your identity's limits win", "standing-invitations.md", "no restart, rebuild or release",
+            "no problem earns a bespoke system", "consolidate or delete before adding", "the simplicity rule",
         })
             Assert.Contains(phrase, markdown);
     }
