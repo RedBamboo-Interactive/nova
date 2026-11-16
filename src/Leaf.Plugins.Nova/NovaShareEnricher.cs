@@ -32,18 +32,12 @@ public sealed class NovaShareEnricher(
 
             if (agent?.AvatarFilename is not null)
             {
-                var avatarPath = ResolveAvatarPath(agent.AvatarFilename);
-                if (avatarPath != null && File.Exists(avatarPath))
+                var avatarId = ResolveAvatarAssetId(agent.AvatarFilename);
+                var avatar = avatarId is null ? null : await assets.ReadAsync(avatarId, ct);
+                if (avatar is not null)
                 {
-                    var bytes = await File.ReadAllBytesAsync(avatarPath, ct);
-                    avatarBase64 = Convert.ToBase64String(bytes);
-                    avatarMediaType = Path.GetExtension(avatarPath).ToLowerInvariant() switch
-                    {
-                        ".webp" => "image/webp",
-                        ".jpg" or ".jpeg" => "image/jpeg",
-                        ".gif" => "image/gif",
-                        _ => "image/png",
-                    };
+                    avatarBase64 = Convert.ToBase64String(avatar.Bytes);
+                    avatarMediaType = avatar.ContentType;
                 }
             }
         }
@@ -404,19 +398,19 @@ public sealed class NovaShareEnricher(
         return content.TrimStart();
     }
 
-    private static string? ResolveAvatarPath(string avatarFilename)
+    /// <summary>
+    /// The asset id behind an agent's avatar filename (<c>/api/assets/&lt;id&gt;</c> or a bare id), or null for a
+    /// path or URL that is not an asset. The bytes come from <see cref="IAssets"/>: the plugin never builds the
+    /// asset folder's path, which moves with RedLeaf's data.
+    /// </summary>
+    internal static string? ResolveAvatarAssetId(string avatarFilename)
     {
         var name = avatarFilename;
         if (name.StartsWith("/api/assets/"))
             name = name["/api/assets/".Length..];
-        if (name.StartsWith('/') || name.Contains("://"))
+        if (name.Length == 0 || name.StartsWith('/') || name.Contains("://"))
             return null;
-
-        var assetsDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "RedLeaf", "assets");
-        var path = Path.Combine(assetsDir, name);
-        return File.Exists(path) ? path : null;
+        return name;
     }
 
     internal sealed record ShareImageSource(
