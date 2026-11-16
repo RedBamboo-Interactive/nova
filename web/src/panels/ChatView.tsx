@@ -1559,13 +1559,13 @@ export function ChatView({
     () => friezeMarkerVisibility(normalizeHiddenFriezeMarkers(hiddenFriezeMarkers)[markerScope]),
     [hiddenFriezeMarkers, markerScope],
   )
-  // Job cards: off, or in Live, nothing is read and the panel renders exactly as without them.
+  // Job cards: off, nothing is read and the panel renders exactly as without them. Live shows the jobs its own turns started.
   const jobsTransport = useMemo(() => activeDiscussionId
     ? createDiscussionJobsTransport(activeDiscussionId, (path, init) => novaExecution.fetch(path, init))
     : null, [activeDiscussionId])
   const jobsDiscussion = activeDiscussion ? { id: activeDiscussion.id, sessionId: activeDiscussion.sessionId } : null
   const jobs = useChatJobs({
-    enabled: jobCards !== false && !!activeDiscussion && activeDiscussion.type !== "live",
+    enabled: jobCards !== false && !!activeDiscussion,
     conversationKey: activeDiscussionId,
     since: activeMessages[0]?.timestamp,
     transport: jobsTransport,

@@ -178,16 +178,17 @@ public sealed class DiscussionJobsEndpointTests
     }
 
     [Fact]
-    public async Task LiveHasNoCardsAndAsksNothing()
+    public async Task LiveShowsTheJobsItsOwnTurnsStartedAndOnlyThose()
     {
         var fixture = new Fixture();
         fixture.Add(owner: Owner, type: "live");
+        fixture.Gateway.List(Job(Image), Job(Elsewhere, discussion: "other999"), Job(Delegate, session: "worker-session"));
+        fixture.Gateway.Detail(Job(Image, detail: true));
 
         var (status, body) = await fixture.ListAsync(Human(Owner), "?since=2026-11-16T10:00:00Z");
 
         Assert.Equal(200, status);
-        Assert.Empty(JsonNode.Parse(body)!["items"]!.AsArray());
-        Assert.Empty(fixture.Gateway.Paths);
+        Assert.Equal([Image.ToString()], JsonNode.Parse(body)!["items"]!.AsArray().Select(item => item!["id"]!.GetValue<string>()));
     }
 
     [Fact]

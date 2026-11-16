@@ -48,7 +48,7 @@ public static class DiscussionJobEndpoints
                 => ListAsync(id, ctx, store, redCompute, DateTimeOffset.UtcNow))
             .WithName("NovaDiscussionJobs")
             .WithSummary("Async jobs the discussion launched, for its job cards")
-            .WithDescription("Images, video, music and workflows this discussion's own turns started, queued in [since, until). Authorized like history-page, then filtered to jobs whose provenance names this discussion and its own session, made for its owner, and confidential only when the discussion is. AI sessions, text to speech and speech to text are left out. `since` is required (ISO 8601) and clamped to the discussion's creation and 30 days back; `until` is optional. Each item carries progress, stage, and outputs rewritten to this discussion's output route. LIVE answers an empty list.");
+            .WithDescription("Images, video, music and workflows this discussion's own turns started, queued in [since, until). Authorized like history-page, then filtered to jobs whose provenance names this discussion and its own session, made for its owner, and confidential only when the discussion is. AI sessions, text to speech and speech to text are left out. `since` is required (ISO 8601) and clamped to the discussion's creation and 30 days back; `until` is optional. Each item carries progress, stage, and outputs rewritten to this discussion's output route.");
 
         group.MapGet("/discussions/{id}/jobs/{jobId:guid}", (string id, Guid jobId, HttpContext ctx, DiscussionStore store, RedComputeClient redCompute)
                 => GetAsync(id, jobId, ctx, store, redCompute))
@@ -91,7 +91,7 @@ public static class DiscussionJobEndpoints
 
         var floor = Max(Utc(discussion.CreatedAt) - CreationSlack, now - MaxLookback);
         var from = Max(since, floor);
-        if (discussion.Type == "live" || (until is { } end && end <= from))
+        if (until is { } end && end <= from)
             return Page([], from);
 
         var summaries = new List<JsonObject>();
@@ -309,7 +309,6 @@ public static class DiscussionJobEndpoints
     private static async Task<(JsonObject? Job, IResult? Failure)> ReadOwnJobAsync(
         DiscussionRead discussion, Guid jobId, RedComputeClient redCompute, CancellationToken ct)
     {
-        if (discussion.Type == "live") return (null, JobNotFound());
         var read = await ReadDetailAsync(redCompute, jobId, ct);
         if (read.Failure is not null) return (null, read.Failure);
         if (read.Gone || read.Job is null || !Belongs(read.Job, discussion)) return (null, JobNotFound());
