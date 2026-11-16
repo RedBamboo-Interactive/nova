@@ -14,6 +14,8 @@ export type LocalSettings = {
   voiceProcessing: boolean
   /** Timeline marker kinds hidden in Live and in other discussions (display only). */
   hiddenFriezeMarkers: HiddenFriezeMarkers
+  /** A small card in the agent message that started an image, video, music or workflow job. */
+  jobCards: boolean
 }
 
 export const settingsStore = createLocalStore<LocalSettings>("nova_settings", {
@@ -27,6 +29,7 @@ export const settingsStore = createLocalStore<LocalSettings>("nova_settings", {
   voiceOutputDeviceLabel: null,
   voiceProcessing: true,
   hiddenFriezeMarkers: { live: [], discussions: [] },
+  jobCards: true,
 })
 
 export const getSettings = settingsStore.get

@@ -986,6 +986,61 @@ public sealed class RedComputeClient(IComputeGateway gateway)
             response.Content.Headers.ContentType?.ToString() ?? "application/json");
     }
 
+    /// <summary>
+    /// One page of the jobs created in a context (a discussion, a session) and queued in
+    /// <c>[since, until)</c>. Every call is bounded below; <paramref name="until"/> may stay open.
+    /// The caller's derived identity applies, and transport failures throw.
+    /// </summary>
+    public async Task<ProxyResult> ListContextJobsAsync(
+        string contextKind, string contextId, DateTimeOffset since, DateTimeOffset? until,
+        int limit, int offset, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(contextKind)) throw new ArgumentException("Context kind is required", nameof(contextKind));
+        if (string.IsNullOrWhiteSpace(contextId)) throw new ArgumentException("Context id is required", nameof(contextId));
+        var query = new List<string>
+        {
+            $"contextKind={Uri.EscapeDataString(contextKind)}",
+            $"contextId={Uri.EscapeDataString(contextId)}",
+            $"since={Uri.EscapeDataString(since.ToUniversalTime().ToString("O"))}",
+        };
+        if (until is { } end) query.Add($"until={Uri.EscapeDataString(end.ToUniversalTime().ToString("O"))}");
+        query.Add($"limit={limit}");
+        query.Add($"offset={offset}");
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"/jobs?{string.Join("&", query)}");
+        using var response = await gateway.SendAsync(request, provenance: null, ct);
+        return new((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct),
+            response.Content.Headers.ContentType?.ToString() ?? "application/json");
+    }
+
+    /// <summary>Asks RedCompute to cancel one job, as the caller. Its status and words come back as they are.</summary>
+    public async Task<ProxyResult> CancelJobAsync(Guid jobId, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete, $"/jobs/{jobId:D}");
+        using var response = await gateway.SendAsync(request, provenance: null, ct);
+        return new((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct),
+            response.Content.Headers.ContentType?.ToString() ?? "application/json");
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex JobOutputPath = new(
+        @"^/[a-z0-9][a-z0-9-]*/jobs/(?<job>[0-9a-fA-F-]{36})/output(?:\?[A-Za-z0-9=&%._-]*)?$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Opens one job output named by the job's own record (<c>outputs[n].url</c>). Only a
+    /// capability's output route of that same job is followed. The caller owns the response.
+    /// </summary>
+    public async Task<HttpResponseMessage> OpenJobOutputAsync(
+        Guid jobId, string outputPath, string? range = null, CancellationToken ct = default)
+    {
+        var match = JobOutputPath.Match(outputPath ?? "");
+        if (!match.Success || !Guid.TryParse(match.Groups["job"].Value, out var named) || named != jobId)
+            throw new ArgumentException("Not an output route of this job", nameof(outputPath));
+        using var request = new HttpRequestMessage(HttpMethod.Get, outputPath);
+        if (!string.IsNullOrWhiteSpace(range))
+            request.Headers.TryAddWithoutValidation("Range", range);
+        return await gateway.SendAsync(request, provenance: null, ct);
+    }
+
     /// <summary>One job's full record. Its result holds a session's last assistant text.</summary>
     public async Task<ProxyResult> GetJobAsync(Guid jobId, CancellationToken ct = default)
     {

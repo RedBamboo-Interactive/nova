@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, type AttachmentTransport, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type EventRowRenderer, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
+import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type EventRowRenderer, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
 import { isMobileClient } from "../components/floating-nova-support"
@@ -21,6 +21,7 @@ import { reactionMenuEntries } from "../components/discussion/reaction-actions"
 import { createNovaSpeechBackend } from "../lib/speech"
 import { useLocalSettings } from "../hooks/use-local-settings"
 import { friezeMarkerScope, friezeMarkerVisibility, normalizeHiddenFriezeMarkers } from "../lib/frieze-marker-settings"
+import { computeJobHref, createDiscussionJobsTransport, jobFrameConcernsDiscussion, stopDiscussionJob } from "../lib/discussion-jobs"
 import { useAgents } from "../hooks/use-agents"
 import { versionedAvatarSrc } from "../lib/agent-directory-sync"
 import { recordingUsageLoader, resolveLiveProvider, usageKey } from "../lib/provider-usage-store"
@@ -1550,7 +1551,7 @@ export function ChatView({
   ) : null, [activeDiscussionId, activePendingContext, pendingContext])
 
   const { opacity: avatarOpacity } = useAvatarStyle()
-  const { showAvatar: avatarEnabled, showDiscussionAvatars, hiddenFriezeMarkers } = useLocalSettings()
+  const { showAvatar: avatarEnabled, showDiscussionAvatars, hiddenFriezeMarkers, jobCards } = useLocalSettings()
   // Live and every other discussion keep separate marker preferences.
   const markerScope = friezeMarkerScope(activeDiscussion?.type)
   // The store keeps one object until the setting changes, so this stays stable.
@@ -1558,6 +1559,28 @@ export function ChatView({
     () => friezeMarkerVisibility(normalizeHiddenFriezeMarkers(hiddenFriezeMarkers)[markerScope]),
     [hiddenFriezeMarkers, markerScope],
   )
+  // Job cards: off, or in Live, nothing is read and the panel renders exactly as without them.
+  const jobsTransport = useMemo(() => activeDiscussionId
+    ? createDiscussionJobsTransport(activeDiscussionId, (path, init) => novaExecution.fetch(path, init))
+    : null, [activeDiscussionId])
+  const jobsDiscussion = activeDiscussion ? { id: activeDiscussion.id, sessionId: activeDiscussion.sessionId } : null
+  const jobs = useChatJobs({
+    enabled: jobCards !== false && !!activeDiscussion && activeDiscussion.type !== "live",
+    conversationKey: activeDiscussionId,
+    since: activeMessages[0]?.timestamp,
+    transport: jobsTransport,
+    mayConcern: data => !!jobsDiscussion && jobFrameConcernsDiscussion(data, jobsDiscussion),
+    confidential: activeDiscussion?.confidential ?? false,
+    jobHref: computeJobHref,
+  })
+  const handleStopJob = useCallback(async (job: ChatJob) => {
+    if (!activeDiscussionId) return
+    try {
+      await stopDiscussionJob(activeDiscussionId, job.id, path => api.post(path))
+    } catch (error) {
+      toast({ title: "Could not stop the job", description: error instanceof Error ? error.message : String(error), variant: "error" })
+    }
+  }, [activeDiscussionId, toast])
   const { autoFocusMode } = useComposerFocusSettings()
   const showAvatar = !floating && avatarEnabled && !!activeDiscussion
   const showFloatingTabAvatar = floating && avatarEnabled && !!activeDiscussion
@@ -1670,6 +1693,8 @@ export function ChatView({
         resolveAgentInfo={resolveAgentInfo}
         eventRows={eventRows}
         isFriezeMarkerVisible={isFriezeMarkerVisible}
+        jobs={jobs}
+        onStopJob={jobs ? handleStopJob : undefined}
         renderStatusLine={renderStatusLine}
         renderComposerAttachments={renderWhatISeeAttachment}
         renderAttachmentActions={renderWhatISeeAction}

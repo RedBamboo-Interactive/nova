@@ -272,6 +272,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
         });
         DiscussionEndpoints.Map(group);
         DiscussionRollbackEndpoints.Map(group);
+        DiscussionJobEndpoints.Map(group);
         JournalEndpoints.Map(group);
         VoiceSessionEndpoints.Map(group);
         AskEndpoints.Map(group);

@@ -44,6 +44,12 @@ export function NovaSettingsPanel() {
         </Select>
       </SettingRow>
       <FriezeMarkerSettings />
+      <SettingRow label="Job cards" hint="Show a small card with progress in the agent message that started an image, video, music or workflow job.">
+        <Switch
+          checked={localSettings.jobCards}
+          onCheckedChange={(v) => setLocalSettings({ jobCards: v })}
+        />
+      </SettingRow>
       <SectionHeader>Voice</SectionHeader>
       <VoiceDeviceSettings />
       <SettingRow label="Push-to-talk key" hint="Hold this key to record a voice reply. Float Nova leases the same key globally while open.">
