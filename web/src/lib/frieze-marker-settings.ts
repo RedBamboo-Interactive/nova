@@ -92,3 +92,12 @@ export function activityMarkerRows(): FriezeMarkerSettingRow[] {
     { key: "thinking", name: "Thinking", color: "var(--color-domain-imagination, #7C4DFF)", shape: "square" },
   ]
 }
+
+/** The folded settings row's one-line state: what is hidden where, or that nothing is. */
+export function hiddenFriezeSummary(hidden: HiddenFriezeMarkers): string {
+  const parts = [
+    hidden.live.length ? `${hidden.live.length} hidden in Live` : null,
+    hidden.discussions.length ? `${hidden.discussions.length} hidden in discussions` : null,
+  ].filter(Boolean)
+  return parts.length ? parts.join(", ") : "All shown"
+}

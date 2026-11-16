@@ -6,6 +6,7 @@ import {
   eventMarkerRows,
   friezeMarkerScope,
   friezeMarkerVisibility,
+  hiddenFriezeSummary,
   normalizeHiddenFriezeMarkers,
   setFriezeMarkerShown,
 } from "./frieze-marker-settings.ts"
@@ -64,4 +65,10 @@ test("event rows come from the API, plus built-ins it doesn't list, once each", 
 
 test("activity rows cover every tool category and thinking", () => {
   assert.deepEqual(activityMarkerRows().map(row => row.key), ["tool:read-only", "tool:mutating", "tool:shell", "tool:agent", "tool:other", "thinking"])
+})
+
+test("the folded row says what is hidden where, or that nothing is", () => {
+  assert.equal(hiddenFriezeSummary({ live: [], discussions: [] }), "All shown")
+  assert.equal(hiddenFriezeSummary({ live: ["event:callback", "event:discussion"], discussions: [] }), "2 hidden in Live")
+  assert.equal(hiddenFriezeSummary({ live: ["event:callback"], discussions: ["thinking"] }), "1 hidden in Live, 1 hidden in discussions")
 })

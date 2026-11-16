@@ -1,9 +1,10 @@
-import { Switch } from "@redbamboo/ui"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger, Switch } from "@redbamboo/ui"
 import { useEventTypes } from "../hooks/use-event-types"
 import { useLocalSettings } from "../hooks/use-local-settings"
 import {
   activityMarkerRows,
   eventMarkerRows,
+  hiddenFriezeSummary,
   normalizeHiddenFriezeMarkers,
   setFriezeMarkerShown,
   type FriezeMarkerScope,
@@ -66,13 +67,25 @@ export function FriezeMarkerSettings() {
   )
 
   return (
-    <div data-setting-path="nova.timelineMarkers" className="py-2.5">
-      <span className="text-sm text-text-muted">Timeline markers</span>
-      <p className="text-xs text-muted-a60 mt-1 leading-relaxed">
-        The dots and squares beside a reply. Hiding a kind only changes what you see: the events still arrive and stay in the conversation. A marker that needs you, such as a failed delivery or a pending approval, always shows.
-      </p>
-      {group("Events", eventMarkerRows(types))}
-      {group("Activity", activityMarkerRows())}
-    </div>
+    <Collapsible data-setting-path="nova.timelineMarkers" className="py-2.5">
+      <CollapsibleTrigger
+        data-slot="frieze-marker-settings-toggle"
+        className="group flex w-full items-center justify-between gap-3 text-left cursor-pointer"
+      >
+        <span className="text-sm text-text-muted">Timeline markers</span>
+        <span className="flex items-center gap-2 text-xs text-text-disabled group-hover:text-text-muted">
+          {hiddenFriezeSummary(hidden)}
+          <i aria-hidden="true" className="ph-bold ph-caret-down text-[10px] transition-transform group-data-[panel-open]:rotate-180" />
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <p className="text-xs text-muted-a60 mt-1 leading-relaxed">
+          Hiding a kind only changes what you see. A failed delivery or a pending approval always shows.
+        </p>
+        {group("Events", eventMarkerRows(types))}
+        {group("Activity", activityMarkerRows())}
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
+
