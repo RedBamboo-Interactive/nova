@@ -1,0 +1,14 @@
+{
+  "codeRequests": [],
+  "requests": [
+    {
+      "body": {
+        "projectPath": "<root>\\workspace",
+        "qualityTier": "deep"
+      },
+      "headers": {},
+      "method": "POST",
+      "path": "/ai-session/sessions"
+    }
+  ]
+}

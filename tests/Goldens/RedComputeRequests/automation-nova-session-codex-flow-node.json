@@ -1,0 +1,51 @@
+{
+  "requests": [
+    {
+      "body": {
+        "addDirs": [
+          "<root>\\scratch"
+        ],
+        "allowedTools": [
+          "Read",
+          "Write",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Bash",
+          "WebFetch",
+          "WebSearch",
+          "TodoWrite"
+        ],
+        "confidential": false,
+        "env": {
+          "REDLEAF_SCRATCH_DIR": "<root>\\scratch",
+          "REDLEAF_SCRATCH_ROOT": "<root>\\scratch",
+          "TEMP": "<root>\\scratch",
+          "TMP": "<root>\\scratch",
+          "TMPDIR": "<root>\\scratch"
+        },
+        "maxTurns": 50,
+        "networkAccess": true,
+        "prompt": "# Automation: Nightly review\nCurrent date: <now>.\nYou are running an automated task. Be concise.\nIf there is nothing to do, say so briefly.\n\n---\n\nReview the day.\n\n---\n\nSCRATCH SPACE: Put every disposable artifact, download, probe, generated intermediate,\nand temporary script in <root>\\scratch. Never create temp, tmp, or scratch folders inside\nthe persistent workspace. Move only deliberate final work into the workspace.\n\n---\n\nAUTOMATION RESULT CONTRACT: Your final response must be exactly one JSON object\nwith this shape: {\"success\":true|false,\"summary\":\"concise result\",\"silent\":false}.\nSet success=false when a required check or action was blocked, denied, or incomplete.\nA deliberate skip after verifying its condition counts as success.",
+        "provider": "codex",
+        "qualityTier": "standard",
+        "sandbox": "danger-full-access",
+        "timeout": 3600,
+        "unattended": true,
+        "workingDir": "<root>\\workspace"
+      },
+      "headers": {
+        "X-Idempotency-Key": "automation:7e1e00000000400080000000000000b1:nova-session",
+        "X-Job-Name": "Nova: Nightly review"
+      },
+      "method": "POST",
+      "path": "/ai-session/execute"
+    }
+  ],
+  "scratchAllocations": [
+    {
+      "executionKey": "7e1e00000000400080000000000000b1-node-run-1",
+      "owner": "Codex Agent"
+    }
+  ]
+}

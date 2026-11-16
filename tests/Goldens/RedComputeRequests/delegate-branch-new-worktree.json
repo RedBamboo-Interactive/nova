@@ -1,0 +1,29 @@
+{
+  "codeRequests": [
+    {
+      "body": null,
+      "method": "GET",
+      "path": "/api/apps/codered/repositories/7e1e0000-0000-4000-8000-000000000001/worktrees"
+    },
+    {
+      "body": {
+        "base": "develop",
+        "branch": "feature/new"
+      },
+      "method": "POST",
+      "path": "/api/apps/codered/repositories/7e1e0000-0000-4000-8000-000000000001/worktrees"
+    }
+  ],
+  "requests": [
+    {
+      "body": {
+        "projectPath": "<root>\\songes.worktrees\\feature-new",
+        "qualityTier": "standard",
+        "repositoryId": "7e1e0000-0000-4000-8000-000000000001"
+      },
+      "headers": {},
+      "method": "POST",
+      "path": "/ai-session/sessions"
+    }
+  ]
+}

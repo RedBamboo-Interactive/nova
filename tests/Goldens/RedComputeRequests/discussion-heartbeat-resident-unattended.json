@@ -1,0 +1,26 @@
+{
+  "requests": [
+    {
+      "body": {
+        "addDirs": [
+          "<root>\\scratch"
+        ],
+        "confidential": false,
+        "keepResident": true,
+        "projectPath": "<root>\\workspace",
+        "qualityTier": null,
+        "scratchDir": "<root>\\scratch",
+        "unattended": true
+      },
+      "headers": {},
+      "method": "POST",
+      "path": "/ai-session/sessions"
+    }
+  ],
+  "scratchAllocations": [
+    {
+      "executionKey": "target",
+      "owner": "nova"
+    }
+  ]
+}

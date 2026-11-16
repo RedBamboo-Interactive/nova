@@ -1,0 +1,27 @@
+{
+  "requests": [
+    {
+      "body": {
+        "addDirs": [
+          "<root>\\scratch"
+        ],
+        "confidential": false,
+        "deliveredAsOneMessage": true,
+        "developerInstructions": "Discord rules.",
+        "maxAccessLevel": "auto",
+        "projectPath": "<root>\\workspace",
+        "qualityTier": null,
+        "scratchDir": "<root>\\scratch"
+      },
+      "headers": {},
+      "method": "POST",
+      "path": "/ai-session/sessions"
+    }
+  ],
+  "scratchAllocations": [
+    {
+      "executionKey": "<random-guid-n>",
+      "owner": "nova"
+    }
+  ]
+}

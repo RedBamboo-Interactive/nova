@@ -1,0 +1,16 @@
+{
+  "codeRequests": [],
+  "requests": [
+    {
+      "body": {
+        "model": "gpt-5",
+        "projectPath": "<root>\\songes",
+        "provider": "codex",
+        "repositoryId": "7e1e0000-0000-4000-8000-000000000001"
+      },
+      "headers": {},
+      "method": "POST",
+      "path": "/ai-session/sessions"
+    }
+  ]
+}
