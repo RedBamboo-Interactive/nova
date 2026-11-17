@@ -20,8 +20,10 @@ import {
   DialogSearchField,
   DialogTitle,
   Icon,
+  RunOnChoice,
   useUiEnvironment,
 } from "@redbamboo/ui"
+import { AI_SESSION, RUN_ON_ROW, runOnAvailable } from "./run-on"
 
 interface QualityTierInfo { slug: string; label: string; color?: string; icon?: string; isDefault: boolean }
 interface ProviderInfo {
@@ -40,7 +42,8 @@ interface ProviderInfo {
 interface Props {
   open: boolean
   onClose: () => void
-  onSelect: (agentId: string, qualityTier: string, provider?: string) => void
+  /** `nodeId` is the node picked in "Run on"; null for Automatic. */
+  onSelect: (agentId: string, qualityTier: string, provider?: string, nodeId?: string | null) => void
 }
 
 export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
@@ -56,6 +59,8 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
   const [tiers, setTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [selectedProvider, setSelectedProvider] = useState<string | undefined>()
+  // "Run on": null is Automatic, which sends nothing new.
+  const [runOn, setRunOn] = useState<string | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const filterRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -67,6 +72,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
       setFilter("")
       setHighlightedAgentId(getSettings().lastUsedAgentId)
       setQualityTier("")
+      setRunOn(null)
       return
     }
     setLoading(agents.length === 0)
@@ -145,7 +151,8 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
     setStarting(true)
     setHighlightedAgentId(agentId)
     setSettings({ lastUsedAgentId: agentId })
-    onSelect(agentId, qualityTier, selectedProvider)
+    if (runOn) onSelect(agentId, qualityTier, selectedProvider, runOn)
+    else onSelect(agentId, qualityTier, selectedProvider)
     onClose()
   }
 
@@ -277,7 +284,16 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
             </button>
           ))}
         </div>
-        <div className="-mx-5 -mb-5 flex items-center justify-between border-t bg-muted-a50 px-3 py-3">
+        {/* Where its sessions run, on its own row so the footer keeps its room. Mounted per opening, so the
+            node list is read fresh each time. */}
+        <div className="-mx-5 -mb-5 border-t">
+        {runOnAvailable && open && (
+          <div data-slot="new-discussion-run-on" className="border-b px-3 py-1.5">
+            <RunOnChoice value={runOn} onChange={setRunOn} capability={AI_SESSION} disabled={starting}
+              className={RUN_ON_ROW} />
+          </div>
+        )}
+        <div className="flex items-center justify-between bg-muted-a50 px-3 py-3">
           <div className="flex items-center gap-2">
             {providers.length > 0 && (
               <DropdownMenu>
@@ -345,6 +361,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
               Go
             </button>
           </div>
+        </div>
         </div>
       </DialogContent>
     </Dialog>

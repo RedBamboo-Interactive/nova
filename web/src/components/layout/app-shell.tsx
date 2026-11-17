@@ -142,8 +142,8 @@ export function AppShell({ children }: Props) {
     }
   }, [openPicker])
 
-  const handlePickerSelect = useCallback(async (agentId: string, qualityTier: string, provider?: string) => {
-    const d = await createDiscussion(agentId, qualityTier, provider)
+  const handlePickerSelect = useCallback(async (agentId: string, qualityTier: string, provider?: string, nodeId?: string | null) => {
+    const d = await createDiscussion(agentId, qualityTier, provider, nodeId ? { nodeId } : undefined)
     if (d) navigate(`/apps/nova/chat/${d.id}`)
   }, [createDiscussion, navigate])
 

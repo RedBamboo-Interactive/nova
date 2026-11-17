@@ -22,6 +22,8 @@ interface RedComputeSession {
   accessLevel?: unknown
   maxAccessLevel?: unknown
   supportedAccessLevels?: unknown
+  /** The node the session runs on (Phase 1); absent from an older RedCompute. */
+  nodeId?: string | null
 }
 
 interface DiscussionRef {
@@ -35,6 +37,8 @@ export interface SessionStatsState {
   stats: SessionStats | null
   /** Show a level the server just accepted, until the next read of the session says it too. */
   applyAccessLevel: (sessionId: string, level: AccessLevel) => void
+  /** The node the session runs on, as the session says; null when unknown. */
+  nodeId: string | null
 }
 
 export function useSessionStats(sessionId: string | null | undefined, isStreaming: boolean, discussion?: DiscussionRef | null): SessionStatsState {
@@ -114,5 +118,6 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
     }
   }, [sessionData, sessionId, discussion?.id, discussion?.title, discussion?.provider, discussion?.qualityTier])
 
-  return useMemo(() => ({ stats, applyAccessLevel }), [stats, applyAccessLevel])
+  const nodeId = sessionData && sessionId && dataSessionRef.current === sessionId && typeof sessionData.nodeId === "string" ? sessionData.nodeId : null
+  return useMemo(() => ({ stats, applyAccessLevel, nodeId }), [stats, applyAccessLevel, nodeId])
 }

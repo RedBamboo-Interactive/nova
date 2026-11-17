@@ -97,8 +97,8 @@ function FloatingNovaContent({
   const { createDiscussion } = useDisc()
   const [pickerOpen, setPickerOpen] = useState(false)
 
-  const handleCreate = useCallback(async (agentId: string, qualityTier: string, provider?: string) => {
-    const discussion = await createDiscussion(agentId, qualityTier, provider)
+  const handleCreate = useCallback(async (agentId: string, qualityTier: string, provider?: string, nodeId?: string | null) => {
+    const discussion = await createDiscussion(agentId, qualityTier, provider, nodeId ? { nodeId } : undefined)
     if (!discussion) return
     setPickerOpen(false)
     onSelectedDiscussionChange(discussion.id)

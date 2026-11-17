@@ -29,6 +29,7 @@ import { LiveQuotaContext, providerUsageStore, type LiveQuotaContextValue } from
 import { useReactions } from "../hooks/use-reactions"
 import { useDisc, useNovaPendingContext } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
+import { DiscussionRunOnSetting, runOnAvailable } from "../components/run-on"
 import { useFullAccessEnabled } from "../hooks/use-full-access-enabled"
 import { FULL_ACCESS_SETTINGS_HREF, changeAccessLevel, openSettingsFromLink } from "../lib/session-access"
 import { setSettings } from "../lib/settings-store"
@@ -284,6 +285,7 @@ export function ChatView({
     updateDiscussionTitle,
     setConfidential,
     setLiveTimeline,
+    setRunOnNode,
     reopenDiscussion,
     loadEarlierMessages,
     retryHistoryLoad,
@@ -473,7 +475,7 @@ export function ChatView({
 
   const sessionStatsDiscussion = useMemo(() => activeDiscussion && { ...activeDiscussion, title: activeDisplayTitle },
     [activeDiscussion, activeDisplayTitle])
-  const { stats: sessionStats, applyAccessLevel } = useSessionStats(activeDiscussion?.sessionId, isStreaming, sessionStatsDiscussion)
+  const { stats: sessionStats, applyAccessLevel, nodeId: sessionNodeId } = useSessionStats(activeDiscussion?.sessionId, isStreaming, sessionStatsDiscussion)
   const loadProviderUsage = useCallback((provider: string, forceRefresh = false) =>
     api.get<ProviderUsageSnapshot>(
       `/ai-session/providers/${encodeURIComponent(provider)}/usage${forceRefresh ? "?refresh=true" : ""}`,
@@ -905,6 +907,23 @@ export function ChatView({
     }
   }, [activeDiscussionId, liveTimelinePending, setLiveTimeline, toast])
 
+  const [runOnPending, setRunOnPending] = useState(false)
+  const handleRunOnChange = useCallback(async (nodeId: string | null) => {
+    if (!activeDiscussionId || runOnPending) return
+    setRunOnPending(true)
+    try {
+      await setRunOnNode(activeDiscussionId, nodeId)
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "Could not change where new sessions run",
+        description: error instanceof Error ? error.message : "Unknown error",
+      })
+    } finally {
+      setRunOnPending(false)
+    }
+  }, [activeDiscussionId, runOnPending, setRunOnNode, toast])
+
   const handleShare = useCallback(() => {
     share.reset()
     share.createShare()
@@ -1139,6 +1158,16 @@ export function ChatView({
           aria-label="LIVE timeline"
         />
       </div>
+      {runOnAvailable && !owningApp && (
+        <DiscussionRunOnSetting
+          key={activeDiscussion.id}
+          nodeId={activeDiscussion.nodeId ?? null}
+          sessionNodeId={sessionNodeId}
+          hasSession={!!activeDiscussion.sessionId}
+          disabled={runOnPending || discussionClosed}
+          onChange={nodeId => void handleRunOnChange(nodeId)}
+        />
+      )}
       <DelegationsInfo activity={activeDelegations} />
     </div>
   )

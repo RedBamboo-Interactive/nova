@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo, useSyncExternalStore, startTransition } from "react"
 import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
+import { newDiscussionBody } from "../lib/new-discussion-request"
 import type { DelegationActivitySnapshot, DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
 import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, PermissionApprovals, PermissionDecisionPayload, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
 import { abandonPermissions, canonicalUserMessageUids, isTranscriptPageMetadata, toPersistedTranscriptPage, closePermission, DeferredInvalidationCoordinator, DurableTranscriptPager, isPermissionQuestion, permissionPendingQuestion, processStreamEvent, readPermissionRequest, rebuildBlocks, TranscriptAccumulator, visibleApprovals } from "@redbamboo/chat"
@@ -1323,17 +1324,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
     agentId?: string,
     qualityTier?: string,
     provider?: string,
-    options?: { idempotencyKey?: string },
+    options?: { idempotencyKey?: string; nodeId?: string | null },
   ) => {
     setIsSpawning(true)
     try {
-      const body: Record<string, string> = {}
-      if (agentId) body.agentId = agentId
-      if (qualityTier) body.qualityTier = qualityTier
-      if (provider) body.provider = provider
-      // A repeated request with the same key returns the same discussion instead of a second one.
-      if (options?.idempotencyKey) body.idempotencyKey = options.idempotencyKey
-      const d = await api.post<DiscussionInfo>("/api/apps/nova/discussions", Object.keys(body).length ? body : undefined)
+      const d = await api.post<DiscussionInfo>("/api/apps/nova/discussions",
+        newDiscussionBody(agentId, qualityTier, provider, options))
       historyLifecycleRef.current.revive(d.id)
       // The creation websocket can beat the HTTP response and insert a sparse
       // placeholder. Always replace it with the authoritative returned record
@@ -2299,6 +2295,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
     upsertDiscussion(updated)
   }, [])
 
+  /** "Run on": the node the discussion's next sessions run on; null is Automatic. */
+  const setRunOnNode = useCallback(async (id: string, nodeId: string | null) => {
+    const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/node`, { nodeId })
+    upsertDiscussion(updated)
+  }, [])
+
   return {
     discussions: visibleDiscussions,
     discussionListLoadState,
@@ -2345,6 +2347,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     updateDiscussionTitle,
     setConfidential,
     setLiveTimeline,
+    setRunOnNode,
     reopenDiscussion,
     loadEarlierMessages,
     refreshDiscussions,

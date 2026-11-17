@@ -59,6 +59,8 @@ export interface DiscussionInfo {
   liveTimeline?: boolean
   /** "explicit" when someone chose it; "default" when it follows the type (on for LIVE and Heartbeat). */
   liveTimelineSource?: "explicit" | "default"
+  /** "Run on": the node its next sessions run on (a /compute/nodes id); null or absent is Automatic. */
+  nodeId?: string | null
   /** Worktrees this discussion works in, newest last. */
   worktrees?: WorktreeAttachment[]
   /** Internal first-turn identity. Raw RedCompute history includes this turn;
