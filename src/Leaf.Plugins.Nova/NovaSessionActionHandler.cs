@@ -89,6 +89,10 @@ public sealed class NovaSessionActionHandler(
             // An automation run: nobody is there to approve a tool call, as for the kernel's ai-session.
             ["unattended"] = true,
         };
+        // Placement by reference, stage A: the same workspace and scratch (also an added directory), by
+        // reference, after every legacy member (which RedCompute still uses). None when a part is not well formed.
+        ComputePlacement.AddTo(body, ComputePlacement.ForAgent(agent.Id, agent.Name, executionKey,
+            ComputePlacement.ScratchAsAddDir));
 
         var provenanceContext = new List<ComputeContextReference>
         {

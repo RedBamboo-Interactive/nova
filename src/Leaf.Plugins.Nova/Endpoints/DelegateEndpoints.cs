@@ -128,6 +128,7 @@ public static class DelegateEndpoints
 
         // Resolve agent if specified: provides workspace, provider, quality defaults.
         AgentInfo? resolvedAgent = null;
+        string? workspaceAgentId = null;
         if (!isContinuation && !string.IsNullOrWhiteSpace(request.Agent))
         {
             var agents = await agentDir.GetAgentsAsync(ct: ctx.RequestAborted);
@@ -139,6 +140,8 @@ public static class DelegateEndpoints
             var ws = await workspaces.GetAsync(resolvedAgent.Id, ctx.RequestAborted);
             ws.GenerateClaudeMd();
 
+            // The session works in this Agent's workspace only when nothing else named a folder.
+            if (request.ProjectPath is null) workspaceAgentId = resolvedAgent.Id;
             request.ProjectPath ??= ws.WorkspacePath;
             request.Provider ??= resolvedAgent.Provider;
             if (string.IsNullOrWhiteSpace(request.Model)
@@ -260,6 +263,10 @@ public static class DelegateEndpoints
                 // Nobody to approve anything: from the verified token only, never the body.
                 if (StartsUnattended(ctx.User))
                     createBody["unattended"] = true;
+                // Placement by reference, stage A: the same repository (and branch worktree) or Agent workspace,
+                // by reference, after every legacy member (which RedCompute still uses).
+                ComputePlacement.AddTo(createBody, DelegatePlacement(resolvedRepository, request.Branch,
+                    branchWorktree?.Branch, workspaceAgentId));
 
                 // The delegating session, from the caller's verified token only, so RedCompute starts the
                 // worker at that session's access level and caps it there. Never from the request body.
@@ -556,6 +563,23 @@ public static class DelegateEndpoints
     /// Null when the branch fields are acceptable. A branch needs a new repository session: a
     /// continuation keeps its original folder, and a physical path already names its folder.
     /// </summary>
+    /// <summary>
+    /// The delegation's <c>placement</c>: the resolved Repository, with the branch Code resolved when one was
+    /// asked for, else the Agent workspace the session works in. Null (no placement at all) when a branch was
+    /// asked for but Code's answer names none, or when nothing is well formed: the checkout would be the
+    /// wrong folder, and RedCompute refuses a malformed placement.
+    /// </summary>
+    internal static System.Text.Json.Nodes.JsonObject? DelegatePlacement(LeafEntity? repository, string? requestedBranch,
+        string? resolvedBranch, string? workspaceAgentId)
+    {
+        if (repository is not null)
+        {
+            if (string.IsNullOrWhiteSpace(requestedBranch)) return ComputePlacement.ForRepository(repository.Id, null);
+            return ComputePlacement.IsText(resolvedBranch) ? ComputePlacement.ForRepository(repository.Id, resolvedBranch) : null;
+        }
+        return workspaceAgentId is null ? null : ComputePlacement.ForAgentWorkspace(workspaceAgentId);
+    }
+
     internal static object? BranchError(DelegateRequest request, bool isContinuation)
     {
         var hasBranch = !string.IsNullOrWhiteSpace(request.Branch);

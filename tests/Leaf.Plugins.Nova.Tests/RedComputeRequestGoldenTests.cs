@@ -19,6 +19,12 @@ namespace Leaf.Plugins.Nova.Tests;
 /// <c>placement</c>, the legacy members of every body must stay byte-identical to these goldens;
 /// <c>placement</c> is the only member a later commit may add. Goldens live in
 /// tests/Goldens/RedComputeRequests; set NOVA_GOLDEN_RECORD=1 to (re)write them.
+/// <para>
+/// Stage A (N1): every body carries <c>placement</c> as its last member, appended after the legacy ones. The
+/// golden is compared with the body cut before that member (so the legacy goldens are unchanged files), the
+/// placement is pinned per path, must pass RedCompute's parser rules (<see cref="PlacementRules"/>), and names
+/// exactly the scratch allocation the path made.
+/// </para>
 /// Windows only: the paths are compared byte for byte, separators included.
 /// </summary>
 public sealed class RedComputeRequestGoldenTests : IDisposable
@@ -54,6 +60,9 @@ public sealed class RedComputeRequestGoldenTests : IDisposable
     public Task Discussion_session_in_the_agent_workspace()
         => DiscussionAsync("discussion-mounted-workspace", mounted: true);
 
+    private const string DiscussionPlacement =
+        """{"workspace":{"agentId":"<agent-id>"},"scratch":{"owner":"nova","executionKey":"target"}}""";
+
     [WindowsGoldenFact]
     public Task Discussion_session_in_a_disposable_workspace()
         => DiscussionAsync("discussion-disposable-workspace", mounted: false);
@@ -86,6 +95,9 @@ public sealed class RedComputeRequestGoldenTests : IDisposable
 
         Assert.Equal("session-1", sessionId);
         Verify(name, Capture(gateway, scratchSpace), f.AgentId);
+        var key = scratchSpace.Calls.Single().Key;
+        AssertPlacement(PlacementRules.Route.Session, f.AgentId,
+            DiscussionPlacement.Replace("\"target\"", "\"" + key + "\""));
     }
 
     // ── NovaSessionActionHandler: the nova-session automation action ───────────────────────────
@@ -124,6 +136,9 @@ public sealed class RedComputeRequestGoldenTests : IDisposable
 
         Assert.NotNull(result);
         Verify(name, Capture(gateway, scratchSpace), agentId);
+        var (owner, key) = scratchSpace.Calls.Single();
+        AssertPlacement(PlacementRules.Route.Execute, agentId,
+            $$"""{"workspace":{"agentId":"<agent-id>"},"scratch":{"owner":"{{owner}}","executionKey":"{{key}}"},"scratchAs":"add-dir"}""");
     }
 
     // ── DelegateEndpoints.HandleDelegateAsync ─────────────────────────────────────────────────
@@ -169,6 +184,20 @@ public sealed class RedComputeRequestGoldenTests : IDisposable
         => DelegateAsync("delegate-repository-provider-model",
             new DelegateRequest { Repository = "songes", Prompt = "work on it", Provider = "codex", Model = "gpt-5" });
 
+    private const string RepositoryPlacement = """{"repository":{"repositoryId":"7e1e0000-0000-4000-8000-000000000001"}}""";
+
+    private static string BranchPlacement(string branch)
+        => """{"repository":{"repositoryId":"7e1e0000-0000-4000-8000-000000000001","branch":"<branch>"}}""".Replace("<branch>", branch);
+
+    private static string ExpectedDelegatePlacement(string name) => name switch
+    {
+        "delegate-branch-existing-worktree" => BranchPlacement("laurent/x"),
+        "delegate-branch-new-worktree" => BranchPlacement("feature/new"),
+        "delegate-branch-is-checkout" => BranchPlacement("laurent/outils"),
+        "delegate-agent-workspace" => """{"workspace":{"agentId":"<agent-id>"}}""",
+        _ => RepositoryPlacement,
+    };
+
     private async Task DelegateAsync(string name, DelegateRequest request, Action<FakeCode>? arrange = null)
     {
         using var f = new CallbackDeliveryTests.Fixture(extraEntities: [repository]);
@@ -195,6 +224,7 @@ public sealed class RedComputeRequestGoldenTests : IDisposable
                 ["body"] = r.Body is null ? null : JsonNode.Parse(r.Body.Value.GetRawText()),
             }).ToArray());
         Verify(name, capture, f.AgentId);
+        AssertPlacement(PlacementRules.Route.Session, f.AgentId, ExpectedDelegatePlacement(name));
     }
 
     private string WorktreeFolder(string branch) => Path.Combine(checkout + ".worktrees", branch.Replace('/', '-'));
@@ -205,7 +235,7 @@ public sealed class RedComputeRequestGoldenTests : IDisposable
     /// The requests that create work (session create, one-shot execute), in order, with the headers that
     /// key them, plus every scratch allocation the path asked the kernel for.
     /// </summary>
-    private static JsonObject Capture(Recorder gateway, RecordingScratch? scratchSpace)
+    private JsonObject Capture(Recorder gateway, RecordingScratch? scratchSpace)
     {
         var capture = new JsonObject
         {
@@ -215,13 +245,53 @@ public sealed class RedComputeRequestGoldenTests : IDisposable
                 ["path"] = r.Path,
                 ["headers"] = new JsonObject(r.Headers.OrderBy(h => h.Key, StringComparer.Ordinal)
                     .Select(h => KeyValuePair.Create(h.Key, (JsonNode?)h.Value))),
-                ["body"] = JsonNode.Parse(r.Body),
+                ["body"] = LegacyBody(r.Body),
             }).ToArray()),
         };
         if (scratchSpace is not null)
             capture["scratchAllocations"] = new JsonArray(scratchSpace.Calls
                 .Select(c => (JsonNode)new JsonObject { ["owner"] = c.Owner, ["executionKey"] = StableKey(c.Key) }).ToArray());
         return capture;
+    }
+
+    private const string PlacementMember = ",\"placement\":";
+
+    private readonly List<JsonObject?> placements = [];
+
+    /// <summary>
+    /// The body as the legacy golden knows it: the bytes before <c>placement</c>, which must be the last member
+    /// (appended after every legacy one). The placement is kept for <see cref="AssertPlacement"/>.
+    /// </summary>
+    private JsonNode LegacyBody(string raw)
+    {
+        var body = JsonNode.Parse(raw)!.AsObject();
+        if (!body.TryGetPropertyValue("placement", out var placement))
+        {
+            placements.Add(null);
+            return body;
+        }
+        Assert.Equal("placement", body.Last().Key);
+        var cut = raw.LastIndexOf(PlacementMember, StringComparison.Ordinal);
+        Assert.True(cut > 0, "placement is not a member after the legacy ones: " + raw);
+        Assert.EndsWith("}}", raw);
+        var legacy = JsonNode.Parse(raw[..cut] + "}")!.AsObject();
+        var withoutPlacement = body.DeepClone().AsObject();
+        withoutPlacement.Remove("placement");
+        Assert.True(JsonNode.DeepEquals(withoutPlacement, legacy), "the bytes before placement are not the legacy body: " + raw);
+        placements.Add(placement!.AsObject());
+        return legacy;
+    }
+
+    /// <summary>
+    /// The one request's placement: exactly <paramref name="expected"/> (members in this order), accepted by
+    /// RedCompute's parser rules for <paramref name="route"/>.
+    /// </summary>
+    private void AssertPlacement(PlacementRules.Route route, Guid agentId, string expected)
+    {
+        var placement = Assert.Single(placements);
+        Assert.NotNull(placement);
+        Assert.Equal(expected.Replace("<agent-id>", agentId.ToString("D")), placement!.ToJsonString());
+        Assert.Null(PlacementRules.Problem(new JsonObject { ["placement"] = placement.DeepClone() }, route));
     }
 
     /// <summary>

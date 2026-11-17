@@ -133,9 +133,8 @@ public sealed class MessagePipeline(
                 agentId ?? "(none)");
             return null;
         }
-        var scratch = scratchSpace.PrepareExecution(
-            agent.Name,
-            discussionId ?? parentJobId ?? Guid.NewGuid().ToString("N"));
+        var scratchKey = discussionId ?? parentJobId ?? Guid.NewGuid().ToString("N");
+        var scratch = scratchSpace.PrepareExecution(agent.Name, scratchKey);
         var workspace = await workspaces.GetForSessionAsync(agent, scratch, ct);
         workspace.GenerateClaudeMd();
 
@@ -168,6 +167,9 @@ public sealed class MessagePipeline(
         // progress-line reminder, whose status sentence would open the public reply. An older RedCompute ignores it.
         if (deliveredAsOneMessage)
             body["deliveredAsOneMessage"] = true;
+        // Placement by reference, stage A: the same workspace and scratch, by reference, after every legacy
+        // member (which RedCompute still uses). None at all when a part is not well formed.
+        ComputePlacement.AddTo(body, ComputePlacement.ForAgent(agent.Id, agent.Name, scratchKey));
 
         var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ct);
         var context = new List<ComputeContextReference>();
