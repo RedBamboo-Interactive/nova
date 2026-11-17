@@ -203,16 +203,32 @@ public sealed class MessagePipeline(
     /// node that cannot run work (offline, not eligible) is still sent: RedCompute says so (409) rather than the
     /// session quietly running somewhere the person did not choose.
     /// </summary>
+    /// <summary>How long a session start waits for RedCompute's node list before starting automatically.</summary>
+    internal static readonly TimeSpan DefaultNodeListTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>The bound on the "Run on" node-list read; tests shorten it.</summary>
+    internal TimeSpan NodeListTimeout { get; init; } = DefaultNodeListTimeout;
+
     private async Task<System.Text.Json.Nodes.JsonObject?> WithRunOnNodeAsync(
         System.Text.Json.Nodes.JsonObject? placement, string nodeId, string agentId,
         ComputeProvenance provenance, CancellationToken ct)
     {
         IReadOnlySet<string>? listed;
+        // Bounded: a RedCompute that hangs on /nodes must not hold the discussion's start. The caller's own
+        // cancellation still propagates; only the bound running out is treated as an unreadable list.
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        bounded.CancelAfter(NodeListTimeout);
         try
         {
-            listed = await redCompute.ListNodeIdsAsync(provenance, ct);
+            listed = await redCompute.ListNodeIdsAsync(provenance, bounded.Token);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning("RedCompute's node list did not answer within {Timeout} for agent {AgentId}",
+                NodeListTimeout, agentId);
+            listed = null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Could not read RedCompute's nodes for agent {AgentId}", agentId);
             listed = null;

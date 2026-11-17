@@ -135,18 +135,53 @@ public sealed class RedComputeRequestGoldenTests : IDisposable
     public Task A_node_list_of_another_shape_starts_automatically()
         => RunOnAsync("node_01STUDIO", """[{"id":"node_01STUDIO"}]""");
 
+    [Fact]
+    public void A_session_start_waits_at_most_three_seconds_for_the_node_list()
+        => Assert.Equal(TimeSpan.FromSeconds(3), MessagePipeline.DefaultNodeListTimeout);
+
+    [WindowsGoldenFact]
+    public async Task A_node_list_that_hangs_starts_automatically_once_the_bound_runs_out()
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var gateway = await RunOnAsync("node_01STUDIO", NodeList, hang: true, bound: TimeSpan.FromMilliseconds(200));
+
+        // The same body and placement as Automatic, after the bound and not the client's own timeout.
+        Assert.Single(gateway.NodeReads);
+        Assert.Single(gateway.Creations);
+        Assert.InRange(watch.Elapsed, TimeSpan.FromMilliseconds(150), TimeSpan.FromSeconds(10));
+    }
+
+    [WindowsGoldenFact]
+    public async Task The_callers_cancellation_during_a_hanging_node_list_still_cancels_the_start()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        var gateway = new Recorder { NodeList = NodeList, HangNodeList = true };
+        var pipeline = new MessagePipeline(null!, null!, f.Entities, null!, new RedComputeClient(gateway), f.Agents,
+            new AgentWorkspaces(f.Agents, new FixedWorkspace(workspace)), new RecordingScratch(scratch),
+            null!, null!, NullLogger<MessagePipeline>.Instance) { NodeListTimeout = TimeSpan.FromMinutes(5) };
+        using var caller = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pipeline.TryCreateSessionAsync(
+            f.AgentId.ToString(), "test-owner", ct: caller.Token, discussionId: "target", runOnNodeId: "node_01STUDIO"));
+
+        // Cancelled by its caller, it is not taken for an unreadable list: no session starts automatically.
+        Assert.Single(gateway.NodeReads);
+        Assert.Empty(gateway.Creations);
+    }
+
     /// <summary>
     /// A discussion session with <paramref name="runOnNodeId"/>: the legacy members are the discussion golden's,
     /// byte for byte, and the placement is <paramref name="expectedPlacement"/> (default: Automatic's).
     /// </summary>
-    private async Task<Recorder> RunOnAsync(string? runOnNodeId, string? nodeList, string? expectedPlacement = null)
+    private async Task<Recorder> RunOnAsync(string? runOnNodeId, string? nodeList, string? expectedPlacement = null,
+        bool hang = false, TimeSpan? bound = null)
     {
         using var f = new CallbackDeliveryTests.Fixture();
-        var gateway = new Recorder { NodeList = nodeList };
+        var gateway = new Recorder { NodeList = nodeList, HangNodeList = hang };
         var scratchSpace = new RecordingScratch(scratch);
         var pipeline = new MessagePipeline(null!, null!, f.Entities, null!, new RedComputeClient(gateway), f.Agents,
             new AgentWorkspaces(f.Agents, new FixedWorkspace(workspace)), scratchSpace,
-            null!, null!, NullLogger<MessagePipeline>.Instance);
+            null!, null!, NullLogger<MessagePipeline>.Instance) { NodeListTimeout = bound ?? MessagePipeline.DefaultNodeListTimeout };
 
         var sessionId = await pipeline.TryCreateSessionAsync(f.AgentId.ToString(), "test-owner",
             discussionId: "target", runOnNodeId: runOnNodeId);
@@ -412,6 +447,9 @@ public sealed class RedComputeRequestGoldenTests : IDisposable
         /// <summary>RedCompute's GET /nodes answer; null answers 503 (the list cannot be read).</summary>
         public string? NodeList { get; set; }
 
+        /// <summary>GET /nodes never answers.</summary>
+        public bool HangNodeList { get; set; }
+
         /// <summary>Each GET /nodes, with the beneficiary it was read for.</summary>
         public List<string?> NodeReads { get; } = [];
 
@@ -423,6 +461,8 @@ public sealed class RedComputeRequestGoldenTests : IDisposable
             if (request.Method == HttpMethod.Get && path == "/nodes")
             {
                 NodeReads.Add(provenance?.OnBehalfOf.Id);
+                // A RedCompute that never answers: only the caller's token ends the wait.
+                if (HangNodeList) await Task.Delay(Timeout.Infinite, ct);
                 return NodeList is null ? new(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("{}") } : Json(NodeList);
             }
             if (request.Method == HttpMethod.Post && path is "/ai-session/sessions" or "/ai-session/execute")
