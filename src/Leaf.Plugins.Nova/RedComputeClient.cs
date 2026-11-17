@@ -159,6 +159,28 @@ public sealed class RedComputeClient(IComputeGateway gateway)
             : (null, "RedCompute returned no session id");
     }
 
+    /// <summary>
+    /// The node ids RedCompute's registry lists (<c>GET /nodes</c>) for the session's identity: the Agent working
+    /// for its beneficiary, who sees node zero and their own nodes. Null when the list cannot be read, so a caller
+    /// never sends a node it could not confirm.
+    /// </summary>
+    public async Task<IReadOnlySet<string>?> ListNodeIdsAsync(ComputeProvenance provenance, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/nodes");
+        using var response = await gateway.SendAsync(request, provenance, ct);
+        if (!response.IsSuccessStatusCode) return null;
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions, ct);
+        if (body.ValueKind != JsonValueKind.Object || !body.TryGetProperty("nodes", out var nodes)
+            || nodes.ValueKind != JsonValueKind.Array)
+            return null;
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var node in nodes.EnumerateArray())
+            if (node.ValueKind == JsonValueKind.Object && node.TryGetProperty("id", out var id)
+                && id.ValueKind == JsonValueKind.String && id.GetString() is { Length: > 0 } value)
+                ids.Add(value);
+        return ids;
+    }
+
     public async Task<ProxyResult> GetMaintenanceStatusAsync(CancellationToken ct = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "/maintenance/status");

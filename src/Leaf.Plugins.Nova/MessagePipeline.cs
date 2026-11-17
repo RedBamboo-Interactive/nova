@@ -70,7 +70,8 @@ public sealed class MessagePipeline(
                     discussion.QualityTier, discussion.Provider,
                     discussionId: discussion.Id, confidential: discussion.Confidential,
                     keepResident: KeepsSessionResident(discussion), cause: cause,
-                    unattended: StartsUnattended(discussion), callerSessionId: callerSessionId);
+                    unattended: StartsUnattended(discussion), callerSessionId: callerSessionId,
+                    runOnNodeId: discussion.RunOnNodeId);
                 if (sessionId is null)
                 {
                     await store.TrySetStatusAsync(discussion.EntityId, DiscussionStatus.Stopped);
@@ -124,7 +125,7 @@ public sealed class MessagePipeline(
         bool confidential = false, string? developerInstructions = null,
         string? modelOverride = null, string? effortOverride = null, bool keepResident = false,
         string? cause = null, bool unattended = false, string? maxAccessLevel = null,
-        string? callerSessionId = null, bool deliveredAsOneMessage = false)
+        string? callerSessionId = null, bool deliveredAsOneMessage = false, string? runOnNodeId = null)
     {
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
         if (agent == null)
@@ -169,7 +170,7 @@ public sealed class MessagePipeline(
             body["deliveredAsOneMessage"] = true;
         // Placement by reference, stage A: the same workspace and scratch, by reference, after every legacy
         // member (which RedCompute still uses). None at all when a part is not well formed.
-        ComputePlacement.AddTo(body, ComputePlacement.ForAgent(agent.Id, agent.Name, scratchKey));
+        var placement = ComputePlacement.ForAgent(agent.Id, agent.Name, scratchKey);
 
         var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, ownerId, ct);
         var context = new List<ComputeContextReference>();
@@ -183,11 +184,52 @@ public sealed class MessagePipeline(
         var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
             entrypointRoute, context, correlationId: correlationId, parentJobId: parentJobId, ct: ct,
             cause: cause);
+        // "Run on": the discussion's node, only when one was chosen and RedCompute still lists it. Automatic makes
+        // no extra call and sends exactly the body above.
+        if (runOnNodeId is not null)
+            placement = await WithRunOnNodeAsync(placement, runOnNodeId, agent.Id, provenance, ct);
+        ComputePlacement.AddTo(body, placement);
         var (sessionId, failure) = await redCompute.CreateSessionWithReasonAsync(body, provenance, ct);
         if (sessionId is null)
             logger.LogWarning("RedCompute refused session creation for agent {AgentId} via {Provider}: {Reason}",
                 agent.Id, effectiveProvider ?? "default", failure);
         return sessionId;
+    }
+
+    /// <summary>
+    /// <paramref name="placement"/> with the chosen node when RedCompute's registry lists it for this session's
+    /// identity. An unknown node would refuse the start with 404, so a node that is no longer listed (forgotten or
+    /// unpaired), or a list that cannot be read, starts the session automatically instead, with a warning. A listed
+    /// node that cannot run work (offline, not eligible) is still sent: RedCompute says so (409) rather than the
+    /// session quietly running somewhere the person did not choose.
+    /// </summary>
+    private async Task<System.Text.Json.Nodes.JsonObject?> WithRunOnNodeAsync(
+        System.Text.Json.Nodes.JsonObject? placement, string nodeId, string agentId,
+        ComputeProvenance provenance, CancellationToken ct)
+    {
+        IReadOnlySet<string>? listed;
+        try
+        {
+            listed = await redCompute.ListNodeIdsAsync(provenance, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Could not read RedCompute's nodes for agent {AgentId}", agentId);
+            listed = null;
+        }
+        if (listed is null)
+        {
+            logger.LogWarning("RedCompute's node list could not be read: the session for agent {AgentId} starts "
+                + "automatically, not on its Run on node {NodeId}", agentId, nodeId);
+            return placement;
+        }
+        if (!listed.Contains(nodeId))
+        {
+            logger.LogWarning("Run on node {NodeId} is not in RedCompute's node list: the session for agent "
+                + "{AgentId} starts automatically", nodeId, agentId);
+            return placement;
+        }
+        return ComputePlacement.WithNode(placement, nodeId);
     }
 
     public Task<SendMessageOutcome> SendAsync(
@@ -287,7 +329,7 @@ public sealed class MessagePipeline(
                     confidential: discussion.Confidential,
                     keepResident: KeepsSessionResident(discussion),
                     cause: cause, unattended: StartsUnattended(discussion),
-                    callerSessionId: callerSessionId);
+                    callerSessionId: callerSessionId, runOnNodeId: discussion.RunOnNodeId);
             }
             catch (ComputeMaintenanceException ex)
             {

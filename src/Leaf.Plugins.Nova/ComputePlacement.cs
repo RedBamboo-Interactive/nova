@@ -66,6 +66,22 @@ internal static class ComputePlacement
         return new JsonObject { ["repository"] = repository };
     }
 
+    /// <summary>
+    /// <paramref name="placement"/> with the node the person chose in "Run on" first:
+    /// <c>{nodeId, workspace?, repository?, scratch?, scratchAs?}</c>, or <c>{nodeId}</c> alone when there is no
+    /// reference. Callers pass only a node RedCompute's registry lists (an unknown one is a 404 before the start);
+    /// a node id that is not well formed leaves the placement as it was.
+    /// </summary>
+    public static JsonObject? WithNode(JsonObject? placement, string? nodeId)
+    {
+        if (!IsText(nodeId)) return placement;
+        var withNode = new JsonObject { ["nodeId"] = nodeId };
+        if (placement is not null)
+            foreach (var (name, member) in placement)
+                withNode[name] = member?.DeepClone();
+        return withNode;
+    }
+
     /// <summary>Adds <paramref name="placement"/> as the body's last member; a null one adds nothing.</summary>
     public static void AddTo(IDictionary<string, object?> body, JsonObject? placement)
     {

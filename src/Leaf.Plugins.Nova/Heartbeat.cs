@@ -854,7 +854,8 @@ public sealed class HeartbeatService(
             keepResident: true,
             cause: ComputeCauses.Agent,
             // The heartbeat-tick automation drives this session: nobody is there to approve.
-            unattended: true)
+            unattended: true,
+            runOnNodeId: discussion.RunOnNodeId)
             ?? throw new InvalidOperationException("RedCompute refused to create a heartbeat session");
 
         await store.PatchAsync(discussion.EntityId, new JsonObject

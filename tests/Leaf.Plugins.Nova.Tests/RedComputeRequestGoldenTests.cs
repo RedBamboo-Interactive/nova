@@ -100,6 +100,69 @@ public sealed class RedComputeRequestGoldenTests : IDisposable
             DiscussionPlacement.Replace("\"target\"", "\"" + key + "\""));
     }
 
+    // ── "Run on" (U1): the discussion's node_id reaches placement.nodeId, and only then ─────────
+
+    private const string NodeList =
+        """{"nodes":[{"id":"node_01ZERO","isLocal":true},{"id":"node_01STUDIO","isLocal":false}],"legacyNodeId":"node_01LEGACY"}""";
+
+    private static readonly string[] Registry = ["node_01ZERO", "node_01STUDIO"];
+
+    [WindowsGoldenFact]
+    public async Task Automatic_reads_no_node_list_and_sends_the_golden_body()
+    {
+        var gateway = await RunOnAsync(runOnNodeId: null, nodeList: NodeList);
+        Assert.Empty(gateway.NodeReads);
+    }
+
+    [WindowsGoldenFact]
+    public async Task A_listed_node_comes_first_in_the_placement_and_nothing_else_changes()
+    {
+        var gateway = await RunOnAsync("node_01STUDIO", NodeList,
+            """{"nodeId":"node_01STUDIO","workspace":{"agentId":"<agent-id>"},"scratch":{"owner":"nova","executionKey":"target"}}""");
+        // Read for the discussion's owner: the Agent counts as the person it works for.
+        Assert.Single(gateway.NodeReads);
+    }
+
+    [WindowsGoldenFact]
+    public Task A_node_RedCompute_no_longer_lists_is_never_sent()
+        => RunOnAsync("node_01GONE", NodeList);
+
+    [WindowsGoldenFact]
+    public Task A_node_list_that_cannot_be_read_starts_automatically()
+        => RunOnAsync("node_01STUDIO", nodeList: null);
+
+    [WindowsGoldenFact]
+    public Task A_node_list_of_another_shape_starts_automatically()
+        => RunOnAsync("node_01STUDIO", """[{"id":"node_01STUDIO"}]""");
+
+    /// <summary>
+    /// A discussion session with <paramref name="runOnNodeId"/>: the legacy members are the discussion golden's,
+    /// byte for byte, and the placement is <paramref name="expectedPlacement"/> (default: Automatic's).
+    /// </summary>
+    private async Task<Recorder> RunOnAsync(string? runOnNodeId, string? nodeList, string? expectedPlacement = null)
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+        var gateway = new Recorder { NodeList = nodeList };
+        var scratchSpace = new RecordingScratch(scratch);
+        var pipeline = new MessagePipeline(null!, null!, f.Entities, null!, new RedComputeClient(gateway), f.Agents,
+            new AgentWorkspaces(f.Agents, new FixedWorkspace(workspace)), scratchSpace,
+            null!, null!, NullLogger<MessagePipeline>.Instance);
+
+        var sessionId = await pipeline.TryCreateSessionAsync(f.AgentId.ToString(), "test-owner",
+            discussionId: "target", runOnNodeId: runOnNodeId);
+
+        Assert.Equal("session-1", sessionId);
+        Verify("discussion-mounted-workspace", Capture(gateway, scratchSpace), f.AgentId);
+        var placement = Assert.Single(placements);
+        Assert.Equal((expectedPlacement ?? DiscussionPlacement).Replace("<agent-id>", f.AgentId.ToString("D")),
+            placement!.ToJsonString());
+        Assert.Null(PlacementRules.Problem(new JsonObject { ["placement"] = placement.DeepClone() },
+            PlacementRules.Route.Session, registry: Registry));
+        if (runOnNodeId is not null && nodeList is not null && nodeList.StartsWith('{'))
+            Assert.Single(gateway.NodeReads);
+        return gateway;
+    }
+
     // ── NovaSessionActionHandler: the nova-session automation action ───────────────────────────
 
     [WindowsGoldenFact]
@@ -346,11 +409,22 @@ public sealed class RedComputeRequestGoldenTests : IDisposable
     {
         public List<Seen> Creations { get; } = [];
 
+        /// <summary>RedCompute's GET /nodes answer; null answers 503 (the list cannot be read).</summary>
+        public string? NodeList { get; set; }
+
+        /// <summary>Each GET /nodes, with the beneficiary it was read for.</summary>
+        public List<string?> NodeReads { get; } = [];
+
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
             var raw = request.Content is null ? "" : await request.Content.ReadAsStringAsync(ct);
             var path = request.RequestUri!.ToString();
+            if (request.Method == HttpMethod.Get && path == "/nodes")
+            {
+                NodeReads.Add(provenance?.OnBehalfOf.Id);
+                return NodeList is null ? new(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("{}") } : Json(NodeList);
+            }
             if (request.Method == HttpMethod.Post && path is "/ai-session/sessions" or "/ai-session/execute")
             {
                 var headers = new Dictionary<string, string>(StringComparer.Ordinal);

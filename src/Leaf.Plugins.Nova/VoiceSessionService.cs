@@ -83,7 +83,7 @@ public sealed class VoiceSessionService(
                     discussion.QualityTier, discussion.Provider, ct, discussion.Id,
                     entrypointRoute: $"/api/apps/nova/discussions/{discussion.Id}/voice-sessions",
                     confidential: discussion.Confidential,
-                    cause: cause);
+                    cause: cause, runOnNodeId: discussion.RunOnNodeId);
                 if (sessionId is null)
                     return Json(503, new { error = "ai_session_unavailable", message = "Nova's AI session could not be started" });
                 await store.PatchAsync(discussion.EntityId, new JsonObject { ["session_id"] = sessionId }, ct: ct);

@@ -104,7 +104,8 @@ public sealed record DiscussionRead(
     string? OwnerApp = null,
     IReadOnlyList<WorktreeAttachment>? Worktrees = null,
     ReactionCursor? ReactionsNoted = null,
-    bool? LiveTimelineSetting = null)
+    bool? LiveTimelineSetting = null,
+    string? RunOnNodeId = null)
 {
     /// <summary>
     /// Whether this discussion's context carries the LIVE timeline: the explicit choice when someone
@@ -1281,8 +1282,30 @@ public sealed class DiscussionStore(
             Str(d, "source_app"),
             WorktreeAttachment.Read(d),
             ReactionCursor.Read(d),
-            Bool(d, LiveTimelineContext.DataKey) ?? Bool(d, LiveTimelineContext.LegacyDataKey));
+            Bool(d, LiveTimelineContext.DataKey) ?? Bool(d, LiveTimelineContext.LegacyDataKey),
+            Str(d, RunOnNodeKey));
     }
+
+    /// <summary>
+    /// The data key of the node the discussion's <b>new</b> sessions run on (a RedCompute <c>/nodes</c> id; Phase 2
+    /// design 3.1). Absent or null is Automatic: RedCompute routes, and the session start sends exactly what it
+    /// sent before nodes could be chosen. The running session's node is read from the session.
+    /// </summary>
+    public const string RunOnNodeKey = "node_id";
+
+    /// <summary>
+    /// Sets the node the discussion's new sessions run on; null returns it to Automatic. The current session is
+    /// pinned where it runs: the choice applies from the next session.
+    /// </summary>
+    public Task<DiscussionRead?> SetRunOnNodeAsync(Guid entityId, string? nodeId, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
+            if (entity is null || Map(entity) is null) return null;
+            await entities.PatchAsync(entityId, new JsonObject { [RunOnNodeKey] = nodeId }, ct: ct);
+            var updated = await entities.GetAsync(entityId, ct);
+            return updated is null ? null : Map(updated);
+        }, ct);
 
     public static object ToInfo(DiscussionRead d) => new
     {
@@ -1306,6 +1329,8 @@ public sealed class DiscussionStore(
         // Effective value, and whether someone chose it ("explicit") or it follows the type ("default").
         liveTimeline = d.LiveTimeline,
         liveTimelineSource = d.LiveTimelineSetting is null ? "default" : "explicit",
+        // The node new sessions run on (a RedCompute /nodes id); null is Automatic.
+        nodeId = d.RunOnNodeId,
         setupBootstrapMessageUid = d.SetupBootstrapMessageUid,
         worktrees = d.Worktrees ?? [],
         ownedBy = DiscussionApplicationOwner.IsForeign(d)

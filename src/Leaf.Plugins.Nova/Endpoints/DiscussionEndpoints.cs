@@ -32,6 +32,21 @@ public class CreateDiscussionRequest
     /// heartbeat, off otherwise.
     /// </summary>
     public bool? LiveTimeline { get; set; }
+    /// <summary>
+    /// "Run on": the node its sessions run on, a RedCompute <c>/nodes</c> id. Omitted or null is Automatic.
+    /// Stored as the discussion's <c>node_id</c>.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("nodeId")]
+    public string? RunOnNodeId { get; set; }
+}
+
+/// <summary>
+/// <c>nodeId</c>: the node a discussion's new sessions run on, or null for Automatic. Kept as raw JSON so a
+/// missing field (a 400) is not mistaken for null.
+/// </summary>
+public class DiscussionRunOnRequest
+{
+    public JsonElement NodeId { get; set; }
 }
 
 /// <summary>"He asked for this there": a discussion and the message in it.</summary>
@@ -304,6 +319,8 @@ public static class DiscussionEndpoints
             });
         if (title is { Length: > MaxCreationTitleLength })
             return Results.BadRequest(new { error = "invalid_title", message = $"title must be at most {MaxCreationTitleLength} characters" });
+        if (createReq?.RunOnNodeId is { } requestedNode && !ComputePlacement.IsText(requestedNode))
+            return InvalidRunOnNode();
 
         // Refused before anything exists. It stamps the brief's record, so with no brief it has no home.
         if (createReq?.RequestedIn is not null && brief is null)
@@ -352,6 +369,10 @@ public static class DiscussionEndpoints
         // Chosen before anything is published or briefed, so the first turn already follows it.
         if (created && createReq?.LiveTimeline is { } liveTimeline)
             discussion = await store.SetLiveTimelineAsync(discussion.EntityId, liveTimeline, ctx.RequestAborted)
+                ?? discussion;
+        // "Run on", stored before the session starts so the first one already runs there.
+        if (created && createReq?.RunOnNodeId is { } runOnNodeId)
+            discussion = await store.SetRunOnNodeAsync(discussion.EntityId, runOnNodeId, ctx.RequestAborted)
                 ?? discussion;
 
         if (created)
@@ -504,6 +525,39 @@ public static class DiscussionEndpoints
         var updated = await store.SetLiveTimelineAsync(discussion.EntityId, value, ctx.RequestAborted);
         if (updated is null) return NotFound();
         if (updated.LiveTimelineSetting != discussion.LiveTimelineSetting)
+            await PublishChangedAsync(events, updated, ctx.RequestAborted);
+        return Results.Ok(DiscussionStore.ToInfo(updated));
+    }
+
+    private static IResult InvalidRunOnNode() => Results.BadRequest(new
+    {
+        error = "invalid_node_id",
+        message = "nodeId must be a node id from GET /compute/nodes (at most 512 characters), or null for Automatic",
+    });
+
+    /// <summary>
+    /// Sets the node a discussion's new sessions run on ("Run on"), or null for Automatic. Whoever may access the
+    /// discussion may choose, as for its LIVE timeline. The current session stays where it runs: sessions are
+    /// pinned, so the change applies from the next one. Each session start checks the node against RedCompute's
+    /// node list and starts automatically when it is no longer listed.
+    /// </summary>
+    internal static async Task<IResult> SetRunOnNodeAsync(DiscussionRead discussion,
+        DiscussionRunOnRequest? request, HttpContext ctx, DiscussionStore store, IPluginEvents? events = null)
+    {
+        if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+        string? value;
+        switch (request?.NodeId.ValueKind)
+        {
+            case JsonValueKind.String when ComputePlacement.IsText(request.NodeId.GetString()):
+                value = request.NodeId.GetString();
+                break;
+            case JsonValueKind.Null: value = null; break;
+            default: return InvalidRunOnNode();
+        }
+
+        var updated = await store.SetRunOnNodeAsync(discussion.EntityId, value, ctx.RequestAborted);
+        if (updated is null) return NotFound();
+        if (updated.RunOnNodeId != discussion.RunOnNodeId)
             await PublishChangedAsync(events, updated, ctx.RequestAborted);
         return Results.Ok(DiscussionStore.ToInfo(updated));
     }
@@ -750,7 +804,7 @@ public static class DiscussionEndpoints
             catch { /* body is optional */ }
             return await CreateDiscussionAsync(createReq, ctx, store, agents, pipeline, events, live, injector);
         })
-            .WithSummary("Creates a discussion and starts its provider session, owned by the signed-in person or the calling Agent's beneficiary. The body is optional: agentId, type, qualityTier, provider, deferSession, idempotencyKey, title (kept: automatic titling won't overwrite it), liveTimeline (boolean: whether its context carries the LIVE timeline; omitted follows the type: on for live and heartbeat, off otherwise), brief (what it should do: posted as an event the new session takes, the server stating who sent it), requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, needs a brief, 403 for a discussion the caller can't read). brief with deferSession is a 400; a retry under idempotencyKey reuses the discussion and its brief. A second open live or heartbeat discussion for the same Agent returns 409.")
+            .WithSummary("Creates a discussion and starts its provider session, owned by the signed-in person or the calling Agent's beneficiary. The body is optional: agentId, type, qualityTier, provider, deferSession, idempotencyKey, title (kept: automatic titling won't overwrite it), liveTimeline (boolean: whether its context carries the LIVE timeline; omitted follows the type: on for live and heartbeat, off otherwise), nodeId (\"Run on\": a node id from GET /compute/nodes its sessions run on; omitted or null is Automatic), brief (what it should do: posted as an event the new session takes, the server stating who sent it), requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, needs a brief, 403 for a discussion the caller can't read). brief with deferSession is a 400; a retry under idempotencyKey reuses the discussion and its brief. A second open live or heartbeat discussion for the same Agent returns 409.")
             .WithMetadata(new AcceptsMetadata([], typeof(CreateDiscussionRequest)));
 
         group.MapGet("/discussions/live", async (HttpContext ctx, DiscussionStore store) =>
@@ -1643,6 +1697,15 @@ public static class DiscussionEndpoints
             return discussion is null ? NotFound() : await SetLiveTimelineAsync(discussion, request, ctx, store, events);
         })
             .WithSummary("Sets whether a discussion's context carries the LIVE timeline (the latest 15 LIVE events from every source: mail, automations, lights, music, other discussions...). Off, its context lists no LIVE events and says how to read them from GET /live/timeline. Body: liveTimeline (true or false; null follows the type's default again: on for live and heartbeat, off otherwise). Same access as renaming; the discussion carries liveTimeline and liveTimelineSource (explicit or default).");
+
+        group.MapPut("/discussions/{id}/node", async (string id,
+            DiscussionRunOnRequest request, HttpContext ctx, DiscussionStore store,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
+        {
+            var discussion = await store.GetAsync(id, ctx.RequestAborted);
+            return discussion is null ? NotFound() : await SetRunOnNodeAsync(discussion, request, ctx, store, events);
+        })
+            .WithSummary("Sets the node a discussion's new sessions run on (\"Run on\"). Body: nodeId (a node id from GET /compute/nodes, or null for Automatic: RedCompute routes). The current session stays on its node; the change applies from the next session. A node RedCompute no longer lists is skipped at the next start, which then runs automatically. Same access as the LIVE timeline setting; the discussion carries nodeId.");
 
         group.MapGet("/live/timeline", (HttpContext ctx, DiscussionStore store, IDiscussions discussions, AgentDirectory agents)
                 => ReadLiveTimelineAsync(ctx, store, discussions, agents))

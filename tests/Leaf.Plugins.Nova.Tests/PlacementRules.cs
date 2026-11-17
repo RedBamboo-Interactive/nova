@@ -16,8 +16,13 @@ public static class PlacementRules
     private const int MaxTextLength = 512;
     private static readonly string[] TopMembers = ["nodeId", "workspace", "repository", "scratch", "scratchAs"];
 
-    /// <summary>The member RedCompute would refuse in <paramref name="body"/>'s <c>placement</c>, or null when it starts.</summary>
-    public static string? Problem(JsonNode? body, Route route, bool conversationOnly = false)
+    /// <summary>
+    /// The member RedCompute would refuse in <paramref name="body"/>'s <c>placement</c>, or null when it starts.
+    /// <paramref name="registry"/> is the node ids GET /nodes lists in the test's RedCompute (ResolveNode answers 404
+    /// for any other); without one only <c>local</c> is known, as before nodes exist.
+    /// </summary>
+    public static string? Problem(JsonNode? body, Route route, bool conversationOnly = false,
+        IReadOnlyCollection<string>? registry = null)
     {
         if (body is not JsonObject obj || !obj.TryGetPropertyValue("placement", out var value) || value is null) return null;
         if (value is not JsonObject placement) return "placement";
@@ -59,7 +64,8 @@ public static class PlacementRules
         }
 
         // Before Phase 3 nodes, only "local" (any case) and "route" (absent or null) are known on every RedCompute.
-        if (nodeId is not null && !string.Equals(nodeId, "local", StringComparison.OrdinalIgnoreCase)) return "placement.nodeId";
+        if (nodeId is not null && !string.Equals(nodeId, "local", StringComparison.OrdinalIgnoreCase)
+            && registry?.Contains(nodeId) != true) return "placement.nodeId";
         return null;
     }
 
