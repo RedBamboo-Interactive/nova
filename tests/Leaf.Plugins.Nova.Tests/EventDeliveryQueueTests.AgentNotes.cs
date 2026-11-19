@@ -255,7 +255,8 @@ public sealed partial class EventDeliveryQueueTests
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (!File.Exists(Path.Combine(root.FullName, "src", "Leaf.Plugins.Nova", "LiveEvents.cs"))) root = root.Parent!;
         var writers = Directory.GetFiles(Path.Combine(root.FullName, "src"), "*.cs", SearchOption.AllDirectories)
-            .Where(file => File.ReadAllText(file).Contains("novaEvent", StringComparison.Ordinal))
+            .Where(file => System.Text.RegularExpressions.Regex.IsMatch(File.ReadAllText(file),
+                @"\bnovaEvent\s*=|\[""novaEvent""\]\s*="))
             .Select(Path.GetFileName);
         Assert.Equal("LiveEvents.cs", Assert.Single(writers));
     }

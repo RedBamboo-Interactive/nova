@@ -56,8 +56,17 @@ public sealed class NovaShareEnricher(
 
     private async Task<List<ShareableMessage>> BuildMessagesAsync(DiscussionRead disc, string? agentName, CancellationToken ct)
     {
-        var messages = new List<ShareableMessage>();
         var records = await discussions.GetMessagesAsync(disc.EntityId, ct: ct);
+        var snapshot = disc.SessionId is not null
+            ? await redCompute.GetSessionAsync(disc.SessionId, ct)
+            : null;
+        return await ProjectMessagesAsync(records, snapshot, agentName, ct);
+    }
+
+    internal async Task<List<ShareableMessage>> ProjectMessagesAsync(
+        IReadOnlyList<DiscussionMessage> records, SessionSnapshot? snapshot, string? agentName, CancellationToken ct)
+    {
+        var messages = new List<ShareableMessage>();
         var userPartsByUid = records
             .Where(m => m.Role == "user")
             .Where(m => !string.IsNullOrWhiteSpace(m.Metadata["uid"]?.GetValue<string>()))
@@ -70,10 +79,6 @@ public sealed class NovaShareEnricher(
                     .First()
                     .Metadata["parts_json"]?.GetValue<string>(),
                 StringComparer.Ordinal);
-
-        var snapshot = disc.SessionId is not null
-            ? await redCompute.GetSessionAsync(disc.SessionId, ct)
-            : null;
 
         if (snapshot is { Messages.Count: > 0 })
         {
@@ -136,6 +141,8 @@ public sealed class NovaShareEnricher(
                 }
                 if (msg.EventType != "text") continue;
 
+                if (msg.Role == "user" && IsInternalInput(msg.Content ?? "", msg.AttachmentsJson)) continue;
+
                 var content = msg.Role == "user" ? StripInjectedTags(msg.Content ?? "") : msg.Content ?? "";
                 List<ShareableImage> messageImages = [];
                 if (msg.Role == "user" && (msg.MessageUid is null || imageUids.Add(msg.MessageUid)))
@@ -168,7 +175,9 @@ public sealed class NovaShareEnricher(
             foreach (var m in records)
             {
                 var source = m.Metadata["source"]?.GetValue<string>() ?? "";
-                if (source.StartsWith("event:")) continue;
+                if (source.StartsWith("event:", StringComparison.Ordinal)) continue;
+                if (m.Role == "user" && source != "user-message"
+                    && IsInternalInput(m.Content, m.Metadata["attachments_json"]?.GetValue<string>())) continue;
 
                 var content = ExtractTextContent(m);
                 List<ShareableImage> images;
@@ -198,6 +207,30 @@ public sealed class NovaShareEnricher(
         }
 
         return messages;
+    }
+
+    // Same admission rules as web/src/lib/message-order.ts: authored frame text
+    // stays a person message; only a whole injector frame is an internal input.
+    internal static bool IsInternalInput(string content, string? attachmentsJson)
+    {
+        if (!Regex.IsMatch(content, @"^\s*<nova-event\s+source=""[^""]+""[^>]*>[\s\S]*</nova-event>\s*$"))
+            return false;
+        if (string.IsNullOrEmpty(attachmentsJson)) return true;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(attachmentsJson);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("inputMessageUids", out var uids)
+                && uids.ValueKind == System.Text.Json.JsonValueKind.Array && uids.GetArrayLength() > 1)
+                return false;
+            if (!root.TryGetProperty("metadata", out var metadata)
+                || metadata.ValueKind != System.Text.Json.JsonValueKind.Object) return false;
+            return metadata.TryGetProperty("novaEvent", out var marker)
+                && marker.ValueKind == System.Text.Json.JsonValueKind.True
+                && !metadata.TryGetProperty("app", out _);
+        }
+        catch (System.Text.Json.JsonException) { return false; }
+        catch (InvalidOperationException) { return false; }
     }
 
     internal async Task<List<ShareableImage>> ResolveShareImagesAsync(
