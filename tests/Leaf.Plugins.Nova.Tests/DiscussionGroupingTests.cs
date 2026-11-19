@@ -46,6 +46,20 @@ public sealed class DiscussionGroupingTests
     }
 
     [Fact]
+    public void Redundant_project_prefixes_are_removed_and_labels_can_improve_without_regrouping()
+    {
+        var first = DiscussionGroupingPolicy.Parse(Output.Replace("Inventory", "Lands of Lore: Inventory"), Inputs, null, Now);
+        Assert.Equal("Inventory", first.Assignments.Single(a => a.DiscussionId == "a").Label);
+        var next = DiscussionGroupingPolicy.Parse(Output.Replace("Inventory", "HUD and inventory"), Inputs, first, Now);
+        Assert.Equal("HUD and inventory", next.Assignments.Single(a => a.DiscussionId == "a").Label);
+        Assert.All(next.Assignments, a => Assert.Equal("Lands of Lore", a.Group));
+        var exact = DiscussionGroupingPolicy.Parse(Output.Replace("Inventory", "Lands of Lore"), Inputs, null, Now);
+        Assert.Equal("Lands of Lore", exact.Assignments.Single(a => a.DiscussionId == "a").Label);
+        var prefixWord = DiscussionGroupingPolicy.Parse(Output.Replace("Inventory", "Lands of Lorekeepers"), Inputs, null, Now);
+        Assert.Equal("Lands of Lorekeepers", prefixWord.Assignments.Single(a => a.DiscussionId == "a").Label);
+    }
+
+    [Fact]
     public void A_changed_title_or_removed_member_invalidates_cached_derived_metadata()
     {
         var previous = DiscussionGroupingPolicy.Parse(Output, Inputs, null, Now);
@@ -156,6 +170,18 @@ public sealed class DiscussionGroupingTests
         world.Gateway.BeforeReturn = () => world.Entities.Items.First(e => e.TypeSlug == "discussion").Data["confidential"] = true;
         var result = await world.Refresh();
         Assert.Empty(result.Assignments);
+        Assert.Empty(world.Records.Rows);
+    }
+
+    [Fact]
+    public async Task Disabling_grouping_cancels_an_inflight_pass_without_saving_its_result()
+    {
+        var world = new World();
+        using var cancelled = new CancellationTokenSource();
+        // Simulate a provider racing cancellation and still returning valid output.
+        world.Gateway.BeforeReturn = cancelled.Cancel;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            world.Service().RefreshAsync("owner", Human(), cancelled.Token));
         Assert.Empty(world.Records.Rows);
     }
 

@@ -28,12 +28,13 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = { ...extraHeaders }
   if (body) headers["Content-Type"] = "application/json"
   if (_deviceId) headers["X-Leaf-Installation-Id"] = _deviceId
   const res = await novaExecution.fetch(`${BASE}${path}`, {
     method,
+    signal,
     credentials: "include",
     headers: Object.keys(headers).length ? headers : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -48,8 +49,8 @@ async function request<T>(method: string, path: string, body?: unknown, extraHea
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>("GET", path),
-  post: <T>(path: string, body?: unknown) => request<T>("POST", path, body),
+  get: <T>(path: string, signal?: AbortSignal) => request<T>("GET", path, undefined, undefined, signal),
+  post: <T>(path: string, body?: unknown, signal?: AbortSignal) => request<T>("POST", path, body, undefined, signal),
   postWithHeaders: <T>(path: string, body: unknown, headers: Record<string, string>) =>
     request<T>("POST", path, body, headers),
   put: <T>(path: string, body?: unknown) => request<T>("PUT", path, body),

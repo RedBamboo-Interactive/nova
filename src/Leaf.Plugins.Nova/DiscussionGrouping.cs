@@ -36,13 +36,23 @@ public static class DiscussionGroupingPolicy
             .ToArray();
 
     public static string Fingerprint(GroupingInput[] inputs)
-        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("group-visuals-v2:" + JsonSerializer.Serialize(inputs, Json))));
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("group-labels-v3:" + JsonSerializer.Serialize(inputs, Json))));
 
     public static bool StillReadable(DiscussionGroupingSnapshot snapshot, GroupingInput[] current)
     {
         var byId = current.ToDictionary(d => d.Id, StringComparer.Ordinal);
         return snapshot.Inputs.All(old => byId.TryGetValue(old.Id, out var now)
             && JsonSerializer.Serialize(old, Json) == JsonSerializer.Serialize(now, Json));
+    }
+
+    private static string CompactLabel(string label, string? group)
+    {
+        if (string.IsNullOrEmpty(group) || !label.StartsWith(group, StringComparison.OrdinalIgnoreCase)
+            || label.Length == group.Length) return label;
+        var next = label[group.Length];
+        if (!char.IsWhiteSpace(next) && !":-|/·–—".Contains(next)) return label;
+        var shortened = label[group.Length..].Trim().TrimStart(':', '-', '|', '/', '·', '–', '—').Trim();
+        return shortened.Length > 0 ? shortened : label;
     }
 
     public static DiscussionGroupingSnapshot Parse(string text, GroupingInput[] inputs,
@@ -95,12 +105,14 @@ public static class DiscussionGroupingPolicy
         foreach (var old in previous?.Assignments ?? [])
         {
             if (old.Group is null || !known.TryGetValue(old.DiscussionId, out var source) || old.SourceTitle != source.Title) continue;
-            assignments.RemoveAll(a => a.DiscussionId == old.DiscussionId);
-            assignments.Add(old);
+            var index = assignments.FindIndex(a => a.DiscussionId == old.DiscussionId);
+            if (index >= 0) assignments[index] = assignments[index] with { Group = old.Group };
+            else assignments.Add(old);
         }
         var multi = assignments.Where(a => a.Group is not null).GroupBy(a => a.Group!)
             .Where(g => g.Count() >= 2).Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
-        var final = assignments.Select(a => a.Group is not null && !multi.Contains(a.Group) ? a with { Group = null } : a).ToArray();
+        var final = assignments.Select(a => a.Group is not null && !multi.Contains(a.Group) ? a with { Group = null } : a)
+            .Select(a => a with { Label = CompactLabel(a.Label, a.Group) }).ToArray();
         var order = (previous?.GroupOrder ?? []).Where(multi.Contains).Concat(multi.Order(StringComparer.Ordinal))
             .Distinct(StringComparer.Ordinal).ToArray();
         // Group identity is chosen explicitly, never borrowed from whichever row is first.
@@ -214,7 +226,10 @@ public sealed class DiscussionGrouping(
                 Group only discussions about the same concrete project. A project can span tools/repositories.
                 Do not group unrelated conversations as General, Other, Development, Personal or Miscellaneous.
                 Leave uncertain or singleton topics ungrouped. Use existing project names when appropriate.
-                Remove repeated project prefixes from labels, preserving the subject and language. Never invent
+                Rename the grouped display labels when useful, preserving the subject and language. Remove the
+                redundant group name: under "Lands of Lore", "Lands of Lore HUD and Inventory" becomes
+                "HUD and Inventory". Do not repeat the project inside the label; retain distinguishing topics.
+                These are grouped list labels, not commands to mutate canonical discussion titles. Never invent
                 IDs, facts, images or URLs. Choose a meaningful icon for EACH discussion and separately for EACH
                 group, representing the whole project rather than a member task. For a group thumbnail choose
                 the supplied member most likely to contain representative project artwork (world, mood, overview),
@@ -230,6 +245,7 @@ public sealed class DiscussionGrouping(
                 system, messages = new[] { new { role = "user", content = JsonSerializer.Serialize(new
                 { discussions = promptInputs, existingGroups = previous?.GroupOrder ?? [], existingGroupVisuals = previous?.Groups ?? [], allowedIcons = DiscussionGroupingPolicy.Icons }, Json) } },
             }, "Organize Nova discussion list", provenance, timeout.Token);
+            ct.ThrowIfCancellationRequested();
             if (!result.Success || string.IsNullOrWhiteSpace(result.Text)) return View(subject, inputs, previous);
             DiscussionGroupingSnapshot snapshot;
             try { snapshot = DiscussionGroupingPolicy.Parse(result.Text, inputs, previous, _time.GetUtcNow()); }
@@ -237,6 +253,7 @@ public sealed class DiscussionGrouping(
             // Access/lifecycle/title could have changed while the model was running.
             var current = await InputsAsync(context, ct);
             if (DiscussionGroupingPolicy.Fingerprint(current) != snapshot.Fingerprint) return View(subject, current, previous);
+            ct.ThrowIfCancellationRequested();
             await records.AppendAsync(Stream, new JsonObject { ["projection"] = JsonSerializer.SerializeToNode(snapshot, Json) }, userId: subject, ct: ct);
             _retryAt.TryRemove(subject, out _);
             return View(subject, current, snapshot);

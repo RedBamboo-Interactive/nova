@@ -16,6 +16,7 @@ export function useDiscussionGrouping(enabled: boolean, discussions: DiscussionI
   useEffect(() => {
     const current = ++generation.current
     let cancelled = false
+    const abort = new AbortController()
     if (!enabled) { setLoading(false); setUnavailable(false); return }
     const accept = (result: DiscussionGroupingView) => {
       if (cancelled || generation.current !== current) return false
@@ -27,18 +28,18 @@ export function useDiscussionGrouping(enabled: boolean, discussions: DiscussionI
       setUnavailable(false)
       void (async () => {
         try {
-          const cached = await api.get<DiscussionGroupingView>("/api/apps/nova/discussion-groups")
+          const cached = await api.get<DiscussionGroupingView>("/api/apps/nova/discussion-groups", abort.signal)
           if (!accept(cached)) return
           if (cached.fingerprint !== cached.sourceFingerprint) {
             if (cached.retryAfterSeconds > 0) { setUnavailable(true); return }
-            const updated = await api.post<DiscussionGroupingView>("/api/apps/nova/discussion-groups/refresh")
+            const updated = await api.post<DiscussionGroupingView>("/api/apps/nova/discussion-groups/refresh", undefined, abort.signal)
             if (accept(updated)) setUnavailable(updated.fingerprint !== updated.sourceFingerprint)
           }
         } catch { if (!cancelled && generation.current === current) setUnavailable(true) }
         finally { if (!cancelled && generation.current === current) setLoading(false) }
       })()
     }, 600)
-    return () => { cancelled = true; clearTimeout(timer) }
+    return () => { cancelled = true; clearTimeout(timer); abort.abort() }
   }, [enabled, inputKey, attempt])
   const visible = useMemo(() => enabled && view && groupingStillVisible(view, discussions) ? view : null,
     [enabled, view, discussions])
