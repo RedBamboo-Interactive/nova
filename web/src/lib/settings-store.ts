@@ -5,6 +5,8 @@ export type LocalSettings = {
   showAvatar: boolean
   /** Agent avatars on discussion rows; off shows the plain status icon. */
   showDiscussionAvatars: boolean
+  /** Optional automatic project sections in the open discussion list. */
+  groupDiscussions: boolean
   agentFilter: string | null
   lastUsedAgentId: string | null
   voiceInputDeviceId: string | null
@@ -21,6 +23,7 @@ export type LocalSettings = {
 export const settingsStore = createLocalStore<LocalSettings>("nova_settings", {
   showAvatar: true,
   showDiscussionAvatars: true,
+  groupDiscussions: false,
   agentFilter: null,
   lastUsedAgentId: null,
   voiceInputDeviceId: null,

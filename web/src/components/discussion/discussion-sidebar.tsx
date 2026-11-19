@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, useRef } from "react"
 import type { ComponentProps } from "react"
-import { ItemList, ItemListRow, RowActionsMenu, useContextTarget, type ContextMenuEntry } from "@redbamboo/ui"
+import { ItemList, ItemListRow, RowActionsMenu, ScrollArea, useContextTarget, type ContextMenuEntry } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
 import type { BackgroundTaskInfo } from "@redbamboo/chat"
 import type { DelegationActivitySnapshot, DiscussionDelegationActivity, DiscussionInfo, AgentInfo } from "../../lib/types"
@@ -12,6 +12,8 @@ import { isDiscussionUnread } from "../../lib/discussion-unread"
 import { discussionActivityIndicator } from "../../lib/delegation-activity"
 import { discussionActionEntries } from "./discussion-actions"
 import { LiveQuotaBorder } from "./live-quota-ring"
+import { DiscussionThumbnail } from "./discussion-thumbnail"
+import { discussionLabel, discussionSections, groupingIcon, type DiscussionGroupingView } from "../../lib/discussion-grouping"
 import { formatOwningApp } from "../../lib/discussion-owner"
 import { createDiscussionTitleResolver } from "../../lib/discussion-display-title"
 
@@ -89,6 +91,11 @@ interface Props {
   getAgent?: (id: string | null) => AgentInfo | undefined
   /** Show each row's Agent avatar, with the status as a corner badge. */
   showAvatars?: boolean
+  grouping?: DiscussionGroupingView | null
+  groupingEnabled?: boolean
+  groupingLoading?: boolean
+  groupingUnavailable?: boolean
+  onRetryGrouping?: () => void
   archiveMode?: boolean
   archiveQuery?: string
   archiveHasMore?: boolean
@@ -97,7 +104,7 @@ interface Props {
   onLoadMoreArchived?: () => void
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars = true, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars = true, grouping = null, groupingEnabled = false, groupingLoading = false, groupingUnavailable = false, onRetryGrouping, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -109,6 +116,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
     return { live, chat }
   }, [discussions])
   const titleOf = useMemo(() => createDiscussionTitleResolver(discussions), [discussions])
+  const sections = useMemo(() => discussionSections(chat, grouping), [chat, grouping])
 
   const renderLiveItem = useCallback((discussion: DiscussionInfo) => {
     const unread = isDiscussionUnread(discussion)
@@ -181,6 +189,8 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
   }, [sidebarSelectionId, activeDiscussionId, onSelect, onRotate, onRowAction, onFloat, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer])
 
   const renderChatItem = useCallback((discussion: DiscussionInfo) => {
+    const label = discussionLabel(discussion, grouping)
+    const visualCue = !!label && showAvatars
     const alive = discussion.status !== "archived" && discussion.status !== "stopped"
     const unread = alive && isDiscussionUnread(discussion)
     const agent = showAvatars ? getAgent?.(discussion.agentId) : undefined
@@ -209,6 +219,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
     return (
       <DiscussionRowTarget
         entries={entries}
+        title={titleOf(discussion) || "New discussion"}
         data-discussion-id={discussion.id}
         data-discussion-type={discussion.type}
         data-discussion-status={discussion.status}
@@ -220,14 +231,14 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         onClick={() => onSelect(discussion.id)}
         icon={
           <div className="relative flex h-full w-full items-center justify-center">
-            {agent ? (
+            {agent || visualCue ? (
               <>
-                <img
+                {visualCue ? <DiscussionThumbnail id={discussion.id} icon={groupingIcon(label?.icon)} /> : agent && <img
                   src={agent.avatarUrl}
                   alt={agent.name}
                   className="absolute inset-0 w-full h-full rounded-lg object-cover"
                   onError={(e) => { e.currentTarget.style.display = "none" }}
-                />
+                />}
                 <div className="absolute -bottom-1 right-0 origin-bottom-right scale-75">
                   <DiscussionStatusIcon discussion={discussion} activity={delegationActivity[discussion.id]} backgroundTasks={backgroundTasks[discussion.id]} awaitingAnswer={awaitingAnswer[discussion.id]} />
                 </div>
@@ -238,18 +249,18 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           </div>
         }
         className={[
-          agent || hasBackgroundWork(discussion, delegationActivity[discussion.id], backgroundTasks[discussion.id]) ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
+          visualCue || agent || hasBackgroundWork(discussion, delegationActivity[discussion.id], backgroundTasks[discussion.id]) ? "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible" : "",
           !alive ? "[&_[data-slot=item-list-title]]:opacity-50"
           : unread ? "[&_[data-slot=item-list-title]]:text-contrast [&_[data-slot=item-list-title]]:font-semibold"
           : "",
         ].filter(Boolean).join(" ")}
         title={
           <>
-            {titleOf(discussion) || "New discussion"}
+            {label?.label || titleOf(discussion) || "New discussion"}
             {discussion.confidential && <i className="ph-bold ph-lock-simple text-[10px] text-text-muted ml-1.5 opacity-60" />}
           </>
         }
-        subtitle={<span className="inline-flex items-baseline gap-1.5"><span>{formatRelative(discussion.lastActivity)}</span>{discussion.ownedBy && <span>· {formatOwningApp(discussion.ownedBy.app)}</span>}</span>}
+        subtitle={<span className="inline-flex items-baseline gap-1.5"><span>{formatRelative(discussion.lastActivity)}</span>{visualCue && agent && <span>· {agent.name}</span>}{discussion.ownedBy && <span>· {formatOwningApp(discussion.ownedBy.app)}</span>}</span>}
         trailing={
           discussion.status !== "archived" ? (
             <div className="flex items-center gap-1.5">
@@ -265,7 +276,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
       </DiscussionRowTarget>
     )
-  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer, titleOf])
+  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer, titleOf, grouping])
 
   const renderArchivedItem = useCallback((discussion: DiscussionInfo) => {
     const item = discussion as ArchiveDiscussionItem
@@ -400,7 +411,19 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             </button>
           </div>
         ) : (
-          <ItemList
+          groupingEnabled ? (
+            <ScrollArea className="h-full" data-discussion-grouping="true">
+              {groupingLoading && <p role="status" className="px-4 py-2 text-[11px] text-text-muted">Organizing discussions…</p>}
+              {groupingUnavailable && <div className="flex items-center justify-between gap-2 px-4 py-2 text-[11px] text-text-muted"><span>Project grouping is unavailable</span><button type="button" className="hover:text-contrast" onClick={onRetryGrouping}>Retry</button></div>}
+              {sections.map(section => (
+                <section key={section.name ?? "ungrouped"} aria-label={section.name ?? "Other discussions"} data-discussion-group={section.name ?? "ungrouped"}>
+                  {section.name && <h3 className="flex items-center gap-2 border-b border-overlay-6 px-4 pb-2 pt-4 text-xs font-medium text-text-muted"><i aria-hidden="true" className={`ph ph-${groupingIcon(section.icon)} text-sm`} /><span className="min-w-0 flex-1 truncate" title={section.name}>{section.name}</span><span className="text-[10px] font-normal">{section.items.length}</span></h3>}
+                  {section.items.map(discussion => <div key={discussion.id}>{renderChatItem(discussion)}</div>)}
+                </section>
+              ))}
+              {chat.length === 0 && <p className="p-4 text-center text-sm text-text-muted">No discussions yet</p>}
+            </ScrollArea>
+          ) : <ItemList
             items={chat}
             keyFn={(d) => d.id}
             emptyMessage="No discussions yet"

@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, typ
 import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type EventRowRenderer, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
@@ -19,6 +19,7 @@ import { WorktreeChips } from "../components/discussion/worktree-chips"
 import { ReactionPills, AddReactionButton, useReactionEmoji } from "../components/discussion/reactions"
 import { reactionMenuEntries } from "../components/discussion/reaction-actions"
 import { createNovaSpeechBackend } from "../lib/speech"
+import { useDiscussionGrouping } from "../hooks/use-discussion-grouping"
 import { useLocalSettings } from "../hooks/use-local-settings"
 import { friezeMarkerScope, friezeMarkerVisibility, normalizeHiddenFriezeMarkers } from "../lib/frieze-marker-settings"
 import { computeJobHref, createDiscussionJobsTransport, jobFrameConcernsDiscussion, stopDiscussionJob } from "../lib/discussion-jobs"
@@ -398,7 +399,8 @@ export function ChatView({
   const pushToTalk = usePushToTalkSettings()
   const agentFilter = settings.agentFilter
 
-  const filteredDiscussions = getSidebarDiscussionOrder(discussions, agentFilter)
+  const grouping = useDiscussionGrouping(settings.groupDiscussions && !archiveMode, discussions)
+  const filteredDiscussions = getSidebarDiscussionOrder(discussions, agentFilter, grouping.view)
   const filteredArchivedDiscussions = getSidebarDiscussionOrder(archivedDiscussions, agentFilter)
 
   useEffect(() => {
@@ -850,7 +852,7 @@ export function ChatView({
         return
       }
       const direction = action === "next-discussion" ? 1 : -1
-      const adjacent = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, direction, agentFilter)
+      const adjacent = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, direction, agentFilter, grouping.view)
       if (adjacent) handleSelectDiscussion(adjacent.id)
     }
 
@@ -873,7 +875,7 @@ export function ChatView({
       environment.document.removeEventListener("keydown", handleKeyDown)
       environment.document.removeEventListener(FLOATING_NOVA_NAVIGATION_EVENT, handleNavigationEvent)
     }
-  }, [activeDiscussionId, agentFilter, discussions, environment.document, floating, handleSelectDiscussion, openNewDiscussion])
+  }, [activeDiscussionId, agentFilter, discussions, grouping.view, environment.document, floating, handleSelectDiscussion, openNewDiscussion])
 
   const handleConfidentialToggle = useCallback(async (checked: boolean) => {
     if (!activeDiscussionId || confidentialityPending) return
@@ -1347,6 +1349,11 @@ export function ChatView({
           <i aria-hidden="true" className="ph-bold ph-dots-three-vertical text-base" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" sideOffset={4}>
+          {!archiveMode && (
+            <DropdownMenuCheckboxItem checked={!!settings.groupDiscussions} onCheckedChange={checked => setSettings({ groupDiscussions: checked === true })}>
+              Group by project
+            </DropdownMenuCheckboxItem>
+          )}
           <DropdownMenuItem onClick={handleToggleArchiveMode}>
             <i
               aria-hidden="true"
@@ -1875,6 +1882,11 @@ export function ChatView({
                 onStop={stopDiscussion}
                 getAgent={getAgent}
                 showAvatars={showDiscussionAvatars}
+                grouping={grouping.view}
+                groupingEnabled={!!settings.groupDiscussions}
+                groupingLoading={grouping.loading}
+                groupingUnavailable={grouping.unavailable}
+                onRetryGrouping={grouping.retry}
                 archiveMode={archiveMode}
                 archiveQuery={archiveQuery}
                 archiveHasMore={archiveHasMore}

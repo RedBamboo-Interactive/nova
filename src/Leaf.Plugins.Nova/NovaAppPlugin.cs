@@ -42,6 +42,12 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<ILogger<NovaAgentWelcomeProvider>>(),
                 sp.GetRequiredService<HeartbeatService>()));
         services.AddSingleton<RedComputeClient>();
+        services.AddSingleton(sp => new DiscussionGrouping(
+            sp.GetRequiredService<DiscussionStore>(),
+            sp.GetRequiredKeyedService<IRecordStreams>(PluginId),
+            sp.GetRequiredService<AgentDirectory>(),
+            sp.GetRequiredService<RedComputeClient>(),
+            sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
         services.AddSingleton<CodeWorktreeClient>();
         services.AddSingleton<IJournalPeers, JournalPeers>();
         services.AddSingleton(sp => new JournalReadModel(
@@ -271,6 +277,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
             }
         });
         DiscussionEndpoints.Map(group);
+        DiscussionGroupingEndpoints.Map(group);
         DiscussionRollbackEndpoints.Map(group);
         DiscussionJobEndpoints.Map(group);
         JournalEndpoints.Map(group);

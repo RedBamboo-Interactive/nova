@@ -23,6 +23,24 @@ plugin tree is involved. `rebuild.ps1` builds registered plugin backends and fro
 packages before staging the suite. To build Nova standalone, pass
 `-p:LeafSdkProject=<path-to-Leaf.Sdk.csproj>`.
 
+## Optional project grouping
+
+The discussion-list ellipsis offers **Group by project**, off by default and saved
+with the local display preferences. Nova groups the same open discussion rows and
+supplies concise display labels without changing their canonical titles, selected
+IDs, actions, read state or lifecycle. Archive browsing remains independent.
+
+`GET /api/apps/nova/discussion-groups` reads the caller's cached projection;
+`POST /api/apps/nova/discussion-groups/refresh` updates it through RedCompute's
+configured Fast tier and verified tool-free stateless inference. The client does
+this asynchronously on meaningful title/membership changes, not on activity or
+streaming events. Only authorized, non-confidential open chat metadata enters the
+bounded classifier. Projection snapshots live in Nova's per-user
+`discussion-groups` record stream. Reads recheck access, and results are rechecked
+before persistence. Model failures or quota notices keep the ordinary list usable
+and apply a two-minute server backoff. Existing artifacts provide lazy row
+thumbnails; missing or unsupported images retain a small icon.
+
 ## Delegation recovery and verification
 
 Authenticated next-message recovery preserves the current caller's app/user/Agent

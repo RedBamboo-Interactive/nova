@@ -1,10 +1,12 @@
 import type { DiscussionInfo } from "./types"
+import { discussionSections, type DiscussionGroupingView } from "./discussion-grouping.ts"
 import { resolveLiveSidebarSelection } from "./live-heartbeat.ts"
 
 /** The exact discussion rows rendered by the sidebar, in visual order. */
 export function getSidebarDiscussionOrder(
   discussions: DiscussionInfo[],
   agentFilter: string | null,
+  grouping: DiscussionGroupingView | null = null,
 ): DiscussionInfo[] {
   const scoped = agentFilter
     ? discussions.filter((discussion) => discussion.agentId === agentFilter)
@@ -16,7 +18,7 @@ export function getSidebarDiscussionOrder(
     if (discussion.type === "live") live.push(discussion)
     else if (discussion.type === "chat") chat.push(discussion)
   }
-  return [...live, ...chat]
+  return [...live, ...(grouping ? discussionSections(chat, grouping).flatMap(section => section.items) : chat)]
 }
 
 /** Resolve Alt+Up/Down against visible sidebar rows, including wraparound. */
@@ -25,11 +27,12 @@ export function getAdjacentSidebarDiscussion(
   activeDiscussionId: string | null,
   direction: -1 | 1,
   agentFilter: string | null,
+  grouping: DiscussionGroupingView | null = null,
 ): DiscussionInfo | null {
   const scoped = agentFilter
     ? discussions.filter((discussion) => discussion.agentId === agentFilter)
     : discussions
-  const ordered = getSidebarDiscussionOrder(scoped, null)
+  const ordered = getSidebarDiscussionOrder(scoped, null, grouping)
   if (ordered.length === 0) return null
 
   const selectedId = resolveLiveSidebarSelection(scoped, activeDiscussionId)
