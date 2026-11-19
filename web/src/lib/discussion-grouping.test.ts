@@ -51,3 +51,25 @@ test("a removed or newly confidential source invalidates the derived cache", () 
   assert.equal(groupingStillVisible(view, rows.filter(d => d.id !== "hud")), false)
   assert.equal(groupingStillVisible(view, rows.map(d => d.id === "hud" ? { ...d, confidential: true } : d)), false)
 })
+
+
+test("group visuals are explicit and independent of row activity order", () => {
+  const visuals: DiscussionGroupingView = { ...view, groups: [
+    { name: "Lands of Lore", icon: "mountains", thumbnailDiscussionId: "icons" },
+    { name: "Leaf", icon: "leaf", thumbnailDiscussionId: null },
+  ] }
+  const groups = discussionSections(rows, visuals)
+  assert.equal(groups[0].icon, "mountains")
+  assert.equal(groups[0].thumbnailDiscussionId, "icons")
+  assert.equal(groups[1].icon, "leaf")
+  assert.equal(groups[1].thumbnailDiscussionId, undefined)
+  assert.equal(discussionSections([...rows].reverse(), visuals)[0].icon, "mountains")
+  assert.equal(discussionSections(rows, view)[0].icon, "chats-circle")
+})
+
+test("filtered out or foreign group representatives cannot trigger thumbnail reads", () => {
+  const visuals: DiscussionGroupingView = { ...view, groups: [
+    { name: "Lands of Lore", icon: "mountains", thumbnailDiscussionId: "cloud" },
+  ] }
+  assert.equal(discussionSections(rows, visuals)[0].thumbnailDiscussionId, undefined)
+})

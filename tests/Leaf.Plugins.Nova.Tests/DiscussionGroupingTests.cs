@@ -14,7 +14,7 @@ public sealed class DiscussionGroupingTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-11-19T14:00:00Z");
     private static GroupingInput[] Inputs => [new("a", "Lands of Lore inventory", "agent", []), new("b", "Lands of Lore icons", "agent", [])];
-    private const string Output = """{"assignments":[{"discussionId":"a","group":"Lands of Lore","label":"Inventory","icon":"layout"},{"discussionId":"b","group":"Lands of Lore","label":"Icons","icon":"image"}]}""";
+    private const string Output = """{"assignments":[{"discussionId":"a","group":"Lands of Lore","label":"Inventory","icon":"layout"},{"discussionId":"b","group":"Lands of Lore","label":"Icons","icon":"image"}],"groups":[{"name":"Lands of Lore","icon":"mountains","thumbnailDiscussionId":"b"}]}""";
     private static DefaultHttpContext Human(string subject = "owner") => new() { User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", subject)], "Bearer")) };
 
     [Fact]
@@ -60,6 +60,48 @@ public sealed class DiscussionGroupingTests
         var result = DiscussionGroupingPolicy.Parse(Output.Replace("layout", "https://evil.test/img"), Inputs, null, Now);
         Assert.Equal("chats-circle", result.Assignments[0].Icon);
         Assert.Equal("Lands of Lore inventory", result.Assignments[0].SourceTitle);
+    }
+
+    [Fact]
+    public void Groups_have_their_own_stable_visual_identity()
+    {
+        var first = DiscussionGroupingPolicy.Parse(Output, Inputs, null, Now);
+        var visual = Assert.Single(first.Groups!);
+        Assert.Equal("mountains", visual.Icon);
+        Assert.Equal("b", visual.ThumbnailDiscussionId);
+        var refreshed = DiscussionGroupingPolicy.Parse(Output.Replace("mountains", "code")
+            .Replace("\"thumbnailDiscussionId\":\"b\"", "\"thumbnailDiscussionId\":\"a\""), Inputs, first, Now);
+        Assert.Equal(visual, Assert.Single(refreshed.Groups!));
+    }
+
+    [Fact]
+    public void Group_visuals_reject_unknown_duplicate_and_cross_group_members()
+    {
+        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(Output.Replace("\"thumbnailDiscussionId\":\"b\"", "\"thumbnailDiscussionId\":\"foreign\""), Inputs, null, Now));
+        var extra = Inputs.Append(new("c", "Unrelated", "agent", [])).ToArray();
+        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(Output.Replace("\"thumbnailDiscussionId\":\"b\"", "\"thumbnailDiscussionId\":\"c\""), extra, null, Now));
+        var parsed = JsonNode.Parse(Output)!;
+        var groups = parsed["groups"]!.AsArray();
+        groups.Add(groups[0]!.DeepClone());
+        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(parsed.ToJsonString(), Inputs, null, Now));
+        parsed["groups"] = new JsonArray(42);
+        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(parsed.ToJsonString(), Inputs, null, Now));
+        parsed["groups"] = new JsonArray();
+        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(parsed.ToJsonString(), Inputs, null, Now));
+        var fallback = DiscussionGroupingPolicy.Parse(Output.Replace("mountains", "invalid"), Inputs, null, Now);
+        Assert.Equal("chats-circle", Assert.Single(fallback.Groups!).Icon);
+    }
+
+    [Fact]
+    public async Task Legacy_snapshots_refresh_once_for_explicit_group_visuals()
+    {
+        var world = new World();
+        await world.Refresh();
+        world.Records.Rows[0].Data["projection"]!.AsObject().Remove("groups");
+        Assert.Null((await world.Service().ReadAsync("owner", Human(), default)).SourceFingerprint);
+        var result = await world.Service().RefreshAsync("owner", Human(), default);
+        Assert.Single(result.Groups!);
+        Assert.Equal(2, world.Gateway.Calls);
     }
 
     [Fact]

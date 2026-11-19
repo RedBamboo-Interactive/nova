@@ -9,6 +9,7 @@ export function DiscussionThumbnail({ id, icon }: { id: string; icon: string }) 
   useEffect(() => {
     const element = ref.current
     if (!element) return
+    setSource(null)
     let disposed = false
     let started = false
     let objectUrl: string | null = null

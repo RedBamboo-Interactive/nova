@@ -7,7 +7,9 @@ export interface DiscussionGroupLabel {
   label: string
   icon: string
 }
+export interface DiscussionGroupVisual { name: string; icon: string; thumbnailDiscussionId: string | null }
 export interface DiscussionGroupingView {
+  groups?: DiscussionGroupVisual[] | null
   fingerprint: string
   sourceFingerprint: string | null
   assignments: DiscussionGroupLabel[]
@@ -15,7 +17,7 @@ export interface DiscussionGroupingView {
   updatedAt: string | null
   retryAfterSeconds: number
 }
-export interface DiscussionSection { name: string | null; icon: string; items: DiscussionInfo[] }
+export interface DiscussionSection { name: string | null; icon: string; thumbnailDiscussionId?: string; items: DiscussionInfo[] }
 const icons = new Set(["chats-circle", "image", "paint-brush", "film-strip", "music-notes", "book-open", "code", "cloud", "hard-drives", "feather", "mountains", "leaf", "layout", "cube"])
 export const groupingIcon = (value: string | undefined) => value && icons.has(value) ? value : "chats-circle"
 
@@ -36,7 +38,8 @@ export function discussionSections(discussions: readonly DiscussionInfo[], view:
   for (const discussion of discussions) {
     const label = discussionLabel(discussion, view)
     if (!label?.group) { loose.push(discussion); continue }
-    const group = sections.get(label.group) ?? { name: label.group, icon: groupingIcon(label.icon), items: [] }
+    const visual = view?.groups?.find(g => g.name === label.group)
+    const group = sections.get(label.group) ?? { name: label.group, icon: groupingIcon(visual?.icon), items: [] }
     group.items.push(discussion)
     sections.set(label.group, group)
   }
@@ -46,7 +49,12 @@ export function discussionSections(discussions: readonly DiscussionInfo[], view:
     if (!section) continue
     sections.delete(name)
     if (section.items.length < 2) loose.push(...section.items)
-    else result.push(section)
+    else {
+      const representative = view?.groups?.find(g => g.name === name)?.thumbnailDiscussionId
+      // Never fetch an image from a member hidden by the active Agent filter.
+      if (representative && section.items.some(d => d.id === representative)) section.thumbnailDiscussionId = representative
+      result.push(section)
+    }
   }
   // Loose rows keep their original recent-activity order too.
   const looseIds = new Set(loose.map(d => d.id))
