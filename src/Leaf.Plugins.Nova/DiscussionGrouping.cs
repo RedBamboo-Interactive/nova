@@ -241,7 +241,7 @@ public sealed class DiscussionGrouping(
             timeout.CancelAfter(TimeSpan.FromSeconds(55));
             var result = await compute.GenerateAsync(new
             {
-                mode = "oneshot", qualityTier = "fast", maxTokens = 4096, requireToolFree = true,
+                mode = "oneshot", provider = agent.Provider, qualityTier = "fast", maxTokens = 4096, requireToolFree = true,
                 system, messages = new[] { new { role = "user", content = JsonSerializer.Serialize(new
                 { discussions = promptInputs, existingGroups = previous?.GroupOrder ?? [], existingGroupVisuals = previous?.Groups ?? [], allowedIcons = DiscussionGroupingPolicy.Icons }, Json) } },
             }, "Organize Nova discussion list", provenance, timeout.Token);

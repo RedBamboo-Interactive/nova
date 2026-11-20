@@ -143,6 +143,7 @@ public sealed class DiscussionGroupingTests
         Assert.Equal(1, world.Gateway.Calls);
         Assert.Single(world.Records.Rows);
         Assert.Contains("\"qualityTier\":\"fast\"", world.Gateway.Body);
+        Assert.Contains("\"provider\":\"codex-default\"", world.Gateway.Body);
         Assert.Contains("\"requireToolFree\":true", world.Gateway.Body);
         Assert.NotNull(world.Gateway.Provenance);
     }
@@ -244,7 +245,7 @@ public sealed class DiscussionGroupingTests
         public World()
         {
             Add("a", "Lands of Lore inventory"); Add("b", "Lands of Lore icons");
-            Entities.Items.Add(new(Guid.Parse(_agentId), "agent", "nova", "Nova", new JsonObject(), Now, Now, null));
+            Entities.Items.Add(new(Guid.Parse(_agentId), "agent", "nova", "Nova", new JsonObject { ["provider"] = "codex-default" }, Now, Now, null));
             Entities.Items.Add(new(Guid.NewGuid(), "plugin", "nova", "Nova", new JsonObject(), Now, Now, null));
             _service = Service();
         }
