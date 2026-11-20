@@ -6,6 +6,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type EventRowRenderer, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
+import { DiscussionThumbnailCacheContext, useDiscussionThumbnailCache } from "../components/discussion/discussion-thumbnail"
 import { isMobileClient } from "../components/floating-nova-support"
 import { DISCUSSION_SHORTCUTS, discussionActionEntries } from "../components/discussion/discussion-actions"
 import { ArtifactsSurface } from "../components/discussion/artifacts-surface"
@@ -400,6 +401,7 @@ export function ChatView({
   const agentFilter = settings.agentFilter
 
   const grouping = useDiscussionGrouping(settings.groupDiscussions && !archiveMode, discussions)
+  const thumbnails = useDiscussionThumbnailCache(discussions)
   const filteredDiscussions = getSidebarDiscussionOrder(discussions, agentFilter, grouping.view)
   const filteredArchivedDiscussions = getSidebarDiscussionOrder(archivedDiscussions, agentFilter)
 
@@ -1863,38 +1865,40 @@ export function ChatView({
         <>
           {sidebarHeader}
           <div className="flex-1 overflow-hidden">
-            <LiveQuotaContext.Provider value={liveQuota}>
-              <DiscussionSidebar
-                discussions={archiveMode ? filteredArchivedDiscussions : filteredDiscussions}
-                loadState={archiveMode ? archiveListLoadState : discussionListLoadState}
-                onRetryLoad={handleRetryDiscussionList}
-                delegationActivity={delegationActivity}
-                backgroundTasks={backgroundTasksByDiscussion}
-                awaitingAnswer={awaitingAnswerByDiscussion}
-                activeDiscussionId={synchronizedDiscussionId ?? activeDiscussionId}
-                onSelect={handleSelectDiscussion}
-                onArchive={handleCloseDiscussion}
-                onRotate={handleRotateDiscussion}
-                onDismiss={dismissDiscussion}
-                onRowAction={handleRowAction}
-                onUpdateTitle={handleUpdateTitle}
-                onFloat={floatingSurface?.supported && !floating ? handleFloatDiscussion : undefined}
-                onStop={stopDiscussion}
-                getAgent={getAgent}
-                showAvatars={showDiscussionAvatars}
-                grouping={grouping.view}
-                groupingEnabled={!!settings.groupDiscussions}
-                groupingLoading={grouping.loading}
-                groupingUnavailable={grouping.unavailable}
-                onRetryGrouping={grouping.retry}
-                archiveMode={archiveMode}
-                archiveQuery={archiveQuery}
-                archiveHasMore={archiveHasMore}
-                onArchiveQueryChange={setArchiveQuery}
-                onExitArchiveMode={handleExitArchiveMode}
-                onLoadMoreArchived={handleLoadMoreArchived}
-              />
-            </LiveQuotaContext.Provider>
+            <DiscussionThumbnailCacheContext.Provider value={thumbnails}>
+              <LiveQuotaContext.Provider value={liveQuota}>
+                <DiscussionSidebar
+                  discussions={archiveMode ? filteredArchivedDiscussions : filteredDiscussions}
+                  loadState={archiveMode ? archiveListLoadState : discussionListLoadState}
+                  onRetryLoad={handleRetryDiscussionList}
+                  delegationActivity={delegationActivity}
+                  backgroundTasks={backgroundTasksByDiscussion}
+                  awaitingAnswer={awaitingAnswerByDiscussion}
+                  activeDiscussionId={synchronizedDiscussionId ?? activeDiscussionId}
+                  onSelect={handleSelectDiscussion}
+                  onArchive={handleCloseDiscussion}
+                  onRotate={handleRotateDiscussion}
+                  onDismiss={dismissDiscussion}
+                  onRowAction={handleRowAction}
+                  onUpdateTitle={handleUpdateTitle}
+                  onFloat={floatingSurface?.supported && !floating ? handleFloatDiscussion : undefined}
+                  onStop={stopDiscussion}
+                  getAgent={getAgent}
+                  showAvatars={showDiscussionAvatars}
+                  grouping={grouping.view}
+                  groupingEnabled={!!settings.groupDiscussions}
+                  groupingLoading={grouping.loading}
+                  groupingUnavailable={grouping.unavailable}
+                  onRetryGrouping={grouping.retry}
+                  archiveMode={archiveMode}
+                  archiveQuery={archiveQuery}
+                  archiveHasMore={archiveHasMore}
+                  onArchiveQueryChange={setArchiveQuery}
+                  onExitArchiveMode={handleExitArchiveMode}
+                  onLoadMoreArchived={handleLoadMoreArchived}
+                />
+              </LiveQuotaContext.Provider>
+            </DiscussionThumbnailCacheContext.Provider>
           </div>
           {showAvatar && (
             <div
