@@ -63,6 +63,10 @@ function DiscussionStatusIcon({ discussion, activity, backgroundTasks, awaitingA
   )
 }
 
+function DiscussionUnreadDot() {
+  return <span aria-label="Unread" className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
+}
+
 function CollapsedGroupStatus({ discussions, delegationActivity, backgroundTasks, awaitingAnswer }: {
   discussions: readonly DiscussionInfo[]
   delegationActivity: DelegationActivitySnapshot
@@ -74,16 +78,12 @@ function CollapsedGroupStatus({ discussions, delegationActivity, backgroundTasks
   const unread = !waiting && open.some(isDiscussionUnread)
   const activity = waiting || (!unread && open.find(discussion => discussion.status === "thinking" ||
     hasBackgroundWork(discussion, delegationActivity[discussion.id], backgroundTasks[discussion.id])))
-  if (!activity && !unread) return null
+  if (unread) return <DiscussionUnreadDot />
+  if (!activity) return null
 
   return (
-    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-overlay-10 px-1.5 py-0.5 text-[10px] leading-none">
-      {unread ? <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-accent-teal" /> : activity && (
-        <span aria-hidden="true" className="inline-flex">
-          <DiscussionStatusIcon discussion={activity} activity={delegationActivity[activity.id]} backgroundTasks={backgroundTasks[activity.id]} awaitingAnswer={awaitingAnswer[activity.id]} />
-        </span>
-      )}
-      {waiting ? "Waiting for you" : unread ? "Unread" : "Activity"}
+    <span className="inline-flex shrink-0">
+      <DiscussionStatusIcon discussion={activity} activity={delegationActivity[activity.id]} backgroundTasks={backgroundTasks[activity.id]} awaitingAnswer={awaitingAnswer[activity.id]} />
     </span>
   )
 }
@@ -207,7 +207,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         trailing={
           <div className="flex items-center gap-1.5">
             {unread && (
-              <span aria-label="Unread" className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
+              <DiscussionUnreadDot />
             )}
             <RowActionsMenu label="Live actions" entries={entries} />
           </div>
@@ -294,7 +294,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           discussion.status !== "archived" ? (
             <div className="flex items-center gap-1.5">
               {unread && (
-                <span aria-label="Unread" className="w-2 h-2 rounded-full bg-accent-teal shrink-0" />
+                <DiscussionUnreadDot />
               )}
               <RowActionsMenu label="Conversation actions" entries={entries} />
             </div>
@@ -442,7 +442,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         ) : (
           groupingEnabled ? (
             <ScrollArea data-slot="item-list" className="h-full" data-discussion-grouping="true">
-              <div className="flex flex-col">
+              <div className={hasNamedSections ? "flex flex-col gap-2 p-2" : "flex flex-col"}>
                 {groupingLoading && !grouping?.assignments.length && <p role="status" className="px-4 py-2 text-[11px] text-text-muted">Organizing discussions…</p>}
                 {groupingUnavailable && <div className="flex items-center justify-between gap-2 px-4 py-2 text-[11px] text-text-muted"><span>Project grouping is unavailable</span><button type="button" className="hover:text-contrast" onClick={onRetryGrouping}>Retry</button></div>}
                 {sections.map((section, index) => {
@@ -451,14 +451,19 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                   const containsSelection = collapsed && section.items.some(discussion => discussion.id === activeDiscussionId)
                   const listId = `${groupListId}-${index}`
                   return (
-                    <section className="flex flex-col in-data-[cozy]:gap-0.5" key={JSON.stringify(section.name)} aria-label={heading ?? "Other discussions"} data-discussion-group={section.name ?? "ungrouped"}>
-                      {heading && <h3 className="border-b border-overlay-6">
+                    <section
+                      className={heading ? "flex flex-col overflow-hidden rounded-lg border border-overlay-10 [&>div>div:last-child_[data-slot=item-list-row]]:border-b-0" : "flex flex-col"}
+                      key={JSON.stringify(section.name)}
+                      aria-label={heading ?? "Other discussions"}
+                      data-discussion-group={section.name ?? "ungrouped"}
+                    >
+                      {heading && <h3 className={collapsed ? undefined : "border-b border-overlay-6"}>
                         <button
                           type="button"
                           aria-expanded={!collapsed}
                           aria-controls={listId}
                           onClick={() => onToggleGroup(section.name)}
-                          className={`flex w-full items-center gap-2 px-4 pb-2 pt-4 text-left text-xs font-medium hover:bg-overlay-6 hover:text-contrast focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-accent-teal ${containsSelection ? "text-contrast" : "text-text-muted"}`}
+                          className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-medium transition-colors hover:bg-overlay-6 hover:text-contrast focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-accent-teal ${containsSelection ? "text-contrast" : "text-text-muted"}`}
                         >
                           <i aria-hidden="true" className={`ph-bold ph-caret-${collapsed ? "right" : "down"} shrink-0 text-[10px]`} />
                           {section.name && <span className="relative h-6 w-6 shrink-0" data-group-visual={section.name}>
@@ -478,7 +483,11 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                           )}
                         </button>
                       </h3>}
-                      <div id={listId} className={collapsed ? "hidden" : "flex flex-col in-data-[cozy]:gap-0.5"} hidden={collapsed}>
+                      <div
+                        id={listId}
+                        className={collapsed ? "hidden" : "flex flex-col in-data-[cozy]:gap-0.5"}
+                        hidden={collapsed}
+                      >
                         {!collapsed && section.items.map(discussion => <div key={discussion.id}>{renderChatItem(discussion)}</div>)}
                       </div>
                     </section>
