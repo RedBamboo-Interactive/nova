@@ -39,7 +39,7 @@ public static class DiscussionGroupingPolicy
             Math.Clamp(d.MessageCount, 0, OpeningRevisionLimit))).ToArray();
 
     public static string Fingerprint(GroupingInput[] inputs)
-        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("group-labels-v6:" + JsonSerializer.Serialize(inputs, Json))));
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("group-labels-v7:" + JsonSerializer.Serialize(inputs, Json))));
 
     public static bool StillReadable(DiscussionGroupingSnapshot snapshot, GroupingInput[] current)
     {

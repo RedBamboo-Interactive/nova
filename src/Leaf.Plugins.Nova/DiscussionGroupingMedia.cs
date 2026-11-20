@@ -41,9 +41,10 @@ internal sealed class DiscussionGroupingMedia(RedComputeClient compute, IAssets?
                     .Select(item => new Candidate(discussion, Text(item, "target") ?? "", Text(item, "title"),
                         Text(item, "origin") == "assistant-image"))
                     .Where(item => AssetPath.IsMatch(item.Target) || RecordId(item.Target, outputPrefix) > 0)
-                    .DistinctBy(item => item.Target)
-                    .OrderByDescending(item => item.IsImageOutput).Take(ImageLimit).ToArray();
-                if (candidates.Length > 0) pools.Add(candidates);
+                    .DistinctBy(item => item.Target).ToArray();
+                var authoredImages = candidates.Where(item => item.IsImageOutput).Take(ImageLimit).ToArray();
+                if (candidates.Length > 0)
+                    pools.Add(authoredImages.Length > 0 ? authoredImages : candidates.Take(ImageLimit).ToArray());
             }
             catch (Exception ex) when ((ex is HttpRequestException or JsonException or InvalidOperationException
                 or OperationCanceledException) && !ct.IsCancellationRequested)
