@@ -109,8 +109,8 @@ public static class DiscussionGroupingPolicy
         if (string.IsNullOrEmpty(group) || !label.StartsWith(group, StringComparison.OrdinalIgnoreCase)
             || label.Length == group.Length) return label;
         var next = label[group.Length];
-        if (!char.IsWhiteSpace(next) && !":-|/ï¿½ï¿½ï¿½".Contains(next)) return label;
-        var shortened = label[group.Length..].Trim().TrimStart(':', '-', '|', '/', 'ï¿½', 'ï¿½', 'ï¿½').Trim();
+        if (!char.IsWhiteSpace(next) && !":-|/·–—".Contains(next)) return label;
+        var shortened = label[group.Length..].Trim().TrimStart(':', '-', '|', '/', '·', '–', '—').Trim();
         return shortened.Length > 0 ? shortened : label;
     }
 
