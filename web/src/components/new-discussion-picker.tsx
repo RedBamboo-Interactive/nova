@@ -23,7 +23,7 @@ import {
   RunOnChoice,
   useUiEnvironment,
 } from "@redbamboo/ui"
-import { AI_SESSION, RUN_ON_ROW, runOnAvailable } from "./run-on"
+import { AI_SESSION, RUN_ON_COMPACT, runOnCompactAvailable } from "./run-on"
 
 interface QualityTierInfo { slug: string; label: string; color?: string; icon?: string; isDefault: boolean }
 interface ProviderInfo {
@@ -284,16 +284,7 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
             </button>
           ))}
         </div>
-        {/* Where its sessions run, on its own row so the footer keeps its room. Mounted per opening, so the
-            node list is read fresh each time. */}
-        <div className="-mx-5 -mb-5 border-t">
-        {runOnAvailable && open && (
-          <div data-slot="new-discussion-run-on" className="border-b px-3 py-1.5">
-            <RunOnChoice value={runOn} onChange={setRunOn} capability={AI_SESSION} disabled={starting}
-              className={RUN_ON_ROW} />
-          </div>
-        )}
-        <div className="flex items-center justify-between bg-muted-a50 px-3 py-3">
+        <div className="-mx-5 -mb-5 flex items-center justify-between border-t bg-muted-a50 px-3 py-3">
           <div className="flex items-center gap-2">
             {providers.length > 0 && (
               <DropdownMenu>
@@ -345,6 +336,12 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>}
+            {/* Where its sessions run: the node's icon, its name in the tooltip, the list on click. Mounted per
+                opening, so the node list is read fresh each time. */}
+            {runOnCompactAvailable && open && (
+              <RunOnChoice compact value={runOn} onChange={setRunOn} capability={AI_SESSION} disabled={starting}
+                className={RUN_ON_COMPACT} />
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -361,7 +358,6 @@ export function NewDiscussionPicker({ open, onClose, onSelect }: Props) {
               Go
             </button>
           </div>
-        </div>
         </div>
       </DialogContent>
     </Dialog>
