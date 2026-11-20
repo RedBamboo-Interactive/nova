@@ -82,7 +82,7 @@ function CollapsedGroupStatus({ discussions, delegationActivity, backgroundTasks
   if (!activity) return null
 
   return (
-    <span className="inline-flex shrink-0">
+    <span className="inline-flex shrink-0 scale-75">
       <DiscussionStatusIcon discussion={activity} activity={delegationActivity[activity.id]} backgroundTasks={backgroundTasks[activity.id]} awaitingAnswer={awaitingAnswer[activity.id]} />
     </span>
   )
@@ -473,13 +473,15 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                           </span>}
                           <span className="min-w-0 flex-1 truncate" title={heading}>{heading}</span>
                           {collapsed && (
-                            <>
-                              <span className="shrink-0 tabular-nums">
+                            <span className="inline-flex shrink-0 items-center gap-2">
+                              <span data-slot="discussion-group-count" className="text-right tabular-nums">
                                 {section.items.length}
                                 <span className="sr-only"> {section.items.length === 1 ? "discussion" : "discussions"}</span>
                               </span>
-                              <CollapsedGroupStatus discussions={section.items} delegationActivity={delegationActivity} backgroundTasks={backgroundTasks} awaitingAnswer={awaitingAnswer} />
-                            </>
+                              <span data-slot="discussion-group-status" className="inline-flex size-4 shrink-0 items-center justify-center">
+                                <CollapsedGroupStatus discussions={section.items} delegationActivity={delegationActivity} backgroundTasks={backgroundTasks} awaitingAnswer={awaitingAnswer} />
+                              </span>
+                            </span>
                           )}
                         </button>
                       </h3>}
