@@ -146,6 +146,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
   const sections = useMemo(() => discussionSections(chat, grouping), [chat, grouping])
   const hasNamedSections = sections.some(section => section.name !== null)
   const groupListId = useId()
+  const liveDividerAfter = chat.length > 0 ? live.at(-1)?.id : undefined
 
   const renderLiveItem = useCallback((discussion: DiscussionInfo) => {
     const unread = isDiscussionUnread(discussion)
@@ -195,6 +196,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         }
         className={[
           "[&_[data-slot=item-list-icon]]:relative [&_[data-slot=item-list-icon]]:overflow-visible",
+          discussion.id === liveDividerAfter ? "border-b-0" : "",
           unread ? "[&_[data-slot=item-list-title]]:font-semibold" : "",
         ].filter(Boolean).join(" ")}
         title={
@@ -215,7 +217,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
       </DiscussionRowTarget>
     )
-  }, [sidebarSelectionId, activeDiscussionId, onSelect, onRotate, onRowAction, onFloat, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer])
+  }, [sidebarSelectionId, activeDiscussionId, liveDividerAfter, onSelect, onRotate, onRowAction, onFloat, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer])
 
   const renderChatItem = useCallback((discussion: DiscussionInfo) => {
     const label = discussionLabel(discussion, grouping)
@@ -417,8 +419,8 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             keyFn={(d) => d.id}
             renderItem={renderLiveItem}
           />
-          {chat.length > 0 && (
-            <div className="mx-3 border-b border-overlay-6 in-[html:not([data-cozy])]:hidden" />
+          {liveDividerAfter && (
+            <div className="border-b border-overlay-6 mx-3" />
           )}
         </div>
       )}
