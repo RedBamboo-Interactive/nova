@@ -329,6 +329,55 @@ public sealed class DiscussionGroupingTests
     }
 
     [Fact]
+    public async Task An_added_discussion_and_a_renamed_member_keep_the_untouched_group_visible()
+    {
+        var world = new World();
+        await world.Refresh();
+        world.Add("c", "A different project");
+        var added = await world.Read();
+        Assert.Equal(2, added.Assignments.Length);
+        Assert.NotEqual(added.Fingerprint, added.SourceFingerprint);
+
+        var renamed = world.Entities.Items.Single(e => e.Slug == DiscussionStore.Slug("b"));
+        renamed.Data["title"] = "A changed subject";
+        var pending = await world.Read();
+        Assert.Equal("a", Assert.Single(pending.Assignments).DiscussionId);
+        Assert.Equal("Lands of Lore", Assert.Single(pending.GroupOrder));
+        Assert.Null(Assert.Single(pending.Groups!).ThumbnailDiscussionId);
+        Assert.NotEqual(pending.Fingerprint, pending.SourceFingerprint);
+
+        world.Gateway.Output = "Incomplete JSON";
+        var failed = await world.Refresh();
+        Assert.Equal(pending.Assignments, failed.Assignments);
+        Assert.Equal(pending.GroupOrder, failed.GroupOrder);
+        Assert.True(failed.RetryAfterSeconds > 0);
+    }
+
+    [Fact]
+    public async Task Explicit_corrections_persist_independently_and_are_scoped_to_eligible_owner_rows()
+    {
+        var world = new World();
+        await world.Refresh();
+        var owner = Human();
+        var service = world.Service();
+        Assert.True(await service.CorrectAsync("owner", owner, [new("a", "RedLeaf"), new("b", null)], default));
+        Assert.False(await service.CorrectAsync("other", Human("other"), [new("a", "Wrong Owner")], default));
+        var restored = await world.Service().ReadAsync("owner", owner, default);
+        Assert.Equal("RedLeaf", restored.Assignments.Single(a => a.DiscussionId == "a").Group);
+        Assert.Null(restored.Assignments.Single(a => a.DiscussionId == "b").Group);
+        Assert.Equal("RedLeaf", Assert.Single(restored.GroupOrder));
+        Assert.Null(Assert.Single(restored.Groups!).ThumbnailDiscussionId);
+        Assert.Equal(restored.Fingerprint, restored.SourceFingerprint);
+        Assert.Equal(1, world.Gateway.Calls);
+
+        var first = world.Entities.Items.Single(e => e.Slug == DiscussionStore.Slug("a"));
+        first.Data["confidential"] = true;
+        var after = await world.Read();
+        Assert.DoesNotContain(after.Assignments, a => a.DiscussionId == "a");
+        Assert.DoesNotContain("RedLeaf", after.GroupOrder);
+    }
+
+    [Fact]
     public async Task Newly_confidential_member_invalidates_saved_group_names_on_read()
     {
         var world = new World();

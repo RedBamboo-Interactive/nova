@@ -70,6 +70,6 @@ export function groupingStillVisible(view: DiscussionGroupingView, discussions: 
   return view.assignments.every(assignment => {
     const discussion = byId.get(assignment.discussionId)
     if (!discussion) return isArchivePending(assignment.discussionId)
-    return !discussion.confidential && discussion.type === "chat" && discussion.title === assignment.sourceTitle
+    return !discussion.confidential && discussion.type === "chat"
   })
 }

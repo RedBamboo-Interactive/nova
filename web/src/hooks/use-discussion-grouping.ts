@@ -21,7 +21,7 @@ export function useDiscussionGrouping(enabled: boolean, discussions: DiscussionI
     if (!enabled) { setLoading(false); setUnavailable(false); return }
     const accept = (result: DiscussionGroupingView) => {
       if (cancelled || generation.current !== current) return false
-      setView(groupingStillVisible(result, latestDiscussions.current, isDiscussionArchivePending) ? result : null)
+      if (groupingStillVisible(result, latestDiscussions.current, isDiscussionArchivePending)) setView(result)
       return true
     }
     let refreshTimer: ReturnType<typeof setTimeout> | undefined

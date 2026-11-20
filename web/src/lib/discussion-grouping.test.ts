@@ -63,6 +63,15 @@ test("closing a row leaves the other sections visible through the pending archiv
   assert.equal(groupingStillVisible(view, rows, locallyClosing), true)
   assert.equal(groupingStillVisible(view, closing.map(row => row.id === "hud" ? { ...row, confidential: true } : row), locallyClosing), false)
 })
+test("an added or renamed row stays loose while the other categories stay visible", () => {
+  const latest = [...rows.map(row => row.id === "hud" ? { ...row, title: "Renamed subject" } : row), make("new")]
+  assert.equal(groupingStillVisible(view, latest), true)
+  const sections = discussionSections(latest, view)
+  assert.deepEqual(sections.map(section => section.name), ["Lands of Lore", "Leaf", null])
+  assert.deepEqual(sections[0].items.map(row => row.id), ["icons"])
+  assert(sections[2].items.some(row => row.id === "hud"))
+  assert(sections[2].items.some(row => row.id === "new"))
+})
 test("a removed or newly confidential source invalidates the derived cache", () => {
   assert.equal(groupingStillVisible(view, rows), true)
   assert.equal(groupingStillVisible(view, rows.filter(d => d.id !== "hud")), false)

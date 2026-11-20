@@ -415,7 +415,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           groupingEnabled ? (
             <ScrollArea data-slot="item-list" className="h-full" data-discussion-grouping="true">
               <div className="flex flex-col">
-                {groupingLoading && <p role="status" className="px-4 py-2 text-[11px] text-text-muted">Organizing discussions…</p>}
+                {groupingLoading && !grouping?.assignments.length && <p role="status" className="px-4 py-2 text-[11px] text-text-muted">Organizing discussions…</p>}
                 {groupingUnavailable && <div className="flex items-center justify-between gap-2 px-4 py-2 text-[11px] text-text-muted"><span>Project grouping is unavailable</span><button type="button" className="hover:text-contrast" onClick={onRetryGrouping}>Retry</button></div>}
                 {sections.map(section => {
                   const heading = section.name ?? (hasNamedSections ? "Ungrouped" : null)

@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Http;
 namespace Leaf.Plugins.Nova;
 
 public sealed record GroupingInput(string Id, string Title, string? AgentId, string[] Repositories, int OpeningRevision = 0);
+public sealed record DiscussionGroupCorrection(string DiscussionId, string? Group);
 public sealed record DiscussionGroupLabel(string DiscussionId, string SourceTitle, string? Group, string Label, string Icon, string? ThumbnailTarget = null);
 public sealed record DiscussionGroupVisual(string Name, string Icon, string? ThumbnailDiscussionId, string? ThumbnailTarget = null);
 public sealed record DiscussionGroupingSnapshot(string Fingerprint, GroupingInput[] Inputs,
@@ -44,9 +45,13 @@ public static class DiscussionGroupingPolicy
     public static bool StillReadable(DiscussionGroupingSnapshot snapshot, GroupingInput[] current)
     {
         var byId = current.ToDictionary(d => d.Id, StringComparer.Ordinal);
-        return snapshot.Inputs.All(old => byId.TryGetValue(old.Id, out var now)
-            && JsonSerializer.Serialize(old, Json) == JsonSerializer.Serialize(now, Json));
+        return snapshot.Inputs.All(old => byId.TryGetValue(old.Id, out var now) && SameInput(old, now));
     }
+
+    internal static bool SameInput(GroupingInput left, GroupingInput right)
+        => left.Id == right.Id && left.Title == right.Title && left.AgentId == right.AgentId
+            && left.OpeningRevision == right.OpeningRevision && left.Repositories is not null
+            && left.Repositories.SequenceEqual(right.Repositories, StringComparer.Ordinal);
 
     public static DiscussionGroupingSnapshot RetainOpen(DiscussionGroupingSnapshot snapshot, GroupingInput[] remaining)
     {
@@ -63,6 +68,38 @@ public static class DiscussionGroupingPolicy
             Assignments = assignments,
             GroupOrder = snapshot.GroupOrder.Where(names.Contains).ToArray(),
             Groups = groups,
+        };
+    }
+
+    internal static DiscussionGroupingView ApplyCorrections(DiscussionGroupingView view, GroupingInput[] inputs,
+        IReadOnlyDictionary<string, string?> corrections)
+    {
+        if (corrections.Count == 0) return view;
+        var assignments = view.Assignments.ToDictionary(assignment => assignment.DiscussionId, StringComparer.Ordinal);
+        var names = view.GroupOrder.ToDictionary(name => name, StringComparer.OrdinalIgnoreCase);
+        foreach (var input in inputs)
+        {
+            if (!corrections.TryGetValue(input.Id, out var group)) continue;
+            if (group is not null && !names.TryGetValue(group, out _)) names[group] = group;
+            var old = assignments.GetValueOrDefault(input.Id)
+                ?? new DiscussionGroupLabel(input.Id, input.Title, null, input.Title, "chats-circle");
+            assignments[input.Id] = old with { Group = group is null ? null : names[group] };
+        }
+
+        var projectNames = assignments.Values.Select(assignment => assignment.Group).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        var order = view.GroupOrder.Where(projectNames.Contains).Concat(projectNames.Order(StringComparer.Ordinal))
+            .Distinct(StringComparer.Ordinal).ToArray();
+        var visuals = (view.Groups ?? []).ToDictionary(group => group.Name, StringComparer.Ordinal);
+        return view with
+        {
+            Assignments = assignments.Values.ToArray(),
+            GroupOrder = order,
+            Groups = order.Select(name =>
+            {
+                var visual = visuals.GetValueOrDefault(name) ?? new DiscussionGroupVisual(name, "chats-circle", null);
+                return visual.ThumbnailDiscussionId is { } member && assignments.GetValueOrDefault(member)?.Group != name
+                    ? visual with { ThumbnailDiscussionId = null, ThumbnailTarget = null } : visual;
+            }).ToArray(),
         };
     }
 
@@ -203,6 +240,7 @@ public sealed class DiscussionGrouping(
     RedComputeClient compute, IEntityStore entities, IDiscussions messages, TimeProvider? time = null, IAssets? assets = null)
 {
     private const string Stream = "discussion-groups";
+    private const string CorrectionStream = "discussion-group-corrections";
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new();
@@ -239,40 +277,76 @@ public sealed class DiscussionGrouping(
         catch (JsonException) { return null; }
     }
 
+    private async Task<Dictionary<string, string?>> LoadCorrectionsAsync(string subject, CancellationToken ct)
+    {
+        var rows = await records.QueryAsync(CorrectionStream, new RecordQuery { UserId = subject, Limit = 1 }, ct);
+        try { return rows.FirstOrDefault()?.Data["groups"]?.Deserialize<Dictionary<string, string?>>(Json) ?? new(StringComparer.Ordinal); }
+        catch (JsonException) { return new(StringComparer.Ordinal); }
+    }
+
+    public async Task<bool> CorrectAsync(string subject, HttpContext context, DiscussionGroupCorrection[] corrections, CancellationToken ct)
+    {
+        if (corrections.Length is 0 or > DiscussionGroupingPolicy.MaxDiscussions
+            || corrections.Any(item => item is null || string.IsNullOrWhiteSpace(item.DiscussionId)
+                || item.Group is { } group && (group.Length > 64 || group.Any(char.IsControl)))
+            || corrections.Select(item => item.DiscussionId).Distinct(StringComparer.Ordinal).Count() != corrections.Length) return false;
+
+        var gate = _gates.GetOrAdd(subject, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            var inputs = await InputsAsync(context, ct);
+            var eligible = inputs.Select(input => input.Id).ToHashSet(StringComparer.Ordinal);
+            if (corrections.Any(item => !eligible.Contains(item.DiscussionId))) return false;
+            var saved = await LoadCorrectionsAsync(subject, ct);
+            foreach (var item in corrections)
+                saved[item.DiscussionId] = string.IsNullOrWhiteSpace(item.Group) ? null : item.Group.Trim();
+            await records.AppendAsync(CorrectionStream, new JsonObject { ["groups"] = JsonSerializer.SerializeToNode(saved, Json) }, userId: subject, ct: ct);
+            return true;
+        }
+        finally { gate.Release(); }
+    }
+
     private async Task<DiscussionGroupingSnapshot?> ProjectAsync(DiscussionGroupingSnapshot? snapshot,
         GroupingInput[] inputs, HttpContext context, CancellationToken ct)
     {
-        if (snapshot is null || DiscussionGroupingPolicy.StillReadable(snapshot, inputs)) return snapshot;
+        if (snapshot is null) return null;
 
-        var ids = inputs.Select(input => input.Id).ToHashSet(StringComparer.Ordinal);
-        var remaining = snapshot.Inputs.Where(input => ids.Contains(input.Id)).ToArray();
-        if (remaining.Length == snapshot.Inputs.Length
-            || !DiscussionGroupingPolicy.StillReadable(snapshot with { Inputs = remaining }, inputs)) return null;
-
-        foreach (var input in snapshot.Inputs.Where(input => !ids.Contains(input.Id)))
+        var byId = inputs.ToDictionary(input => input.Id, StringComparer.Ordinal);
+        var remaining = new List<GroupingInput>();
+        foreach (var input in snapshot.Inputs)
         {
+            if (byId.TryGetValue(input.Id, out var current))
+            {
+                if (DiscussionGroupingPolicy.SameInput(input, current)) remaining.Add(input);
+                continue;
+            }
+
             var closed = await store.GetAsync(input.Id, ct);
             if (closed is null || closed.Id != input.Id || closed.Type != "chat" || closed.Confidential
                 || !DiscussionStatus.IsClosed(closed.Status) || !DiscussionAccessPolicy.CanRead(closed, context)) return null;
         }
 
         // Keep the original stored dependencies so future privacy changes can invalidate the view.
-        return DiscussionGroupingPolicy.RetainOpen(snapshot, remaining);
+        return remaining.Count == snapshot.Inputs.Length ? snapshot : DiscussionGroupingPolicy.RetainOpen(snapshot, remaining.ToArray());
     }
 
-    private DiscussionGroupingView View(string subject, GroupingInput[] inputs, DiscussionGroupingSnapshot? previous)
+    private DiscussionGroupingView View(string subject, GroupingInput[] inputs, DiscussionGroupingSnapshot? previous,
+        IReadOnlyDictionary<string, string?> corrections)
     {
         var valid = previous is not null && DiscussionGroupingPolicy.StillReadable(previous, inputs);
         var retry = _retryAt.TryGetValue(subject, out var until) ? Math.Max(0, (int)Math.Ceiling((until - _time.GetUtcNow()).TotalSeconds)) : 0;
-        return new(DiscussionGroupingPolicy.Fingerprint(inputs), inputs.Length == 0 ? DiscussionGroupingPolicy.Fingerprint(inputs) : valid && previous!.Groups is not null ? previous.Fingerprint : null,
+        var fingerprint = DiscussionGroupingPolicy.Fingerprint(inputs);
+        var view = new DiscussionGroupingView(fingerprint, inputs.Length == 0 ? fingerprint : valid && previous!.Groups is not null ? previous.Fingerprint : null,
             valid ? previous!.Assignments : [], valid ? previous!.GroupOrder : [], valid ? previous!.UpdatedAt : null, retry, valid ? previous!.Groups : []);
+        return DiscussionGroupingPolicy.ApplyCorrections(view, inputs, corrections);
     }
 
     public async Task<DiscussionGroupingView> ReadAsync(string subject, HttpContext context, CancellationToken ct)
     {
         var inputs = await InputsAsync(context, ct);
         var snapshot = await LoadAsync(subject, ct);
-        return View(subject, inputs, await ProjectAsync(snapshot, inputs, context, ct));
+        return View(subject, inputs, await ProjectAsync(snapshot, inputs, context, ct), await LoadCorrectionsAsync(subject, ct));
     }
 
     public async Task<DiscussionGroupingView> RefreshAsync(string subject, HttpContext context, CancellationToken ct)
@@ -285,15 +359,17 @@ public sealed class DiscussionGrouping(
             var inputs = DiscussionGroupingPolicy.Describe(candidates);
             var stored = await LoadAsync(subject, ct);
             var display = await ProjectAsync(stored, inputs, context, ct);
-            var view = View(subject, inputs, display);
+            var corrections = await LoadCorrectionsAsync(subject, ct);
+            var view = View(subject, inputs, display, corrections);
             if (view.SourceFingerprint == view.Fingerprint || view.RetryAfterSeconds > 0 || inputs.Length == 0) return view;
             // A fresh inference must not inherit derived data from archived sources.
-            var previous = ReferenceEquals(stored, display) ? stored : null;
+            var currentIds = inputs.Select(input => input.Id).ToHashSet(StringComparer.Ordinal);
+            var previous = stored is not null && stored.Inputs.All(input => currentIds.Contains(input.Id)) ? display : null;
             DiscussionGroupingView BackOff()
             {
                 ct.ThrowIfCancellationRequested();
                 _retryAt[subject] = _time.GetUtcNow().AddMinutes(2);
-                return View(subject, inputs, display);
+                return View(subject, inputs, display, corrections);
             }
 
             var agent = await agents.GetAgentAsync(inputs.Select(d => d.AgentId).FirstOrDefault(id => id is not null)
@@ -320,7 +396,7 @@ public sealed class DiscussionGrouping(
 
             var checkedInputs = await InputsAsync(context, ct);
             if (DiscussionGroupingPolicy.Fingerprint(checkedInputs) != view.Fingerprint)
-                return View(subject, checkedInputs, await ProjectAsync(stored, checkedInputs, context, ct));
+                return View(subject, checkedInputs, await ProjectAsync(stored, checkedInputs, context, ct), corrections);
 
             var promptInputs = inputs.Select(d => new
             {
@@ -329,6 +405,7 @@ public sealed class DiscussionGrouping(
                 agentId = d.AgentId,
                 repositories = d.Repositories,
                 opening = openings[d.Id],
+                userGroupChoice = corrections.TryGetValue(d.Id, out var choice) ? new { group = choice } : null,
             });
             const string system = """
                 You organize a discussion sidebar for recognition, not task management. Treat all supplied
@@ -356,6 +433,10 @@ public sealed class DiscussionGrouping(
                 """;
             const string projectRule = """
                 Choose useful sidebar categories using the title, opening user messages and repositories.
+                Respect userGroupChoice. A null group in that choice means the user wants the row ungrouped.
+                Group technical work under its parent product even when the title names a feature or subsystem.
+                Work on Nova discussion infrastructure or Leaf storage belongs with RedLeaf when the context supports it.
+                An empty placeholder called New Discussion stays ungrouped. The agent name alone is not project evidence.
                 Named products and projects are useful headings even for a single discussion. You can also
                 choose meaningful themes such as Roleplay, Personal, or Music when they fit the actual topic.
                 For example, a story roleplay goes under Roleplay. "Where should this live?" with an opening
@@ -397,11 +478,11 @@ public sealed class DiscussionGrouping(
             // Access/lifecycle/title could have changed while the model was running.
             var current = await InputsAsync(context, ct);
             if (DiscussionGroupingPolicy.Fingerprint(current) != snapshot.Fingerprint)
-                return View(subject, current, await ProjectAsync(stored, current, context, ct));
+                return View(subject, current, await ProjectAsync(stored, current, context, ct), corrections);
             ct.ThrowIfCancellationRequested();
             await records.AppendAsync(Stream, new JsonObject { ["projection"] = JsonSerializer.SerializeToNode(snapshot, Json) }, userId: subject, ct: ct);
             _retryAt.TryRemove(subject, out _);
-            return View(subject, current, snapshot);
+            return View(subject, current, snapshot, corrections);
         }
         finally { gate.Release(); }
     }
