@@ -200,6 +200,13 @@ public sealed class DiscussionGroupingTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             world.Service().RefreshAsync("owner", Human(), cancelled.Token));
         Assert.Empty(world.Records.Rows);
+        Assert.Equal(0, (await world.Read()).RetryAfterSeconds);
+
+        world.Gateway.BeforeReturn = null;
+        var replacement = await world.Refresh();
+        Assert.Equal(replacement.Fingerprint, replacement.SourceFingerprint);
+        Assert.Equal(2, world.Gateway.Calls);
+        Assert.Single(world.Records.Rows);
     }
 
     [Fact]

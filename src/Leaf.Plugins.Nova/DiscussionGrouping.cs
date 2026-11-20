@@ -205,11 +205,16 @@ public sealed class DiscussionGrouping(
             var view = View(subject, inputs, previous);
             if (view.SourceFingerprint == view.Fingerprint || view.RetryAfterSeconds > 0 || inputs.Length == 0) return view;
             if (previous is not null && !DiscussionGroupingPolicy.StillReadable(previous, inputs)) previous = null;
-            // Set before submitting: malformed results, cancellation and uncertain failures cannot spin.
-            _retryAt[subject] = _time.GetUtcNow().AddMinutes(2);
+            DiscussionGroupingView BackOff()
+            {
+                ct.ThrowIfCancellationRequested();
+                _retryAt[subject] = _time.GetUtcNow().AddMinutes(2);
+                return View(subject, inputs, previous);
+            }
+
             var agent = await agents.GetAgentAsync(inputs.Select(d => d.AgentId).FirstOrDefault(id => id is not null)
                 ?? agents.NovaAgentId ?? "", ct);
-            if (agent is null) return View(subject, inputs, previous);
+            if (agent is null) return BackOff();
             // Cache scope may canonicalize local-user to the installation owner. Compute
             // authority must retain the actual caller's user/system beneficiary boundary.
             var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(
@@ -249,10 +254,10 @@ public sealed class DiscussionGrouping(
                 { discussions = promptInputs, existingGroups = previous?.GroupOrder ?? [], existingGroupVisuals = previous?.Groups ?? [], allowedIcons = DiscussionGroupingPolicy.Icons }, Json) } },
             }, "Organize Nova discussion list", provenance, timeout.Token);
             ct.ThrowIfCancellationRequested();
-            if (!result.Success || string.IsNullOrWhiteSpace(result.Text)) return View(subject, inputs, previous);
+            if (!result.Success || string.IsNullOrWhiteSpace(result.Text)) return BackOff();
             DiscussionGroupingSnapshot snapshot;
             try { snapshot = DiscussionGroupingPolicy.Parse(result.Text, inputs, previous, _time.GetUtcNow()); }
-            catch (JsonException) { return View(subject, inputs, previous); }
+            catch (JsonException) { return BackOff(); }
             // Access/lifecycle/title could have changed while the model was running.
             var current = await InputsAsync(context, ct);
             if (DiscussionGroupingPolicy.Fingerprint(current) != snapshot.Fingerprint) return View(subject, current, previous);
