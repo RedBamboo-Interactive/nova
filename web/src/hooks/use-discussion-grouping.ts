@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { api } from "../lib/api"
 import { groupingInputKey, groupingStillVisible, type DiscussionGroupingView } from "../lib/discussion-grouping"
+import { isDiscussionArchivePending } from "../lib/discussion-list-store"
 import type { DiscussionInfo } from "../lib/types"
 
 /** Optional work behind the list. A status/read/activity event never reruns the classifier. */
@@ -20,7 +21,7 @@ export function useDiscussionGrouping(enabled: boolean, discussions: DiscussionI
     if (!enabled) { setLoading(false); setUnavailable(false); return }
     const accept = (result: DiscussionGroupingView) => {
       if (cancelled || generation.current !== current) return false
-      setView(groupingStillVisible(result, latestDiscussions.current) ? result : null)
+      setView(groupingStillVisible(result, latestDiscussions.current, isDiscussionArchivePending) ? result : null)
       return true
     }
     const timer = setTimeout(() => {
@@ -41,7 +42,7 @@ export function useDiscussionGrouping(enabled: boolean, discussions: DiscussionI
     }, 600)
     return () => { cancelled = true; clearTimeout(timer); abort.abort() }
   }, [enabled, inputKey, attempt])
-  const visible = useMemo(() => enabled && view && groupingStillVisible(view, discussions) ? view : null,
+  const visible = useMemo(() => enabled && view && groupingStillVisible(view, discussions, isDiscussionArchivePending) ? view : null,
     [enabled, view, discussions])
   return { view: visible, loading, unavailable, retry: useCallback(() => setAttempt(v => v + 1), []) }
 }

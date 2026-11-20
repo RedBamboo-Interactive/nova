@@ -52,6 +52,17 @@ test("only early message-count changes refresh context for a stable title", () =
   assert.notEqual(key(3), key(4))
   assert.equal(key(4), key(270))
 })
+test("closing a row leaves the other sections visible through the pending archive and undo", () => {
+  const closing = rows.map(row => row.id === "hud" ? { ...row, status: "archiving" as const } : row)
+  const without = rows.filter(row => row.id !== "hud")
+  const locallyClosing = (id: string) => id === "hud"
+  assert.equal(groupingStillVisible(view, closing, locallyClosing), true)
+  assert.equal(groupingStillVisible(view, without, locallyClosing), true)
+  assert.deepEqual(discussionSections(closing, view).map(section => section.name), ["Lands of Lore", "Leaf", null])
+  assert.equal(discussionSections(closing, view)[0].items.some(row => row.id === "hud"), false)
+  assert.equal(groupingStillVisible(view, rows, locallyClosing), true)
+  assert.equal(groupingStillVisible(view, closing.map(row => row.id === "hud" ? { ...row, confidential: true } : row), locallyClosing), false)
+})
 test("a removed or newly confidential source invalidates the derived cache", () => {
   assert.equal(groupingStillVisible(view, rows), true)
   assert.equal(groupingStillVisible(view, rows.filter(d => d.id !== "hud")), false)

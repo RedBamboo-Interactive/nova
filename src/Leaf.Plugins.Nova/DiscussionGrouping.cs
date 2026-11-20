@@ -48,6 +48,24 @@ public static class DiscussionGroupingPolicy
             && JsonSerializer.Serialize(old, Json) == JsonSerializer.Serialize(now, Json));
     }
 
+    public static DiscussionGroupingSnapshot RetainOpen(DiscussionGroupingSnapshot snapshot, GroupingInput[] remaining)
+    {
+        var ids = remaining.Select(input => input.Id).ToHashSet(StringComparer.Ordinal);
+        var assignments = snapshot.Assignments.Where(assignment => ids.Contains(assignment.DiscussionId)).ToArray();
+        var names = assignments.Select(assignment => assignment.Group).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        var groups = snapshot.Groups?.Where(group => names.Contains(group.Name))
+            .Select(group => group.ThumbnailDiscussionId is { } thumbnail && !ids.Contains(thumbnail)
+                ? group with { ThumbnailDiscussionId = null } : group).ToArray();
+        return snapshot with
+        {
+            Fingerprint = snapshot.Fingerprint == Fingerprint(snapshot.Inputs) ? Fingerprint(remaining) : snapshot.Fingerprint,
+            Inputs = remaining,
+            Assignments = assignments,
+            GroupOrder = snapshot.GroupOrder.Where(names.Contains).ToArray(),
+            Groups = groups,
+        };
+    }
+
     private static string CompactLabel(string label, string? group)
     {
         if (string.IsNullOrEmpty(group) || !label.StartsWith(group, StringComparison.OrdinalIgnoreCase)
@@ -198,6 +216,27 @@ public sealed class DiscussionGrouping(
         catch (JsonException) { return null; }
     }
 
+    private async Task<DiscussionGroupingSnapshot?> ProjectAsync(DiscussionGroupingSnapshot? snapshot,
+        GroupingInput[] inputs, HttpContext context, CancellationToken ct)
+    {
+        if (snapshot is null || DiscussionGroupingPolicy.StillReadable(snapshot, inputs)) return snapshot;
+
+        var ids = inputs.Select(input => input.Id).ToHashSet(StringComparer.Ordinal);
+        var remaining = snapshot.Inputs.Where(input => ids.Contains(input.Id)).ToArray();
+        if (remaining.Length == snapshot.Inputs.Length
+            || !DiscussionGroupingPolicy.StillReadable(snapshot with { Inputs = remaining }, inputs)) return null;
+
+        foreach (var input in snapshot.Inputs.Where(input => !ids.Contains(input.Id)))
+        {
+            var closed = await store.GetAsync(input.Id, ct);
+            if (closed is null || closed.Id != input.Id || closed.Type != "chat" || closed.Confidential
+                || !DiscussionStatus.IsClosed(closed.Status) || !DiscussionAccessPolicy.CanRead(closed, context)) return null;
+        }
+
+        // Keep the original stored dependencies so future privacy changes can invalidate the view.
+        return DiscussionGroupingPolicy.RetainOpen(snapshot, remaining);
+    }
+
     private DiscussionGroupingView View(string subject, GroupingInput[] inputs, DiscussionGroupingSnapshot? previous)
     {
         var valid = previous is not null && DiscussionGroupingPolicy.StillReadable(previous, inputs);
@@ -207,7 +246,11 @@ public sealed class DiscussionGrouping(
     }
 
     public async Task<DiscussionGroupingView> ReadAsync(string subject, HttpContext context, CancellationToken ct)
-        => View(subject, await InputsAsync(context, ct), await LoadAsync(subject, ct));
+    {
+        var inputs = await InputsAsync(context, ct);
+        var snapshot = await LoadAsync(subject, ct);
+        return View(subject, inputs, await ProjectAsync(snapshot, inputs, context, ct));
+    }
 
     public async Task<DiscussionGroupingView> RefreshAsync(string subject, HttpContext context, CancellationToken ct)
     {
@@ -217,15 +260,17 @@ public sealed class DiscussionGrouping(
         {
             var candidates = await CandidatesAsync(context, ct);
             var inputs = DiscussionGroupingPolicy.Describe(candidates);
-            var previous = await LoadAsync(subject, ct);
-            var view = View(subject, inputs, previous);
+            var stored = await LoadAsync(subject, ct);
+            var display = await ProjectAsync(stored, inputs, context, ct);
+            var view = View(subject, inputs, display);
             if (view.SourceFingerprint == view.Fingerprint || view.RetryAfterSeconds > 0 || inputs.Length == 0) return view;
-            if (previous is not null && !DiscussionGroupingPolicy.StillReadable(previous, inputs)) previous = null;
+            // A fresh inference must not inherit derived data from archived sources.
+            var previous = ReferenceEquals(stored, display) ? stored : null;
             DiscussionGroupingView BackOff()
             {
                 ct.ThrowIfCancellationRequested();
                 _retryAt[subject] = _time.GetUtcNow().AddMinutes(2);
-                return View(subject, inputs, previous);
+                return View(subject, inputs, display);
             }
 
             var agent = await agents.GetAgentAsync(inputs.Select(d => d.AgentId).FirstOrDefault(id => id is not null)
@@ -244,7 +289,7 @@ public sealed class DiscussionGrouping(
 
             var checkedInputs = await InputsAsync(context, ct);
             if (DiscussionGroupingPolicy.Fingerprint(checkedInputs) != view.Fingerprint)
-                return View(subject, checkedInputs, previous);
+                return View(subject, checkedInputs, await ProjectAsync(stored, checkedInputs, context, ct));
 
             var promptInputs = inputs.Select(d => new
             {
@@ -300,7 +345,8 @@ public sealed class DiscussionGrouping(
             catch (JsonException) { return BackOff(); }
             // Access/lifecycle/title could have changed while the model was running.
             var current = await InputsAsync(context, ct);
-            if (DiscussionGroupingPolicy.Fingerprint(current) != snapshot.Fingerprint) return View(subject, current, previous);
+            if (DiscussionGroupingPolicy.Fingerprint(current) != snapshot.Fingerprint)
+                return View(subject, current, await ProjectAsync(stored, current, context, ct));
             ct.ThrowIfCancellationRequested();
             await records.AppendAsync(Stream, new JsonObject { ["projection"] = JsonSerializer.SerializeToNode(snapshot, Json) }, userId: subject, ct: ct);
             _retryAt.TryRemove(subject, out _);

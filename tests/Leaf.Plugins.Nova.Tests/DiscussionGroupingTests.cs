@@ -254,6 +254,54 @@ public sealed class DiscussionGroupingTests
         Assert.Single(world.Records.Rows);
     }
 
+    [Theory]
+    [InlineData("archiving")]
+    [InlineData("archived")]
+    public async Task Verified_archive_projects_the_surviving_rows_without_reclassification(string status)
+    {
+        var world = new World();
+        var original = await world.Refresh();
+        var member = world.Entities.Items.Single(e => e.Slug == DiscussionStore.Slug("b"));
+        member.Data["status"] = status;
+
+        var current = await world.Read();
+        Assert.Equal(current.Fingerprint, current.SourceFingerprint);
+        Assert.Equal("a", Assert.Single(current.Assignments).DiscussionId);
+        Assert.Equal("Lands of Lore", Assert.Single(current.GroupOrder));
+        Assert.Null(Assert.Single(current.Groups!).ThumbnailDiscussionId);
+        await world.Refresh();
+        Assert.Equal(1, world.Gateway.Calls);
+        Assert.Single(world.Records.Rows);
+
+        member.Data["status"] = "idle";
+        Assert.Equal(original.Assignments, (await world.Read()).Assignments);
+        member.Data["status"] = status;
+        member.Data["confidential"] = true;
+        Assert.Empty((await world.Read()).Assignments);
+    }
+
+    [Fact]
+    public async Task New_inputs_keep_existing_groups_visible_during_refresh_after_archive()
+    {
+        var world = new World();
+        await world.Refresh();
+        world.Entities.Items.Single(e => e.Slug == DiscussionStore.Slug("b")).Data["status"] = "archived";
+        world.Add("c", "Newly opened topic");
+        var cached = await world.Read();
+        Assert.NotEqual(cached.Fingerprint, cached.SourceFingerprint);
+        Assert.Equal("a", Assert.Single(cached.Assignments).DiscussionId);
+
+        world.Gateway.Output = SingletonOutput;
+        var refreshed = await world.Refresh();
+        Assert.Equal(refreshed.Fingerprint, refreshed.SourceFingerprint);
+        Assert.Equal(2, world.Gateway.Calls);
+        Assert.DoesNotContain("Lands of Lore icons", world.Gateway.Body);
+        var request = JsonNode.Parse(world.Gateway.Body)!;
+        var content = request["messages"]![0]!["content"]!.GetValue<string>();
+        var userData = JsonNode.Parse(content[content.IndexOf("{\"discussions\":", StringComparison.Ordinal)..])!;
+        Assert.Empty(userData["existingGroups"]!.AsArray());
+    }
+
     [Fact]
     public async Task Newly_confidential_member_invalidates_saved_group_names_on_read()
     {

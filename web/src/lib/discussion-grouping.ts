@@ -59,7 +59,12 @@ export function discussionSections(discussions: readonly DiscussionInfo[], view:
   return result
 }
 
-export function groupingStillVisible(view: DiscussionGroupingView, discussions: readonly DiscussionInfo[]): boolean {
-  return view.assignments.every(a => discussions.some(d => d.id === a.discussionId && !d.confidential
-    && d.type === "chat" && d.status !== "archived" && d.status !== "archiving" && d.title === a.sourceTitle))
+export function groupingStillVisible(view: DiscussionGroupingView, discussions: readonly DiscussionInfo[],
+  isArchivePending: (id: string) => boolean = () => false): boolean {
+  const byId = new Map(discussions.map(discussion => [discussion.id, discussion]))
+  return view.assignments.every(assignment => {
+    const discussion = byId.get(assignment.discussionId)
+    if (!discussion) return isArchivePending(assignment.discussionId)
+    return !discussion.confidential && discussion.type === "chat" && discussion.title === assignment.sourceTitle
+  })
 }
