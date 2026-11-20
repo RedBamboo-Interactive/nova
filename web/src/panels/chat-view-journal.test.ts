@@ -8,7 +8,7 @@ test("the chat stays in the tree under the Journal, hidden and never unmounted",
   const detail = source.slice(source.indexOf("detail={"), source.indexOf("<ArtifactsSurface"))
 
   // One constant wrapper holds the chat on every route, so opening the Journal can't remount it.
-  assert.match(detail, /journalOpen \? " invisible" : ""\}`\}\s*>\s*\{chatArea\}\s*<\/div>/)
+  assert.match(detail, /journalOpen \? " invisible" : ""\}`\}\s*>\s*\{chatArea\}\s*<div ref=\{transcriptFadeRef\} inert aria-hidden="true"[^>]*\/>\s*<\/div>/)
   // The Journal is added beside it, never in its place.
   assert.match(detail, /\{journalOpen && \(\s*<div data-slot="journal-surface"/)
   assert.doesNotMatch(detail, /journalOpen \? [^"]*<JournalView/)

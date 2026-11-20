@@ -1,4 +1,4 @@
-import { useState, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type Ref } from "react"
+import { useState, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type MouseEvent as ReactMouseEvent, type Ref } from "react"
 import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
@@ -50,6 +50,7 @@ import {
   type FloatingNovaCaptureContextRequest,
 } from "../lib/floating-context"
 import { applyPendingVisibleContext } from "../lib/pending-visible-context-store"
+import { fadeOutgoingTranscript } from "../lib/discussion-transcript-fade"
 import { isDiscussionSelectionCurrent, resolveRequestedDiscussionId } from "../lib/discussion-view-selection"
 import { NOVA_DRAFT_STORAGE_KEY, opensChat } from "../lib/new-discussion-draft"
 import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToContext, type MonitorVisualSource } from "../lib/visual-capture"
@@ -62,6 +63,17 @@ import { useVoiceSession } from "../hooks/use-voice-session"
 import { VoiceSessionPanel } from "../components/voice-session-panel"
 
 const NO_MESSAGES: MessageBlock[] = []
+const COMPOSER_INPUT = '[data-slot="composer"] textarea'
+
+function keepComposerFocus(event: ReactMouseEvent<HTMLDivElement>) {
+  const row = (event.target as Element).closest?.('[data-discussion-id] [data-slot="item-list-row"]')
+  if (event.button !== 0 || !row) return
+
+  const focused = event.currentTarget.ownerDocument.activeElement
+  if (focused?.matches(`[data-slot="nova-discussion-pane"] ${COMPOSER_INPUT}`)) {
+    event.preventDefault()
+  }
+}
 
 const speechBackend = createNovaSpeechBackend()
 const loadNovaMaintenanceStatus = () => api.get<unknown>("/api/apps/nova/maintenance")
@@ -221,6 +233,9 @@ export function ChatView({
   const floating = presentation === "floating"
   const mobileClient = isMobileClient(environment.window.navigator)
   const [pendingDiscussionId, setPendingDiscussionId] = useState<string | null>(null)
+  const discussionPaneRef = useRef<HTMLDivElement>(null)
+  const transcriptFadeRef = useRef<HTMLDivElement>(null)
+  const restoreComposerFocusRef = useRef<string | null>(null)
   const location = useLocation()
   const [mobileTab, setMobileTab] = useState(() => (!floating && opensChat(location.state) ? 1 : 0))
   const floatingSurface = useUiSurface("nova:floating-chat")
@@ -382,6 +397,13 @@ export function ChatView({
       setMobileTab(0)
     }
   }, [requestedDiscussionId, pendingDiscussionId, synchronizedDiscussionId, activeDiscussionId, selectDiscussion, clearDiscussionSelection])
+
+  // Keep the existing conversation remount, but transfer input focus before paint.
+  useLayoutEffect(() => {
+    if (!activeDiscussion || discussionSelectionPending || restoreComposerFocusRef.current !== activeDiscussion.id) return
+    restoreComposerFocusRef.current = null
+    discussionPaneRef.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.focus({ preventScroll: true })
+  }, [activeDiscussion, discussionSelectionPending])
 
   // Same-day Lives are told apart against every discussion this view has loaded.
   const activeDisplayTitle = useMemo(() => activeDiscussion
@@ -806,15 +828,22 @@ export function ChatView({
   }, [activeDiscussionId, retryHistoryLoad])
 
   const handleSelectDiscussion = useCallback((id: string) => {
+    if (id !== activeDiscussionId && !journalOpen) {
+      const pane = discussionPaneRef.current
+      const fadeLayer = transcriptFadeRef.current
+      const input = pane?.querySelector(COMPOSER_INPUT)
+      restoreComposerFocusRef.current = input && input === pane?.ownerDocument.activeElement ? id : null
+      if (pane && fadeLayer && !environment.window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        fadeOutgoingTranscript(pane, fadeLayer)
+      }
+    }
+
+    // The pending ID masks the previous route until the router or Float host catches up.
     setPendingDiscussionId(id)
     if (floating) onSelectDiscussion?.(id)
     else navigate(`/apps/nova/chat/${id}`)
-    // The route/host selection is the authority. Selecting the discussion
-    // locally here as well can race the still-old requested id and bounce the
-    // store old -> new -> old -> new. The layout effect applies the requested
-    // selection before paint while the render guard hides any stale transcript.
     setMobileTab(1)
-  }, [floating, navigate, onSelectDiscussion])
+  }, [activeDiscussionId, environment.window, floating, journalOpen, navigate, onSelectDiscussion])
 
   const handleRotateDiscussion = useCallback(async (id: string) => {
     const followReplacement = activeDiscussionId === id
@@ -1878,7 +1907,7 @@ export function ChatView({
         sidebar={
         <>
           {sidebarHeader}
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 overflow-hidden" onMouseDownCapture={keepComposerFocus}>
             <DiscussionThumbnailCacheContext.Provider value={thumbnails}>
               <LiveQuotaContext.Provider value={liveQuota}>
                 <DiscussionSidebar
@@ -1936,10 +1965,12 @@ export function ChatView({
         // draft are as it left them. `invisible` keeps its layout, unlike taking it off the page.
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
+            ref={discussionPaneRef}
             data-slot="nova-discussion-pane"
-            className={`flex min-h-0 min-w-0 flex-1 flex-col${journalOpen ? " invisible" : ""}`}
+            className={`relative flex min-h-0 min-w-0 flex-1 flex-col${journalOpen ? " invisible" : ""}`}
           >
             {chatArea}
+            <div ref={transcriptFadeRef} inert aria-hidden="true" className="pointer-events-none absolute inset-0 z-10 overflow-hidden" />
           </div>
           {journalOpen && (
             <div data-slot="journal-surface" className="absolute inset-0 z-20 flex min-h-0 flex-col">

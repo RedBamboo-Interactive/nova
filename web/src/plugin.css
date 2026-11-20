@@ -424,9 +424,20 @@
 
 }
 
+.nova-transcript-exit {
+  position: absolute;
+  overflow: hidden;
+}
+
+.nova-transcript-exit * {
+  animation: none !important;
+  transition: none !important;
+}
+
 /* Discussion switches may move focus. Keep the input frame the same size. */
 [data-slot="nova-discussion-pane"] [data-slot="composer"] :has(> .message-input-textarea) {
   scale: none;
+  transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
