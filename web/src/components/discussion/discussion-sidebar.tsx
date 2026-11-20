@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useRef } from "react"
+import { memo, useCallback, useId, useMemo, useRef } from "react"
 import type { ComponentProps } from "react"
 import { ItemList, ItemListRow, RowActionsMenu, ScrollArea, useContextTarget, type ContextMenuEntry } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
@@ -63,6 +63,31 @@ function DiscussionStatusIcon({ discussion, activity, backgroundTasks, awaitingA
   )
 }
 
+function CollapsedGroupStatus({ discussions, delegationActivity, backgroundTasks, awaitingAnswer }: {
+  discussions: readonly DiscussionInfo[]
+  delegationActivity: DelegationActivitySnapshot
+  backgroundTasks: Props["backgroundTasks"]
+  awaitingAnswer: NonNullable<Props["awaitingAnswer"]>
+}) {
+  const open = discussions.filter(discussion => discussion.status !== "archived" && discussion.status !== "archiving")
+  const waiting = open.find(discussion => awaitingAnswer[discussion.id])
+  const unread = !waiting && open.some(isDiscussionUnread)
+  const activity = waiting || (!unread && open.find(discussion => discussion.status === "thinking" ||
+    hasBackgroundWork(discussion, delegationActivity[discussion.id], backgroundTasks[discussion.id])))
+  if (!activity && !unread) return null
+
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-overlay-10 px-1.5 py-0.5 text-[10px] leading-none">
+      {unread ? <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-accent-teal" /> : activity && (
+        <span aria-hidden="true" className="inline-flex">
+          <DiscussionStatusIcon discussion={activity} activity={delegationActivity[activity.id]} backgroundTasks={backgroundTasks[activity.id]} awaitingAnswer={awaitingAnswer[activity.id]} />
+        </span>
+      )}
+      {waiting ? "Waiting for you" : unread ? "Unread" : "Activity"}
+    </span>
+  )
+}
+
 /** A sidebar row whose right-click and long-press menu is its ⋮ menu's entries. */
 function DiscussionRowTarget({ entries, ...props }: { entries: ContextMenuEntry[] } & ComponentProps<"div">) {
   const ref = useRef<HTMLDivElement>(null)
@@ -96,6 +121,8 @@ interface Props {
   groupingLoading?: boolean
   groupingUnavailable?: boolean
   onRetryGrouping?: () => void
+  collapsedGroups: readonly (string | null)[]
+  onToggleGroup: (group: string | null) => void
   archiveMode?: boolean
   archiveQuery?: string
   archiveHasMore?: boolean
@@ -104,7 +131,7 @@ interface Props {
   onLoadMoreArchived?: () => void
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars = true, grouping = null, groupingEnabled = false, groupingLoading = false, groupingUnavailable = false, onRetryGrouping, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars = true, grouping = null, groupingEnabled = false, groupingLoading = false, groupingUnavailable = false, onRetryGrouping, collapsedGroups, onToggleGroup, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -118,6 +145,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
   const titleOf = useMemo(() => createDiscussionTitleResolver(discussions), [discussions])
   const sections = useMemo(() => discussionSections(chat, grouping), [chat, grouping])
   const hasNamedSections = sections.some(section => section.name !== null)
+  const groupListId = useId()
 
   const renderLiveItem = useCallback((discussion: DiscussionInfo) => {
     const unread = isDiscussionUnread(discussion)
@@ -417,19 +445,42 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
               <div className="flex flex-col">
                 {groupingLoading && !grouping?.assignments.length && <p role="status" className="px-4 py-2 text-[11px] text-text-muted">Organizing discussions…</p>}
                 {groupingUnavailable && <div className="flex items-center justify-between gap-2 px-4 py-2 text-[11px] text-text-muted"><span>Project grouping is unavailable</span><button type="button" className="hover:text-contrast" onClick={onRetryGrouping}>Retry</button></div>}
-                {sections.map(section => {
+                {sections.map((section, index) => {
                   const heading = section.name ?? (hasNamedSections ? "Ungrouped" : null)
+                  const collapsed = heading !== null && collapsedGroups.includes(section.name)
+                  const containsSelection = collapsed && section.items.some(discussion => discussion.id === activeDiscussionId)
+                  const listId = `${groupListId}-${index}`
                   return (
-                    <section className="flex flex-col in-data-[cozy]:gap-0.5" key={section.name ?? "ungrouped"} aria-label={heading ?? "Other discussions"} data-discussion-group={section.name ?? "ungrouped"}>
-                      {heading && <h3 className="flex items-center gap-2 border-b border-overlay-6 px-4 pb-2 pt-4 text-xs font-medium text-text-muted">
-                        {section.name && <span className="relative h-6 w-6 shrink-0" data-group-visual={section.name}>
-                          {section.thumbnailDiscussionId && section.thumbnailTarget && showAvatars
-                            ? <DiscussionThumbnail id={section.thumbnailDiscussionId} icon={section.icon} target={section.thumbnailTarget} />
-                            : <i aria-hidden="true" className={`ph ph-${groupingIcon(section.icon)} absolute inset-0 flex items-center justify-center text-sm`} />}
-                        </span>}
-                        <span className="min-w-0 truncate" title={heading}>{heading}</span>
+                    <section className="flex flex-col in-data-[cozy]:gap-0.5" key={JSON.stringify(section.name)} aria-label={heading ?? "Other discussions"} data-discussion-group={section.name ?? "ungrouped"}>
+                      {heading && <h3 className="border-b border-overlay-6">
+                        <button
+                          type="button"
+                          aria-expanded={!collapsed}
+                          aria-controls={listId}
+                          onClick={() => onToggleGroup(section.name)}
+                          className={`flex w-full items-center gap-2 px-4 pb-2 pt-4 text-left text-xs font-medium hover:bg-overlay-6 hover:text-contrast focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-accent-teal ${containsSelection ? "text-contrast" : "text-text-muted"}`}
+                        >
+                          <i aria-hidden="true" className={`ph-bold ph-caret-${collapsed ? "right" : "down"} shrink-0 text-[10px]`} />
+                          {section.name && <span className="relative h-6 w-6 shrink-0" data-group-visual={section.name}>
+                            {section.thumbnailDiscussionId && section.thumbnailTarget && showAvatars
+                              ? <DiscussionThumbnail id={section.thumbnailDiscussionId} icon={section.icon} target={section.thumbnailTarget} />
+                              : <i aria-hidden="true" className={`ph ph-${groupingIcon(section.icon)} absolute inset-0 flex items-center justify-center text-sm`} />}
+                          </span>}
+                          <span className="min-w-0 flex-1 truncate" title={heading}>{heading}</span>
+                          {collapsed && (
+                            <>
+                              <span className="shrink-0 tabular-nums">
+                                {section.items.length}
+                                <span className="sr-only"> {section.items.length === 1 ? "discussion" : "discussions"}</span>
+                              </span>
+                              <CollapsedGroupStatus discussions={section.items} delegationActivity={delegationActivity} backgroundTasks={backgroundTasks} awaitingAnswer={awaitingAnswer} />
+                            </>
+                          )}
+                        </button>
                       </h3>}
-                      {section.items.map(discussion => <div key={discussion.id}>{renderChatItem(discussion)}</div>)}
+                      <div id={listId} className={collapsed ? "hidden" : "flex flex-col in-data-[cozy]:gap-0.5"} hidden={collapsed}>
+                        {!collapsed && section.items.map(discussion => <div key={discussion.id}>{renderChatItem(discussion)}</div>)}
+                      </div>
                     </section>
                   )
                 })}

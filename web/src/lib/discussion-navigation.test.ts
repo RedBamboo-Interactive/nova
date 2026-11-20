@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { getAdjacentSidebarDiscussion, getSidebarDiscussionOrder } from "./discussion-navigation.ts"
 import type { DiscussionInfo } from "./types.ts"
+import type { DiscussionGroupingView } from "./discussion-grouping.ts"
 
 function discussion(id: string, type: DiscussionInfo["type"], agentId = "agent-a"): DiscussionInfo {
   return {
@@ -67,4 +68,33 @@ test("treats Heartbeat as its visible Live row", () => {
 
   assert.equal(getAdjacentSidebarDiscussion(discussions, "heartbeat", 1, null)?.id, "first-chat")
   assert.equal(getAdjacentSidebarDiscussion(discussions, "heartbeat", -1, null)?.id, "first-chat")
+})
+
+test("skips folded groups and keeps loose rows visible when there are no named groups", () => {
+  const discussions = [
+    discussion("live", "live"),
+    discussion("loose", "chat"),
+    discussion("first-leaf", "chat"),
+    discussion("second-leaf", "chat"),
+    discussion("other-agent", "chat", "agent-b"),
+  ]
+  const grouping: DiscussionGroupingView = {
+    fingerprint: "test",
+    sourceFingerprint: "test",
+    assignments: ["first-leaf", "second-leaf"].map(id => ({
+      discussionId: id,
+      sourceTitle: id,
+      group: "Leaf",
+      label: id,
+      icon: "leaf",
+    })),
+    groupOrder: ["Leaf"],
+    updatedAt: null,
+    retryAfterSeconds: 0,
+  }
+
+  assert.equal(getAdjacentSidebarDiscussion(discussions, "live", 1, "agent-a", grouping, ["Leaf"])?.id, "loose")
+  assert.equal(getAdjacentSidebarDiscussion(discussions, "loose", -1, "agent-a", grouping, ["Leaf"])?.id, "live")
+  assert.deepEqual(getSidebarDiscussionOrder(discussions, "agent-a", grouping, [null]).map(row => row.id), ["live", "first-leaf", "second-leaf"])
+  assert.deepEqual(getSidebarDiscussionOrder(discussions, "agent-b", grouping, [null]).map(row => row.id), ["other-agent"])
 })

@@ -7,6 +7,7 @@ export function getSidebarDiscussionOrder(
   discussions: DiscussionInfo[],
   agentFilter: string | null,
   grouping: DiscussionGroupingView | null = null,
+  collapsedGroups: readonly (string | null)[] = [],
 ): DiscussionInfo[] {
   const scoped = agentFilter
     ? discussions.filter((discussion) => discussion.agentId === agentFilter)
@@ -18,7 +19,11 @@ export function getSidebarDiscussionOrder(
     if (discussion.type === "live") live.push(discussion)
     else if (discussion.type === "chat") chat.push(discussion)
   }
-  return [...live, ...(grouping ? discussionSections(chat, grouping).flatMap(section => section.items) : chat)]
+  if (!grouping) return [...live, ...chat]
+
+  const sections = discussionSections(chat, grouping)
+  if (!sections.some(section => section.name !== null)) return [...live, ...chat]
+  return [...live, ...sections.flatMap(section => collapsedGroups.includes(section.name) ? [] : section.items)]
 }
 
 /** Resolve Alt+Up/Down against visible sidebar rows, including wraparound. */
@@ -28,11 +33,12 @@ export function getAdjacentSidebarDiscussion(
   direction: -1 | 1,
   agentFilter: string | null,
   grouping: DiscussionGroupingView | null = null,
+  collapsedGroups: readonly (string | null)[] = [],
 ): DiscussionInfo | null {
   const scoped = agentFilter
     ? discussions.filter((discussion) => discussion.agentId === agentFilter)
     : discussions
-  const ordered = getSidebarDiscussionOrder(scoped, null, grouping)
+  const ordered = getSidebarDiscussionOrder(scoped, null, grouping, collapsedGroups)
   if (ordered.length === 0) return null
 
   const selectedId = resolveLiveSidebarSelection(scoped, activeDiscussionId)

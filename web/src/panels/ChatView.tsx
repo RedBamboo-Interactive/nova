@@ -34,7 +34,7 @@ import { useSessionStats } from "../hooks/use-session-stats"
 import { DiscussionRunOnSetting, runOnAvailable } from "../components/run-on"
 import { useFullAccessEnabled } from "../hooks/use-full-access-enabled"
 import { FULL_ACCESS_SETTINGS_HREF, changeAccessLevel, openSettingsFromLink } from "../lib/session-access"
-import { setSettings } from "../lib/settings-store"
+import { getSettings, setSettings } from "../lib/settings-store"
 import { api, novaExecution } from "../lib/api"
 import { findCurrentLive, findLiveHeartbeatPair } from "../lib/live-heartbeat"
 import { getAdjacentSidebarDiscussion, getSidebarDiscussionOrder } from "../lib/discussion-navigation"
@@ -417,7 +417,16 @@ export function ChatView({
   const multiAgent = agents.length > 1
   const settings = useLocalSettings()
   const pushToTalk = usePushToTalkSettings()
-  const agentFilter = settings.agentFilter
+  const { agentFilter, collapsedDiscussionGroups } = settings
+
+  const toggleDiscussionGroup = useCallback((group: string | null) => {
+    const collapsed = getSettings().collapsedDiscussionGroups
+    setSettings({
+      collapsedDiscussionGroups: collapsed.includes(group)
+        ? collapsed.filter(name => name !== group)
+        : [...collapsed, group],
+    })
+  }, [])
 
   const grouping = useDiscussionGrouping(settings.groupDiscussions && !archiveMode, discussions)
   const thumbnails = useDiscussionThumbnailCache(discussions)
@@ -880,7 +889,7 @@ export function ChatView({
         return
       }
       const direction = action === "next-discussion" ? 1 : -1
-      const adjacent = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, direction, agentFilter, grouping.view)
+      const adjacent = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, direction, agentFilter, grouping.view, collapsedDiscussionGroups)
       if (adjacent) handleSelectDiscussion(adjacent.id)
     }
 
@@ -903,7 +912,7 @@ export function ChatView({
       environment.document.removeEventListener("keydown", handleKeyDown)
       environment.document.removeEventListener(FLOATING_NOVA_NAVIGATION_EVENT, handleNavigationEvent)
     }
-  }, [activeDiscussionId, agentFilter, discussions, grouping.view, environment.document, floating, handleSelectDiscussion, openNewDiscussion])
+  }, [activeDiscussionId, agentFilter, collapsedDiscussionGroups, discussions, grouping.view, environment.document, floating, handleSelectDiscussion, openNewDiscussion])
 
   const handleConfidentialToggle = useCallback(async (checked: boolean) => {
     if (!activeDiscussionId || confidentialityPending) return
@@ -1923,6 +1932,8 @@ export function ChatView({
                   groupingLoading={grouping.loading}
                   groupingUnavailable={grouping.unavailable}
                   onRetryGrouping={grouping.retry}
+                  collapsedGroups={collapsedDiscussionGroups}
+                  onToggleGroup={toggleDiscussionGroup}
                   archiveMode={archiveMode}
                   archiveQuery={archiveQuery}
                   archiveHasMore={archiveHasMore}

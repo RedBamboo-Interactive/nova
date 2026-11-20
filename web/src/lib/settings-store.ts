@@ -7,6 +7,7 @@ export type LocalSettings = {
   showDiscussionAvatars: boolean
   /** Optional automatic project sections in the open discussion list. */
   groupDiscussions: boolean
+  collapsedDiscussionGroups: (string | null)[]
   agentFilter: string | null
   lastUsedAgentId: string | null
   voiceInputDeviceId: string | null
@@ -24,6 +25,7 @@ export const settingsStore = createLocalStore<LocalSettings>("nova_settings", {
   showAvatar: true,
   showDiscussionAvatars: true,
   groupDiscussions: false,
+  collapsedDiscussionGroups: [],
   agentFilter: null,
   lastUsedAgentId: null,
   voiceInputDeviceId: null,
