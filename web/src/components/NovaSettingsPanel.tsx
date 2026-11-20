@@ -25,7 +25,7 @@ export function NovaSettingsPanel() {
           onCheckedChange={(v) => setLocalSettings({ showDiscussionAvatars: v })}
         />
       </SettingRow>
-      <SettingRow label="Group by project">
+      <SettingRow label="Group by project" hint="Nova uses titles and opening messages to group open discussions in the sidebar by project or topic. Discussions without a clear match stay ungrouped.">
         <Switch
           aria-label="Group by project"
           checked={localSettings.groupDiscussions}
