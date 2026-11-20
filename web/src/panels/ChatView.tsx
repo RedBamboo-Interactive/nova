@@ -1,4 +1,4 @@
-import { useState, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type ReactNode, type Ref } from "react"
+import { useState, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type Ref } from "react"
 import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
@@ -60,6 +60,8 @@ import { AgentNoteRow } from "../components/discussion/agent-note-row"
 import { formatOwningApp } from "../lib/discussion-owner"
 import { useVoiceSession } from "../hooks/use-voice-session"
 import { VoiceSessionPanel } from "../components/voice-session-panel"
+
+const NO_MESSAGES: MessageBlock[] = []
 
 const speechBackend = createNovaSpeechBackend()
 const loadNovaMaintenanceStatus = () => api.get<unknown>("/api/apps/nova/maintenance")
@@ -219,10 +221,6 @@ export function ChatView({
   const floating = presentation === "floating"
   const mobileClient = isMobileClient(environment.window.navigator)
   const [pendingDiscussionId, setPendingDiscussionId] = useState<string | null>(null)
-  const discussionPaneRef = useRef<HTMLDivElement>(null)
-  const displayedChatRef = useRef<ReactNode>(null)
-  const discussionExitRef = useRef<Animation | null>(null)
-  const [exitingChat, setExitingChat] = useState<ReactNode>(null)
   const location = useLocation()
   const [mobileTab, setMobileTab] = useState(() => (!floating && opensChat(location.state) ? 1 : 0))
   const floatingSurface = useUiSurface("nova:floating-chat")
@@ -324,11 +322,10 @@ export function ChatView({
     pendingDiscussionId,
     defaultDiscussionId,
   )
-  // Let the selected row and loading feedback paint before rendering a cached transcript.
+  const discussionSelectionPending = !isDiscussionSelectionCurrent(synchronizedDiscussionId, activeDiscussionId)
+  // Give the selected row and chat frame a paint before mounting a large cached transcript.
   const renderedDiscussionId = useDeferredValue(synchronizedDiscussionId)
-  const discussionSelectionPending =
-    !isDiscussionSelectionCurrent(synchronizedDiscussionId, activeDiscussionId) ||
-    renderedDiscussionId !== synchronizedDiscussionId
+  const historyRenderPending = renderedDiscussionId !== synchronizedDiscussionId
 
   const maintenance = useMaintenanceStatus({
     load: loadNovaMaintenanceStatus,
@@ -809,26 +806,15 @@ export function ChatView({
   }, [activeDiscussionId, retryHistoryLoad])
 
   const handleSelectDiscussion = useCallback((id: string) => {
-    const pane = discussionPaneRef.current
-    const outgoing = displayedChatRef.current
-    // Keep the outgoing pane inert while the destination loads.
-    if (id !== synchronizedDiscussionId && !discussionExitRef.current && outgoing && pane?.isConnected && pane.animate &&
-        !environment.window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      const exit = pane.animate(
-        [{ opacity: 0.88, transform: "translateY(0)" }, { opacity: 0, transform: "translateY(7px)" }],
-        { duration: 120, easing: "ease-out", fill: "forwards" },
-      )
-      discussionExitRef.current = exit
-      setExitingChat(outgoing)
-      void exit.finished.then(() => setExitingChat(null), () => {})
-    }
-
-    // The route/host handoff still drives selection and starts loading immediately.
     setPendingDiscussionId(id)
     if (floating) onSelectDiscussion?.(id)
     else navigate(`/apps/nova/chat/${id}`)
+    // The route/host selection is the authority. Selecting the discussion
+    // locally here as well can race the still-old requested id and bounce the
+    // store old -> new -> old -> new. The layout effect applies the requested
+    // selection before paint while the render guard hides any stale transcript.
     setMobileTab(1)
-  }, [environment.window, floating, navigate, onSelectDiscussion, synchronizedDiscussionId])
+  }, [floating, navigate, onSelectDiscussion])
 
   const handleRotateDiscussion = useCallback(async (id: string) => {
     const followReplacement = activeDiscussionId === id
@@ -1648,8 +1634,9 @@ export function ChatView({
   const avatarBase = activeAgent ? activeAgent.avatarUrl : "/api/apps/nova/avatar"
   const avatarSrc = versionedAvatarSrc(avatarBase, avatarRevision)
 
+  const historyPending = historyRenderPending || (isLoadingMessages && activeMessages.length === 0)
   const chatArea = activeDiscussion && !discussionSelectionPending ? (
-    <div key={activeDiscussion.id} className="flex-1 flex flex-col min-h-0 min-w-0 relative">
+    <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
       {voiceSession.phase !== "idle" && voiceSession.phase !== "closed" && (
         <VoiceSessionPanel
           agentName={activeAgent?.name ?? "Nova"}
@@ -1676,13 +1663,13 @@ export function ChatView({
           onEnd={() => void voiceSession.stop()}
         />
       )}
-      {isLoadingMessages && activeMessages.length === 0 && (
+      {historyPending && (
         <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center z-10">
           <i aria-hidden="true" className="ph-bold ph-spinner animate-spin text-2xl opacity-40" />
           <span className="sr-only">Loading discussion.</span>
         </div>
       )}
-      {historyLoadFailure && activeMessages.length === 0 && !isLoadingMessages && (
+      {historyLoadFailure && activeMessages.length === 0 && !historyPending && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
           <div
             role="alert"
@@ -1703,7 +1690,7 @@ export function ChatView({
         </div>
       )}
       <ChatPanel
-        messages={activeMessages}
+        messages={historyRenderPending ? NO_MESSAGES : activeMessages}
         isStreaming={isStreaming}
         supportsSteering={supportsSteering}
         rollback={conversationRollback}
@@ -1796,7 +1783,10 @@ export function ChatView({
       )}
     </div>
   ) : (
-    <div className="flex-1 flex items-center justify-center text-text-muted">
+    <div
+      data-slot={discussionSelectionPending || isResolvingDiscussion ? "chat-panel" : undefined}
+      className="flex flex-1 min-h-0 min-w-0 items-center justify-center text-text-muted"
+    >
       {isSpawning || discussionSelectionPending || isResolvingDiscussion || discussionListLoadState === "loading" ? (
         <div role="status" className="text-center">
           <i aria-hidden="true" className="ph-bold ph-spinner animate-spin text-2xl mx-auto mb-3 opacity-40" />
@@ -1817,20 +1807,6 @@ export function ChatView({
       )}
     </div>
   )
-
-  useLayoutEffect(() => {
-    displayedChatRef.current = !exitingChat && activeDiscussion && !discussionSelectionPending && !journalOpen
-      ? chatArea
-      : null
-  })
-
-  useLayoutEffect(() => {
-    if (!exitingChat) return
-    return () => {
-      discussionExitRef.current?.cancel()
-      discussionExitRef.current = null
-    }
-  }, [exitingChat])
 
   return (
     <div
@@ -1960,13 +1936,10 @@ export function ChatView({
         // draft are as it left them. `invisible` keeps its layout, unlike taking it off the page.
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
-            ref={discussionPaneRef}
-            data-slot="discussion-transition"
-            data-exiting={exitingChat ? "" : undefined}
-            inert={!!exitingChat}
+            data-slot="nova-discussion-pane"
             className={`flex min-h-0 min-w-0 flex-1 flex-col${journalOpen ? " invisible" : ""}`}
           >
-            {exitingChat ?? chatArea}
+            {chatArea}
           </div>
           {journalOpen && (
             <div data-slot="journal-surface" className="absolute inset-0 z-20 flex min-h-0 flex-col">

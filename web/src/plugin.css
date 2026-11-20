@@ -424,6 +424,11 @@
 
 }
 
+/* Discussion switches may move focus. Keep the input frame the same size. */
+[data-slot="nova-discussion-pane"] [data-slot="composer"] :has(> .message-input-textarea) {
+  scale: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .nova-voice-mode,
   .nova-voice-mode[data-state="closing"],

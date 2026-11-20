@@ -8,7 +8,7 @@ test("the chat stays in the tree under the Journal, hidden and never unmounted",
   const detail = source.slice(source.indexOf("detail={"), source.indexOf("<ArtifactsSurface"))
 
   // One constant wrapper holds the chat on every route, so opening the Journal can't remount it.
-  assert.match(detail, /journalOpen \? " invisible" : ""\}`\}\s*>\s*\{exitingChat \?\? chatArea\}\s*<\/div>/)
+  assert.match(detail, /journalOpen \? " invisible" : ""\}`\}\s*>\s*\{chatArea\}\s*<\/div>/)
   // The Journal is added beside it, never in its place.
   assert.match(detail, /\{journalOpen && \(\s*<div data-slot="journal-surface"/)
   assert.doesNotMatch(detail, /journalOpen \? [^"]*<JournalView/)
@@ -18,7 +18,7 @@ test("the chat stays in the tree under the Journal, hidden and never unmounted",
 
 test("the chat area itself doesn't depend on the Journal being open", () => {
   const start = source.indexOf("const chatArea = ")
-  const area = source.slice(start, source.indexOf("  useLayoutEffect(", start))
+  const area = source.slice(start, source.indexOf("return (", start))
 
   assert.notEqual(start, -1)
   assert.doesNotMatch(area, /journalOpen/)
