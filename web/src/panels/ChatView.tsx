@@ -1778,38 +1778,37 @@ export function ChatView({
         renderAttachmentActions={renderWhatISeeAction}
         renderSideActions={renderSideActions}
         getMessageActions={getMessageActions}
+        footer={owningApp ? (
+          <div
+            data-slot="owned-discussion-bar"
+            className="shrink-0 border-t border-overlay-8 bg-card px-4 py-3"
+          >
+            <div className="mx-auto flex max-w-3xl items-center gap-2 text-sm text-text-muted">
+              <i aria-hidden="true" className="ph-bold ph-plugs-connected shrink-0" />
+              <span>This discussion belongs to {owningApp}. Continue it there.</span>
+            </div>
+          </div>
+        ) : discussionClosed ? (
+          <div
+            data-slot="archived-discussion-bar"
+            className="shrink-0 border-t border-overlay-8 bg-card px-4 py-3"
+          >
+            <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
+              <span className="text-sm text-text-muted">This discussion is archived</span>
+              <button
+                type="button"
+                onClick={() => { void handleReopen() }}
+                disabled={reopenPending || activeDiscussion.status === "archiving" || !activeDiscussion.sessionId}
+                title={!activeDiscussion.sessionId ? "This archive has no provider session to reopen" : undefined}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <i aria-hidden="true" className={`ph-bold ${reopenPending ? "ph-spinner animate-spin" : "ph-arrow-counter-clockwise"}`} />
+                {activeDiscussion.status === "archiving" ? "Finalizing…" : reopenPending ? "Reopening…" : "Reopen"}
+              </button>
+            </div>
+          </div>
+        ) : null}
       />
-      {owningApp && (
-        <div
-          data-slot="owned-discussion-bar"
-          className="shrink-0 border-t border-overlay-8 bg-card px-4 py-3"
-        >
-          <div className="mx-auto flex max-w-3xl items-center gap-2 text-sm text-text-muted">
-            <i aria-hidden="true" className="ph-bold ph-plugs-connected shrink-0" />
-            <span>This discussion belongs to {owningApp}. Continue it there.</span>
-          </div>
-        </div>
-      )}
-      {discussionClosed && !owningApp && (
-        <div
-          data-slot="archived-discussion-bar"
-          className="shrink-0 border-t border-overlay-8 bg-card px-4 py-3"
-        >
-          <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
-            <span className="text-sm text-text-muted">This discussion is archived</span>
-            <button
-              type="button"
-              onClick={() => { void handleReopen() }}
-              disabled={reopenPending || activeDiscussion.status === "archiving" || !activeDiscussion.sessionId}
-              title={!activeDiscussion.sessionId ? "This archive has no provider session to reopen" : undefined}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <i aria-hidden="true" className={`ph-bold ${reopenPending ? "ph-spinner animate-spin" : "ph-arrow-counter-clockwise"}`} />
-              {activeDiscussion.status === "archiving" ? "Finalizing…" : reopenPending ? "Reopening…" : "Reopen"}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   ) : (
     <div

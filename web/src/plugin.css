@@ -434,6 +434,10 @@
   transition: none !important;
 }
 
+:scope[data-cozy] :is([data-slot="owned-discussion-bar"], [data-slot="archived-discussion-bar"]) {
+  background: transparent;
+}
+
 /* Discussion switches may move focus. Keep the input frame the same size. */
 [data-slot="nova-discussion-pane"] [data-slot="composer"] :has(> .message-input-textarea) {
   scale: none;
