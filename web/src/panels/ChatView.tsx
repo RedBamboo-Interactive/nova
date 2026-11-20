@@ -411,15 +411,6 @@ export function ChatView({
     : null, [activeDiscussion, discussions, archivedDiscussions])
   const discussionClosed = activeDiscussion?.status === "archived" || activeDiscussion?.status === "archiving"
 
-  useBreadcrumbLabel(
-    !floating && urlDiscussionId ? `/apps/nova/chat/${urlDiscussionId}` : undefined,
-    activeDiscussion?.type === "live" && !discussionClosed
-      ? "Live"
-      : activeDiscussion?.type === "heartbeat"
-        ? "Heartbeat"
-        : activeDisplayTitle || "New Discussion",
-  )
-
   // The route's segment would read "journal"; a dated day has its own crumb under it.
   useBreadcrumbLabel(journalOpen ? JOURNAL_ROUTE : undefined, "Journal")
   useBreadcrumbLabel(journalOpen && journalDate ? journalPath({ day: journalDate }) : undefined, "Journal")

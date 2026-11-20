@@ -9,7 +9,9 @@ import { AppShell } from "./components/layout/app-shell"
 import { useDiscussions } from "./hooks/use-discussions"
 import { useEventTypes } from "./hooks/use-event-types"
 import type { WsEvent } from "./lib/types"
-import { routes } from "./routes"
+import { createRoutes } from "./routes"
+import { resolveKnownDiscussion } from "./lib/archive-discussion-store"
+import { createDiscussionTitleResolver } from "./lib/discussion-display-title"
 import { usePendingVisibleContext, type PendingVisibleContextController } from "./hooks/use-pending-visible-context"
 
 type DiscussionsHook = ReturnType<typeof useDiscussions>
@@ -50,17 +52,28 @@ function WsDiscussionBridge({ discRef }: { discRef: React.RefObject<DiscussionsH
  * provider, and the command palette. This component mounts Nova's chat routes and
  * the discussion state shared across them.
  */
-function NovaAppInner() {
+function NovaRoutes() {
+  const { discussions, archivedDiscussions, activeDiscussion } = useDisc()
+  const routes = useMemo(() => createRoutes(id => {
+    // Selection can get ahead of the router. Resolve the title for this route's own ID.
+    const discussion = activeDiscussion?.id === id
+      ? activeDiscussion
+      : resolveKnownDiscussion(discussions, archivedDiscussions, id)
+    if (!discussion) return "Discussion"
+    if (discussion.type === "heartbeat") return "Heartbeat"
+    if (discussion.type === "live" && discussion.status !== "archived" && discussion.status !== "archiving") {
+      return "Live"
+    }
+    return createDiscussionTitleResolver([...discussions, ...archivedDiscussions])(discussion) || "New Discussion"
+  }), [discussions, archivedDiscussions, activeDiscussion])
   const element = useRoutes(routes)
   const { pathname } = useLocation()
   usePluginBreadcrumbs(routes, "/apps/nova", pathname)
 
   return (
-    <NovaRuntimeProvider>
-      <AppShell>
-        <div className="h-full overflow-hidden">{element}</div>
-      </AppShell>
-    </NovaRuntimeProvider>
+    <AppShell>
+      <div className="h-full overflow-hidden">{element}</div>
+    </AppShell>
   )
 }
 
@@ -88,5 +101,9 @@ export function NovaRuntimeProvider({
 
 // Toasts render in the shell's single stack; the plugin mounts none of its own.
 export function NovaApp() {
-  return <NovaAppInner />
+  return (
+    <NovaRuntimeProvider>
+      <NovaRoutes />
+    </NovaRuntimeProvider>
+  )
 }
