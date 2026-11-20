@@ -117,6 +117,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
   }, [discussions])
   const titleOf = useMemo(() => createDiscussionTitleResolver(discussions), [discussions])
   const sections = useMemo(() => discussionSections(chat, grouping), [chat, grouping])
+  const hasNamedSections = sections.some(section => section.name !== null)
 
   const renderLiveItem = useCallback((discussion: DiscussionInfo) => {
     const unread = isDiscussionUnread(discussion)
@@ -416,20 +417,22 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
               <div className="flex flex-col">
                 {groupingLoading && <p role="status" className="px-4 py-2 text-[11px] text-text-muted">Organizing discussions…</p>}
                 {groupingUnavailable && <div className="flex items-center justify-between gap-2 px-4 py-2 text-[11px] text-text-muted"><span>Project grouping is unavailable</span><button type="button" className="hover:text-contrast" onClick={onRetryGrouping}>Retry</button></div>}
-                {sections.map(section => (
-                  <section className="flex flex-col in-data-[cozy]:gap-0.5" key={section.name ?? "ungrouped"} aria-label={section.name ?? "Other discussions"} data-discussion-group={section.name ?? "ungrouped"}>
-                    {section.name && <h3 className="flex items-center gap-2 border-b border-overlay-6 px-4 pb-2 pt-4 text-xs font-medium text-text-muted">
-                      <span className="relative h-6 w-6 shrink-0" data-group-visual={section.name}>
-                        {section.thumbnailDiscussionId && showAvatars
-                          ? <DiscussionThumbnail id={section.thumbnailDiscussionId} icon={section.icon} />
-                          : <i aria-hidden="true" className={`ph ph-${groupingIcon(section.icon)} absolute inset-0 flex items-center justify-center text-sm`} />}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate" title={section.name}>{section.name}</span>
-                      <span className="text-[10px] font-normal">{section.items.length}</span>
-                    </h3>}
-                    {section.items.map(discussion => <div key={discussion.id}>{renderChatItem(discussion)}</div>)}
-                  </section>
-                ))}
+                {sections.map(section => {
+                  const heading = section.name ?? (hasNamedSections ? "Ungrouped" : null)
+                  return (
+                    <section className="flex flex-col in-data-[cozy]:gap-0.5" key={section.name ?? "ungrouped"} aria-label={heading ?? "Other discussions"} data-discussion-group={section.name ?? "ungrouped"}>
+                      {heading && <h3 className="flex items-center gap-2 border-b border-overlay-6 px-4 pb-2 pt-4 text-xs font-medium text-text-muted">
+                        {section.name && <span className="relative h-6 w-6 shrink-0" data-group-visual={section.name}>
+                          {section.thumbnailDiscussionId && showAvatars
+                            ? <DiscussionThumbnail id={section.thumbnailDiscussionId} icon={section.icon} />
+                            : <i aria-hidden="true" className={`ph ph-${groupingIcon(section.icon)} absolute inset-0 flex items-center justify-center text-sm`} />}
+                        </span>}
+                        <span className="min-w-0 truncate" title={heading}>{heading}</span>
+                      </h3>}
+                      {section.items.map(discussion => <div key={discussion.id}>{renderChatItem(discussion)}</div>)}
+                    </section>
+                  )
+                })}
                 {chat.length === 0 && <p className="p-4 text-center text-sm text-text-muted">No discussions yet</p>}
               </div>
             </ScrollArea>
