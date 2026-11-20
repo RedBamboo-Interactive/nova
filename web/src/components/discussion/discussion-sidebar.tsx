@@ -452,12 +452,12 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                   const listId = `${groupListId}-${index}`
                   return (
                     <section
-                      className={heading ? "flex flex-col overflow-hidden rounded-lg [&>div>div:last-child_[data-slot=item-list-row]]:border-b-0" : "flex flex-col"}
+                      className="flex flex-col gap-2"
                       key={JSON.stringify(section.name)}
                       aria-label={heading ?? "Other discussions"}
                       data-discussion-group={section.name ?? "ungrouped"}
                     >
-                      {heading && <h3 className={collapsed ? undefined : "border-b border-overlay-6"}>
+                      {heading && <h3>
                         <button
                           type="button"
                           aria-expanded={!collapsed}
@@ -485,7 +485,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                       </h3>}
                       <div
                         id={listId}
-                        className={collapsed ? "hidden" : "flex flex-col in-data-[cozy]:gap-0.5"}
+                        className={collapsed ? "hidden" : heading ? "flex flex-col gap-1" : "flex flex-col in-data-[cozy]:gap-0.5"}
                         hidden={collapsed}
                       >
                         {!collapsed && section.items.map(discussion => <div key={discussion.id}>{renderChatItem(discussion)}</div>)}
