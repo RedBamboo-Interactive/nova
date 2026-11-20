@@ -418,7 +418,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             renderItem={renderLiveItem}
           />
           {chat.length > 0 && (
-            <div className="border-b border-overlay-6 mx-3" />
+            <div className="mx-3 hidden border-b border-overlay-6 in-data-[cozy]:block" />
           )}
         </div>
       )}
