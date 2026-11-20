@@ -48,13 +48,10 @@ export function discussionSections(discussions: readonly DiscussionInfo[], view:
     const section = sections.get(name)
     if (!section) continue
     sections.delete(name)
-    if (section.items.length < 2) loose.push(...section.items)
-    else {
-      const representative = view?.groups?.find(g => g.name === name)?.thumbnailDiscussionId
-      // Never fetch an image from a member hidden by the active Agent filter.
-      if (representative && section.items.some(d => d.id === representative)) section.thumbnailDiscussionId = representative
-      result.push(section)
-    }
+    const representative = view?.groups?.find(g => g.name === name)?.thumbnailDiscussionId
+    // Never fetch an image from a member hidden by the active Agent filter.
+    if (representative && section.items.some(d => d.id === representative)) section.thumbnailDiscussionId = representative
+    result.push(section)
   }
   // Loose rows keep their original recent-activity order too.
   const looseIds = new Set(loose.map(d => d.id))

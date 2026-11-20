@@ -15,6 +15,7 @@ public sealed class DiscussionGroupingTests
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-11-19T14:00:00Z");
     private static GroupingInput[] Inputs => [new("a", "Lands of Lore inventory", "agent", []), new("b", "Lands of Lore icons", "agent", [])];
     private const string Output = """{"assignments":[{"discussionId":"a","group":"Lands of Lore","label":"Inventory","icon":"layout"},{"discussionId":"b","group":"Lands of Lore","label":"Icons","icon":"image"}],"groups":[{"name":"Lands of Lore","icon":"mountains","thumbnailDiscussionId":"b"}]}""";
+    private const string SingletonOutput = """{"assignments":[{"discussionId":"a","group":"Lands of Lore","label":"Inventory","icon":"layout"}],"groups":[{"name":"Lands of Lore","icon":"mountains","thumbnailDiscussionId":"a"}]}""";
     private static DefaultHttpContext Human(string subject = "owner") => new() { User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", subject)], "Bearer")) };
 
     [Fact]
@@ -28,11 +29,12 @@ public sealed class DiscussionGroupingTests
     }
 
     [Fact]
-    public void Singleton_and_uncertain_topics_are_not_forced_into_categories()
+    public void A_recognizable_project_with_one_discussion_keeps_its_heading()
     {
-        var result = DiscussionGroupingPolicy.Parse(Output.Replace("\"Lands of Lore\",\"label\":\"Icons\"", "\"Other\",\"label\":\"Icons\""), Inputs, null, Now);
-        Assert.All(result.Assignments, a => Assert.Null(a.Group));
-        Assert.Empty(result.GroupOrder);
+        var result = DiscussionGroupingPolicy.Parse(SingletonOutput, Inputs, null, Now);
+        Assert.Equal("Lands of Lore", Assert.Single(result.Assignments).Group);
+        Assert.Equal("Lands of Lore", Assert.Single(result.GroupOrder));
+        Assert.Equal("a", Assert.Single(result.Groups!).ThumbnailDiscussionId);
     }
 
     [Fact]
@@ -247,16 +249,19 @@ public sealed class DiscussionGroupingTests
     }
 
     [Fact]
-    public async Task Zero_or_one_eligible_discussion_needs_no_model()
+    public async Task Empty_list_skips_inference_and_one_discussion_can_get_a_project()
     {
         var world = new World();
         world.Entities.Items.RemoveAll(e => e.TypeSlug == "discussion" && e.Data["discussion_id"]!.ToString() == "b");
+        world.Gateway.Output = SingletonOutput;
         var one = await world.Refresh();
         Assert.Equal(one.Fingerprint, one.SourceFingerprint);
+        Assert.Single(one.GroupOrder);
         world.Entities.Items.RemoveAll(e => e.TypeSlug == "discussion");
         var none = await world.Refresh();
         Assert.Equal(none.Fingerprint, none.SourceFingerprint);
-        Assert.Equal(0, world.Gateway.Calls);
+        Assert.Empty(none.GroupOrder);
+        Assert.Equal(1, world.Gateway.Calls);
     }
     private sealed class World
     {

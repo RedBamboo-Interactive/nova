@@ -22,12 +22,12 @@ test("keyboard navigation follows grouped visible order", () => {
   assert.equal(getAdjacentSidebarDiscussion(rows, "hud", -1, null, view)?.id, "live")
   assert.equal(getAdjacentSidebarDiscussion(rows, "roleplay", 1, null, view)?.id, "live")
 })
-test("new, uncertain and singleton discussions stay visible", () => {
+test("one visible discussion keeps its project heading while uncertain rows stay loose", () => {
   const subset = [make("new"), rows[1], rows[3]]
   const sections = discussionSections(subset, view)
-  assert.equal(sections.length, 1)
-  assert.equal(sections[0].name, null)
-  assert.deepEqual(sections[0].items.map(d => d.id), ["new", "hud", "roleplay"])
+  assert.deepEqual(sections.map(section => section.name), ["Lands of Lore", null])
+  assert.deepEqual(sections[0].items.map(d => d.id), ["hud"])
+  assert.deepEqual(sections[1].items.map(d => d.id), ["new", "roleplay"])
 })
 test("agent filtering cannot introduce hidden discussion IDs", () => {
   const mixed = rows.map(d => d.id === "icons" ? { ...d, agentId: "another" } : d)
