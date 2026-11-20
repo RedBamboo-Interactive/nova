@@ -25,6 +25,13 @@ export function NovaSettingsPanel() {
           onCheckedChange={(v) => setLocalSettings({ showDiscussionAvatars: v })}
         />
       </SettingRow>
+      <SettingRow label="Group by project">
+        <Switch
+          aria-label="Group by project"
+          checked={localSettings.groupDiscussions}
+          onCheckedChange={(groupDiscussions) => setLocalSettings({ groupDiscussions })}
+        />
+      </SettingRow>
       <SectionHeader>Chat</SectionHeader>
       <SettingRow label="Composer autofocus" hint="Choose when opening or switching a discussion moves focus to the message field.">
         <Select
