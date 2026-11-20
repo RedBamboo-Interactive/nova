@@ -174,12 +174,55 @@ public sealed class DiscussionGroupingTests
         world.Add("foreign", "SOMEONE ELSE", owner: "other");
         world.Add("archive", "ANCIENT", status: "archived");
         world.Add("live", "LIVE PERSONAL", type: "live");
+        foreach (var id in new[] { "private", "foreign", "archive", "live" })
+            world.AddMessage(id, $"Excluded opening for {id}");
         await world.Refresh();
+        Assert.Empty(world.Messages.Reads);
+        Assert.DoesNotContain("Excluded opening", world.Gateway.Body);
         Assert.DoesNotContain("TOP SECRET", world.Gateway.Body);
         Assert.DoesNotContain("SOMEONE ELSE", world.Gateway.Body);
         Assert.DoesNotContain("ANCIENT", world.Gateway.Body);
         Assert.DoesNotContain("LIVE PERSONAL", world.Gateway.Body);
         Assert.Empty((await world.Service().ReadAsync("other", Human("other"), default)).Assignments);
+    }
+
+    [Fact]
+    public async Task Generic_title_classification_uses_only_bounded_human_context_and_does_not_store_it()
+    {
+        var world = new World();
+        world.Entities.Items.First(e => e.TypeSlug == "discussion").Data["title"] = "Where should this live?";
+        world.AddMessage("a", "HIDDEN EVENT", "agent-note");
+        world.AddMessage("a", "QUEUED TEXT", "queued-user-message");
+        world.AddMessage("a", "ASSISTANT TEXT", role: "assistant");
+        world.AddMessage("a", "<nova-context>INJECTED CONTEXT</nova-context> I want to start a story roleplay. " + new string('x', 400) + "TRUNCATED TAIL");
+        world.AddMessage("a", "My character is the navigator.");
+        world.AddMessage("a", "LATER TURN");
+        world.Gateway.Output = SingletonOutput.Replace("Lands of Lore", "Roleplay").Replace("Inventory", "Starting a story");
+
+        await world.Read();
+        Assert.Empty(world.Messages.Reads);
+        var result = await world.Refresh();
+        Assert.Equal("Roleplay", Assert.Single(result.GroupOrder));
+        Assert.Equal("Where should this live?", Assert.Single(result.Assignments).SourceTitle);
+        Assert.Contains("I want to start a story roleplay", world.Gateway.Body);
+        Assert.Contains("My character is the navigator", world.Gateway.Body);
+        foreach (var excluded in new[] { "HIDDEN EVENT", "QUEUED TEXT", "ASSISTANT TEXT", "INJECTED CONTEXT", "TRUNCATED TAIL", "LATER TURN" })
+            Assert.DoesNotContain(excluded, world.Gateway.Body);
+        Assert.DoesNotContain("My character is the navigator", Assert.Single(world.Records.Rows).Data.ToJsonString());
+        await world.Read();
+        await world.Refresh();
+        Assert.Single(world.Messages.Reads);
+    }
+
+    [Fact]
+    public async Task Rechecks_access_after_reading_context_before_sending_inference()
+    {
+        var world = new World();
+        world.AddMessage("a", "CONTENT MADE PRIVATE DURING READ");
+        world.Messages.AfterRead = () => world.Entities.Items.First(e => e.TypeSlug == "discussion").Data["confidential"] = true;
+        await world.Refresh();
+        Assert.Equal(0, world.Gateway.Calls);
+        Assert.Empty(world.Records.Rows);
     }
 
     [Fact]
@@ -268,6 +311,7 @@ public sealed class DiscussionGroupingTests
         public Entities Entities { get; } = new();
         public Records Records { get; } = new();
         public Gateway Gateway { get; } = new();
+        public OpeningMessages Messages { get; } = new();
         private readonly string _agentId = Guid.NewGuid().ToString();
         private readonly DiscussionGrouping _service;
         public World()
@@ -279,8 +323,14 @@ public sealed class DiscussionGroupingTests
         }
         public void Add(string id, string title, string owner = "owner", bool confidential = false, string status = "idle", string type = "chat") => Entities.Items.Add(new(Guid.NewGuid(), "discussion", DiscussionStore.Slug(id), title,
             new JsonObject { ["discussion_id"] = id, ["app"] = "nova", ["title"] = title, ["type"] = type, ["status"] = status, ["owner_id"] = owner, ["agent"] = _agentId, ["confidential"] = confidential }, Now, Now, null));
-        public DiscussionGrouping Service() => new(new DiscussionStore(Entities, new NoMessages()), Records,
-            new AgentDirectory(Entities, new Events()), new RedComputeClient(Gateway), Entities);
+        public void AddMessage(string id, string content, string source = "user-message", string role = "user")
+        {
+            var entity = Entities.Items.Single(e => e.Slug == DiscussionStore.Slug(id));
+            Messages.Rows.Add(new(Messages.Rows.Count + 1, entity.Id, role, content, new JsonObject { ["source"] = source }, Now));
+            entity.Data["message_count"] = Messages.Rows.Count(m => m.DiscussionId == entity.Id);
+        }
+        public DiscussionGrouping Service() => new(new DiscussionStore(Entities, Messages), Records,
+            new AgentDirectory(Entities, new Events()), new RedComputeClient(Gateway), Entities, Messages);
         public Task<DiscussionGroupingView> Read() => _service.ReadAsync("owner", Human(), default);
         public Task<DiscussionGroupingView> Refresh() => _service.RefreshAsync("owner", Human(), default);
     }
@@ -323,11 +373,22 @@ public sealed class DiscussionGroupingTests
         public Task<LeafEntity> ReplaceDataAsync(Guid id, JsonObject data, string? name = null, CancellationToken ct = default) => throw new InvalidOperationException("No entity mutations");
         public Task DeleteAsync(Guid id, CancellationToken ct = default) => throw new InvalidOperationException("No entity mutations");
     }
-    private sealed class NoMessages : IDiscussions
+    private sealed class OpeningMessages : IDiscussions
     {
+        public List<DiscussionMessage> Rows { get; } = [];
+        public List<Guid> Reads { get; } = [];
+        public Action? AfterRead;
         public Task<LeafEntity> CreateAsync(string? title, string? agentSlugOrId = null, JsonObject? data = null, CancellationToken ct = default) => throw new InvalidOperationException("No transcript access");
         public Task PostAsync(Guid discussionId, string role, string content, JsonObject? metadata = null, string? userId = null, CancellationToken ct = default) => throw new InvalidOperationException("No transcript access");
-        public Task<IReadOnlyList<DiscussionMessage>> GetMessagesAsync(Guid discussionId, int limit = 1000, long afterId = 0, CancellationToken ct = default) => throw new InvalidOperationException("No transcript access");
+        public Task<IReadOnlyList<DiscussionMessage>> GetMessagesAsync(Guid discussionId, int limit = 1000, long afterId = 0, CancellationToken ct = default)
+        {
+            Assert.Equal(12, limit);
+            Assert.Equal(0, afterId);
+            Reads.Add(discussionId);
+            IReadOnlyList<DiscussionMessage> page = Rows.Where(m => m.DiscussionId == discussionId).Take(limit).ToArray();
+            AfterRead?.Invoke();
+            return Task.FromResult(page);
+        }
         public Task<IReadOnlyList<DiscussionMessage>> SearchMessagesAsync(string query, int limit = 1000, CancellationToken ct = default) => throw new InvalidOperationException("No transcript access");
         public Task ClearMessagesAsync(Guid discussionId, CancellationToken ct = default) => throw new InvalidOperationException("No transcript access");
         public Task SetReactionAsync(Guid discussionId, ReactionChange change, CancellationToken ct = default) => throw new InvalidOperationException("No transcript access");

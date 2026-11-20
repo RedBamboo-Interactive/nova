@@ -46,6 +46,12 @@ test("status, read markers and activity do not cause classifier work", () => {
   assert.equal(groupingInputKey([...rows].reverse()), key)
   assert.notEqual(groupingInputKey(rows.map(d => d.id === "hud" ? { ...d, title: "Renamed" } : d)), key)
 })
+test("only early message-count changes refresh context for a stable title", () => {
+  const key = (messageCount: number) => groupingInputKey([make("stable", "Stable title", { messageCount })])
+  assert.notEqual(key(0), key(1))
+  assert.notEqual(key(3), key(4))
+  assert.equal(key(4), key(270))
+})
 test("a removed or newly confidential source invalidates the derived cache", () => {
   assert.equal(groupingStillVisible(view, rows), true)
   assert.equal(groupingStillVisible(view, rows.filter(d => d.id !== "hud")), false)

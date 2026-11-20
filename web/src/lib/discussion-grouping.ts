@@ -23,7 +23,7 @@ export const groupingIcon = (value: string | undefined) => value && icons.has(va
 
 export function groupingInputKey(discussions: readonly DiscussionInfo[]): string {
   return JSON.stringify(discussions.filter(d => d.type === "chat" && !d.confidential && d.status !== "archived" && d.status !== "archiving")
-    .map(d => [d.id, d.title, d.agentId, d.worktrees?.map(w => [w.repositoryId, w.repositoryName])]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
+    .map(d => [d.id, d.title, d.agentId, Math.min(d.messageCount, 4), d.worktrees?.map(w => [w.repositoryId, w.repositoryName])]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
 }
 
 /** Match derived labels against current facts; never decorate a confidential, changed or closed row. */
