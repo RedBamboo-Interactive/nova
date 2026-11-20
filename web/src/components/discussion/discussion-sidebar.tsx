@@ -452,7 +452,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                   const listId = `${groupListId}-${index}`
                   return (
                     <section
-                      className={heading ? "flex flex-col overflow-hidden rounded-lg border border-overlay-10 [&>div>div:last-child_[data-slot=item-list-row]]:border-b-0" : "flex flex-col"}
+                      className={heading ? "flex flex-col overflow-hidden rounded-lg [&>div>div:last-child_[data-slot=item-list-row]]:border-b-0" : "flex flex-col"}
                       key={JSON.stringify(section.name)}
                       aria-label={heading ?? "Other discussions"}
                       data-discussion-group={section.name ?? "ungrouped"}
