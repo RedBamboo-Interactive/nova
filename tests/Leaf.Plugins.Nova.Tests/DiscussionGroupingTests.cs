@@ -354,6 +354,42 @@ public sealed class DiscussionGroupingTests
     }
 
     [Fact]
+    public async Task Growing_a_discussions_opening_keeps_its_group_during_and_after_refresh()
+    {
+        var world = new World();
+        world.AddMessage("b", "Review inventory icons");
+        world.AddMessage("b", "First reply", role: "assistant");
+        world.AddMessage("b", "Check the palette too");
+        var saved = await world.Refresh();
+
+        world.AddMessage("b", "Second reply", role: "assistant");
+        var reads = world.Messages.Reads.Count;
+        var pending = await world.Read();
+        Assert.NotEqual(pending.Fingerprint, pending.SourceFingerprint);
+        Assert.Equal(saved.Assignments, pending.Assignments);
+        Assert.Equal(saved.Groups, pending.Groups);
+        Assert.Equal(reads, world.Messages.Reads.Count);
+        Assert.Equal(1, world.Gateway.Calls);
+
+        var output = JsonNode.Parse(Output)!;
+        output["assignments"]!.AsArray().Single(row => row!["discussionId"]!.GetValue<string>() == "b")!["group"] = "";
+        world.Gateway.Output = output.ToJsonString();
+        var updated = await world.Refresh();
+        Assert.Equal(updated.Fingerprint, updated.SourceFingerprint);
+        Assert.Equal("Lands of Lore", updated.Assignments.Single(row => row.DiscussionId == "b").Group);
+        Assert.Equal(2, world.Gateway.Calls);
+
+        world.AddMessage("b", "Another ordinary turn");
+        Assert.Equal(updated.SourceFingerprint, (await world.Refresh()).SourceFingerprint);
+        Assert.Equal(2, world.Gateway.Calls);
+
+        var member = world.Entities.Items.Single(entity => entity.Slug == DiscussionStore.Slug("b"));
+        member.Data["message_count"] = 2;
+        Assert.DoesNotContain((await world.Read()).Assignments, row => row.DiscussionId == "b");
+    }
+
+
+    [Fact]
     public async Task Explicit_corrections_persist_independently_and_are_scoped_to_eligible_owner_rows()
     {
         var world = new World();

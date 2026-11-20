@@ -45,12 +45,13 @@ public static class DiscussionGroupingPolicy
     public static bool StillReadable(DiscussionGroupingSnapshot snapshot, GroupingInput[] current)
     {
         var byId = current.ToDictionary(d => d.Id, StringComparer.Ordinal);
-        return snapshot.Inputs.All(old => byId.TryGetValue(old.Id, out var now) && SameInput(old, now));
+        return snapshot.Inputs.All(old => byId.TryGetValue(old.Id, out var now) && CanRetainAssignment(old, now));
     }
 
-    internal static bool SameInput(GroupingInput left, GroupingInput right)
+    // More opening messages can make the classification stale without invalidating its display.
+    internal static bool CanRetainAssignment(GroupingInput left, GroupingInput right)
         => left.Id == right.Id && left.Title == right.Title && left.AgentId == right.AgentId
-            && left.OpeningRevision == right.OpeningRevision && left.Repositories is not null
+            && left.OpeningRevision <= right.OpeningRevision && left.Repositories is not null
             && left.Repositories.SequenceEqual(right.Repositories, StringComparer.Ordinal);
 
     public static DiscussionGroupingSnapshot RetainOpen(DiscussionGroupingSnapshot snapshot, GroupingInput[] remaining)
@@ -108,8 +109,8 @@ public static class DiscussionGroupingPolicy
         if (string.IsNullOrEmpty(group) || !label.StartsWith(group, StringComparison.OrdinalIgnoreCase)
             || label.Length == group.Length) return label;
         var next = label[group.Length];
-        if (!char.IsWhiteSpace(next) && !":-|/·–—".Contains(next)) return label;
-        var shortened = label[group.Length..].Trim().TrimStart(':', '-', '|', '/', '·', '–', '—').Trim();
+        if (!char.IsWhiteSpace(next) && !":-|/ï¿½ï¿½ï¿½".Contains(next)) return label;
+        var shortened = label[group.Length..].Trim().TrimStart(':', '-', '|', '/', 'ï¿½', 'ï¿½', 'ï¿½').Trim();
         return shortened.Length > 0 ? shortened : label;
     }
 
@@ -318,7 +319,7 @@ public sealed class DiscussionGrouping(
         {
             if (byId.TryGetValue(input.Id, out var current))
             {
-                if (DiscussionGroupingPolicy.SameInput(input, current)) remaining.Add(input);
+                if (DiscussionGroupingPolicy.CanRetainAssignment(input, current)) remaining.Add(input);
                 continue;
             }
 
