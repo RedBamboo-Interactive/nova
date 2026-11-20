@@ -24,23 +24,22 @@ export function useDiscussionGrouping(enabled: boolean, discussions: DiscussionI
       setView(groupingStillVisible(result, latestDiscussions.current, isDiscussionArchivePending) ? result : null)
       return true
     }
-    const timer = setTimeout(() => {
-      setLoading(true)
-      setUnavailable(false)
-      void (async () => {
-        try {
-          const cached = await api.get<DiscussionGroupingView>("/api/apps/nova/discussion-groups", abort.signal)
-          if (!accept(cached)) return
-          if (cached.fingerprint !== cached.sourceFingerprint) {
-            if (cached.retryAfterSeconds > 0) { setUnavailable(true); return }
-            const updated = await api.post<DiscussionGroupingView>("/api/apps/nova/discussion-groups/refresh", undefined, abort.signal)
-            if (accept(updated)) setUnavailable(updated.fingerprint !== updated.sourceFingerprint)
-          }
-        } catch { if (!cancelled && generation.current === current) setUnavailable(true) }
-        finally { if (!cancelled && generation.current === current) setLoading(false) }
-      })()
-    }, 600)
-    return () => { cancelled = true; clearTimeout(timer); abort.abort() }
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined
+    const isCurrent = () => !cancelled && generation.current === current
+    setLoading(false)
+    setUnavailable(false)
+    void api.get<DiscussionGroupingView>("/api/apps/nova/discussion-groups", abort.signal).then(cached => {
+      if (!accept(cached) || cached.fingerprint === cached.sourceFingerprint) return
+      if (cached.retryAfterSeconds > 0) { setUnavailable(true); return }
+      refreshTimer = setTimeout(() => {
+        setLoading(true)
+        void api.post<DiscussionGroupingView>("/api/apps/nova/discussion-groups/refresh", undefined, abort.signal)
+          .then(updated => { if (accept(updated)) setUnavailable(updated.fingerprint !== updated.sourceFingerprint) })
+          .catch(() => { if (isCurrent()) setUnavailable(true) })
+          .finally(() => { if (isCurrent()) setLoading(false) })
+      }, 600)
+    }).catch(() => { if (isCurrent()) setUnavailable(true) })
+    return () => { cancelled = true; clearTimeout(refreshTimer); abort.abort() }
   }, [enabled, inputKey, attempt])
   const visible = useMemo(() => enabled && view && groupingStillVisible(view, discussions, isDiscussionArchivePending) ? view : null,
     [enabled, view, discussions])

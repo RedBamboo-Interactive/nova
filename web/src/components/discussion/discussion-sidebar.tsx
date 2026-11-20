@@ -234,7 +234,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           <div className="relative flex h-full w-full items-center justify-center">
             {agent || visualCue ? (
               <>
-                {visualCue ? <DiscussionThumbnail id={discussion.id} icon={groupingIcon(label?.icon)} /> : agent && <img
+                {visualCue ? <DiscussionThumbnail id={discussion.id} icon={groupingIcon(label?.icon)} target={label?.thumbnailTarget} /> : agent && <img
                   src={agent.avatarUrl}
                   alt={agent.name}
                   className="absolute inset-0 w-full h-full rounded-lg object-cover"
@@ -423,8 +423,8 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                     <section className="flex flex-col in-data-[cozy]:gap-0.5" key={section.name ?? "ungrouped"} aria-label={heading ?? "Other discussions"} data-discussion-group={section.name ?? "ungrouped"}>
                       {heading && <h3 className="flex items-center gap-2 border-b border-overlay-6 px-4 pb-2 pt-4 text-xs font-medium text-text-muted">
                         {section.name && <span className="relative h-6 w-6 shrink-0" data-group-visual={section.name}>
-                          {section.thumbnailDiscussionId && showAvatars
-                            ? <DiscussionThumbnail id={section.thumbnailDiscussionId} icon={section.icon} />
+                          {section.thumbnailDiscussionId && section.thumbnailTarget && showAvatars
+                            ? <DiscussionThumbnail id={section.thumbnailDiscussionId} icon={section.icon} target={section.thumbnailTarget} />
                             : <i aria-hidden="true" className={`ph ph-${groupingIcon(section.icon)} absolute inset-0 flex items-center justify-center text-sm`} />}
                         </span>}
                         <span className="min-w-0 truncate" title={heading}>{heading}</span>

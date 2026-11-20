@@ -91,6 +91,32 @@ public sealed class DiscussionGroupingTests
     }
 
     [Fact]
+    public void Model_thumbnail_choices_use_only_the_exact_reviewed_image_for_its_owner()
+    {
+        var output = JsonNode.Parse(Output)!;
+        output["assignments"]![0]!["thumbnailId"] = "image-2";
+        output["assignments"]![1]!["thumbnailId"] = "image-2";
+        output["groups"]![0]!["thumbnailId"] = "image-2";
+        DiscussionGroupingImageChoice[] images = [new("image-2", "b", "/api/assets/art.png")];
+        var result = DiscussionGroupingPolicy.Parse(output.ToJsonString(), Inputs, null, Now, images);
+        Assert.Null(result.Assignments[0].ThumbnailTarget);
+        Assert.Equal("/api/assets/art.png", result.Assignments[1].ThumbnailTarget);
+        Assert.Equal("/api/assets/art.png", Assert.Single(result.Groups!).ThumbnailTarget);
+        var archived = DiscussionGroupingPolicy.RetainOpen(result, [Inputs[0]]);
+        Assert.Null(Assert.Single(archived.Groups!).ThumbnailTarget);
+
+        output["assignments"]![1]!["thumbnailId"] = "https://example.com/arbitrary.png";
+        output["groups"]![0]!["thumbnailId"] = "https://example.com/arbitrary.png";
+        var rejected = DiscussionGroupingPolicy.Parse(output.ToJsonString(), Inputs, null, Now, images);
+        Assert.Null(rejected.Assignments[1].ThumbnailTarget);
+        Assert.Null(Assert.Single(rejected.Groups!).ThumbnailTarget);
+
+        var retained = DiscussionGroupingPolicy.Parse(Output, Inputs, result, Now);
+        Assert.Equal("/api/assets/art.png", retained.Assignments[1].ThumbnailTarget);
+        Assert.Equal("/api/assets/art.png", Assert.Single(retained.Groups!).ThumbnailTarget);
+    }
+
+    [Fact]
     public void Group_visuals_reject_unknown_duplicate_and_cross_group_members()
     {
         Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(Output.Replace("\"thumbnailDiscussionId\":\"b\"", "\"thumbnailDiscussionId\":\"foreign\""), Inputs, null, Now));
