@@ -210,7 +210,10 @@ public sealed class DiscussionGrouping(
             var agent = await agents.GetAgentAsync(inputs.Select(d => d.AgentId).FirstOrDefault(id => id is not null)
                 ?? agents.NovaAgentId ?? "", ct);
             if (agent is null) return View(subject, inputs, previous);
-            var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, subject, ct);
+            // Cache scope may canonicalize local-user to the installation owner. Compute
+            // authority must retain the actual caller's user/system beneficiary boundary.
+            var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(
+                entities, context.User.FindFirstValue("sub"), ct);
             var provenance = await NovaComputeProvenance.CreateAsync(entities, agent, beneficiary,
                 "/api/apps/nova/discussion-groups/refresh", [], method: "POST", ct: ct,
                 cause: NovaComputeProvenance.RequestCause(context, subject));

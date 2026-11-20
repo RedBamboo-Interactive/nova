@@ -136,6 +136,22 @@ public sealed class DiscussionGroupingTests
     }
 
     [Fact]
+    public async Task Canonical_cache_owner_does_not_impersonate_a_local_browser_compute_beneficiary()
+    {
+        var local = new World();
+        // The endpoint already resolved its canonical cache key to owner.
+        var localContext = Human("local-user");
+        localContext.Items[InstallationOwner.RequestItem] = "owner";
+        await local.Service().RefreshAsync("owner", localContext, default);
+        Assert.Equal("system", local.Gateway.Provenance!.OnBehalfOf.Kind);
+        Assert.Equal("owner", Assert.Single(local.Records.Rows).UserId);
+        var signedOwner = new World();
+        await signedOwner.Refresh();
+        Assert.Equal("user", signedOwner.Gateway.Provenance!.OnBehalfOf.Kind);
+        Assert.Equal("owner", signedOwner.Gateway.Provenance!.OnBehalfOf.Id);
+    }
+
+    [Fact]
     public async Task Concurrent_clients_share_one_completion_and_one_snapshot()
     {
         var world = new World();
