@@ -2,7 +2,7 @@ import { useState, useCallback, useDeferredValue, useEffect, useLayoutEffect, us
 import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type EventRowRenderer, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
@@ -1387,23 +1387,28 @@ export function ChatView({
         <DropdownMenuContent align="end" sideOffset={4}>
           {!archiveMode && (
             <>
-              <DropdownMenuCheckboxItem checked={!!settings.groupDiscussions} onCheckedChange={checked => setSettings({ groupDiscussions: checked === true })}>
-                Group by project
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={settings.refineDiscussionTitles}
-                disabled={!settings.groupDiscussions}
-                onCheckedChange={checked => setSettings({ refineDiscussionTitles: checked === true })}
-              >
-                Refine titles
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={settings.useDiscussionThumbnails}
-                disabled={!settings.groupDiscussions}
-                onCheckedChange={checked => setSettings({ useDiscussionThumbnails: checked === true })}
-              >
-                Use thumbnail images
-              </DropdownMenuCheckboxItem>
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>Grouping</DropdownMenuLabel>
+                <DropdownMenuCheckboxItem checked={!!settings.groupDiscussions} onCheckedChange={checked => setSettings({ groupDiscussions: checked === true })}>
+                  Group by project
+                </DropdownMenuCheckboxItem>
+                <div className="ms-3 border-s border-border ps-1">
+                  <DropdownMenuCheckboxItem
+                    checked={settings.refineDiscussionTitles}
+                    disabled={!settings.groupDiscussions}
+                    onCheckedChange={checked => setSettings({ refineDiscussionTitles: checked === true })}
+                  >
+                    Refine titles
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={settings.useDiscussionThumbnails}
+                    disabled={!settings.groupDiscussions}
+                    onCheckedChange={checked => setSettings({ useDiscussionThumbnails: checked === true })}
+                  >
+                    Use thumbnail images
+                  </DropdownMenuCheckboxItem>
+                </div>
+              </DropdownMenuGroup>
               <DropdownMenuSeparator />
             </>
           )}

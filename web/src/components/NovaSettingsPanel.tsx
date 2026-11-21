@@ -1,3 +1,4 @@
+import { useId } from "react"
 import { KeyCaptureInput, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SettingRow, SectionHeader, Switch } from "@redbamboo/ui"
 import { composerFocusSettingsStore, normalizePushToTalkKey, pushToTalkSettingsStore, useComposerFocusSettings, usePushToTalkSettings, type ComposerAutoFocusMode } from "@redbamboo/chat"
 import { useLocalSettings } from "../hooks/use-local-settings"
@@ -7,6 +8,7 @@ import { FriezeMarkerSettings } from "./FriezeMarkerSettings"
 
 export function NovaSettingsPanel() {
   const localSettings = useLocalSettings()
+  const groupingHeadingId = useId()
   const pushToTalk = usePushToTalkSettings()
   const composerFocus = useComposerFocusSettings()
 
@@ -25,29 +27,34 @@ export function NovaSettingsPanel() {
           onCheckedChange={(v) => setLocalSettings({ showDiscussionAvatars: v })}
         />
       </SettingRow>
-      <SettingRow label="Group by project" hint="Nova uses titles and opening messages to group open discussions in the sidebar by project or topic. Discussions without a clear match stay ungrouped.">
-        <Switch
-          aria-label="Group by project"
-          checked={localSettings.groupDiscussions}
-          onCheckedChange={(groupDiscussions) => setLocalSettings({ groupDiscussions })}
-        />
-      </SettingRow>
-      <SettingRow label="Refine titles" hint="Show concise sidebar labels for grouped discussions. Turn this off to see their full titles.">
-        <Switch
-          aria-label="Refine titles"
-          checked={localSettings.refineDiscussionTitles}
-          disabled={!localSettings.groupDiscussions}
-          onCheckedChange={(refineDiscussionTitles) => setLocalSettings({ refineDiscussionTitles })}
-        />
-      </SettingRow>
-      <SettingRow label="Use thumbnail images" hint="Show image previews for discussions and project headings when available. Turn this off to use icons.">
-        <Switch
-          aria-label="Use thumbnail images"
-          checked={localSettings.useDiscussionThumbnails}
-          disabled={!localSettings.groupDiscussions}
-          onCheckedChange={(useDiscussionThumbnails) => setLocalSettings({ useDiscussionThumbnails })}
-        />
-      </SettingRow>
+      <div role="group" aria-labelledby={groupingHeadingId} className="mb-4 mt-2 rounded-lg bg-overlay-4 px-3 py-2.5">
+        <h3 id={groupingHeadingId} className="text-sm font-medium text-contrast">Grouping</h3>
+        <SettingRow label="Group by project" hint="Nova uses titles and opening messages to group open discussions in the sidebar by project or topic. Discussions without a clear match stay ungrouped.">
+          <Switch
+            aria-label="Group by project"
+            checked={localSettings.groupDiscussions}
+            onCheckedChange={(groupDiscussions) => setLocalSettings({ groupDiscussions })}
+          />
+        </SettingRow>
+        <div className="ms-2 border-s border-overlay-10 ps-3">
+          <SettingRow label="Refine titles" hint="Show concise sidebar labels for grouped discussions. Turn this off to see their full titles.">
+            <Switch
+              aria-label="Refine titles"
+              checked={localSettings.refineDiscussionTitles}
+              disabled={!localSettings.groupDiscussions}
+              onCheckedChange={(refineDiscussionTitles) => setLocalSettings({ refineDiscussionTitles })}
+            />
+          </SettingRow>
+          <SettingRow label="Use thumbnail images" hint="Show image previews for discussions and project headings when available. Turn this off to use icons.">
+            <Switch
+              aria-label="Use thumbnail images"
+              checked={localSettings.useDiscussionThumbnails}
+              disabled={!localSettings.groupDiscussions}
+              onCheckedChange={(useDiscussionThumbnails) => setLocalSettings({ useDiscussionThumbnails })}
+            />
+          </SettingRow>
+        </div>
+      </div>
       <SectionHeader>Chat</SectionHeader>
       <SettingRow label="Composer autofocus" hint="Choose when opening or switching a discussion moves focus to the message field.">
         <Select
