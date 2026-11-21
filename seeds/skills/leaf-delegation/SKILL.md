@@ -1,6 +1,6 @@
 ---
 name: leaf-delegation
-description: "Delegate bounded implementation or research to persistent Leaf Code sessions, verify the receiving workspace has the required Leaf Skills and knowledge, review results as Nova, and continue the same session. Use when handing work to Code or inspecting, reviewing, or continuing a delegation."
+description: "Delegate bounded implementation or research to Leaf Code, verify the receiving workspace has the required Skills and context, and review results as Nova. Use when sending or reviewing delegated work, deciding whether to continue a session, or preparing a fresh handoff."
 ---
 
 # Leaf delegation
@@ -17,6 +17,21 @@ Keep product judgment, architecture, established decisions, and acceptance revie
 
 For repository-backed delegation, the working directory is the repository checkout. The current delegate endpoint does not forward Agent instructions or selected Skill packages to that session. Supplying `agent` resolves attribution and workspace/provider defaults; it does not make the Agent workspace's Skills discoverable from a different repository. Do not invent a `skills`, `addDirs`, or `developerInstructions` request field: those are not in the delegate request contract.
 
+## Decide whether to start fresh
+
+Prefer a fresh Code session when the feature, milestone, or scope changes materially, even in
+the same repository. Continue the existing session for focused review feedback, fixes, or
+verification on the same bounded task while its context is still reliable. Repeated compaction
+can degrade judgment and lose decisions. Rotate earlier if compactions accumulate or the worker
+starts revisiting settled decisions, missing constraints, or repeating investigation.
+
+At a handoff, review a checkpoint and confirm the previous worker has finished writing before
+the next worker takes over the same checkout. Give the new session a concise, self-contained
+brief with the current goal and scope, the checked-out revision and any uncommitted work,
+decisions and constraints that still apply, what is done and verified, remaining work, and
+acceptance criteria. Point to the exact files, symbols, commits, tests, and readable references
+it needs. Keep any separate handoff in an authorized location the worker can read.
+
 ## Prepare the receiving session's Leaf knowledge
 
 Before delegating Leaf work, inspect the canonical checkout's applicable instructions and available Skill packages. Resolve the selected Agent and its Skills through their authoritative entities or generated workspace projection. Verify actual availability; a Skill name in this prompt or the existence of a Skill entity does not establish that the worker can discover or read it.
@@ -31,7 +46,7 @@ Select only knowledge relevant to the task:
 
 Include a short knowledge section in the delegated prompt. Give each required Skill's exact readable entrypoint and the relevant reference or journal paths, resolved for this installation. Explicitly tell the worker to read them before changing source. If a package cannot be read from the receiving environment, include its current authoritative instructions and necessary references in the prompt, within the task's authorized data scope. Never include raw credentials. If neither method provides the required knowledge, do the work directly or report the missing context; do not send an under-informed worker anyway.
 
-Ask the worker to establish the checkout, loaded Skills/references, relevant decisions and integration ownership before edits. Review that evidence in its session output. Missing required context is a reason to correct the handoff before implementation, not something to discover at completion. On continuation, recheck context when scope changes or a required contract has changed.
+Ask the worker to establish the checkout, loaded Skills/references, relevant decisions and integration ownership before edits. Review that evidence in its session output. Correct missing context before implementation. On continuation, refresh any required contract or reference that changed.
 
 Never repair discovery by editing generated `AGENTS.md`, `CLAUDE.md`, `.agents/skills`, or `.claude/skills` files, or by copying private Nova memory into a repository. Agent/Skill entities own those projections. Automatic attachment of Skills to repository sessions requires a separately scoped product change; a prompt handoff is not proof that attachment exists.
 
@@ -141,12 +156,12 @@ worktree), and list with `GET`. Each turn's context then carries
 
 ## Continue existing work
 
-Continue the same session so its transcript and context remain intact:
+For focused follow-up on the current task, send:
 
 ```json
 {
   "sessionId": "<existing session id>",
-  "prompt": "<review feedback or next bounded task>",
+  "prompt": "<focused feedback or verification on the current task>",
   "discussionId": "<current discussion id>"
 }
 ```
@@ -195,8 +210,8 @@ whose prompt cannot be accepted is cleaned up by Nova.
 
 With `discussionId`, terminal state produces a Nova session-complete event in that discussion.
 Afterward, inspect the repository status and artifacts, read the exact RedCompute session when
-needed, and verify tests plus real product behavior. Continue the same session with concrete feedback
-when revisions are needed.
+needed, and verify tests plus real product behavior. Use concrete review feedback for revisions
+to the current task. Apply the session selection guidance above before continuing.
 
 Persistent Claude and Codex sessions can emit correlated questions. Treat pending questions as
 control state and answer them through the session question route. One-shot inference closes input
@@ -206,5 +221,5 @@ after its prompt and cannot ask interactively.
 
 Give the delegated session the concrete outcome, repository scope, verified required Skills and references, decisions already made,
 acceptance behavior, required verification, dirty-worktree boundaries, and anything that must remain
-untouched. Keep work that may edit the same files in one sequential session; use parallel sessions
-only for independent scopes.
+untouched. Serialize work that can touch the same files, including when handing off to a fresh
+session. Follow repository ownership rules for any parallel work.
