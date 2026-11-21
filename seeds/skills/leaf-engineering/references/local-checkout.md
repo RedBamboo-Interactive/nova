@@ -88,8 +88,9 @@ git clone <repository> <parent>/<extension repository>
 git clone https://github.com/RedBamboo-Interactive/redbamboo-packages <parent>/redbamboo-packages
 ```
 
-If `release/producer-input.v1.json` names `redbamboo.commit`, check `redbamboo-packages` out at that
-commit, so the frontend builds against what the extension's release uses.
+Keep `redbamboo-packages` on an up-to-date `main`: a release builds against the `main` commit its
+builder resolves, so the frontend builds against what the extension's release uses. A
+`redbamboo.commit` in an older `release/producer-input.v1.json` is a legacy pin no release reads.
 
 Backend, when `plugin.json` has one:
 

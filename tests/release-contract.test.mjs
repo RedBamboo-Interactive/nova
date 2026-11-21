@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { readFileSync as readFileRaw, readdirSync, statSync } from "node:fs"
+import { readFileSync as readFileRaw } from "node:fs"
 import { join, resolve } from "node:path"
 import test from "node:test"
-import { buildMetadata, canonical, hashFile, validateExactVersionOverride, validateInput } from "../scripts/release/metadata.mjs"
+import { buildMetadata, canonical, checkDependencyCommits, hashFile, validateExactVersionOverride, validateInput } from "../scripts/release/metadata.mjs"
 
 const root = resolve(import.meta.dirname, "..")
 const readFileSync = (path, encoding) => {
@@ -81,14 +81,13 @@ test("automated version stamping permits only the three exact version fields", (
   assert.throws(() => validateExactVersionOverride(head, head, manifest.version), /must change the committed version/)
 })
 
-test("release input records only Leaf.Sdk and Nova's four actual shared package sources", () => {
+test("release input names only Leaf.Sdk and Nova's four actual shared package sources, never their commits", () => {
   assert.deepEqual(producer.leafSdk, {
     repository: "RedBamboo-Interactive/redleaf",
-    commit: "770756d72dbc6c633deaa6fe269b46bb5c4687d4",
     sourcePath: "src/Leaf.Sdk",
   })
-  assert.equal(producer.redleafReleaseToolCommit, "21e6fd393196fbe2179293ff3f05cb3501ebeaed")
-  assert.match(producer.redbamboo.commit, /^[0-9a-f]{40}$/)
+  assert.equal("redleafReleaseToolCommit" in producer, false)
+  assert.deepEqual(Object.keys(producer.redbamboo).sort(), ["inputs", "lockPath", "repository"])
   assert.deepEqual(producer.redbamboo.inputs.map(({ id, name, sourcePath }) => ({ id, name, sourcePath })), [
     { id: "redbamboo-chat", name: "@redbamboo/chat", sourcePath: "packages/chat" },
     { id: "redbamboo-ui", name: "@redbamboo/ui", sourcePath: "packages/ui" },
@@ -119,12 +118,23 @@ test("metadata bytes are deterministic and channel-neutral", () => {
     novaUrl: "https://github.com/RedBamboo-Interactive/nova",
     leafSdkUrl: "https://github.com/RedBamboo-Interactive/redleaf",
     redbambooUrl: "https://github.com/RedBamboo-Interactive/redbamboo-packages",
+    redleafCommit: "1".repeat(40),
+    redbambooCommit: "2".repeat(40),
     builtAt: "2026-08-08T09:00:00.000Z",
   }
   const first = canonical(buildMetadata(input, manifest, source))
   assert.equal(first, canonical(buildMetadata(input, manifest, source)))
   assert.doesNotMatch(first, /stable|nightly|channel|run_id|run_attempt/i)
   const metadata = JSON.parse(first)
+  // The builder-supplied commits are recorded exactly where the signed record and announcements read them.
+  assert.equal(metadata.toolchain.releaseTool, "1".repeat(40))
+  assert.deepEqual(Object.fromEntries(metadata.buildInputs.map((item) => [item.id, item.commit])), {
+    "leaf-sdk": "1".repeat(40),
+    "redbamboo-chat": "2".repeat(40),
+    "redbamboo-ui": "2".repeat(40),
+    "redbamboo-utility": "2".repeat(40),
+    "redbamboo-workflow": "2".repeat(40),
+  })
   assert.deepEqual(metadata.build, { backendProject: "src/Leaf.Plugins.Nova/Leaf.Plugins.Nova.csproj", frontendDirectory: "web" })
   assert.deepEqual(metadata.sboms, [])
   assert.deepEqual(metadata.dependencyLocks.map((item) => item.id).sort(), ["backend-nuget-lock", "redbamboo-pnpm-lock", "tests-nuget-lock", "web-pnpm-lock"])
@@ -137,21 +147,25 @@ test("metadata bytes are deterministic and channel-neutral", () => {
   assert.deepEqual(metadata.buildInputs.map((item) => item.id).sort(), ["leaf-sdk", "redbamboo-chat", "redbamboo-ui", "redbamboo-utility", "redbamboo-workflow"])
 })
 
-test("an unresolved RedLeaf pin fails closed before release output", () => {
-  const placeholder = ["REPLACE", "WITH", "REDLEAF", "RELEASE", "TOOL", "COMMIT"].join("_")
-  const unresolved = { ...structuredClone(producer), redleafReleaseToolCommit: placeholder }
-  assert.throws(() => validateInput(unresolved, manifest, packageJson), /publication is blocked/)
-  let placeholderCount = 0
-  const walk = (directory) => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if ([".git", "node_modules", "dist", "artifacts", "bin", "obj"].includes(entry.name)) continue
-      const path = join(directory, entry.name)
-      if (entry.isDirectory()) walk(path)
-      else if (statSync(path).size < 1_000_000) placeholderCount += readFileSync(path, "utf8").split(placeholder).length - 1
-    }
-  }
-  walk(root)
-  assert.equal(placeholderCount, 0)
+test("a committed dependency commit fails closed before release output", () => {
+  const pinned = [
+    { ...validProducer(), redleafReleaseToolCommit: "1".repeat(40) },
+    { ...validProducer(), leafSdk: { ...producer.leafSdk, commit: "1".repeat(40) } },
+    { ...validProducer(), redbamboo: { ...producer.redbamboo, commit: "2".repeat(40) } },
+  ]
+  for (const input of pinned) assert.throws(() => validateInput(input, manifest, packageJson), /builder inputs/)
+})
+
+test("the builder-supplied commits must be exact and name the checkouts that were built", () => {
+  const redleaf = "1".repeat(40)
+  const redbamboo = "2".repeat(40)
+  const checkouts = { leafSdk: redleaf, redleaf, redbamboo }
+  assert.doesNotThrow(() => checkDependencyCommits({ redleaf, redbamboo }, checkouts))
+  assert.throws(() => checkDependencyCommits({ redleaf: "1".repeat(7), redbamboo }, checkouts), /--redleaf-commit must be one full lowercase commit SHA/)
+  assert.throws(() => checkDependencyCommits({ redleaf, redbamboo: "A".repeat(40) }, checkouts), /--redbamboo-commit must be one full lowercase commit SHA/)
+  assert.throws(() => checkDependencyCommits({ redleaf, redbamboo }, { ...checkouts, leafSdk: "3".repeat(40) }), /Leaf\.Sdk checkout is at 3{40}, but the builder supplied 1{40}/)
+  assert.throws(() => checkDependencyCommits({ redleaf, redbamboo }, { ...checkouts, redleaf: "3".repeat(40) }), /RedLeaf release tool checkout/)
+  assert.throws(() => checkDependencyCommits({ redleaf, redbamboo }, { ...checkouts, redbamboo: "3".repeat(40) }), /RedBamboo checkout/)
 })
 
 test("workflow uses immutable action SHAs and one channel-neutral RedLeaf ingestion", () => {
@@ -187,10 +201,29 @@ test("workflow uses immutable action SHAs and one channel-neutral RedLeaf ingest
   assert.match(workflow, /-AllowEphemeralVersionOverride/)
 })
 
-test("release production rejects stale shared packages and every frontend native-command failure", () => {
+test("release production builds against RedLeaf and RedBamboo main resolved at dispatch and recorded", () => {
   const workflow = readFileSync(join(root, ".github/workflows/release-candidate.yml"), "utf8").replaceAll("\r\n", "\n")
-  assert.match(workflow, /git -C redbamboo-packages ls-remote --exit-code origin refs\/heads\/main/)
-  assert.match(workflow, /RedBamboo producer pin is stale/)
+  const candidate = workflow.slice(workflow.indexOf("  candidate:"), workflow.indexOf("  bridge:"))
+  assert.doesNotMatch(workflow, /redleafReleaseToolCommit|leafSdk\.commit|redbamboo\.commit|producer pin/)
+  assert.match(candidate, /repository: RedBamboo-Interactive\/redbamboo-packages\n\s+ref: main\n\s+path: redbamboo-packages\n/)
+  assert.match(candidate, /repository: RedBamboo-Interactive\/redleaf\n\s+ref: main\n\s+path: redleaf-release\n/)
+  // Leaf.Sdk is the same RedLeaf commit as the release tool, never a second resolution of main.
+  assert.match(candidate, /repository: RedBamboo-Interactive\/redleaf\n\s+ref: \$\{\{ steps\.dependencies\.outputs\.redleaf \}\}\n\s+path: leaf-sdk\n/)
+  assert.ok(candidate.indexOf("path: leaf-sdk") > candidate.indexOf("id: dependencies"))
+  assert.match(candidate, /\$redleaf = \(git -C redleaf-release rev-parse HEAD\)\.Trim\(\)/)
+  assert.match(candidate, /\$redbamboo = \(git -C redbamboo-packages rev-parse HEAD\)\.Trim\(\)/)
+  assert.match(candidate, /GITHUB_STEP_SUMMARY/)
+  // Both metadata modes receive the resolved commits, through the environment rather than an expression.
+  for (const mode of ["generate", "validate"]) {
+    const step = candidate.slice(candidate.indexOf(`node scripts/release/metadata.mjs ${mode}`))
+    assert.match(step.slice(0, step.indexOf("throw")), /--redleaf-commit \$env:REDLEAF_COMMIT `\n\s+--redbamboo-commit \$env:REDBAMBOO_COMMIT `/)
+  }
+  assert.equal((candidate.match(/REDLEAF_COMMIT: \$\{\{ steps\.dependencies\.outputs\.redleaf \}\}/g) ?? []).length, 2)
+  assert.equal((candidate.match(/REDBAMBOO_COMMIT: \$\{\{ steps\.dependencies\.outputs\.redbamboo \}\}/g) ?? []).length, 2)
+})
+
+test("release production rejects every frontend native-command failure", () => {
+  const workflow = readFileSync(join(root, ".github/workflows/release-candidate.yml"), "utf8").replaceAll("\r\n", "\n")
 
   const checkedCommands = [
     ["corepack enable", "Corepack enable failed."],
