@@ -32,6 +32,22 @@ export function NovaSettingsPanel() {
           onCheckedChange={(groupDiscussions) => setLocalSettings({ groupDiscussions })}
         />
       </SettingRow>
+      <SettingRow label="Refine titles" hint="Show concise sidebar labels for grouped discussions. Turn this off to see their full titles.">
+        <Switch
+          aria-label="Refine titles"
+          checked={localSettings.refineDiscussionTitles}
+          disabled={!localSettings.groupDiscussions}
+          onCheckedChange={(refineDiscussionTitles) => setLocalSettings({ refineDiscussionTitles })}
+        />
+      </SettingRow>
+      <SettingRow label="Use thumbnail images" hint="Show image previews for discussions and project headings when available. Turn this off to use icons.">
+        <Switch
+          aria-label="Use thumbnail images"
+          checked={localSettings.useDiscussionThumbnails}
+          disabled={!localSettings.groupDiscussions}
+          onCheckedChange={(useDiscussionThumbnails) => setLocalSettings({ useDiscussionThumbnails })}
+        />
+      </SettingRow>
       <SectionHeader>Chat</SectionHeader>
       <SettingRow label="Composer autofocus" hint="Choose when opening or switching a discussion moves focus to the message field.">
         <Select

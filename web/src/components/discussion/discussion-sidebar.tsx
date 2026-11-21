@@ -118,6 +118,8 @@ interface Props {
   showAvatars?: boolean
   grouping?: DiscussionGroupingView | null
   groupingEnabled?: boolean
+  refineTitles: boolean
+  useThumbnails: boolean
   groupingLoading?: boolean
   groupingUnavailable?: boolean
   onRetryGrouping?: () => void
@@ -131,7 +133,7 @@ interface Props {
   onLoadMoreArchived?: () => void
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars = true, grouping = null, groupingEnabled = false, groupingLoading = false, groupingUnavailable = false, onRetryGrouping, collapsedGroups, onToggleGroup, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars = true, grouping = null, groupingEnabled = false, refineTitles, useThumbnails, groupingLoading = false, groupingUnavailable = false, onRetryGrouping, collapsedGroups, onToggleGroup, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -264,7 +266,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           <div className="relative flex h-full w-full items-center justify-center">
             {agent || visualCue ? (
               <>
-                {visualCue ? <DiscussionThumbnail id={discussion.id} icon={groupingIcon(label?.icon)} target={label?.thumbnailTarget} /> : agent && <img
+                {visualCue ? <DiscussionThumbnail id={discussion.id} icon={groupingIcon(label?.icon)} target={useThumbnails ? label?.thumbnailTarget : undefined} /> : agent && <img
                   src={agent.avatarUrl}
                   alt={agent.name}
                   className="absolute inset-0 w-full h-full rounded-lg object-cover"
@@ -287,7 +289,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         ].filter(Boolean).join(" ")}
         title={
           <>
-            {label?.label || titleOf(discussion) || "New discussion"}
+            {(refineTitles && label?.label) || titleOf(discussion) || "New discussion"}
             {discussion.confidential && <i className="ph-bold ph-lock-simple text-[10px] text-text-muted ml-1.5 opacity-60" />}
           </>
         }
@@ -307,7 +309,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
       </DiscussionRowTarget>
     )
-  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer, titleOf, grouping])
+  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer, titleOf, grouping, refineTitles, useThumbnails])
 
   const renderArchivedItem = useCallback((discussion: DiscussionInfo) => {
     const item = discussion as ArchiveDiscussionItem
@@ -469,7 +471,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                         >
                           <i aria-hidden="true" className={`ph-bold ph-caret-${collapsed ? "right" : "down"} shrink-0 text-[10px]`} />
                           {section.name && <span className="relative h-6 w-6 shrink-0" data-group-visual={section.name}>
-                            {section.thumbnailDiscussionId && section.thumbnailTarget && showAvatars
+                            {useThumbnails && section.thumbnailDiscussionId && section.thumbnailTarget && showAvatars
                               ? <DiscussionThumbnail id={section.thumbnailDiscussionId} icon={section.icon} target={section.thumbnailTarget} />
                               : <i aria-hidden="true" className={`ph ph-${groupingIcon(section.icon)} absolute inset-0 flex items-center justify-center text-sm`} />}
                           </span>}

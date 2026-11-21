@@ -1390,6 +1390,20 @@ export function ChatView({
               <DropdownMenuCheckboxItem checked={!!settings.groupDiscussions} onCheckedChange={checked => setSettings({ groupDiscussions: checked === true })}>
                 Group by project
               </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={settings.refineDiscussionTitles}
+                disabled={!settings.groupDiscussions}
+                onCheckedChange={checked => setSettings({ refineDiscussionTitles: checked === true })}
+              >
+                Refine titles
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={settings.useDiscussionThumbnails}
+                disabled={!settings.groupDiscussions}
+                onCheckedChange={checked => setSettings({ useDiscussionThumbnails: checked === true })}
+              >
+                Use thumbnail images
+              </DropdownMenuCheckboxItem>
               <DropdownMenuSeparator />
             </>
           )}
@@ -1928,6 +1942,8 @@ export function ChatView({
                   showAvatars={showDiscussionAvatars}
                   grouping={grouping.view}
                   groupingEnabled={!!settings.groupDiscussions}
+                  refineTitles={settings.refineDiscussionTitles}
+                  useThumbnails={settings.useDiscussionThumbnails}
                   groupingLoading={grouping.loading}
                   groupingUnavailable={grouping.unavailable}
                   onRetryGrouping={grouping.retry}
