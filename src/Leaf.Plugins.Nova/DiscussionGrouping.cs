@@ -49,7 +49,7 @@ public static class DiscussionGroupingPolicy
     }
 
     public static string Fingerprint(GroupingInput[] inputs)
-        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("group-labels-v8:" + JsonSerializer.Serialize(inputs, Json))));
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("group-labels-v9:" + JsonSerializer.Serialize(inputs, Json))));
 
     public static bool StillReadable(DiscussionGroupingSnapshot snapshot, GroupingInput[] current)
     {
@@ -79,6 +79,26 @@ public static class DiscussionGroupingPolicy
             Assignments = assignments,
             GroupOrder = snapshot.GroupOrder.Where(names.Contains).ToArray(),
             Groups = groups,
+        };
+    }
+
+    private static readonly HashSet<string> ProviderGroupNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Codex", "OpenAI Codex", "Codex CLI", "OpenAI Codex CLI",
+    };
+
+    internal static DiscussionGroupingSnapshot WithoutProviderGroups(DiscussionGroupingSnapshot snapshot)
+    {
+        if (!snapshot.Assignments.Any(a => a.Group is { } group && ProviderGroupNames.Contains(group))
+            && !snapshot.GroupOrder.Any(ProviderGroupNames.Contains)
+            && !(snapshot.Groups?.Any(g => ProviderGroupNames.Contains(g.Name)) ?? false)) return snapshot;
+
+        return snapshot with
+        {
+            Assignments = snapshot.Assignments.Select(a => a.Group is { } group && ProviderGroupNames.Contains(group)
+                ? a with { Group = null } : a).ToArray(),
+            GroupOrder = snapshot.GroupOrder.Where(name => !ProviderGroupNames.Contains(name)).ToArray(),
+            Groups = snapshot.Groups?.Where(group => !ProviderGroupNames.Contains(group.Name)).ToArray(),
         };
     }
 
@@ -127,6 +147,7 @@ public static class DiscussionGroupingPolicy
     public static DiscussionGroupingSnapshot Parse(string text, GroupingInput[] inputs,
         DiscussionGroupingSnapshot? previous, DateTimeOffset now, IReadOnlyList<DiscussionGroupingImageChoice>? choices = null)
     {
+        if (previous is not null) previous = WithoutProviderGroups(previous);
         var raw = text.Trim();
         if (raw.StartsWith("```", StringComparison.Ordinal))
         {
@@ -162,7 +183,7 @@ public static class DiscussionGroupingPolicy
             var id = Read("discussionId", 100);
             if (!known.TryGetValue(id, out var source) || !seen.Add(id)) throw new JsonException("Unknown or duplicate discussion ID");
             var group = Read("group", 64);
-            if (group.Equals("Other", StringComparison.OrdinalIgnoreCase)
+            if (ProviderGroupNames.Contains(group) || group.Equals("Other", StringComparison.OrdinalIgnoreCase)
                 || group.Equals("General", StringComparison.OrdinalIgnoreCase)
                 || group.Equals("Miscellaneous", StringComparison.OrdinalIgnoreCase)) group = "";
             if (group.Length > 0)
@@ -214,6 +235,7 @@ public static class DiscussionGroupingPolicy
                 return text;
             }
             var name = ReadVisual("name", 64);
+            if (ProviderGroupNames.Contains(name)) continue;
             if (!names.TryGetValue(name, out var canonical) || !visualNames.Add(canonical))
                 throw new JsonException("Unknown or duplicate group visual");
             var icon = ReadVisual("icon", 32);
@@ -314,7 +336,11 @@ public sealed class DiscussionGrouping(
     private async Task<DiscussionGroupingSnapshot?> LoadAsync(string subject, CancellationToken ct)
     {
         var rows = await records.QueryAsync(Stream, new RecordQuery { UserId = subject, Limit = 1 }, ct);
-        try { return rows.FirstOrDefault()?.Data["projection"]?.Deserialize<DiscussionGroupingSnapshot>(Json); }
+        try
+        {
+            var snapshot = rows.FirstOrDefault()?.Data["projection"]?.Deserialize<DiscussionGroupingSnapshot>(Json);
+            return snapshot is null ? null : DiscussionGroupingPolicy.WithoutProviderGroups(snapshot);
+        }
         catch (JsonException) { return null; }
     }
 
@@ -403,9 +429,10 @@ public sealed class DiscussionGrouping(
             var corrections = await LoadCorrectionsAsync(subject, ct);
             var view = View(subject, inputs, display, corrections);
             if (view.SourceFingerprint == view.Fingerprint || view.RetryAfterSeconds > 0 || inputs.Length == 0) return view;
-            // A fresh inference must not inherit derived data from archived sources.
+            // Start model inference without old hints when a source has left the input set.
             var currentIds = inputs.Select(input => input.Id).ToHashSet(StringComparer.Ordinal);
-            var previous = stored is not null && stored.Inputs.All(input => currentIds.Contains(input.Id)) ? display : null;
+            var hadMissingInput = stored?.Inputs.Any(input => !currentIds.Contains(input.Id)) == true;
+            var hints = hadMissingInput ? null : display;
             DiscussionGroupingView BackOff()
             {
                 ct.ThrowIfCancellationRequested();
@@ -496,9 +523,13 @@ public sealed class DiscussionGrouping(
                 Choose useful sidebar categories using the title, repositories, opening user messages and recent final replies.
                 Later discussion can identify the project behind a generic request. Ignore incidental project mentions.
                 Respect userGroupChoice. A null group in that choice means the user wants the row ungrouped.
-                Group technical work under its parent product even when the title names a feature or subsystem.
-                Work on Nova discussion infrastructure or Leaf storage belongs with RedLeaf when the context supports it.
-                An empty placeholder called New Discussion stays ungrouped. The agent name alone is not project evidence.
+                For engineering discussions, group by the project that owns the thing being changed.
+                An agent, model, harness, provider, editor, or other tool used in the work does not identify that project.
+                Codex is a harness, never an automatic sidebar group. Session scratch support implemented by
+                RedCompute belongs under RedCompute. Shared Leaf chat UI, Nova discussion infrastructure, and
+                RedLeaf Workspace features belong under RedLeaf. Code is the Leaf app, distinct from Codex.
+                Use these headings when the conversation supports that ownership. An empty placeholder called
+                New Discussion stays ungrouped.
                 Named products and projects are useful headings even for a single discussion. You can also
                 choose meaningful themes such as Roleplay, Personal, or Music when they fit the actual topic.
                 For example, a story roleplay goes under Roleplay. "Where should this live?" with an opening
@@ -518,9 +549,9 @@ public sealed class DiscussionGrouping(
                     messages = new[] { new { role = "user", content = projectRule + "\n" + JsonSerializer.Serialize(new
                     {
                         discussions = promptInputs,
-                        existingGroups = previous?.GroupOrder ?? [],
-                        existingGroupVisuals = (previous?.Groups ?? []).Select(group => new { group.Name, group.Icon }),
-                        existingAssignments = (previous?.Assignments ?? []).Select(a => new { a.DiscussionId, a.Group, a.Label, a.Icon }),
+                        existingGroups = hints?.GroupOrder ?? [],
+                        existingGroupVisuals = (hints?.Groups ?? []).Select(group => new { group.Name, group.Icon }),
+                        existingAssignments = (hints?.Assignments ?? []).Select(a => new { a.DiscussionId, a.Group, a.Label, a.Icon }),
                         imageCandidates = attachments.Select(image => new { image.Choice.Id, image.Choice.DiscussionId, image.Caption }),
                         allowedIcons = DiscussionGroupingPolicy.Icons,
                     }, Json) } },
@@ -534,13 +565,15 @@ public sealed class DiscussionGrouping(
             }
             ct.ThrowIfCancellationRequested();
             if (!result.Success || string.IsNullOrWhiteSpace(result.Text)) return BackOff();
-            DiscussionGroupingSnapshot snapshot;
-            try { snapshot = DiscussionGroupingPolicy.Parse(result.Text, inputs, previous, _time.GetUtcNow(), media.Select(image => image.Choice).ToArray()); }
-            catch (JsonException) { return BackOff(); }
             // Access/lifecycle/title could have changed while the model was running.
             var current = await InputsAsync(context, ct);
-            if (DiscussionGroupingPolicy.Fingerprint(current) != snapshot.Fingerprint)
+            if (DiscussionGroupingPolicy.Fingerprint(current) != view.Fingerprint)
                 return View(subject, current, await ProjectAsync(stored, current, context, ct), corrections);
+            // Preserve open rows' memberships after a verified archive, even though the model saw no old hints.
+            var retained = hadMissingInput ? await ProjectAsync(stored, current, context, ct) : display;
+            DiscussionGroupingSnapshot snapshot;
+            try { snapshot = DiscussionGroupingPolicy.Parse(result.Text, inputs, retained, _time.GetUtcNow(), media.Select(image => image.Choice).ToArray()); }
+            catch (JsonException) { return BackOff(); }
             ct.ThrowIfCancellationRequested();
             await records.AppendAsync(Stream, new JsonObject { ["projection"] = JsonSerializer.SerializeToNode(snapshot, Json) }, userId: subject, ct: ct);
             _retryAt.TryRemove(subject, out _);

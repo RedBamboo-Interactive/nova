@@ -37,6 +37,42 @@ public sealed class DiscussionGroupingTests
         Assert.Equal("a", Assert.Single(result.Groups!).ThumbnailDiscussionId);
     }
 
+    [Theory]
+    [InlineData("Codex")]
+    [InlineData(" openai codex ")]
+    [InlineData("CODEX CLI")]
+    public void Codex_provider_names_cannot_create_automatic_groups(string providerName)
+    {
+        var result = DiscussionGroupingPolicy.Parse(Output.Replace("Lands of Lore", providerName), Inputs, null, Now);
+        Assert.Equal(2, result.Assignments.Length);
+        Assert.All(result.Assignments, a => Assert.Null(a.Group));
+        Assert.Empty(result.GroupOrder);
+        Assert.Empty(result.Groups!);
+    }
+
+    [Fact]
+    public async Task A_saved_codex_group_is_retired_and_can_be_reclassified_under_its_project()
+    {
+        var world = new World();
+        await world.Refresh();
+        var previous = world.Records.Rows[0].Data["projection"]!.AsObject();
+        previous["fingerprint"] = "old-policy";
+        previous["groupOrder"] = new JsonArray("Codex");
+        previous["groups"]![0]!["name"] = "Codex";
+        foreach (var assignment in previous["assignments"]!.AsArray()) assignment!["group"] = "Codex";
+
+        var cached = await world.Read();
+        Assert.All(cached.Assignments, a => Assert.Null(a.Group));
+        Assert.Empty(cached.GroupOrder);
+        Assert.Empty(cached.Groups!);
+        Assert.Equal(1, world.Gateway.Calls);
+
+        world.Gateway.Output = Output.Replace("Lands of Lore", "RedLeaf");
+        var refreshed = await world.Refresh();
+        Assert.Equal("RedLeaf", Assert.Single(refreshed.GroupOrder));
+        Assert.All(refreshed.Assignments, a => Assert.Equal("RedLeaf", a.Group));
+    }
+
     [Fact]
     public void Existing_meaningful_memberships_and_group_order_survive_additions()
     {
@@ -348,7 +384,7 @@ public sealed class DiscussionGroupingTests
     }
 
     [Fact]
-    public async Task New_inputs_keep_existing_groups_visible_during_refresh_after_archive()
+    public async Task New_inputs_keep_surviving_groups_after_archive_even_when_the_model_leaves_them_ungrouped()
     {
         var world = new World();
         await world.Refresh();
@@ -358,15 +394,35 @@ public sealed class DiscussionGroupingTests
         Assert.NotEqual(cached.Fingerprint, cached.SourceFingerprint);
         Assert.Equal("a", Assert.Single(cached.Assignments).DiscussionId);
 
-        world.Gateway.Output = SingletonOutput;
+        world.Gateway.Output = """{"assignments":[{"discussionId":"a","group":"","label":"Inventory","icon":"layout"}],"groups":[]}""";
         var refreshed = await world.Refresh();
         Assert.Equal(refreshed.Fingerprint, refreshed.SourceFingerprint);
+        Assert.Equal("Lands of Lore", Assert.Single(refreshed.Assignments).Group);
+        Assert.Null(Assert.Single(refreshed.Groups!).ThumbnailDiscussionId);
         Assert.Equal(2, world.Gateway.Calls);
         Assert.DoesNotContain("Lands of Lore icons", world.Gateway.Body);
         var request = JsonNode.Parse(world.Gateway.Body)!;
         var content = request["messages"]![0]!["content"]!.GetValue<string>();
         var userData = JsonNode.Parse(content[content.IndexOf("{\"discussions\":", StringComparison.Ordinal)..])!;
         Assert.Empty(userData["existingGroups"]!.AsArray());
+        Assert.Empty(userData["existingAssignments"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task An_archived_member_becoming_confidential_during_refresh_discards_the_retained_groups()
+    {
+        var world = new World();
+        await world.Refresh();
+        var archived = world.Entities.Items.Single(e => e.Slug == DiscussionStore.Slug("b"));
+        archived.Data["status"] = "archived";
+        world.Add("c", "New discussion");
+        world.Gateway.Output = """{"assignments":[{"discussionId":"a","group":"","label":"Inventory","icon":"layout"}],"groups":[]}""";
+        world.Gateway.BeforeReturn = () => archived.Data["confidential"] = true;
+
+        var refreshed = await world.Refresh();
+        Assert.Null(Assert.Single(refreshed.Assignments).Group);
+        Assert.Empty(refreshed.GroupOrder);
+        Assert.Empty(refreshed.Groups!);
     }
 
     [Fact]
