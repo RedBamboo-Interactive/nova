@@ -29,7 +29,7 @@ export function NovaSettingsPanel() {
       </SettingRow>
       <div role="group" aria-labelledby={groupingHeadingId} className="mb-4 mt-2 rounded-lg bg-overlay-4 px-3 py-2.5">
         <h3 id={groupingHeadingId} className="text-sm font-medium text-contrast">Grouping</h3>
-        <SettingRow label="Group by project" hint="Nova uses titles and opening messages to group open discussions in the sidebar by project or topic. Discussions without a clear match stay ungrouped.">
+        <SettingRow label="Group by project" hint="Nova uses titles and excerpts from the conversation to group open discussions in the sidebar by project or topic. Discussions without a clear match stay ungrouped.">
           <Switch
             aria-label="Group by project"
             checked={localSettings.groupDiscussions}

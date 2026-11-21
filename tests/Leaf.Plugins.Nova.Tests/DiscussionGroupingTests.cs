@@ -222,7 +222,8 @@ public sealed class DiscussionGroupingTests
         world.AddMessage("a", "ASSISTANT TEXT", role: "assistant");
         world.AddMessage("a", "<nova-context>INJECTED CONTEXT</nova-context> I want to start a story roleplay. " + new string('x', 400) + "TRUNCATED TAIL");
         world.AddMessage("a", "My character is the navigator.");
-        world.AddMessage("a", "LATER TURN");
+        for (var i = 0; i < 5; i++) world.AddMessage("a", $"Later accepted turn {i}");
+        world.AddMessage("a", "BEYOND EXCERPT LIMIT");
         world.Gateway.Output = SingletonOutput.Replace("Lands of Lore", "Roleplay").Replace("Inventory", "Starting a story");
 
         await world.Read();
@@ -232,12 +233,52 @@ public sealed class DiscussionGroupingTests
         Assert.Equal("Where should this live?", Assert.Single(result.Assignments).SourceTitle);
         Assert.Contains("I want to start a story roleplay", world.Gateway.Body);
         Assert.Contains("My character is the navigator", world.Gateway.Body);
-        foreach (var excluded in new[] { "HIDDEN EVENT", "QUEUED TEXT", "ASSISTANT TEXT", "INJECTED CONTEXT", "TRUNCATED TAIL", "LATER TURN" })
+        Assert.Contains("Later accepted turn 3", world.Gateway.Body);
+        foreach (var excluded in new[] { "HIDDEN EVENT", "QUEUED TEXT", "ASSISTANT TEXT", "INJECTED CONTEXT", "TRUNCATED TAIL", "Later accepted turn 4", "BEYOND EXCERPT LIMIT" })
             Assert.DoesNotContain(excluded, world.Gateway.Body);
         Assert.DoesNotContain("My character is the navigator", Assert.Single(world.Records.Rows).Data.ToJsonString());
         await world.Read();
         await world.Refresh();
         Assert.Single(world.Messages.Reads);
+    }
+
+    [Fact]
+    public async Task A_later_final_reply_can_supply_project_context_after_the_fourth_message()
+    {
+        var world = new World();
+        world.AttachSession("a", "session-a");
+        world.AttachSession("b", "session-b", confidential: true);
+        world.Entities.Items.Single(e => e.Slug == DiscussionStore.Slug("a")).Data["title"] = "Tool square redesign";
+        for (var i = 0; i < 4; i++) world.AddMessage("a", $"Design choice {i}");
+        world.AddMessage("b", "Ordinary user message");
+        var initialOutput = JsonNode.Parse(Output)!;
+        initialOutput["assignments"]!.AsArray().Single(row => row!["discussionId"]!.GetValue<string>() == "a")!["group"] = "";
+        world.Gateway.Output = initialOutput.ToJsonString();
+        var first = await world.Refresh();
+        Assert.Null(first.Assignments.Single(row => row.DiscussionId == "a").Group);
+
+        world.Gateway.Transcript =
+        [
+            new() { Role = "assistant", EventType = "text", Phase = "commentary", Content = "COMMENTARY ONLY" },
+            new() { Role = "assistant", EventType = "tool_result", Phase = "final_answer", Content = "TOOL OUTPUT" },
+            new() { Role = "assistant", EventType = "text", Phase = "final_answer", ParentToolUseId = "background", Content = "BACKGROUND REPLY" },
+            new() { Role = "assistant", EventType = "text", Phase = "final_answer", Content =
+                "<nova-context>INJECTED FINAL CONTEXT</nova-context> This is the shared Code chat UI for Compute jobs." },
+        ];
+        world.Gateway.Output = SingletonOutput.Replace("Lands of Lore", "Code");
+        world.AddMessage("a", "Let's implement it.");
+
+        var cached = await world.Read();
+        Assert.NotEqual(cached.Fingerprint, cached.SourceFingerprint);
+        Assert.Single(world.Gateway.TranscriptReads);
+
+        var updated = await world.Refresh();
+        Assert.Equal("Code", updated.Assignments.Single(row => row.DiscussionId == "a").Group);
+        Assert.Equal(new[] { "session-a", "session-a" }, world.Gateway.TranscriptReads);
+        Assert.Contains("shared Code chat UI for Compute jobs", world.Gateway.Body);
+        foreach (var excluded in new[] { "COMMENTARY ONLY", "TOOL OUTPUT", "BACKGROUND REPLY", "INJECTED FINAL CONTEXT" })
+            Assert.DoesNotContain(excluded, world.Gateway.Body);
+        Assert.DoesNotContain("shared Code chat UI", world.Records.Rows[^1].Data.ToJsonString());
     }
 
     [Fact]
@@ -379,9 +420,18 @@ public sealed class DiscussionGroupingTests
         Assert.Equal("Lands of Lore", updated.Assignments.Single(row => row.DiscussionId == "b").Group);
         Assert.Equal(2, world.Gateway.Calls);
 
-        world.AddMessage("b", "Another ordinary turn");
-        Assert.Equal(updated.SourceFingerprint, (await world.Refresh()).SourceFingerprint);
-        Assert.Equal(2, world.Gateway.Calls);
+        for (var i = 0; i < 8; i++) world.AddMessage("b", $"Early turn {i}");
+        var atEarlyLimit = await world.Refresh();
+        Assert.NotEqual(updated.SourceFingerprint, atEarlyLimit.SourceFingerprint);
+        Assert.Equal(3, world.Gateway.Calls);
+
+        for (var i = 0; i < 7; i++) world.AddMessage("b", $"Ordinary later turn {i}");
+        Assert.Equal(atEarlyLimit.SourceFingerprint, (await world.Refresh()).SourceFingerprint);
+        Assert.Equal(3, world.Gateway.Calls);
+
+        world.AddMessage("b", "Next context checkpoint");
+        Assert.NotEqual(atEarlyLimit.SourceFingerprint, (await world.Refresh()).SourceFingerprint);
+        Assert.Equal(4, world.Gateway.Calls);
 
         var member = world.Entities.Items.Single(entity => entity.Slug == DiscussionStore.Slug("b"));
         member.Data["message_count"] = 2;
@@ -488,6 +538,12 @@ public sealed class DiscussionGroupingTests
             Messages.Rows.Add(new(Messages.Rows.Count + 1, entity.Id, role, content, new JsonObject { ["source"] = source }, Now));
             entity.Data["message_count"] = Messages.Rows.Count(m => m.DiscussionId == entity.Id);
         }
+        public void AttachSession(string id, string sessionId, bool confidential = false)
+        {
+            Entities.Items.Single(e => e.Slug == DiscussionStore.Slug(id)).Data["session_id"] = sessionId;
+            Entities.Items.Add(new(Guid.NewGuid(), "ai-session", sessionId, sessionId,
+                new JsonObject { ["session_id"] = sessionId, ["confidential"] = confidential }, Now, Now, null));
+        }
         public DiscussionGrouping Service() => new(new DiscussionStore(Entities, Messages), Records,
             new AgentDirectory(Entities, new Events()), new RedComputeClient(Gateway), Entities, Messages);
         public Task<DiscussionGroupingView> Read() => _service.ReadAsync("owner", Human(), default);
@@ -498,8 +554,23 @@ public sealed class DiscussionGroupingTests
     {
         public int Calls; public string Body = ""; public string Output = DiscussionGroupingTests.Output;
         public Action? BeforeReturn; public ComputeProvenance? Provenance;
+        public SessionMessage[] Transcript = [];
+        public List<string> TranscriptReads { get; } = [];
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
+            if (request.Method == HttpMethod.Get)
+            {
+                var path = request.RequestUri!.OriginalString;
+                if (path.EndsWith("/artifacts?kinds=image&limit=8", StringComparison.Ordinal))
+                    return new(HttpStatusCode.NotFound);
+                Assert.EndsWith("/transcript-page?limit=48", path);
+                var sessionId = path.Split('/')[3];
+                TranscriptReads.Add(sessionId);
+                var page = new { session = new { id = sessionId }, messages = Transcript,
+                    page = new { epoch = "epoch", boundaryComplete = true } };
+                var json = JsonSerializer.Serialize(page, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                return new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+            }
             Calls++; Body = await request.Content!.ReadAsStringAsync(ct); Provenance = provenance;
             await Task.Yield(); BeforeReturn?.Invoke();
             return new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new { success = true, text = Output }), Encoding.UTF8, "application/json") };
@@ -541,7 +612,7 @@ public sealed class DiscussionGroupingTests
         public Task PostAsync(Guid discussionId, string role, string content, JsonObject? metadata = null, string? userId = null, CancellationToken ct = default) => throw new InvalidOperationException("No transcript access");
         public Task<IReadOnlyList<DiscussionMessage>> GetMessagesAsync(Guid discussionId, int limit = 1000, long afterId = 0, CancellationToken ct = default)
         {
-            Assert.Equal(12, limit);
+            Assert.Equal(32, limit);
             Assert.Equal(0, afterId);
             Reads.Add(discussionId);
             IReadOnlyList<DiscussionMessage> page = Rows.Where(m => m.DiscussionId == discussionId).Take(limit).ToArray();

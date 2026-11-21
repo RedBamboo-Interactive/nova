@@ -46,11 +46,16 @@ test("status, read markers and activity do not cause classifier work", () => {
   assert.equal(groupingInputKey([...rows].reverse()), key)
   assert.notEqual(groupingInputKey(rows.map(d => d.id === "hud" ? { ...d, title: "Renamed" } : d)), key)
 })
-test("only early message-count changes refresh context for a stable title", () => {
+test("grouping refreshes through early messages and at later checkpoints", () => {
   const key = (messageCount: number) => groupingInputKey([make("stable", "Stable title", { messageCount })])
   assert.notEqual(key(0), key(1))
-  assert.notEqual(key(3), key(4))
-  assert.equal(key(4), key(270))
+  assert.notEqual(key(4), key(5))
+  assert.notEqual(key(11), key(12))
+  assert.equal(key(12), key(19))
+  assert.notEqual(key(19), key(20))
+  assert.equal(key(20), key(27))
+  assert.notEqual(key(27), key(28))
+  assert.notEqual(key(20), groupingInputKey([make("stable", "Stable title", { messageCount: 20, sessionId: "new-session" })]))
 })
 test("closing a row leaves the other sections visible through the pending archive and undo", () => {
   const closing = rows.map(row => row.id === "hud" ? { ...row, status: "archiving" as const } : row)

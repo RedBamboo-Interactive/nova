@@ -22,9 +22,16 @@ export interface DiscussionSection { name: string | null; icon: string; thumbnai
 const icons = new Set(["chats-circle", "image", "paint-brush", "film-strip", "music-notes", "book-open", "code", "cloud", "hard-drives", "feather", "mountains", "leaf", "layout", "cube"])
 export const groupingIcon = (value: string | undefined) => value && icons.has(value) ? value : "chats-circle"
 
+// Keep the early limit and later interval in sync with DiscussionGroupingPolicy.
+function contextRevision(messageCount: number): number {
+  const count = Math.max(0, messageCount)
+  if (count <= 12) return count
+  return 12 + Math.floor((count - 12) / 8) * 8
+}
+
 export function groupingInputKey(discussions: readonly DiscussionInfo[]): string {
   return JSON.stringify(discussions.filter(d => d.type === "chat" && !d.confidential && d.status !== "archived" && d.status !== "archiving")
-    .map(d => [d.id, d.title, d.agentId, Math.min(d.messageCount, 4), d.worktrees?.map(w => [w.repositoryId, w.repositoryName])]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
+    .map(d => [d.id, d.title, d.agentId, d.sessionId, contextRevision(d.messageCount), d.worktrees?.map(w => [w.repositoryId, w.repositoryName])]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
 }
 
 /** Match derived labels against current facts; never decorate a confidential, changed or closed row. */
