@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using Xunit;
 
 namespace Leaf.Plugins.Nova.Tests;
@@ -38,7 +37,12 @@ public sealed class NovaStoragePathTests
         Assert.Empty(offenders);
     }
 
-    // <repo>/tests/Leaf.Plugins.Nova.Tests/<this file> -> <repo>
-    private static DirectoryInfo RepositoryRoot([CallerFilePath] string testFile = "")
-        => new DirectoryInfo(Path.GetDirectoryName(testFile)!).Parent!.Parent!;
+    // From the test output directory, not [CallerFilePath]: a release build maps source paths to /_/ (PathMap).
+    private static DirectoryInfo RepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "plugin.json")))
+            directory = directory.Parent;
+        return directory ?? throw new DirectoryNotFoundException("Could not locate the Nova repository root.");
+    }
 }

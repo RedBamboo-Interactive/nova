@@ -1,5 +1,4 @@
 using System.Net;
-using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
@@ -576,11 +575,12 @@ internal static class RequestGoldens
         Assert.Fail($"Request golden {name} changed. Expected {path}, actual written to {dump}.");
     }
 
-    private static string RepoRoot([CallerFilePath] string file = "")
+    // From the test output directory, not [CallerFilePath]: a release build maps source paths to /_/ (PathMap).
+    private static string RepoRoot()
     {
-        var directory = new DirectoryInfo(Path.GetDirectoryName(file)!);
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "plugin.json")))
             directory = directory.Parent;
-        return directory?.FullName ?? throw new InvalidOperationException("plugin.json not found above " + file);
+        return directory?.FullName ?? throw new InvalidOperationException("plugin.json not found above " + AppContext.BaseDirectory);
     }
 }
