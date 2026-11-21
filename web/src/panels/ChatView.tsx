@@ -1341,20 +1341,19 @@ export function ChatView({
       // slot; inline from 768px, this header). Phones (tabs) and Floating Nova have no
       // container, so every rule gated on it is off and the header renders as before.
       className="nova-discussions-header"
-      leading={archiveMode ? (
-        <>
-          <button
-            type="button"
-            onClick={handleExitArchiveMode}
-            aria-label="Back to discussions"
-            title="Back to discussions"
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
-          >
-            <i aria-hidden="true" className="ph-bold ph-arrow-left text-base" />
-          </button>
-          {sidebarTitle}
-        </>
-      ) : sidebarTitle}
+      // Back is its own slot, so it stays in the row when the dock tabs this list.
+      back={archiveMode ? (
+        <button
+          type="button"
+          onClick={handleExitArchiveMode}
+          aria-label="Back to discussions"
+          title="Back to discussions"
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-overlay-10 hover:text-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring-a50"
+        >
+          <i aria-hidden="true" className="ph-bold ph-arrow-left text-base" />
+        </button>
+      ) : undefined}
+      leading={sidebarTitle}
     >
       {multiAgent && (
         <AgentPicker
