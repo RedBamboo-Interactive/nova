@@ -177,8 +177,8 @@ public static class DiscussionEndpoints
     private static readonly TimeSpan EventSessionWait = TimeSpan.FromSeconds(20);
 
     /// <summary>
-    /// <c>success</c> means the event will reach the session exactly once: delivered now (200) or
-    /// durably queued until the session exists (202). A system event is recorded for display only.
+    /// <c>success</c> means RedCompute admitted the event (200), or Nova durably queued it (202).
+    /// The report distinguishes admission from provider delivery. A system event is display-only.
     /// Anything that did not and will not reach the session is a non-success the caller can act on.
     /// </summary>
     internal static IResult EventResponse(EventInjectionResult result) => result.Delivery switch
@@ -242,9 +242,15 @@ public static class DiscussionEndpoints
             ? EventSender.DefaultSource : request.Source;
         var replyTo = request.SenderAgentId is null ? null : request.ReplyToDiscussionId;
 
+        // Use the signed origin for policy even when confidentiality hides it in the note itself.
+        var sender = DiscussionAccessPolicy.ReadSignedActor(ctx.User);
+        var crossDiscussion = request.Type != "system" && sender is { IsAgent: true, DiscussionId: { } origin }
+            && !string.Equals(origin, discussion.Id, StringComparison.OrdinalIgnoreCase)
+            && IsAgentNoteSource(source, origin);
+        var delivery = request.Delivery ?? (crossDiscussion ? DelegateEndpoints.SteerCurrent : null);
         var result = await injector.InjectEventAsync(discussion, request.Content, request.Type, source,
             request.SenderAgentId, replyTo, request.Metadata, UserId(ctx),
-            request.IdempotencyKey, ctx.RequestAborted, stamped, request.Delivery);
+            request.IdempotencyKey, ctx.RequestAborted, stamped, delivery);
 
         // A discussion created a moment ago is still getting its session. The event is queued
         // and the creation delivers it; wait a bounded while so the answer can say delivered.
@@ -261,6 +267,13 @@ public static class DiscussionEndpoints
             SentNote.Failed(result.Delivery), UserId(ctx), ctx.RequestAborted);
         return EventResponse(result);
     }
+
+    // A named machine event keeps its policy even when an Agent posts it from a discussion.
+    // Older Agent notes addressed the receiving session using the origin as the source.
+    private static bool IsAgentNoteSource(string? source, string origin) =>
+        source == EventSender.DefaultSource
+        || string.Equals(source, origin, StringComparison.OrdinalIgnoreCase)
+        || source?.EndsWith("-" + origin, StringComparison.OrdinalIgnoreCase) == true;
 
     private const int MaxRequestUidLength = 200;
 
@@ -2063,7 +2076,7 @@ public static class DiscussionEndpoints
 
         group.MapPost("/discussions/{id}/event", (string id, DiscussionEventRequest request, HttpContext ctx, DiscussionStore store, AgentDirectory agents, EventInjector injector, MessagePipeline pipeline, RedComputeClient redCompute)
             => PostEventAsync(id, request, ctx, store, agents, injector, pipeline, redCompute))
-            .WithSummary("Injects an event into a discussion and delivers it to its session; this is how an Agent writes to a discussion, its own included. A note to another discussion also shows, for the reader only, in the discussion it was sent from. For a signed Agent the server states the sender and sending discussion from the token and ignores senderAgentId in the body, and source defaults to agent-note. Body: content (required), optional type, source, senderAgentId, replyToDiscussionId (with senderAgentId, registers a reply callback), metadata, idempotencyKey, requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, 403 for a discussion the caller can't read), delivery (after-current, the default, or steer-current: into the running turn if it can take it, otherwise queued; anything else is a 400). The response's deliveryReport says what became of that: requested, effective, deliveryReason. Never creates a session: to a discussion without one it answers 202 queued. The id may be live for the current LIVE discussion.");
+            .WithSummary("Injects an event into a discussion and delivers it to its session; this is how an Agent writes to a discussion, its own included. A note to another discussion also shows, for the reader only, in the discussion it was sent from. For a signed Agent the server states the sender and sending discussion from the token and ignores senderAgentId in the body, and source defaults to agent-note. Body: content (required), optional type, source, senderAgentId, replyToDiscussionId (with senderAgentId, registers a reply callback), metadata, idempotencyKey, requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, 403 for a discussion the caller can't read), delivery (after-current or steer-current; anything else is a 400). Agent notes to other discussions default to steer-current. Self-notes and events without a signed discussion origin default to after-current. A steer returns when admitted, without waiting for the provider. deliveryReport gives requested, effective, effectiveFinal, state, deliveryReason and queueItemId when available. Read the queue item for the final outcome. Never creates a session: to a discussion without one it answers 202 queued. The id may be live for the current LIVE discussion.");
 
         group.MapPost("/discussions/{id}/nova-message", async (string id, NovaMessageRequest request,
             HttpContext ctx, DiscussionStore store, ConversationUnread conversationUnread,

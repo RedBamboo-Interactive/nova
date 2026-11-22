@@ -224,7 +224,8 @@ public static class CallbackEndpoints
         var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
             metadata: metadata,
             idempotencyKey: key, redeliverOnReuse: key is not null,
-            deliveryIdempotencyKey: key, ct: ctx.RequestAborted, framed: true);
+            deliveryIdempotencyKey: key, ct: ctx.RequestAborted, framed: true,
+            delivery: DelegateEndpoints.SteerCurrent);
         // Do not introduce extra unkeyed retries from an older sender. Recovery
         // is safe only when the callback carries its stable delivery identity.
         if (key is not null && !forwarded && discussion.SessionId is not null)
@@ -369,7 +370,8 @@ public static class CallbackEndpoints
         var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
             metadata: metadata,
             idempotencyKey: key, redeliverOnReuse: true,
-            deliveryIdempotencyKey: key, ct: ctx.RequestAborted, framed: true);
+            deliveryIdempotencyKey: key, ct: ctx.RequestAborted, framed: true,
+            delivery: DelegateEndpoints.SteerCurrent);
         if (!forwarded && discussion.SessionId is not null)
             return Results.Json(new { error = "event_delivery_failed" }, statusCode: 502);
 
@@ -543,7 +545,8 @@ public static class CallbackEndpoints
                 return Results.Json(new { error = "delivery_failed", message = "Target discussion not found" }, statusCode: 502);
 
             await injector.InjectAsync(discussion, responseContent, null, $"agent-response:{sessionId}",
-                senderAgentId: string.IsNullOrEmpty(respondingAgentId) ? null : respondingAgentId);
+                senderAgentId: string.IsNullOrEmpty(respondingAgentId) ? null : respondingAgentId,
+                ct: ctx.RequestAborted, delivery: DelegateEndpoints.SteerCurrent);
 
             // Stop the responding session (may already be stopped).
             try { await redCompute.StopAsync(sessionId); }

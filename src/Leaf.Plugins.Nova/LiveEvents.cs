@@ -64,9 +64,10 @@ public sealed class EventInjector(
         string? senderAgentId = null, string? replyToDiscussionId = null,
         JsonElement? metadata = null, string? userId = null,
         string? idempotencyKey = null, bool redeliverOnReuse = false,
-        CancellationToken ct = default, string? deliveryIdempotencyKey = null, bool framed = false)
+        CancellationToken ct = default, string? deliveryIdempotencyKey = null, bool framed = false, string? delivery = null)
         => Forwarded(await InjectCoreAsync(discussion, content, type, source, senderAgentId, replyToDiscussionId,
-            metadata, userId, idempotencyKey, redeliverOnReuse, ct, deliveryIdempotencyKey, null, framed: framed));
+            metadata, userId, idempotencyKey, redeliverOnReuse, ct, deliveryIdempotencyKey, null, framed: framed,
+            delivery: delivery));
 
     /// <summary>
     /// The <c>POST /discussions/{id}/event</c> contract: the detailed outcome, and a RedCompute
@@ -106,7 +107,7 @@ public sealed class EventInjector(
             idempotencyKey, false, ct, idempotencyKey, null, requireOpen: true);
 
     internal void SentNoteNotRecorded(Exception ex, string fromId, string targetId)
-        => logger?.LogWarning(ex, "A note from {From} to {Target} went out, but its bubble was not recorded", fromId, targetId);
+        => logger?.LogWarning(ex, "A note from {From} to {Target} went out, but its activity marker was not recorded", fromId, targetId);
 
     // Additive scoped entry point. Legacy injection signature, event identity, persistence,
     // delivery and reconciliation remain unchanged.
@@ -384,6 +385,7 @@ public sealed class EventInjector(
             if (senderAgentId is not null)
                 messageBody["metadata"] = new { novaEvent = true, senderAgentId, senderName };
             if (delivery is not null) messageBody["delivery"] = delivery;
+            if (delivery == DelegateEndpoints.SteerCurrent) messageBody["waitForDelivery"] = false;
             var agent = discussion.AgentId != null ? await agents.GetAgentAsync(discussion.AgentId, ct) : null;
             if (agent == null)
                 return new(false, null, 422, "missing_agent", "The discussion has no linked Agent entity.");

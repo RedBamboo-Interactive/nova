@@ -78,6 +78,13 @@ record (`requested`, `effective`, `effectiveFinal`, `state`, `deliveryReason`, w
 `interrupt-current` RedCompute's `turnInterrupted` and `interruptResult`. RedCompute
 delivers `interrupt-current` ahead of older queued input.
 
+Agent notes posted to another discussion through `/event` and server-originated
+completion and reply callbacks default to `steer-current`. Self-notes default to
+`after-current`. An explicit event delivery policy takes precedence. A steer returns
+on durable admission. `deliveryReport` describes the admission snapshot, including
+whether the effective policy is final. Read the discussion's
+`/input-queue/{queueItemId}` for the settled result.
+
 Completion callbacks carry RedCompute's `turnId`, `turnOutcome` and `interruptedBy`.
 An interrupted turn becomes a `session-interrupted` event naming who interrupted it,
 never a completion. A turn is de-duplicated on `turnId` (falling back to

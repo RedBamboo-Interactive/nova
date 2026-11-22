@@ -54,6 +54,41 @@ public sealed partial class EventDeliveryQueueTests
         Assert.Equal("delivered", body.GetProperty("delivery").GetString());
     }
 
+    [Theory]
+    [InlineData(false, null, Steer)]
+    [InlineData(false, After, After)]
+    [InlineData(true, null, After)]
+    [InlineData(true, Steer, Steer)]
+    public async Task Signed_notes_default_by_origin_and_honor_explicit_policy(
+        bool self, string? choice, string expected)
+    {
+        using var w = new World("session-1");
+        AddOrigin(w);
+        var user = SignedAgent(w, discussion: self ? w.Discussion().Id : Origin);
+        var (status, body) = await PostAsync(w, user, new DiscussionEventRequest { Content = "A note", Delivery = choice });
+
+        Assert.Equal(200, status);
+        Assert.Equal(expected, Report(body).GetProperty("Requested").GetString());
+        var message = Assert.Single(w.Gateway.Messages);
+        Assert.Equal(self && choice is null ? null : expected, message.Delivery);
+        Assert.Equal(expected == Steer ? false : null, message.WaitForDelivery);
+        Assert.Equal(self ? 0 : 1, (await SentRecordsAsync(w, self ? w.Discussion().Id : Origin)).Count);
+    }
+
+    [Theory]
+    [InlineData("heartbeat", After)]
+    [InlineData("nova-" + Origin, Steer)]
+    public async Task Signed_machine_events_keep_their_default_and_old_note_sources_steer(string source, string expected)
+    {
+        using var w = new World("session-1");
+        AddOrigin(w);
+        var (status, body) = await PostAsync(w, SignedAgent(w),
+            new DiscussionEventRequest { Content = "A note", Source = source });
+
+        Assert.Equal(200, status);
+        Assert.Equal(expected, Report(body).GetProperty("Requested").GetString());
+    }
+
     [Fact]
     public async Task A_steer_that_could_not_land_says_it_waits()
     {

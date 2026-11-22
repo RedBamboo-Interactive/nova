@@ -194,6 +194,13 @@ the same value under its first name), `inputsAhead` (other prompts are delivered
 `interruptResult` says why not (`not_active`, `maintenance`, `unsupported`, `not_found`, `error`).
 A retry replays the first admission's result and never interrupts twice.
 
+Server-originated completion and reply callbacks default to `steer-current` into the
+receiving discussion. An Agent note posted to another discussion through `/event` has
+the same default. Self-notes default to `after-current` and an explicit event policy
+takes precedence. The event endpoint acknowledges a steer on durable admission.
+Use its `deliveryReport` and `queueItemId` to distinguish a pending steer from its final
+delivery through `GET /api/apps/nova/discussions/{id}/input-queue/{queueItemId}`.
+
 The completion callback is always bound to this prompt. A steered prompt reports when the turn it
 joined ends, and that turn arrives in the discussion once, not once per prompt it carried. The turn
 an interrupt ended reports through its own registration as a `session-interrupted` event that names

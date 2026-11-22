@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type EventRowRenderer, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
+import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
 import { DiscussionThumbnailCacheContext, useDiscussionThumbnailCache } from "../components/discussion/discussion-thumbnail"
@@ -56,8 +56,7 @@ import { NOVA_DRAFT_STORAGE_KEY, opensChat } from "../lib/new-discussion-draft"
 import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToContext, type MonitorVisualSource } from "../lib/visual-capture"
 import { delegationEventPath } from "../lib/delegation-session-link"
 import { AGENT_NOTE_KEY } from "../lib/agent-note"
-import { isNoteRowPart, type NoteOriginDiscussion } from "../lib/agent-note-row"
-import { AgentNoteRow } from "../components/discussion/agent-note-row"
+import { describeAgentNote, type NoteOriginDiscussion } from "../lib/agent-note-presentation"
 import { formatOwningApp } from "../lib/discussion-owner"
 import { useVoiceSession } from "../hooks/use-voice-session"
 import { VoiceSessionPanel } from "../components/voice-session-panel"
@@ -1473,22 +1472,12 @@ export function ChatView({
     }
   }, [archivedDiscussions, discussions])
 
-  const eventRows = useMemo<EventRowRenderer>(() => ({
-    isRow: isNoteRowPart,
-    render: (part, { queueStatus, waiting }) => (
-      <AgentNoteRow
-        part={part}
-        queueStatus={queueStatus}
-        waiting={waiting}
-        currentDiscussionId={activeDiscussionId}
-        resolveAgent={resolveAgentInfo}
-        resolveDiscussion={resolveNoteDiscussion}
-        onOpenDiscussion={handleSelectDiscussion}
-        resolveImageSrc={resolveImageSrc}
-        resolveFileLink={resolveFileLink}
-      />
-    ),
-  }), [activeDiscussionId, handleSelectDiscussion, resolveAgentInfo, resolveFileLink, resolveImageSrc, resolveNoteDiscussion])
+  const resolveAgentNote = useCallback((event: ParsedEvent) => describeAgentNote(event, {
+    currentDiscussionId: activeDiscussionId,
+    resolveAgent: resolveAgentInfo,
+    resolveDiscussion: resolveNoteDiscussion,
+    onOpenDiscussion: handleSelectDiscussion,
+  }), [activeDiscussionId, handleSelectDiscussion, resolveAgentInfo, resolveNoteDiscussion])
 
   const { reactions, react, unreact } = useReactions(activeDiscussionId)
 
@@ -1787,7 +1776,7 @@ export function ChatView({
         getTranscriptPayloadDownloadUrl={getTranscriptPayloadDownloadUrl}
         assistantAvatar={avatarSrc}
         resolveAgentInfo={resolveAgentInfo}
-        eventRows={eventRows}
+        resolveAgentNote={resolveAgentNote}
         isFriezeMarkerVisible={isFriezeMarkerVisible}
         jobs={jobs}
         onStopJob={jobs ? handleStopJob : undefined}

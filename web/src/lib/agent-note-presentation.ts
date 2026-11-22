@@ -1,6 +1,5 @@
-import type { MessagePart } from "@redbamboo/chat"
+import type { AgentNotePresentation, ParsedEvent } from "@redbamboo/chat"
 import { AGENT_NOTE_KEY, AGENT_NOTE_SENT_KEY } from "./agent-note.ts"
-import { NOTE_ROW_KEY } from "./message-order.ts"
 
 /** What a reader's client knows about the discussion a note came from. */
 export interface NoteOriginDiscussion {
@@ -80,28 +79,37 @@ export function describeSentNote({ targetDiscussionId, targetTitle, targetAgentI
   }
 }
 
-/** The note as one plain line: the row truncates it, so Markdown markers would only show as noise. */
-export function notePreview(text: string): string {
-  return text
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/gm, "")
-    .replace(/(\*\*|__|`+|~~)/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
+type AgentNoteResolvers = Pick<NoteRowInput, "currentDiscussionId" | "resolveAgent" | "resolveDiscussion"> & {
+  onOpenDiscussion: (id: string) => void
 }
 
-export function isSentNotePart(part: MessagePart): boolean {
-  return part.toolName === `event:${AGENT_NOTE_SENT_KEY}`
+function noteField(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null
 }
 
-/** A note the conversation shows as a row. Anything else stays in the frieze. */
-export function isNoteRowPart(part: MessagePart): boolean {
-  if (isSentNotePart(part)) return true
-  if (part.toolName !== `event:${AGENT_NOTE_KEY}`) return false
-  try {
-    return (JSON.parse(part.toolInput ?? "{}") as { data?: Record<string, unknown> }).data?.[NOTE_ROW_KEY] === true
-  } catch {
-    return false
+export function describeAgentNote(event: ParsedEvent, options: AgentNoteResolvers): AgentNotePresentation | undefined {
+  const { key, data } = event
+  if (key !== AGENT_NOTE_KEY && key !== AGENT_NOTE_SENT_KEY) return undefined
+  const sent = key === AGENT_NOTE_SENT_KEY
+  const origin = sent
+    ? describeSentNote({
+      ...options,
+      targetDiscussionId: noteField(data?.targetDiscussionId),
+      targetTitle: noteField(data?.targetTitle),
+      targetAgentId: noteField(data?.targetAgentId),
+    })
+    : describeNote({
+      ...options,
+      agent: noteField(data?.agent),
+      discussionId: noteField(data?.discussionId),
+      topic: noteField(data?.topic),
+    })
+  const id = origin.openDiscussionId
+  return {
+    lead: `Note ${sent ? "to" : "from"}${origin.name ? ` ${origin.name} in` : ""}`,
+    discussion: "target" in origin ? origin.target : origin.origin,
+    avatarUrl: origin.avatarUrl,
+    discussionHref: id ? `/apps/nova/chat/${encodeURIComponent(id)}` : undefined,
+    onOpenDiscussion: id ? () => options.onOpenDiscussion(id) : undefined,
   }
 }

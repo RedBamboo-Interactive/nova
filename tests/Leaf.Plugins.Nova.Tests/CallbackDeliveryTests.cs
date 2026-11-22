@@ -13,6 +13,19 @@ namespace Leaf.Plugins.Nova.Tests;
 
 public sealed class CallbackDeliveryTests
 {
+    [Fact]
+    public async Task CompletionAcknowledgesAdmissionWithoutWaitingForTheSteer()
+    {
+        using var f = new Fixture();
+        f.Gateway.Answer = """{"accepted":true,"item":{"id":"q1","state":"pending","delivery":"steer-current"}}""";
+
+        Assert.Equal(200, await f.Complete("prompt-one"));
+        using var body = JsonDocument.Parse(Assert.Single(f.Gateway.Bodies));
+        Assert.Equal("steer-current", body.RootElement.GetProperty("delivery").GetString());
+        Assert.False(body.RootElement.GetProperty("waitForDelivery").GetBoolean());
+        Assert.Single(f.TargetMessages);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

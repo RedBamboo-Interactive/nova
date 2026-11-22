@@ -702,7 +702,7 @@ public sealed partial class EventDeliveryQueueTests
         public string? AdmissionItem { get; set; }
 
         public sealed record Admitted(string Session, string Text, string? MessageUid, string? Key,
-            string? Content = null, string? Metadata = null, string? Delivery = null);
+            string? Content = null, string? Metadata = null, string? Delivery = null, bool? WaitForDelivery = null);
 
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
@@ -750,7 +750,8 @@ public sealed partial class EventDeliveryQueueTests
                             if (key is not null) admittedKeys.Add(key, raw);
                             Messages.Add(new(session, text, uid, key, content,
                                 body.RootElement.TryGetProperty("metadata", out var sent) ? sent.GetRawText() : null,
-                                body.RootElement.TryGetProperty("delivery", out var policy) ? policy.GetString() : null));
+                                body.RootElement.TryGetProperty("delivery", out var policy) ? policy.GetString() : null,
+                                body.RootElement.TryGetProperty("waitForDelivery", out var wait) ? wait.GetBoolean() : null));
                         }
                     }
                     if (fail) throw new HttpRequestException("Simulated lost acknowledgement");

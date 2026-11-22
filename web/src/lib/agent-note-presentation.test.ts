@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import type { MessagePart } from "@redbamboo/chat"
-import { describeNote, describeSentNote, isNoteRowPart, isSentNotePart, notePreview, type NoteOriginDiscussion } from "./agent-note-row.ts"
+import type { ParsedEvent } from "@redbamboo/chat"
+import { describeAgentNote, describeNote, describeSentNote, type NoteOriginDiscussion } from "./agent-note-presentation.ts"
 import { buildEventPart } from "./message-order.ts"
 import { resolveEventType } from "./event-type-resolution.ts"
 
@@ -69,19 +69,6 @@ test("an Agent nobody can resolve never shows an id as its name", () => {
   assert.equal(describe({ agent: "takit" }).name, "Takit")
 })
 
-test("the preview is one plain line", () => {
-  assert.equal(notePreview("**Bold** and `code`\n\n- item [link](http://x)\n## head"), "Bold and code item link head")
-})
-
-test("only a projected note row is lifted out of the frieze", () => {
-  const resolve = (source: string) => resolveEventType(source, new Map())
-  const part = (source: string, content: string) => buildEventPart({ source, content, data: null, timestamp: "2026-11-03T10:00:00Z" }, resolve)
-  assert.equal(isNoteRowPart(part("event:nova-94453f76", "[internal] From 94453f76: hi")), true)
-  assert.equal(isNoteRowPart(part("event:nova-94453f76", "no lead")), false, "keeps its named dot")
-  assert.equal(isNoteRowPart(part("event:heartbeat", "[internal] x")), false)
-  assert.equal(isNoteRowPart({ type: "tool_use", toolName: "event:agent-note", toolInput: "not json", content: "" } as MessagePart), false)
-})
-
 const sentTo = (over: Partial<Parameters<typeof describeSentNote>[0]>) => describeSentNote({
   targetDiscussionId: "94453f76",
   targetTitle: "Title when sent",
@@ -105,7 +92,7 @@ test("a sent note keeps its stored title when the discussion is gone, and doesn'
   assert.deepEqual(sentTo({ targetDiscussionId: "ffffffff" }), { name: "Nova", avatarUrl: "/api/assets/nova.png", target: "Title when sent", openDiscussionId: null })
 })
 
-test("a sent note to an archived discussion can't be opened from the bubble", () => {
+test("a sent note to an archived discussion can't be opened from the note", () => {
   const to = sentTo({ targetDiscussionId: "a0000000" })
   assert.equal(to.target, "Old thread")
   assert.equal(to.openDiscussionId, null)
@@ -115,21 +102,41 @@ test("a sent note to a confidential discussion names nothing", () => {
   assert.deepEqual(sentTo({ targetDiscussionId: null, targetTitle: null, targetAgentId: null }), { name: null, avatarUrl: null, target: "another discussion", openDiscussionId: null })
 })
 
-test("the server's sent record renders as a sent row and never as a received note", () => {
-  const part = buildEventPart({
-    source: "event:agent-note-sent",
-    content: "Rebuild when you can.",
-    data: { targetDiscussionId: "94453f76", targetAgentId: "agent-guid", failed: false },
-    timestamp: "2026-11-04T15:00:00Z",
-  }, key => resolveEventType(key, new Map()))
-  assert.equal(part.toolName, "event:agent-note-sent")
-  assert.equal(isSentNotePart(part), true)
-  assert.equal(isNoteRowPart(part), true)
-  assert.equal(part.content, "Rebuild when you can.")
+const resolve = (source: string) => resolveEventType(source, new Map())
+const describePart = (source: string, content: string, data: Record<string, unknown> | null = null) => {
+  const timestamp = "2026-11-04T15:00:00Z"
+  const part = buildEventPart({ source, content, data, timestamp }, resolve)
+  const event: ParsedEvent = { ...JSON.parse(part.toolInput!), key: part.toolName!.slice(6), text: part.content! }
+  return { part, note: describeAgentNote(event, {
+    currentDiscussionId: "f6761850",
+    resolveAgent: ref => AGENTS[ref],
+    resolveDiscussion: id => DISCUSSIONS[id],
+    onOpenDiscussion: () => {},
+  }) }
+}
+
+test("stored received and sent records keep their Markdown and open the appropriate discussion", () => {
+  const received = describePart("event:nova-94453f76", "[internal] From 94453f76: **Build complete**")
+  const sent = describePart("event:agent-note-sent", "**Rebuild now**", {
+    targetDiscussionId: "94453f76", targetAgentId: "agent-guid",
+  })
+  assert.equal(received.part.toolName, "event:agent-note")
+  assert.equal(received.part.content, "**Build complete**")
+  assert.equal(received.note?.lead, "Note from Nova in")
+  assert.equal(sent.part.toolName, "event:agent-note-sent")
+  assert.equal(sent.part.content, "**Rebuild now**")
+  assert.equal(sent.note?.lead, "Note to Nova in")
+  for (const projection of [received, sent]) {
+    assert.equal(projection.note?.discussion, "Taking initiative")
+    assert.equal(projection.note?.discussionHref, "/apps/nova/chat/94453f76")
+  }
 })
 
-test("an unrelated event isn't a sent note", () => {
-  const part = buildEventPart({ source: "event:delegation", content: "Delegated", timestamp: "2026-11-04T15:00:00Z" }, key => resolveEventType(key, new Map()))
-  assert.equal(isSentNotePart(part), false)
-  assert.equal(isNoteRowPart(part), false)
+test("the confidential target label has no name, avatar or link", () => {
+  const { note } = describePart("event:agent-note-sent", "A note", {})
+  assert.equal(note?.lead, "Note to")
+  assert.equal(note?.discussion, "another discussion")
+  assert.equal(note?.avatarUrl, null)
+  assert.equal(note?.discussionHref, undefined)
+  assert.equal(describePart("event:delegate", "Finished").note, undefined)
 })
