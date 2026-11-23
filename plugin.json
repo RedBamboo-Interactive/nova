@@ -69,6 +69,10 @@
       {
         "id": "chat-avatar-overlay",
         "description": "Optional action layered over an agent avatar in the Nova chat UI"
+      },
+      {
+        "id": "discussion-notices",
+        "description": "Optional notices above the conversation in the selected private Nova discussion"
       }
     ],
     "settings": {}

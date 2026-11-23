@@ -4,7 +4,7 @@ import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
-import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
+import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, PluginExtensionSlot, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
 import { DiscussionThumbnail, DiscussionThumbnailCacheContext, useDiscussionThumbnailCache } from "../components/discussion/discussion-thumbnail"
 import { discussionLabel, groupingIcon } from "../lib/discussion-grouping"
@@ -1710,6 +1710,7 @@ export function ChatView({
   const avatarSrc = versionedAvatarSrc(avatarBase, avatarRevision)
 
   const historyPending = historyRenderPending || (isLoadingMessages && activeMessages.length === 0)
+  const showDiscussionNotices = !journalOpen && !activeDiscussion?.ownedBy
   const chatArea = activeDiscussion && !discussionSelectionPending ? (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
       {voiceSession.phase !== "idle" && voiceSession.phase !== "closed" && (
@@ -1763,6 +1764,14 @@ export function ChatView({
             </button>
           </div>
         </div>
+      )}
+      {showDiscussionNotices && (
+        <PluginExtensionSlot
+          key={activeDiscussion.id}
+          targetPluginId="nova"
+          slotId="discussion-notices"
+          context={{ discussionId: activeDiscussion.id, isStreaming }}
+        />
       )}
       <ChatPanel
         messages={historyRenderPending ? NO_MESSAGES : activeMessages}
