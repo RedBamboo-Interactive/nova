@@ -1,5 +1,5 @@
 import { createLocalStore } from "@redbamboo/utility"
-import type { DiscussionGroupSortMode } from "./discussion-grouping"
+import type { DiscussionGroupSortMode, GroupedDiscussionSortMode } from "./discussion-grouping"
 import type { HiddenFriezeMarkers } from "./frieze-marker-settings"
 
 export type LocalSettings = {
@@ -12,6 +12,7 @@ export type LocalSettings = {
   useDiscussionThumbnails: boolean
   discussionGroupSort: DiscussionGroupSortMode
   discussionGroupOrder: string[]
+  groupedDiscussionSort: GroupedDiscussionSortMode
   collapsedDiscussionGroups: (string | null)[]
   agentFilter: string | null
   lastUsedAgentId: string | null
@@ -34,6 +35,7 @@ export const settingsStore = createLocalStore<LocalSettings>("nova_settings", {
   useDiscussionThumbnails: true,
   discussionGroupSort: "activity",
   discussionGroupOrder: [],
+  groupedDiscussionSort: "activity",
   collapsedDiscussionGroups: [],
   agentFilter: null,
   lastUsedAgentId: null,

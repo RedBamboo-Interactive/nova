@@ -1,5 +1,5 @@
 import type { DiscussionInfo } from "./types"
-import { discussionSections, type DiscussionGroupSort, type DiscussionGroupingView } from "./discussion-grouping.ts"
+import { discussionSections, type DiscussionGroupingSort, type DiscussionGroupingView } from "./discussion-grouping.ts"
 import { resolveLiveSidebarSelection } from "./live-heartbeat.ts"
 
 /** The exact discussion rows rendered by the sidebar, in visual order. */
@@ -8,7 +8,7 @@ export function getSidebarDiscussionOrder(
   agentFilter: string | null,
   grouping: DiscussionGroupingView | null = null,
   collapsedGroups: readonly (string | null)[] = [],
-  groupSort?: DiscussionGroupSort,
+  groupSort?: DiscussionGroupingSort,
 ): DiscussionInfo[] {
   const scoped = agentFilter
     ? discussions.filter((discussion) => discussion.agentId === agentFilter)
@@ -35,7 +35,7 @@ export function getAdjacentSidebarDiscussion(
   agentFilter: string | null,
   grouping: DiscussionGroupingView | null = null,
   collapsedGroups: readonly (string | null)[] = [],
-  groupSort?: DiscussionGroupSort,
+  groupSort?: DiscussionGroupingSort,
 ): DiscussionInfo | null {
   const scoped = agentFilter
     ? discussions.filter((discussion) => discussion.agentId === agentFilter)

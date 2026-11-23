@@ -13,7 +13,7 @@ import { discussionActivityIndicator } from "../../lib/delegation-activity"
 import { discussionActionEntries } from "./discussion-actions"
 import { LiveQuotaBorder } from "./live-quota-ring"
 import { DiscussionThumbnail } from "./discussion-thumbnail"
-import { discussionLabel, discussionSections, groupingIcon, type DiscussionGroupSort, type DiscussionGroupingView } from "../../lib/discussion-grouping"
+import { discussionLabel, discussionSections, groupingIcon, sidebarDiscussionTitle, type DiscussionGroupingSort, type DiscussionGroupingView } from "../../lib/discussion-grouping"
 import { formatOwningApp } from "../../lib/discussion-owner"
 import { createDiscussionTitleResolver } from "../../lib/discussion-display-title"
 
@@ -125,7 +125,7 @@ interface Props {
   onRetryGrouping?: () => void
   collapsedGroups: readonly (string | null)[]
   onToggleGroup: (group: string | null) => void
-  groupSort: DiscussionGroupSort
+  groupSort: DiscussionGroupingSort
   onReorderGroups: (source: string, target: string, visibleNames: readonly string[]) => void
   archiveMode?: boolean
   archiveQuery?: string
@@ -262,7 +262,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
     return (
       <DiscussionRowTarget
         entries={entries}
-        title={titleOf(discussion) || "New discussion"}
+        title={sidebarDiscussionTitle(discussion)}
         data-discussion-id={discussion.id}
         data-discussion-type={discussion.type}
         data-discussion-status={discussion.status}
@@ -299,7 +299,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         ].filter(Boolean).join(" ")}
         title={
           <>
-            {(refineTitles && label?.label) || titleOf(discussion) || "New discussion"}
+            {sidebarDiscussionTitle(discussion, refineTitles ? label?.label : undefined)}
             {discussion.confidential && <i className="ph-bold ph-lock-simple text-[10px] text-text-muted ml-1.5 opacity-60" />}
           </>
         }
@@ -319,7 +319,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
       </DiscussionRowTarget>
     )
-  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer, titleOf, grouping, refineTitles, useThumbnails])
+  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer, grouping, refineTitles, useThumbnails])
 
   const renderArchivedItem = useCallback((discussion: DiscussionInfo) => {
     const item = discussion as ArchiveDiscussionItem

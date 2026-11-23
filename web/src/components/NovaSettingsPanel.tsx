@@ -2,7 +2,7 @@ import { useId } from "react"
 import { KeyCaptureInput, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SettingRow, SectionHeader, Switch } from "@redbamboo/ui"
 import { composerFocusSettingsStore, normalizePushToTalkKey, pushToTalkSettingsStore, useComposerFocusSettings, usePushToTalkSettings, type ComposerAutoFocusMode } from "@redbamboo/chat"
 import { useLocalSettings } from "../hooks/use-local-settings"
-import { discussionGroupSortOptions, type DiscussionGroupSortMode } from "../lib/discussion-grouping"
+import { discussionGroupSortOptions, groupedDiscussionSortOptions, type DiscussionGroupSortMode, type GroupedDiscussionSortMode } from "../lib/discussion-grouping"
 import { setSettings as setLocalSettings } from "../lib/settings-store"
 import { VoiceDeviceSettings } from "./VoiceDeviceSettings"
 import { FriezeMarkerSettings } from "./FriezeMarkerSettings"
@@ -65,6 +65,20 @@ export function NovaSettingsPanel() {
               </SelectTrigger>
               <SelectContent>
                 {discussionGroupSortOptions.map(({ value, label }) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </SettingRow>
+          <SettingRow label="Sort discussions" hint="Choose the discussion order within each section of the grouped sidebar.">
+            <Select
+              value={localSettings.groupedDiscussionSort}
+              disabled={!localSettings.groupDiscussions}
+              onValueChange={value => setLocalSettings({ groupedDiscussionSort: value as GroupedDiscussionSortMode })}
+            >
+              <SelectTrigger className="w-40" aria-label="Sort discussions">
+                <SelectValue>{groupedDiscussionSortOptions.find(option => option.value === localSettings.groupedDiscussionSort)?.label}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {groupedDiscussionSortOptions.map(({ value, label }) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
               </SelectContent>
             </Select>
           </SettingRow>

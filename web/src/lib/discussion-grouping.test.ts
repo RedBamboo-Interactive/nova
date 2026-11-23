@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { discussionLabel, discussionSections, groupingInputKey, groupingStillVisible, moveDiscussionGroup, type DiscussionGroupSortMode, type DiscussionGroupingView } from "./discussion-grouping.ts"
+import { discussionLabel, discussionSections, groupingInputKey, groupingStillVisible, moveDiscussionGroup, type DiscussionGroupingSort, type DiscussionGroupSortMode, type DiscussionGroupingView } from "./discussion-grouping.ts"
 import { getAdjacentSidebarDiscussion, getSidebarDiscussionOrder } from "./discussion-navigation.ts"
 import type { DiscussionInfo } from "./types.ts"
 const make = (id: string, title = id, extra: Partial<DiscussionInfo> = {}): DiscussionInfo => ({ id, entityId: id, title, type: "chat", status: "idle", sessionId: null, agentId: "nova", messageCount: 1, lastReadAt: null, createdAt: "2026-11-19T00:00:00Z", lastActivity: "2026-11-19T00:00:00Z", ...extra })
@@ -138,4 +138,32 @@ test("manual reorder keeps filtered and temporarily absent projects in their sav
     ["Second", "Filtered", "First", "Temporarily absent", "Third"])
   assert.equal(moveDiscussionGroup(order, visible, "First", "Filtered"), null)
   assert.equal(moveDiscussionGroup(order, visible, "First", "First"), null)
+})
+
+
+test("sorts rows independently of manual heading order and uses the visible title", () => {
+  const data = [
+    ...rows.filter(row => row.type === "chat").map(row => row.id === "hud" ? { ...row, lastActivity: "2026-11-23T00:00:00Z" } :
+      row.id === "icons" ? { ...row, createdAt: "2026-11-21T00:00:00Z" } : row),
+    make("other", "Another topic"),
+  ]
+  const sort: DiscussionGroupingSort = { mode: "manual", manualOrder: ["Leaf", "Lands of Lore"], discussionMode: "alphabetical" }
+  const rowOrder = (options: DiscussionGroupingSort) =>
+    discussionSections(data, view, options).map(section => [section.name, section.items.map(row => row.id)])
+
+  assert.deepEqual(rowOrder(sort).slice(0, 2), [
+    ["Leaf", ["triage", "cloud"]],
+    ["Lands of Lore", ["icons", "hud"]],
+  ])
+  assert.deepEqual(rowOrder({ ...sort, refineTitles: false }).slice(0, 2), [
+    ["Leaf", ["cloud", "triage"]],
+    ["Lands of Lore", ["hud", "icons"]],
+  ])
+  assert.deepEqual(rowOrder(sort).at(-1), [null, ["other", "roleplay"]])
+  assert.deepEqual(rowOrder({ ...sort, discussionMode: "activity" })[1], ["Lands of Lore", ["hud", "icons"]])
+  assert.deepEqual(rowOrder({ ...sort, discussionMode: "newest" })[1], ["Lands of Lore", ["icons", "hud"]])
+  assert.deepEqual(rowOrder({ ...sort, discussionMode: "oldest" })[1], ["Lands of Lore", ["hud", "icons"]])
+  assert.equal(getAdjacentSidebarDiscussion(data, "cloud", 1, null, view, [], sort)?.id, "icons")
+  assert.equal(getAdjacentSidebarDiscussion(data, "cloud", 1, null, view, ["Lands of Lore"], sort)?.id, "other")
+  assert.equal(getAdjacentSidebarDiscussion(data, "cloud", 1, null, null, [], sort)?.id, "other")
 })

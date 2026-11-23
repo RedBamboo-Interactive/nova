@@ -29,12 +29,23 @@ export const discussionGroupSortOptions = [
 ] as const
 
 export type DiscussionGroupSortMode = typeof discussionGroupSortOptions[number]["value"]
-export interface DiscussionGroupSort {
+export const groupedDiscussionSortOptions = [
+  { value: "activity", label: "Most recent activity" },
+  { value: "alphabetical", label: "Alphabetical" },
+  { value: "newest", label: "Newest created" },
+  { value: "oldest", label: "Oldest created" },
+] as const
+
+export type GroupedDiscussionSortMode = typeof groupedDiscussionSortOptions[number]["value"]
+
+export interface DiscussionGroupingSort {
   mode: DiscussionGroupSortMode
   manualOrder: readonly string[]
+  discussionMode?: GroupedDiscussionSortMode
+  refineTitles?: boolean
 }
 
-const groupNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
+const titleCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
 const icons = new Set(["chats-circle", "image", "paint-brush", "film-strip", "music-notes", "book-open", "code", "cloud", "hard-drives", "feather", "mountains", "leaf", "layout", "cube"])
 export const groupingIcon = (value: string | undefined) => value && icons.has(value) ? value : "chats-circle"
 
@@ -56,10 +67,33 @@ export function discussionLabel(discussion: DiscussionInfo, view: DiscussionGrou
   return view?.assignments.find(a => a.discussionId === discussion.id && a.sourceTitle === discussion.title)
 }
 
+export function sidebarDiscussionTitle(discussion: DiscussionInfo, refinedTitle?: string): string {
+  return refinedTitle || discussion.title?.trim() || "New discussion"
+}
+
+function sortDiscussionRows(
+  rows: DiscussionInfo[],
+  view: DiscussionGroupingView | null,
+  mode: GroupedDiscussionSortMode,
+  refineTitles: boolean,
+) {
+  if (mode === "alphabetical") {
+    const titles = new Map(rows.map(row => [
+      row, sidebarDiscussionTitle(row, refineTitles ? discussionLabel(row, view)?.label : undefined),
+    ]))
+    rows.sort((a, b) => titleCollator.compare(titles.get(a)!, titles.get(b)!))
+    return
+  }
+
+  const dates = new Map(rows.map(row => [row, Date.parse(mode === "activity" ? row.lastActivity : row.createdAt) || 0]))
+  const direction = mode === "oldest" ? 1 : -1
+  rows.sort((a, b) => direction * (dates.get(a)! - dates.get(b)!))
+}
+
 export function discussionSections(
   discussions: readonly DiscussionInfo[],
   view: DiscussionGroupingView | null,
-  sort?: DiscussionGroupSort,
+  sort?: DiscussionGroupingSort,
 ): DiscussionSection[] {
   const sections = new Map<string, NamedDiscussionSection>()
   const loose: DiscussionInfo[] = []
@@ -91,7 +125,7 @@ export function discussionSections(
     const rank = (section: NamedDiscussionSection) => ranks.get(section.name) ?? ranks.size
     result.sort((a, b) => rank(a) - rank(b))
   } else if (mode === "alphabetical") {
-    result.sort((a, b) => groupNameCollator.compare(a.name, b.name))
+    result.sort((a, b) => titleCollator.compare(a.name, b.name))
   } else {
     const latestActivity = (section: DiscussionSection) => section.items.reduce(
       (latest, row) => Math.max(latest, Date.parse(row.lastActivity) || 0), 0,
@@ -101,6 +135,11 @@ export function discussionSections(
       const sizeOrder = mode === "size" ? b.items.length - a.items.length : 0
       return sizeOrder || activity.get(b)! - activity.get(a)!
     })
+  }
+  const discussionMode = sort?.discussionMode
+  if (discussionMode && result.length) {
+    for (const section of result) sortDiscussionRows(section.items, view, discussionMode, sort.refineTitles ?? true)
+    sortDiscussionRows(loose, view, discussionMode, sort.refineTitles ?? true)
   }
   return loose.length ? [...result, { name: null, icon: "chats-circle", items: loose }] : result
 }

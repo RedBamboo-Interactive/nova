@@ -7,7 +7,7 @@ import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, Pendi
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, PluginExtensionSlot, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
 import { DiscussionThumbnail, DiscussionThumbnailCacheContext, useDiscussionThumbnailCache } from "../components/discussion/discussion-thumbnail"
-import { discussionGroupSortOptions, discussionLabel, discussionSections, groupingIcon, moveDiscussionGroup, type DiscussionGroupSort, type DiscussionGroupSortMode } from "../lib/discussion-grouping"
+import { discussionGroupSortOptions, discussionLabel, discussionSections, groupedDiscussionSortOptions, groupingIcon, moveDiscussionGroup, type DiscussionGroupingSort, type DiscussionGroupSortMode, type GroupedDiscussionSortMode } from "../lib/discussion-grouping"
 import { isMobileClient } from "../components/floating-nova-support"
 import { DISCUSSION_SHORTCUTS, discussionActionEntries } from "../components/discussion/discussion-actions"
 import { ArtifactsSurface } from "../components/discussion/artifacts-surface"
@@ -418,11 +418,13 @@ export function ChatView({
   const multiAgent = agents.length > 1
   const settings = useLocalSettings()
   const pushToTalk = usePushToTalkSettings()
-  const { agentFilter, collapsedDiscussionGroups, discussionGroupSort, discussionGroupOrder } = settings
-  const groupSort = useMemo<DiscussionGroupSort>(() => ({
+  const { agentFilter, collapsedDiscussionGroups, discussionGroupSort, discussionGroupOrder, groupedDiscussionSort, refineDiscussionTitles } = settings
+  const groupSort = useMemo<DiscussionGroupingSort>(() => ({
     mode: discussionGroupSort,
     manualOrder: discussionGroupOrder,
-  }), [discussionGroupSort, discussionGroupOrder])
+    discussionMode: groupedDiscussionSort,
+    refineTitles: refineDiscussionTitles,
+  }), [discussionGroupSort, discussionGroupOrder, groupedDiscussionSort, refineDiscussionTitles])
 
   const toggleDiscussionGroup = useCallback((group: string | null) => {
     const collapsed = getSettings().collapsedDiscussionGroups
@@ -1437,7 +1439,7 @@ export function ChatView({
         >
           <i aria-hidden="true" className="ph-bold ph-dots-three-vertical text-base" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" sideOffset={4}>
+        <DropdownMenuContent align="end" sideOffset={4} className="max-h-[var(--available-height)] overflow-y-auto">
           {!archiveMode && (
             <>
               <DropdownMenuGroup>
@@ -1467,6 +1469,18 @@ export function ChatView({
                     onValueChange={value => setSettings({ discussionGroupSort: value as DiscussionGroupSortMode })}
                   >
                     {discussionGroupSortOptions.map(({ value, label }) => (
+                      <DropdownMenuRadioItem key={value} value={value} disabled={!settings.groupDiscussions}>
+                        {label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                  <DropdownMenuLabel>Sort discussions</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    aria-label="Sort discussions"
+                    value={groupedDiscussionSort}
+                    onValueChange={value => setSettings({ groupedDiscussionSort: value as GroupedDiscussionSortMode })}
+                  >
+                    {groupedDiscussionSortOptions.map(({ value, label }) => (
                       <DropdownMenuRadioItem key={value} value={value} disabled={!settings.groupDiscussions}>
                         {label}
                       </DropdownMenuRadioItem>
