@@ -6,7 +6,8 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
-import { DiscussionThumbnailCacheContext, useDiscussionThumbnailCache } from "../components/discussion/discussion-thumbnail"
+import { DiscussionThumbnail, DiscussionThumbnailCacheContext, useDiscussionThumbnailCache } from "../components/discussion/discussion-thumbnail"
+import { discussionLabel, groupingIcon } from "../lib/discussion-grouping"
 import { isMobileClient } from "../components/floating-nova-support"
 import { DISCUSSION_SHORTCUTS, discussionActionEntries } from "../components/discussion/discussion-actions"
 import { ArtifactsSurface } from "../components/discussion/artifacts-surface"
@@ -1049,6 +1050,10 @@ export function ChatView({
     folder: sessionProjectPath,
   })
   const infoNode = infoSources.node
+  // Discussion grouping, as the sidebar row uses it: no label (grouping off, confidential, closed or a
+  // stale title) changes nothing in the hero.
+  const groupLabel = activeDiscussion && settings.groupDiscussions ? discussionLabel(activeDiscussion, grouping.view) : undefined
+  const groupVisual = groupLabel?.group ? grouping.view?.groups?.find(group => group.name === groupLabel.group) : undefined
   const sessionInfoProps = {
     stats: sessionStats,
     messages: activeMessages,
@@ -1074,6 +1079,12 @@ export function ChatView({
     fullAccessEnabled,
     // The floating window has no RedLeaf shell to open Settings in: the link stays text there.
     fullAccessSettingsHref: floating ? undefined : FULL_ACCESS_SETTINGS_HREF,
+    subtitle: groupLabel && settings.refineDiscussionTitles && groupLabel.label ? groupLabel.label : undefined,
+    titleLeading: activeDiscussion && groupLabel ? (
+      <DiscussionThumbnail id={activeDiscussion.id} icon={groupingIcon(groupLabel.icon)}
+        target={settings.useDiscussionThumbnails ? groupLabel.thumbnailTarget : undefined} />
+    ) : undefined,
+    group: groupLabel?.group ? { name: groupLabel.group, icon: `ph ph-${groupingIcon(groupVisual?.icon)}` } : undefined,
     skills: infoSources.skills,
     node: infoNode,
     workspace: infoSources.workspace,
