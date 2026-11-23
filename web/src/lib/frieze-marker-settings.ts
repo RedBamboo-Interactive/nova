@@ -1,3 +1,4 @@
+import type { FriezeDensity } from "@redbamboo/chat"
 import { FRIEZE_TOOL_CATEGORIES, friezeMarkerKey, type FriezeMarkerVisibility, type FriezeToolCategory } from "@redbamboo/chat/frieze-markers"
 import { BUILTIN_EVENTS } from "./event-type-resolution.ts"
 import type { EventType } from "./types"
@@ -14,6 +15,10 @@ export interface HiddenFriezeMarkers {
 }
 
 export type FriezeMarkerScope = keyof HiddenFriezeMarkers
+
+export function normalizeFriezeDensity(value: unknown): FriezeDensity {
+  return value === "quiet" || value === "minimal" ? value : "detailed"
+}
 
 export const NO_HIDDEN_FRIEZE_MARKERS: HiddenFriezeMarkers = { live: [], discussions: [] }
 

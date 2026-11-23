@@ -23,7 +23,7 @@ import { reactionMenuEntries } from "../components/discussion/reaction-actions"
 import { createNovaSpeechBackend } from "../lib/speech"
 import { useDiscussionGrouping } from "../hooks/use-discussion-grouping"
 import { useLocalSettings } from "../hooks/use-local-settings"
-import { friezeMarkerScope, friezeMarkerVisibility, normalizeHiddenFriezeMarkers } from "../lib/frieze-marker-settings"
+import { friezeMarkerScope, friezeMarkerVisibility, normalizeFriezeDensity, normalizeHiddenFriezeMarkers } from "../lib/frieze-marker-settings"
 import { computeJobHref, createDiscussionJobsTransport, jobFrameConcernsDiscussion, stopDiscussionJob } from "../lib/discussion-jobs"
 import { useAgents } from "../hooks/use-agents"
 import { versionedAvatarSrc } from "../lib/agent-directory-sync"
@@ -1714,7 +1714,7 @@ export function ChatView({
   ) : null, [activeDiscussionId, activePendingContext, pendingContext])
 
   const { opacity: avatarOpacity } = useAvatarStyle()
-  const { showAvatar: avatarEnabled, showDiscussionAvatars, hiddenFriezeMarkers, jobCards } = useLocalSettings()
+  const { showAvatar: avatarEnabled, showDiscussionAvatars, hiddenFriezeMarkers, friezeDensity, jobCards } = useLocalSettings()
   // Live and every other discussion keep separate marker preferences.
   const markerScope = friezeMarkerScope(activeDiscussion?.type)
   // The store keeps one object until the setting changes, so this stays stable.
@@ -1867,6 +1867,7 @@ export function ChatView({
         resolveAgentInfo={resolveAgentInfo}
         resolveAgentNote={resolveAgentNote}
         isFriezeMarkerVisible={isFriezeMarkerVisible}
+        friezeDensity={normalizeFriezeDensity(friezeDensity)}
         jobs={jobs}
         onStopJob={jobs ? handleStopJob : undefined}
         renderStatusLine={renderStatusLine}

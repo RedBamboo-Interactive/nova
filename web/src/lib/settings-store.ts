@@ -1,3 +1,4 @@
+import type { FriezeDensity } from "@redbamboo/chat"
 import { createLocalStore } from "@redbamboo/utility"
 import type { DiscussionGroupSortMode, GroupedDiscussionSortMode } from "./discussion-grouping"
 import type { HiddenFriezeMarkers } from "./frieze-marker-settings"
@@ -23,6 +24,7 @@ export type LocalSettings = {
   voiceProcessing: boolean
   /** Timeline marker kinds hidden in Live and in other discussions (display only). */
   hiddenFriezeMarkers: HiddenFriezeMarkers
+  friezeDensity: FriezeDensity
   /** A small card in the agent message that started an image, video, music or workflow job. */
   jobCards: boolean
 }
@@ -45,6 +47,7 @@ export const settingsStore = createLocalStore<LocalSettings>("nova_settings", {
   voiceOutputDeviceLabel: null,
   voiceProcessing: true,
   hiddenFriezeMarkers: { live: [], discussions: [] },
+  friezeDensity: "detailed",
   jobCards: true,
 })
 

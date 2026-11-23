@@ -6,10 +6,14 @@ import { discussionGroupSortOptions, groupedDiscussionSortOptions, type Discussi
 import { setSettings as setLocalSettings } from "../lib/settings-store"
 import { VoiceDeviceSettings } from "./VoiceDeviceSettings"
 import { FriezeMarkerSettings } from "./FriezeMarkerSettings"
+import { normalizeFriezeDensity } from "../lib/frieze-marker-settings"
+
+const WORK_STEP_OPTIONS = [["detailed", "Detailed"], ["quiet", "Quiet"], ["minimal", "Minimal"]] as const
 
 export function NovaSettingsPanel() {
   const localSettings = useLocalSettings()
   const groupingHeadingId = useId()
+  const workStepsName = useId()
   const pushToTalk = usePushToTalkSettings()
   const composerFocus = useComposerFocusSettings()
 
@@ -101,6 +105,21 @@ export function NovaSettingsPanel() {
             <SelectItem value="never">Never</SelectItem>
           </SelectContent>
         </Select>
+      </SettingRow>
+      <SettingRow label="Work steps" hint="How much of Nova's work shows under each reply.">
+        <div role="radiogroup" aria-label="Work steps" data-setting-path="friezeDensity"
+          className="flex shrink-0 gap-0.5 rounded-lg bg-overlay-6 p-0.5">
+          {WORK_STEP_OPTIONS.map(([value, label]) => (
+            <label key={value} className="cursor-pointer">
+              <input type="radio" name={workStepsName} value={value} className="peer sr-only"
+                checked={normalizeFriezeDensity(localSettings.friezeDensity) === value}
+                onChange={() => setLocalSettings({ friezeDensity: value })} />
+              <span className="block rounded-md px-2 py-1 text-xs text-text-muted hover:text-text-primary peer-checked:bg-overlay-10 peer-checked:text-text-primary peer-focus-visible:outline-2 peer-focus-visible:outline-ring">
+                {label}
+              </span>
+            </label>
+          ))}
+        </div>
       </SettingRow>
       <FriezeMarkerSettings />
       <SettingRow label="Job cards" hint="Show a small card with progress in the agent message that started an image, video, music or workflow job.">

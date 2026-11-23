@@ -7,11 +7,20 @@ import {
   friezeMarkerScope,
   friezeMarkerVisibility,
   hiddenFriezeSummary,
+  normalizeFriezeDensity,
   normalizeHiddenFriezeMarkers,
   setFriezeMarkerShown,
 } from "./frieze-marker-settings.ts"
 
 const event = (key: string): MessagePart => ({ type: "tool_use", toolName: `event:${key}`, content: key })
+
+test("work steps preserve saved modes and default old or malformed preferences to Detailed", () => {
+  assert.equal(normalizeFriezeDensity("quiet"), "quiet")
+  assert.equal(normalizeFriezeDensity("minimal"), "minimal")
+  for (const value of ["detailed", undefined, null, "unknown", {}]) {
+    assert.equal(normalizeFriezeDensity(value), "detailed")
+  }
+})
 
 test("Live has its own scope; every other discussion shares one", () => {
   assert.equal(friezeMarkerScope("live"), "live")
