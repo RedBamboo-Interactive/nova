@@ -13,6 +13,20 @@ export interface SessionInfoSources {
 
 const NONE: SessionInfoSources = { skills: null, node: null, workspace: null, memory: null }
 
+/**
+ * Every agent-skill entity, read once per page load: the entities API has no id filter or batch read, so
+ * resolving an agent's skill ids needs the list. A failed read is not kept, so the next open tries again.
+ */
+let skillEntities: Promise<{ items: EntityLike[] }> | null = null
+function loadSkillEntities(signal: AbortSignal): Promise<{ items: EntityLike[] }> {
+  if (!skillEntities) {
+    // Not tied to one open's signal: the answer outlives it.
+    skillEntities = api.get<{ items: EntityLike[] }>("/api/entities?type=agent-skill&limit=500")
+    skillEntities.catch(() => { skillEntities = null })
+  }
+  return signal.aborted ? Promise.reject(new DOMException("Aborted", "AbortError")) : skillEntities
+}
+
 const normalizePath = (path: string | null | undefined) => path ? path.replaceAll("\\", "/") : null
 
 /**
@@ -42,7 +56,7 @@ export function useSessionInfoSources(args: {
     void (async () => {
       const [agent, skillList, workspaceEntity, mood, nodes] = await Promise.all([
         attempt(api.get<EntityLike>(`/api/entities/${encodeURIComponent(agentId)}`, signal)),
-        attempt(api.get<{ items: EntityLike[] }>("/api/entities?type=agent-skill&limit=500", signal)),
+        attempt(loadSkillEntities(signal)),
         workspaceId ? attempt(api.get<EntityLike>(`/api/entities/${encodeURIComponent(workspaceId)}`, signal)) : Promise.resolve(null),
         workspaceId
           ? attempt(api.get<{ content?: string }>(`/api/apps/nova/memory/file?agent=${encodeURIComponent(agentId)}&path=${encodeURIComponent(MOOD_PATH)}`, signal))
