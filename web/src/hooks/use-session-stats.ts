@@ -24,6 +24,8 @@ interface RedComputeSession {
   supportedAccessLevels?: unknown
   /** The node the session runs on (Phase 1); absent from an older RedCompute. */
   nodeId?: string | null
+  /** The folder the session works in (an Agent's workspace for a Nova discussion). */
+  projectPath?: string | null
 }
 
 interface DiscussionRef {
@@ -39,6 +41,8 @@ export interface SessionStatsState {
   applyAccessLevel: (sessionId: string, level: AccessLevel) => void
   /** The node the session runs on, as the session says; null when unknown. */
   nodeId: string | null
+  /** The folder the session works in, as the session says; null when unknown. */
+  projectPath: string | null
 }
 
 export function useSessionStats(sessionId: string | null | undefined, isStreaming: boolean, discussion?: DiscussionRef | null): SessionStatsState {
@@ -119,5 +123,6 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
   }, [sessionData, sessionId, discussion?.id, discussion?.title, discussion?.provider, discussion?.qualityTier])
 
   const nodeId = sessionData && sessionId && dataSessionRef.current === sessionId && typeof sessionData.nodeId === "string" ? sessionData.nodeId : null
-  return useMemo(() => ({ stats, applyAccessLevel, nodeId }), [stats, applyAccessLevel, nodeId])
+  const projectPath = sessionData && sessionId && dataSessionRef.current === sessionId && typeof sessionData.projectPath === "string" ? sessionData.projectPath : null
+  return useMemo(() => ({ stats, applyAccessLevel, nodeId, projectPath }), [stats, applyAccessLevel, nodeId, projectPath])
 }

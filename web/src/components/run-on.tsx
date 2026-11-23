@@ -28,7 +28,9 @@ export const RUN_ON_COMPACT = "[&_[data-slot=run-on-choice-trigger]]:h-[26px] [&
  * the list, Automatic first, and the text says the current session stays where it is; with one it is the
  * node's icon alone. Without the compact mode (an older shared UI) the row keeps its text only.
  */
-export function DiscussionRunOnSetting({ nodeId, sessionNodeId, hasSession, disabled, onChange }: {
+export function DiscussionRunOnSetting({ nodeId, sessionNodeId, hasSession, disabled, onChange, title = "Node" }: {
+  /** The row's heading; the Info modal's Node section already says "Node". */
+  title?: string
   /** The discussion's choice for new sessions; null is Automatic. */
   nodeId: string | null
   /** The node the current session runs on, from the session; null when unknown. */
@@ -62,7 +64,7 @@ export function DiscussionRunOnSetting({ nodeId, sessionNodeId, hasSession, disa
       <div className="flex min-w-0 items-start gap-2.5">
         <i className="ph-bold ph-desktop-tower mt-0.5 text-sm text-text-muted" aria-hidden="true" />
         <div className="min-w-0">
-          <div className="text-xs font-medium text-contrast">Node</div>
+          <div className="text-xs font-medium text-contrast">{title}</div>
           <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
             {current && (
               <span data-slot="run-on-session-node">Running on <span className="font-medium text-contrast">{running}</span>. </span>

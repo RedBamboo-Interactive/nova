@@ -5,9 +5,9 @@ import { worktreeChipLabel, worktreeCodePath } from "../../lib/worktree-attachme
 /**
  * The worktrees this discussion works in, one chip each: `repo · branch`. The discussion keeps its
  * Agent workspace; a chip only says where it touches a repository, and opens that repository in
- * Code on the branch.
+ * Code on the branch. `bare` drops the header bar's border and padding, for a list inside a dialog.
  */
-export function WorktreeChips({ worktrees }: { worktrees: readonly WorktreeAttachment[] | undefined }) {
+export function WorktreeChips({ worktrees, bare }: { worktrees: readonly WorktreeAttachment[] | undefined; bare?: boolean }) {
   const navigate = useNavigate()
   if (!worktrees?.length) return null
   return (
@@ -15,7 +15,7 @@ export function WorktreeChips({ worktrees }: { worktrees: readonly WorktreeAttac
       data-slot="discussion-worktrees"
       role="list"
       aria-label="Worktrees this discussion works in"
-      className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-overlay-6 px-4 py-1.5"
+      className={bare ? "flex flex-wrap items-center gap-1.5" : "flex shrink-0 flex-wrap items-center gap-1.5 border-b border-overlay-6 px-4 py-1.5"}
     >
       {worktrees.map((worktree) => {
         const path = worktreeCodePath(worktree)

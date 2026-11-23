@@ -31,6 +31,7 @@ import { LiveQuotaContext, providerUsageStore, type LiveQuotaContextValue } from
 import { useReactions } from "../hooks/use-reactions"
 import { useDisc, useNovaPendingContext } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
+import { useSessionInfoSources } from "../hooks/use-session-info-sources"
 import { DiscussionRunOnSetting, runOnAvailable } from "../components/run-on"
 import { useFullAccessEnabled } from "../hooks/use-full-access-enabled"
 import { FULL_ACCESS_SETTINGS_HREF, changeAccessLevel, openSettingsFromLink } from "../lib/session-access"
@@ -506,7 +507,7 @@ export function ChatView({
 
   const sessionStatsDiscussion = useMemo(() => activeDiscussion && { ...activeDiscussion, title: activeDisplayTitle },
     [activeDiscussion, activeDisplayTitle])
-  const { stats: sessionStats, applyAccessLevel, nodeId: sessionNodeId } = useSessionStats(activeDiscussion?.sessionId, isStreaming, sessionStatsDiscussion)
+  const { stats: sessionStats, applyAccessLevel, nodeId: sessionNodeId, projectPath: sessionProjectPath } = useSessionStats(activeDiscussion?.sessionId, isStreaming, sessionStatsDiscussion)
   const loadProviderUsage = useCallback((provider: string, forceRefresh = false) =>
     api.get<ProviderUsageSnapshot>(
       `/ai-session/providers/${encodeURIComponent(provider)}/usage${forceRefresh ? "?refresh=true" : ""}`,
@@ -1038,6 +1039,16 @@ export function ChatView({
     const level = await changeAccessLevel(api.post, activeSessionId, requested)
     applyAccessLevel(activeSessionId, level)
   }, [activeSessionId, applyAccessLevel])
+  const activeDelegations = activeDiscussion ? delegationActivity[activeDiscussion.id] : undefined
+  // Skills, workspace, memory and node: read each time Info opens.
+  const infoSources = useSessionInfoSources({
+    open: sessionInfoOpen,
+    agentId: activeAgent?.id,
+    workspaceId: activeAgent?.workspaceId,
+    sessionNodeId,
+    folder: sessionProjectPath,
+  })
+  const infoNode = infoSources.node
   const sessionInfoProps = {
     stats: sessionStats,
     messages: activeMessages,
@@ -1063,6 +1074,36 @@ export function ChatView({
     fullAccessEnabled,
     // The floating window has no RedLeaf shell to open Settings in: the link stays text there.
     fullAccessSettingsHref: floating ? undefined : FULL_ACCESS_SETTINGS_HREF,
+    skills: infoSources.skills,
+    node: infoNode,
+    workspace: infoSources.workspace,
+    memory: infoSources.memory,
+    // The messages loaded so far are all the "used in this discussion" lists can count.
+    historyPartial: hasEarlierMessages,
+    // With a choice of nodes, the discussion's "run on" setting sits under the node. With one node
+    // the node section already says every session runs there.
+    nodeExtra: activeDiscussion && runOnAvailable && !owningApp && infoNode && !infoNode.onlyNode ? (
+      <DiscussionRunOnSetting
+        key={activeDiscussion.id}
+        title="Run new sessions on"
+        nodeId={activeDiscussion.nodeId ?? null}
+        sessionNodeId={sessionNodeId}
+        hasSession={!!activeDiscussion.sessionId}
+        disabled={runOnPending || discussionClosed}
+        onChange={nodeId => void handleRunOnChange(nodeId)}
+      />
+    ) : undefined,
+    workspaceExtra: activeDiscussion ? (
+      <>
+        {!!activeDiscussion.worktrees?.length && (
+          <div>
+            <h3 className="mb-2 text-xs font-medium text-text-muted">Worktrees</h3>
+            <WorktreeChips worktrees={activeDiscussion.worktrees} bare />
+          </div>
+        )}
+        <DelegationsInfo activity={activeDelegations} />
+      </>
+    ) : undefined,
   }
 
   const [pendingRowAction, setPendingRowAction] = useState<{ id: string; action: DiscussionRowAction } | null>(null)
@@ -1152,8 +1193,6 @@ export function ChatView({
     </Tabs>
   )
 
-  const activeDelegations = activeDiscussion ? delegationActivity[activeDiscussion.id] : undefined
-
   const sessionInfoContent = activeDiscussion && (
     <div className="space-y-3">
       <div className="flex items-start justify-between gap-3 rounded-lg border border-overlay-6 bg-overlay-3 px-3 py-2.5">
@@ -1196,17 +1235,6 @@ export function ChatView({
           aria-label="LIVE timeline"
         />
       </div>
-      {runOnAvailable && !owningApp && (
-        <DiscussionRunOnSetting
-          key={activeDiscussion.id}
-          nodeId={activeDiscussion.nodeId ?? null}
-          sessionNodeId={sessionNodeId}
-          hasSession={!!activeDiscussion.sessionId}
-          disabled={runOnPending || discussionClosed}
-          onChange={nodeId => void handleRunOnChange(nodeId)}
-        />
-      )}
-      <DelegationsInfo activity={activeDelegations} />
     </div>
   )
 
