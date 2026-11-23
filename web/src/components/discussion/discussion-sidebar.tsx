@@ -1,4 +1,4 @@
-import { memo, useCallback, useId, useMemo, useRef } from "react"
+import { memo, useCallback, useId, useMemo, useRef, useState } from "react"
 import type { ComponentProps } from "react"
 import { ItemList, ItemListRow, RowActionsMenu, ScrollArea, useContextTarget, type ContextMenuEntry } from "@redbamboo/ui"
 import { MorphSpinner } from "@redbamboo/chat"
@@ -13,7 +13,7 @@ import { discussionActivityIndicator } from "../../lib/delegation-activity"
 import { discussionActionEntries } from "./discussion-actions"
 import { LiveQuotaBorder } from "./live-quota-ring"
 import { DiscussionThumbnail } from "./discussion-thumbnail"
-import { discussionLabel, discussionSections, groupingIcon, type DiscussionGroupingView } from "../../lib/discussion-grouping"
+import { discussionLabel, discussionSections, groupingIcon, type DiscussionGroupSort, type DiscussionGroupingView } from "../../lib/discussion-grouping"
 import { formatOwningApp } from "../../lib/discussion-owner"
 import { createDiscussionTitleResolver } from "../../lib/discussion-display-title"
 
@@ -125,6 +125,8 @@ interface Props {
   onRetryGrouping?: () => void
   collapsedGroups: readonly (string | null)[]
   onToggleGroup: (group: string | null) => void
+  groupSort: DiscussionGroupSort
+  onReorderGroups: (source: string, target: string, visibleNames: readonly string[]) => void
   archiveMode?: boolean
   archiveQuery?: string
   archiveHasMore?: boolean
@@ -133,7 +135,7 @@ interface Props {
   onLoadMoreArchived?: () => void
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars = true, grouping = null, groupingEnabled = false, refineTitles, useThumbnails, groupingLoading = false, groupingUnavailable = false, onRetryGrouping, collapsedGroups, onToggleGroup, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars = true, grouping = null, groupingEnabled = false, refineTitles, useThumbnails, groupingLoading = false, groupingUnavailable = false, onRetryGrouping, collapsedGroups, onToggleGroup, groupSort, onReorderGroups, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -145,7 +147,15 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
     return { live, chat }
   }, [discussions])
   const titleOf = useMemo(() => createDiscussionTitleResolver(discussions), [discussions])
-  const sections = useMemo(() => discussionSections(chat, grouping), [chat, grouping])
+  const sections = useMemo(() => discussionSections(chat, grouping, groupSort), [chat, grouping, groupSort])
+  const groupNames = useMemo(() => sections.flatMap(section => section.name === null ? [] : [section.name]), [sections])
+  const draggedGroup = useRef<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
+
+  const clearGroupDrag = () => {
+    draggedGroup.current = null
+    setDropTarget(null)
+  }
   const hasNamedSections = sections.some(section => section.name !== null)
   const groupListId = useId()
   const liveDividerAfter = chat.length > 0 ? live.at(-1)?.id : undefined
@@ -450,7 +460,9 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                 {groupingLoading && !grouping?.assignments.length && <p role="status" className="px-4 py-2 text-[11px] text-text-muted">Organizing discussions…</p>}
                 {groupingUnavailable && <div className="flex items-center justify-between gap-2 px-4 py-2 text-[11px] text-text-muted"><span>Project grouping is unavailable</span><button type="button" className="hover:text-contrast" onClick={onRetryGrouping}>Retry</button></div>}
                 {sections.map((section, index) => {
-                  const heading = section.name ?? (hasNamedSections ? "Ungrouped" : null)
+                  const name = section.name
+                  const heading = name ?? (hasNamedSections ? "Ungrouped" : null)
+                  const reorderable = groupSort.mode === "manual" && name !== null && groupNames.length > 1
                   const collapsed = heading !== null && collapsedGroups.includes(section.name)
                   const containsSelection = collapsed && section.items.some(discussion => discussion.id === activeDiscussionId)
                   const listId = `${groupListId}-${index}`
@@ -461,34 +473,87 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
                       aria-label={heading ?? "Other discussions"}
                       data-discussion-group={section.name ?? "ungrouped"}
                     >
-                      {heading && <h3>
-                        <button
-                          type="button"
-                          aria-expanded={!collapsed}
-                          aria-controls={listId}
-                          onClick={() => onToggleGroup(section.name)}
-                          className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-medium transition-colors hover:bg-overlay-6 hover:text-contrast focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-accent-teal ${containsSelection ? "text-contrast" : "text-text-muted"}`}
-                        >
-                          <i aria-hidden="true" className={`ph-bold ph-caret-${collapsed ? "right" : "down"} shrink-0 text-[10px]`} />
-                          {section.name && <span className="relative h-6 w-6 shrink-0" data-group-visual={section.name}>
-                            {useThumbnails && section.thumbnailDiscussionId && section.thumbnailTarget && showAvatars
-                              ? <DiscussionThumbnail id={section.thumbnailDiscussionId} icon={section.icon} target={section.thumbnailTarget} />
-                              : <i aria-hidden="true" className={`ph ph-${groupingIcon(section.icon)} absolute inset-0 flex items-center justify-center text-sm`} />}
-                          </span>}
-                          <span className="min-w-0 flex-1 truncate" title={heading}>{heading}</span>
-                          {collapsed && (
-                            <span className="inline-flex shrink-0 items-center gap-2">
-                              <span data-slot="discussion-group-count" className="text-right tabular-nums">
-                                {section.items.length}
-                                <span className="sr-only"> {section.items.length === 1 ? "discussion" : "discussions"}</span>
+                      {heading && <div
+                        className={`flex items-center rounded-md ${reorderable && dropTarget === name ? "outline outline-1 -outline-offset-1 outline-accent-teal" : ""}`}
+                        onDragOver={reorderable ? event => {
+                          if (!draggedGroup.current || draggedGroup.current === name) return
+                          event.preventDefault()
+                          event.dataTransfer.dropEffect = "move"
+                          setDropTarget(name)
+                        } : undefined}
+                        onDragLeave={reorderable ? event => {
+                          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null)
+                        } : undefined}
+                        onDrop={reorderable ? event => {
+                          const source = draggedGroup.current
+                          if (!source) return
+                          event.preventDefault()
+                          clearGroupDrag()
+                          onReorderGroups(source, name, groupNames)
+                        } : undefined}
+                      >
+                        <h3 className="min-w-0 flex-1">
+                          <button
+                            type="button"
+                            aria-expanded={!collapsed}
+                            aria-controls={listId}
+                            onClick={() => onToggleGroup(section.name)}
+                            className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-medium transition-colors hover:bg-overlay-6 hover:text-contrast focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-accent-teal ${containsSelection ? "text-contrast" : "text-text-muted"}`}
+                          >
+                            <i aria-hidden="true" className={`ph-bold ph-caret-${collapsed ? "right" : "down"} shrink-0 text-[10px]`} />
+                            {section.name && <span className="relative h-6 w-6 shrink-0" data-group-visual={section.name}>
+                              {useThumbnails && section.thumbnailDiscussionId && section.thumbnailTarget && showAvatars
+                                ? <DiscussionThumbnail id={section.thumbnailDiscussionId} icon={section.icon} target={section.thumbnailTarget} />
+                                : <i aria-hidden="true" className={`ph ph-${groupingIcon(section.icon)} absolute inset-0 flex items-center justify-center text-sm`} />}
+                            </span>}
+                            <span className="min-w-0 flex-1 truncate" title={heading}>{heading}</span>
+                            {collapsed && (
+                              <span className="inline-flex shrink-0 items-center gap-2">
+                                <span data-slot="discussion-group-count" className="text-right tabular-nums">
+                                  {section.items.length}
+                                  <span className="sr-only"> {section.items.length === 1 ? "discussion" : "discussions"}</span>
+                                </span>
+                                <span data-slot="discussion-group-status" className="inline-flex size-4 shrink-0 items-center justify-center">
+                                  <CollapsedGroupStatus discussions={section.items} delegationActivity={delegationActivity} backgroundTasks={backgroundTasks} awaitingAnswer={awaitingAnswer} />
+                                </span>
                               </span>
-                              <span data-slot="discussion-group-status" className="inline-flex size-4 shrink-0 items-center justify-center">
-                                <CollapsedGroupStatus discussions={section.items} delegationActivity={delegationActivity} backgroundTasks={backgroundTasks} awaitingAnswer={awaitingAnswer} />
-                              </span>
+                            )}
+                          </button>
+                        </h3>
+                        {reorderable && (
+                          <div className="flex shrink-0 items-center text-text-muted">
+                            <span
+                              aria-hidden="true"
+                              title="Drag to reorder"
+                              draggable
+                              className="flex size-7 cursor-grab items-center justify-center active:cursor-grabbing"
+                              onDragStart={event => {
+                                draggedGroup.current = name
+                                event.dataTransfer.effectAllowed = "move"
+                                event.dataTransfer.setData("application/x-nova-discussion-group", "move")
+                              }}
+                              onDragEnd={clearGroupDrag}
+                            >
+                              <i className="ph-bold ph-dots-six-vertical" />
                             </span>
-                          )}
-                        </button>
-                      </h3>}
+                            {([-1, 1] as const).map(direction => {
+                              const target = groupNames[index + direction]
+                              const move = direction === -1 ? "up" : "down"
+                              return <button
+                                key={direction}
+                                type="button"
+                                aria-label={`Move ${name} ${move}`}
+                                aria-disabled={!target}
+                                title={`Move ${move}`}
+                                className="flex size-8 items-center justify-center rounded-md aria-disabled:opacity-40 aria-[disabled=false]:hover:bg-overlay-6 aria-[disabled=false]:hover:text-contrast focus-visible:outline focus-visible:outline-accent-teal"
+                                onClick={() => { if (target) onReorderGroups(name, target, groupNames) }}
+                              >
+                                <i aria-hidden="true" className={`ph-bold ph-caret-${move}`} />
+                              </button>
+                            })}
+                          </div>
+                        )}
+                      </div>}
                       <div
                         id={listId}
                         className={collapsed ? "hidden" : heading ? "flex flex-col gap-1" : "flex flex-col in-data-[cozy]:gap-0.5"}

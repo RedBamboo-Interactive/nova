@@ -2,12 +2,12 @@ import { useState, useCallback, useDeferredValue, useEffect, useLayoutEffect, us
 import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, PluginExtensionSlot, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
 import { DiscussionThumbnail, DiscussionThumbnailCacheContext, useDiscussionThumbnailCache } from "../components/discussion/discussion-thumbnail"
-import { discussionLabel, groupingIcon } from "../lib/discussion-grouping"
+import { discussionGroupSortOptions, discussionLabel, discussionSections, groupingIcon, moveDiscussionGroup, type DiscussionGroupSort, type DiscussionGroupSortMode } from "../lib/discussion-grouping"
 import { isMobileClient } from "../components/floating-nova-support"
 import { DISCUSSION_SHORTCUTS, discussionActionEntries } from "../components/discussion/discussion-actions"
 import { ArtifactsSurface } from "../components/discussion/artifacts-surface"
@@ -418,7 +418,11 @@ export function ChatView({
   const multiAgent = agents.length > 1
   const settings = useLocalSettings()
   const pushToTalk = usePushToTalkSettings()
-  const { agentFilter, collapsedDiscussionGroups } = settings
+  const { agentFilter, collapsedDiscussionGroups, discussionGroupSort, discussionGroupOrder } = settings
+  const groupSort = useMemo<DiscussionGroupSort>(() => ({
+    mode: discussionGroupSort,
+    manualOrder: discussionGroupOrder,
+  }), [discussionGroupSort, discussionGroupOrder])
 
   const toggleDiscussionGroup = useCallback((group: string | null) => {
     const collapsed = getSettings().collapsedDiscussionGroups
@@ -431,7 +435,18 @@ export function ChatView({
 
   const grouping = useDiscussionGrouping(settings.groupDiscussions && !archiveMode, discussions)
   const thumbnails = useDiscussionThumbnailCache(discussions)
-  const filteredDiscussions = getSidebarDiscussionOrder(discussions, agentFilter, grouping.view)
+  const reorderDiscussionGroups = useCallback((source: string, target: string, visibleNames: readonly string[]) => {
+    const current = getSettings()
+    if (!current.groupDiscussions || current.discussionGroupSort !== "manual") return
+    const sections = discussionSections(discussions, grouping.view, { mode: "manual", manualOrder: current.discussionGroupOrder })
+    const order = new Set(current.discussionGroupOrder)
+    for (const section of sections) {
+      if (section.name !== null) order.add(section.name)
+    }
+    const next = moveDiscussionGroup([...order], visibleNames, source, target)
+    if (next) setSettings({ discussionGroupOrder: next })
+  }, [discussions, grouping.view])
+  const filteredDiscussions = getSidebarDiscussionOrder(discussions, agentFilter)
   const filteredArchivedDiscussions = getSidebarDiscussionOrder(archivedDiscussions, agentFilter)
 
   useEffect(() => {
@@ -890,7 +905,7 @@ export function ChatView({
         return
       }
       const direction = action === "next-discussion" ? 1 : -1
-      const adjacent = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, direction, agentFilter, grouping.view, collapsedDiscussionGroups)
+      const adjacent = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, direction, agentFilter, grouping.view, collapsedDiscussionGroups, groupSort)
       if (adjacent) handleSelectDiscussion(adjacent.id)
     }
 
@@ -913,7 +928,7 @@ export function ChatView({
       environment.document.removeEventListener("keydown", handleKeyDown)
       environment.document.removeEventListener(FLOATING_NOVA_NAVIGATION_EVENT, handleNavigationEvent)
     }
-  }, [activeDiscussionId, agentFilter, collapsedDiscussionGroups, discussions, grouping.view, environment.document, floating, handleSelectDiscussion, openNewDiscussion])
+  }, [activeDiscussionId, agentFilter, collapsedDiscussionGroups, discussions, grouping.view, groupSort, environment.document, floating, handleSelectDiscussion, openNewDiscussion])
 
   const handleConfidentialToggle = useCallback(async (checked: boolean) => {
     if (!activeDiscussionId || confidentialityPending) return
@@ -1445,6 +1460,18 @@ export function ChatView({
                   >
                     Use thumbnail images
                   </DropdownMenuCheckboxItem>
+                  <DropdownMenuLabel>Sort groups</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    aria-label="Sort groups"
+                    value={discussionGroupSort}
+                    onValueChange={value => setSettings({ discussionGroupSort: value as DiscussionGroupSortMode })}
+                  >
+                    {discussionGroupSortOptions.map(({ value, label }) => (
+                      <DropdownMenuRadioItem key={value} value={value} disabled={!settings.groupDiscussions}>
+                        {label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
                 </div>
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
@@ -1991,6 +2018,8 @@ export function ChatView({
                   onRetryGrouping={grouping.retry}
                   collapsedGroups={collapsedDiscussionGroups}
                   onToggleGroup={toggleDiscussionGroup}
+                  groupSort={groupSort}
+                  onReorderGroups={reorderDiscussionGroups}
                   archiveMode={archiveMode}
                   archiveQuery={archiveQuery}
                   archiveHasMore={archiveHasMore}

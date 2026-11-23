@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { discussionLabel, discussionSections, groupingInputKey, groupingStillVisible, type DiscussionGroupingView } from "./discussion-grouping.ts"
+import { discussionLabel, discussionSections, groupingInputKey, groupingStillVisible, moveDiscussionGroup, type DiscussionGroupSortMode, type DiscussionGroupingView } from "./discussion-grouping.ts"
 import { getAdjacentSidebarDiscussion, getSidebarDiscussionOrder } from "./discussion-navigation.ts"
 import type { DiscussionInfo } from "./types.ts"
 const make = (id: string, title = id, extra: Partial<DiscussionInfo> = {}): DiscussionInfo => ({ id, entityId: id, title, type: "chat", status: "idle", sessionId: null, agentId: "nova", messageCount: 1, lastReadAt: null, createdAt: "2026-11-19T00:00:00Z", lastActivity: "2026-11-19T00:00:00Z", ...extra })
@@ -103,4 +103,39 @@ test("filtered out or foreign group representatives cannot trigger thumbnail rea
     { name: "Lands of Lore", icon: "mountains", thumbnailDiscussionId: "cloud" },
   ] }
   assert.equal(discussionSections(rows, visuals)[0].thumbnailDiscussionId, undefined)
+})
+
+
+test("sorts project headings without changing rows, Live, or Ungrouped", () => {
+  const dated = rows.map(row => row.id === "cloud" ? { ...row, lastActivity: "2026-11-21T00:00:00Z" } : row)
+  const groups = (mode: DiscussionGroupSortMode, manualOrder: string[] = []) =>
+    discussionSections(dated, view, { mode, manualOrder }).map(section => [section.name, section.items.map(row => row.id)])
+
+  const lands = ["Lands of Lore", ["hud", "icons"]]
+  const leaf = ["Leaf", ["triage", "cloud"]]
+  assert.deepEqual(groups("activity").slice(0, 2), [leaf, lands])
+  assert.deepEqual(groups("alphabetical").slice(0, 2), [lands, leaf])
+  assert.deepEqual(groups("manual", ["Leaf", "Unavailable"]).slice(0, 2), [leaf, lands])
+
+  const sort = { mode: "activity", manualOrder: [] } as const
+  assert.deepEqual(getSidebarDiscussionOrder(dated, null, view, [], sort).map(row => row.id),
+    ["live", "triage", "cloud", "hud", "icons", "roleplay"])
+  assert.equal(getAdjacentSidebarDiscussion(dated, "cloud", 1, null, view, [], sort)?.id, "hud")
+  assert.equal(getAdjacentSidebarDiscussion(dated, "cloud", 1, null, view, ["Lands of Lore"], sort)?.id, "roleplay")
+
+  const updates = dated.map(row => row.id === "icons" ? { ...row, lastActivity: "2026-11-22T00:00:00Z" } : row)
+  assert.equal(discussionSections(updates, view, sort)[0].name, "Lands of Lore")
+  const scoped = dated.filter(row => row.id !== "triage")
+  assert.equal(discussionSections(scoped, view, { mode: "size", manualOrder: [] })[0].name, "Lands of Lore")
+})
+
+test("manual reorder keeps filtered and temporarily absent projects in their saved slots", () => {
+  const order = ["First", "Filtered", "Second", "Temporarily absent", "Third"]
+  const visible = ["First", "Second", "Third"]
+  assert.deepEqual(moveDiscussionGroup(order, visible, "Third", "First"),
+    ["Third", "Filtered", "First", "Temporarily absent", "Second"])
+  assert.deepEqual(moveDiscussionGroup(order, visible, "First", "Second"),
+    ["Second", "Filtered", "First", "Temporarily absent", "Third"])
+  assert.equal(moveDiscussionGroup(order, visible, "First", "Filtered"), null)
+  assert.equal(moveDiscussionGroup(order, visible, "First", "First"), null)
 })

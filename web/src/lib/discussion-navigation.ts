@@ -1,5 +1,5 @@
 import type { DiscussionInfo } from "./types"
-import { discussionSections, type DiscussionGroupingView } from "./discussion-grouping.ts"
+import { discussionSections, type DiscussionGroupSort, type DiscussionGroupingView } from "./discussion-grouping.ts"
 import { resolveLiveSidebarSelection } from "./live-heartbeat.ts"
 
 /** The exact discussion rows rendered by the sidebar, in visual order. */
@@ -8,6 +8,7 @@ export function getSidebarDiscussionOrder(
   agentFilter: string | null,
   grouping: DiscussionGroupingView | null = null,
   collapsedGroups: readonly (string | null)[] = [],
+  groupSort?: DiscussionGroupSort,
 ): DiscussionInfo[] {
   const scoped = agentFilter
     ? discussions.filter((discussion) => discussion.agentId === agentFilter)
@@ -21,7 +22,7 @@ export function getSidebarDiscussionOrder(
   }
   if (!grouping) return [...live, ...chat]
 
-  const sections = discussionSections(chat, grouping)
+  const sections = discussionSections(chat, grouping, groupSort)
   if (!sections.some(section => section.name !== null)) return [...live, ...chat]
   return [...live, ...sections.flatMap(section => collapsedGroups.includes(section.name) ? [] : section.items)]
 }
@@ -34,11 +35,12 @@ export function getAdjacentSidebarDiscussion(
   agentFilter: string | null,
   grouping: DiscussionGroupingView | null = null,
   collapsedGroups: readonly (string | null)[] = [],
+  groupSort?: DiscussionGroupSort,
 ): DiscussionInfo | null {
   const scoped = agentFilter
     ? discussions.filter((discussion) => discussion.agentId === agentFilter)
     : discussions
-  const ordered = getSidebarDiscussionOrder(scoped, null, grouping, collapsedGroups)
+  const ordered = getSidebarDiscussionOrder(scoped, null, grouping, collapsedGroups, groupSort)
   if (ordered.length === 0) return null
 
   const selectedId = resolveLiveSidebarSelection(scoped, activeDiscussionId)

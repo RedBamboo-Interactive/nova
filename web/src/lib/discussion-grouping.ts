@@ -19,6 +19,22 @@ export interface DiscussionGroupingView {
   retryAfterSeconds: number
 }
 export interface DiscussionSection { name: string | null; icon: string; thumbnailDiscussionId?: string; thumbnailTarget?: string; items: DiscussionInfo[] }
+type NamedDiscussionSection = DiscussionSection & { name: string }
+
+export const discussionGroupSortOptions = [
+  { value: "activity", label: "Most recent activity" },
+  { value: "manual", label: "Manual" },
+  { value: "alphabetical", label: "Alphabetical" },
+  { value: "size", label: "Most discussions" },
+] as const
+
+export type DiscussionGroupSortMode = typeof discussionGroupSortOptions[number]["value"]
+export interface DiscussionGroupSort {
+  mode: DiscussionGroupSortMode
+  manualOrder: readonly string[]
+}
+
+const groupNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
 const icons = new Set(["chats-circle", "image", "paint-brush", "film-strip", "music-notes", "book-open", "code", "cloud", "hard-drives", "feather", "mountains", "leaf", "layout", "cube"])
 export const groupingIcon = (value: string | undefined) => value && icons.has(value) ? value : "chats-circle"
 
@@ -40,8 +56,12 @@ export function discussionLabel(discussion: DiscussionInfo, view: DiscussionGrou
   return view?.assignments.find(a => a.discussionId === discussion.id && a.sourceTitle === discussion.title)
 }
 
-export function discussionSections(discussions: readonly DiscussionInfo[], view: DiscussionGroupingView | null): DiscussionSection[] {
-  const sections = new Map<string, DiscussionSection>()
+export function discussionSections(
+  discussions: readonly DiscussionInfo[],
+  view: DiscussionGroupingView | null,
+  sort?: DiscussionGroupSort,
+): DiscussionSection[] {
+  const sections = new Map<string, NamedDiscussionSection>()
   const loose: DiscussionInfo[] = []
   for (const discussion of discussions) {
     const label = discussionLabel(discussion, view)
@@ -51,7 +71,7 @@ export function discussionSections(discussions: readonly DiscussionInfo[], view:
     group.items.push(discussion)
     sections.set(label.group, group)
   }
-  const result: DiscussionSection[] = []
+  const result: NamedDiscussionSection[] = []
   for (const name of [...(view?.groupOrder ?? []), ...sections.keys()]) {
     const section = sections.get(name)
     if (!section) continue
@@ -65,10 +85,42 @@ export function discussionSections(discussions: readonly DiscussionInfo[], view:
     }
     result.push(section)
   }
-  // Loose rows keep their original recent-activity order too.
-  const looseIds = new Set(loose.map(d => d.id))
-  if (looseIds.size) result.push({ name: null, icon: "chats-circle", items: discussions.filter(d => looseIds.has(d.id)) })
-  return result
+  const mode = sort?.mode ?? "activity"
+  if (mode === "manual") {
+    const ranks = new Map(sort?.manualOrder.map((name, index) => [name, index]))
+    const rank = (section: NamedDiscussionSection) => ranks.get(section.name) ?? ranks.size
+    result.sort((a, b) => rank(a) - rank(b))
+  } else if (mode === "alphabetical") {
+    result.sort((a, b) => groupNameCollator.compare(a.name, b.name))
+  } else {
+    const latestActivity = (section: DiscussionSection) => section.items.reduce(
+      (latest, row) => Math.max(latest, Date.parse(row.lastActivity) || 0), 0,
+    )
+    const activity = new Map(result.map(section => [section, latestActivity(section)]))
+    result.sort((a, b) => {
+      const sizeOrder = mode === "size" ? b.items.length - a.items.length : 0
+      return sizeOrder || activity.get(b)! - activity.get(a)!
+    })
+  }
+  return loose.length ? [...result, { name: null, icon: "chats-circle", items: loose }] : result
+}
+
+/** Move among visible projects while leaving hidden projects in their saved slots. */
+export function moveDiscussionGroup(
+  order: readonly string[],
+  visibleNames: readonly string[],
+  source: string,
+  target: string,
+): string[] | null {
+  const visible = new Set(visibleNames)
+  const reordered = order.filter(name => visible.has(name))
+  const from = reordered.indexOf(source)
+  const to = reordered.indexOf(target)
+  if (from < 0 || to < 0 || from === to) return null
+  reordered.splice(from, 1)
+  reordered.splice(to, 0, source)
+  let index = 0
+  return order.map(name => visible.has(name) ? reordered[index++] : name)
 }
 
 export function groupingStillVisible(view: DiscussionGroupingView, discussions: readonly DiscussionInfo[],

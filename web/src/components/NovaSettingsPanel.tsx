@@ -2,6 +2,7 @@ import { useId } from "react"
 import { KeyCaptureInput, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SettingRow, SectionHeader, Switch } from "@redbamboo/ui"
 import { composerFocusSettingsStore, normalizePushToTalkKey, pushToTalkSettingsStore, useComposerFocusSettings, usePushToTalkSettings, type ComposerAutoFocusMode } from "@redbamboo/chat"
 import { useLocalSettings } from "../hooks/use-local-settings"
+import { discussionGroupSortOptions, type DiscussionGroupSortMode } from "../lib/discussion-grouping"
 import { setSettings as setLocalSettings } from "../lib/settings-store"
 import { VoiceDeviceSettings } from "./VoiceDeviceSettings"
 import { FriezeMarkerSettings } from "./FriezeMarkerSettings"
@@ -52,6 +53,20 @@ export function NovaSettingsPanel() {
               disabled={!localSettings.groupDiscussions}
               onCheckedChange={(useDiscussionThumbnails) => setLocalSettings({ useDiscussionThumbnails })}
             />
+          </SettingRow>
+          <SettingRow label="Sort groups" hint="Choose how project headings are ordered. In Manual, drag a heading using its handle or use its move buttons.">
+            <Select
+              value={localSettings.discussionGroupSort}
+              disabled={!localSettings.groupDiscussions}
+              onValueChange={value => setLocalSettings({ discussionGroupSort: value as DiscussionGroupSortMode })}
+            >
+              <SelectTrigger className="w-40" aria-label="Sort groups">
+                <SelectValue>{discussionGroupSortOptions.find(option => option.value === localSettings.discussionGroupSort)?.label}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {discussionGroupSortOptions.map(({ value, label }) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </SettingRow>
         </div>
       </div>
