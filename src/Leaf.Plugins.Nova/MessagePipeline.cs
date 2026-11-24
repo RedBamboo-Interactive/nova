@@ -501,9 +501,10 @@ public sealed class MessagePipeline(
         requestedMessageUid ??= Guid.NewGuid().ToString("N");
 
         // Skills attached here on demand: written back into scratch if it was cleared, named on every turn.
+        // MCP servers attached here are named the same way; RedLeaf's gateway serves their tools.
         var attachedSkillLines = discussionSkills is null
             ? null
-            : await discussionSkills.PrepareTurnAsync(discussion, ct);
+            : (await discussionSkills.PrepareTurnAsync(discussion, ct)).Concat(DiscussionMcpService.ContextLines(discussion)).ToList();
 
         string contextBlock;
         if (fullContext)

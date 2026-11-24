@@ -174,7 +174,9 @@ public sealed class DiscussionSkillService(
         return lines;
     }
 
-    private async Task NotifyAsync(DiscussionRead discussion, string content, string idempotencyKey, CancellationToken ct)
+    /// <summary>Sends Nova's own note about an attachment change (a Skill, or an MCP server with <paramref name="source"/> mcp).</summary>
+    internal async Task NotifyAsync(DiscussionRead discussion, string content, string idempotencyKey, CancellationToken ct,
+        string source = EventSource)
     {
         try
         {
@@ -186,15 +188,15 @@ public sealed class DiscussionSkillService(
             // must not interrupt that turn.
             Task<bool> send;
             using (ExecutionContext.SuppressFlow())
-                send = Task.Run(() => injector.InjectAsync(discussion, content, null, EventSource,
+                send = Task.Run(() => injector.InjectAsync(discussion, content, null, source,
                     idempotencyKey: idempotencyKey, ct: CancellationToken.None, deliveryIdempotencyKey: idempotencyKey,
                     delivery: DelegateEndpoints.AfterCurrent));
             if (!await send.WaitAsync(ct))
-                logger.LogInformation("The Skill note for discussion {Discussion} is recorded but was not forwarded now (no session yet, or refused)", discussion.Id);
+                logger.LogInformation("The {Source} note for discussion {Discussion} is recorded but was not forwarded now (no session yet, or refused)", source, discussion.Id);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning(ex, "The Skill note for discussion {Discussion} was not delivered", discussion.Id);
+            logger.LogWarning(ex, "The {Source} note for discussion {Discussion} was not delivered", source, discussion.Id);
         }
     }
 

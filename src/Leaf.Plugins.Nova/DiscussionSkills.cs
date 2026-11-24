@@ -9,7 +9,8 @@ namespace Leaf.Plugins.Nova;
 /// <summary>
 /// A Skill attached to one discussion on demand, beside the Agent's default Skills. The record lives
 /// on the discussion entity (<see cref="DataKey"/>), so a restart, a resume or idle parking keeps it,
-/// and RedLeaf can read it. <see cref="Kind"/> is <c>skill</c>; the same record will carry MCP servers.
+/// and RedLeaf can read it. <see cref="Kind"/> is <c>skill</c> or <c>mcp</c> (an <c>mcp-server</c> entity,
+/// whose tools RedLeaf's MCP gateway serves to this discussion's sessions).
 /// </summary>
 public sealed record CapabilityAttachment(
     string Kind, string EntityId, string Slug, string Name,
@@ -18,6 +19,7 @@ public sealed record CapabilityAttachment(
 {
     public const string DataKey = "attached_capabilities";
     public const string SkillKind = "skill";
+    public const string McpKind = "mcp";
 
     /// <summary>Who asked for it: the person (<c>user</c>) or the Agent (<c>agent</c>).</summary>
     public const string ByUser = "user";

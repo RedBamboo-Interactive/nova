@@ -24,6 +24,8 @@ export interface DiscussionActionHandlers extends Omit<ConversationActionHandler
   voiceDisabled?: boolean
   /** Opens the Skill picker: a Skill for this discussion only. */
   onAttachSkill?: () => void
+  /** Opens the MCP server picker: its tools for this discussion only. */
+  onAttachMcpServer?: () => void
   onFloat?: () => void
   onReset?: () => void
 }
@@ -33,7 +35,7 @@ export interface DiscussionActionHandlers extends Omit<ConversationActionHandler
  * Stop, Close) with Nova's entries in its slots. Voice leads, Float and Reset timeline follow Share.
  * The header menu, each sidebar row menu and the rows' context menu render this one array.
  */
-export function discussionActionEntries({ onVoice, voiceDisabled = false, onAttachSkill, onFloat, onReset, ...handlers }: DiscussionActionHandlers): ContextMenuEntry[] {
+export function discussionActionEntries({ onVoice, voiceDisabled = false, onAttachSkill, onAttachMcpServer, onFloat, onReset, ...handlers }: DiscussionActionHandlers): ContextMenuEntry[] {
   const shortcut = (keys: string) => conversationShortcut(keys, handlers.showShortcuts)
   const leading: ContextMenuEntry[] = []
   if (onVoice) {
@@ -46,6 +48,12 @@ export function discussionActionEntries({ onVoice, voiceDisabled = false, onAtta
     leading.push({
       id: "attach-skill", label: "Attach Skill…", icon: "ph-bold ph-puzzle-piece",
       run: () => onAttachSkill(), attributes: { "aria-haspopup": "dialog" },
+    })
+  }
+  if (onAttachMcpServer) {
+    leading.push({
+      id: "attach-mcp-server", label: "Attach MCP server…", icon: "ph-bold ph-plugs-connected",
+      run: () => onAttachMcpServer(), attributes: { "aria-haspopup": "dialog" },
     })
   }
   const afterShare: ContextMenuEntry[] = []

@@ -113,6 +113,10 @@ public sealed record DiscussionRead(
     public IReadOnlyList<CapabilityAttachment> AttachedSkills
         => (Capabilities ?? []).Where(a => a.Kind == CapabilityAttachment.SkillKind).ToList();
 
+    /// <summary>The MCP servers attached to this discussion on demand, beside the Agent's default ones.</summary>
+    public IReadOnlyList<CapabilityAttachment> AttachedMcpServers
+        => (Capabilities ?? []).Where(a => a.Kind == CapabilityAttachment.McpKind).ToList();
+
     /// <summary>
     /// Whether this discussion's context carries the LIVE timeline: the explicit choice when someone
     /// made one, else on for LIVE and Heartbeat and off for everything else.
@@ -1427,6 +1431,9 @@ public sealed class DiscussionStore(
         // Skills attached here on demand, and the Agent's requests waiting for (or settled by) the person.
         skills = d.AttachedSkills,
         skillRequests = (d.CapabilityRequests ?? []).Where(r => r.Kind == CapabilityAttachment.SkillKind).ToList(),
+        // MCP servers attached here on demand (their tools come through RedLeaf's MCP gateway), and requests.
+        mcpServers = d.AttachedMcpServers,
+        mcpServerRequests = (d.CapabilityRequests ?? []).Where(r => r.Kind == CapabilityAttachment.McpKind).ToList(),
         ownedBy = DiscussionApplicationOwner.IsForeign(d)
             ? new { app = d.OwnerApp }
             : null,

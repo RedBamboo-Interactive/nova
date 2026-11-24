@@ -69,6 +69,10 @@ export interface DiscussionInfo {
   skills?: SkillAttachment[]
   /** The Agent's requests to attach a Skill: pending ones wait for the person's tap. */
   skillRequests?: SkillRequest[]
+  /** MCP servers attached to this discussion only (kind mcp); RedLeaf's MCP gateway serves their tools. */
+  mcpServers?: SkillAttachment[]
+  /** The Agent's requests to attach an MCP server. */
+  mcpServerRequests?: SkillRequest[]
   /** Internal first-turn identity. Raw RedCompute history includes this turn;
    * clients hide it while retaining the real session and its tool trace. */
   setupBootstrapMessageUid?: string | null

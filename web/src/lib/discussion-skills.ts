@@ -1,9 +1,12 @@
-// Pure helpers for Skills attached to one discussion on demand (no runtime imports, so node tests load it).
+// Pure helpers for Skills and MCP servers attached to one discussion on demand (no runtime imports, so node tests load it).
 import type { PermissionApproval } from "@redbamboo/chat"
 
-/** A Skill attached to this discussion only, beside the Agent's defaults. */
+/** What a discussion attaches on demand: a Skill, or an MCP server whose tools RedLeaf's gateway serves. */
+export type CapabilityKind = "skill" | "mcp"
+
+/** A Skill (or MCP server) attached to this discussion only, beside the Agent's defaults. */
 export interface SkillAttachment {
-  kind: "skill"
+  kind: CapabilityKind
   entityId: string
   slug: string
   name: string
@@ -16,10 +19,10 @@ export interface SkillAttachment {
   approvedById?: string | null
 }
 
-/** The Agent's request to attach a Skill its owner did not make attachable. */
+/** The Agent's request to attach a Skill (or MCP server) its owner did not make attachable. */
 export interface SkillRequest {
   id: string
-  kind: "skill"
+  kind: CapabilityKind
   entityId: string
   slug: string
   name: string
@@ -51,8 +54,27 @@ export function skillsPath(discussionId: string): string {
   return `/api/apps/nova/discussions/${encodeURIComponent(discussionId)}/skills`
 }
 
+export function mcpServersPath(discussionId: string): string {
+  return `/api/apps/nova/discussions/${encodeURIComponent(discussionId)}/mcp-servers`
+}
+
+/** The attach route of one kind: /skills or /mcp-servers. */
+export function capabilityPath(discussionId: string, kind: CapabilityKind): string {
+  return kind === "mcp" ? mcpServersPath(discussionId) : skillsPath(discussionId)
+}
+
+/** Decides any request, a Skill's or an MCP server's. */
 export function skillRequestPath(discussionId: string, requestId: string): string {
-  return `/api/apps/nova/discussions/${encodeURIComponent(discussionId)}/skill-requests/${encodeURIComponent(requestId)}`
+  return `/api/apps/nova/discussions/${encodeURIComponent(discussionId)}/capability-requests/${encodeURIComponent(requestId)}`
+}
+
+/** What the person calls each kind. */
+export function capabilityNoun(kind: CapabilityKind): string {
+  return kind === "mcp" ? "MCP server" : "Skill"
+}
+
+export function capabilityIcon(kind: CapabilityKind): string {
+  return kind === "mcp" ? "ph-bold ph-plugs-connected" : "ph-bold ph-puzzle-piece"
 }
 
 export function readSkillAttachments(value: unknown): SkillAttachment[] {
@@ -80,7 +102,8 @@ export function skillChipTitle(attachment: SkillAttachment, agentName: string | 
   const by = attachment.attachedBy === "user"
     ? "You attached it"
     : attachment.approvedById ? `${agentName?.trim() || "The agent"} asked, you approved` : `${agentName?.trim() || "The agent"} attached it`
-  return `${attachment.name} (${attachment.slug})\n${by}. This discussion only.`
+  const tools = attachment.kind === "mcp" ? " Its tools answer here through Leaf's MCP gateway." : ""
+  return `${attachment.name} (${attachment.slug})\n${by}. This discussion only.${tools}`
 }
 
 /**
@@ -89,10 +112,10 @@ export function skillChipTitle(attachment: SkillAttachment, agentName: string | 
  */
 export function skillRequestApproval(request: SkillRequest): PermissionApproval {
   return {
-    key: `skill-request:${request.id}`,
+    key: `${request.kind === "mcp" ? "mcp" : "skill"}-request:${request.id}`,
     requestId: request.id,
     request: {
-      toolName: `Attach Skill · ${request.name}`,
+      toolName: `Attach ${capabilityNoun(request.kind ?? "skill")} · ${request.name}`,
       summary: request.reason?.trim() || null,
       options: ["allow_once", "deny"],
     },

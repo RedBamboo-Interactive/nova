@@ -83,6 +83,15 @@ public static class DiscussionSkillEndpoints
                 return discussion is null ? DiscussionEndpoints.NotFound() : await DecideAsync(discussion, requestId, body, ctx, skills, store, events);
             })
             .WithSummary("The person approves or declines an Agent's request to attach a Skill. Body: decision (approve or decline). Only a person may decide; an Agent token is refused (403). Approving attaches it as for POST /skills; declining tells the Agent.");
+
+        group.MapPost("/discussions/{id}/capability-requests/{requestId}", async (string id, string requestId, SkillRequestDecision body,
+                HttpContext ctx, DiscussionStore store, DiscussionSkillService skills,
+                [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
+            {
+                var discussion = await store.GetAsync(id, ctx.RequestAborted);
+                return discussion is null ? DiscussionEndpoints.NotFound() : await DecideAsync(discussion, requestId, body, ctx, skills, store, events);
+            })
+            .WithSummary("The person approves or declines an Agent's request to attach a Skill or an MCP server (any request in capability_requests). Body: decision (approve or decline). Only a person may decide; an Agent token is refused (403). Approving attaches it; declining tells the Agent.");
     }
 
     public sealed record CallerInfo(string Kind, string? Id, string? Name, string Text);
@@ -183,6 +192,9 @@ public static class DiscussionSkillEndpoints
         var ct = ctx.RequestAborted;
         var caller = await skills.NamePersonAsync(discussion, Caller(discussion, ctx)!, ct);
         var now = DateTimeOffset.UtcNow;
+        if (request.Kind == CapabilityAttachment.McpKind)
+            return await DiscussionMcpEndpoints.DecideAsync(discussion, request, decision, caller, now,
+                ctx.RequestServices.GetRequiredService<DiscussionMcpService>(), store, events, ct);
 
         if (decision == "decline")
         {
@@ -205,7 +217,7 @@ public static class DiscussionSkillEndpoints
         return Results.Ok(new { status = "attached", skillFile = skillFile?.Replace('\\', '/'), items });
     }
 
-    private static IResult? Refusal(DiscussionRead discussion, HttpContext ctx)
+    internal static IResult? Refusal(DiscussionRead discussion, HttpContext ctx)
     {
         if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return DiscussionEndpoints.AccessDenied(discussion);
         if (DiscussionApplicationOwner.IsForeign(discussion)) return DiscussionApplicationOwner.Refusal(discussion);
@@ -213,7 +225,7 @@ public static class DiscussionSkillEndpoints
         return null;
     }
 
-    private static IResult NotAllowed()
+    internal static IResult NotAllowed()
         => Results.Json(new
         {
             error = "attach_not_allowed",

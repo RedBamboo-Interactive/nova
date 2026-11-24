@@ -263,6 +263,10 @@ public sealed class NovaAppPlugin : ILeafPlugin
             sp.GetRequiredService<EventInjector>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DiscussionSkillService>>(),
             sp.GetService<IAssets>()));
+        services.AddSingleton(sp => new DiscussionMcpService(
+            sp.GetRequiredService<DiscussionStore>(),
+            sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+            sp.GetRequiredService<DiscussionSkillService>()));
     }
 
     public void MapEndpoints(RouteGroupBuilder group)
@@ -291,6 +295,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
         DiscussionGroupingEndpoints.Map(group);
         DiscussionRollbackEndpoints.Map(group);
         DiscussionSkillEndpoints.Map(group);
+        DiscussionMcpEndpoints.Map(group);
         DiscussionJobEndpoints.Map(group);
         JournalEndpoints.Map(group);
         VoiceSessionEndpoints.Map(group);

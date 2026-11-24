@@ -538,6 +538,7 @@ export function ChatView({
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false)
   const [titleEditing, setTitleEditing] = useState(false)
   const [attachSkillOpen, setAttachSkillOpen] = useState(false)
+  const [attachMcpOpen, setAttachMcpOpen] = useState(false)
   const [reopenPending, setReopenPending] = useState(false)
   const [confidentialityPending, setConfidentialityPending] = useState(false)
   const [liveTimelinePending, setLiveTimelinePending] = useState(false)
@@ -1309,6 +1310,7 @@ export function ChatView({
               onVoice: owningApp ? undefined : openVoice,
               voiceDisabled: !voiceAvailable,
               onAttachSkill: canAttachSkills ? () => setAttachSkillOpen(true) : undefined,
+              onAttachMcpServer: canAttachSkills ? () => setAttachMcpOpen(true) : undefined,
               onInfo: openSessionInfo,
               onArtifacts: openArtifacts,
               onRename: canManageDiscussion ? () => setTitleEditing(true) : undefined,
@@ -1344,6 +1346,8 @@ export function ChatView({
         discussionId={activeDiscussion.id}
         skills={activeDiscussion.skills}
         requests={activeDiscussion.skillRequests}
+        mcpServers={activeDiscussion.mcpServers}
+        mcpRequests={activeDiscussion.mcpServerRequests}
         agentName={activeAgent?.name}
         disabled={!canAttachSkills}
       />
@@ -1354,6 +1358,16 @@ export function ChatView({
           open={attachSkillOpen}
           onOpenChange={setAttachSkillOpen}
           onError={message => toast({ variant: "error", title: "Skill not attached", description: message })}
+        />
+      )}
+      {canAttachSkills && (
+        <AttachSkillDialog
+          discussionId={activeDiscussion.id}
+          kind="mcp"
+          agentName={activeAgent?.name}
+          open={attachMcpOpen}
+          onOpenChange={setAttachMcpOpen}
+          onError={message => toast({ variant: "error", title: "MCP server not attached", description: message })}
         />
       )}
       {earlierHistoryLoadFailure && (

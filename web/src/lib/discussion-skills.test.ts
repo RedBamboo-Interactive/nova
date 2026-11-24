@@ -11,6 +11,7 @@ import {
   skillRequestApproval,
   skillRequestPath,
   skillsPath,
+  capabilityPath,
   type SkillAttachment,
   type SkillRequest,
 } from "./discussion-skills.ts"
@@ -70,5 +71,14 @@ test("records from the server are read defensively", () => {
 
 test("routes escape the ids", () => {
   assert.equal(skillsPath("d 1"), "/api/apps/nova/discussions/d%201/skills")
-  assert.equal(skillRequestPath("d1", "r/1"), "/api/apps/nova/discussions/d1/skill-requests/r%2F1")
+  assert.equal(skillRequestPath("d1", "r/1"), "/api/apps/nova/discussions/d1/capability-requests/r%2F1")
+  assert.equal(capabilityPath("d 1", "mcp"), "/api/apps/nova/discussions/d%201/mcp-servers")
+  assert.equal(capabilityPath("d1", "skill"), "/api/apps/nova/discussions/d1/skills")
+})
+
+test("an MCP server request and chip say MCP server", () => {
+  const approval = skillRequestApproval({ ...request, kind: "mcp", name: "Galaxus" })
+  assert.equal(approval.request.toolName, "Attach MCP server · Galaxus")
+  assert.equal(approval.key, "mcp-request:r1")
+  assert.match(skillChipTitle({ ...hers, kind: "mcp" }, "Nova"), /Leaf's MCP gateway/)
 })
