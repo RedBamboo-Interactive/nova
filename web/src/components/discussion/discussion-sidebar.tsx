@@ -11,6 +11,8 @@ import { resolveLiveSidebarSelection } from "../../lib/live-heartbeat"
 import { isDiscussionUnread } from "../../lib/discussion-unread"
 import { discussionActivityIndicator } from "../../lib/delegation-activity"
 import { discussionActionEntries } from "./discussion-actions"
+import { DiscussionBehaviourMarks } from "./discussion-behaviour"
+import { agentsWithHeartbeat } from "../../lib/discussion-behaviours"
 import { LiveQuotaBorder } from "./live-quota-ring"
 import { DiscussionThumbnail } from "./discussion-thumbnail"
 import { discussionLabel, discussionSections, groupingIcon, sidebarDiscussionTitle, type DiscussionGroupingSort, type DiscussionGroupingView } from "../../lib/discussion-grouping"
@@ -147,6 +149,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
     return { live, chat }
   }, [discussions])
   const titleOf = useMemo(() => createDiscussionTitleResolver(discussions), [discussions])
+  const heartbeatAgents = useMemo(() => agentsWithHeartbeat(discussions), [discussions])
   const sections = useMemo(() => discussionSections(chat, grouping, groupSort), [chat, grouping, groupSort])
   const groupNames = useMemo(() => sections.flatMap(section => section.name === null ? [] : [section.name]), [sections])
   const draggedGroup = useRef<string | null>(null)
@@ -297,12 +300,8 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
           : unread ? "[&_[data-slot=item-list-title]]:text-contrast [&_[data-slot=item-list-title]]:font-semibold"
           : "",
         ].filter(Boolean).join(" ")}
-        title={
-          <>
-            {sidebarDiscussionTitle(discussion, refineTitles ? label?.label : undefined)}
-            {discussion.confidential && <i className="ph-bold ph-lock-simple text-[10px] text-text-muted ml-1.5 opacity-60" />}
-          </>
-        }
+        title={sidebarDiscussionTitle(discussion, refineTitles ? label?.label : undefined)}
+        badge={<DiscussionBehaviourMarks discussion={discussion} agentHasHeartbeat={heartbeatAgents.has(discussion.agentId)} />}
         subtitle={<span className="inline-flex items-baseline gap-1.5"><span>{formatRelative(discussion.lastActivity)}</span>{visualCue && agent && <span>· {agent.name}</span>}{discussion.ownedBy && <span>· {formatOwningApp(discussion.ownedBy.app)}</span>}</span>}
         trailing={
           discussion.status !== "archived" ? (
@@ -319,7 +318,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
       </DiscussionRowTarget>
     )
-  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer, grouping, refineTitles, useThumbnails])
+  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer, grouping, refineTitles, useThumbnails, heartbeatAgents])
 
   const renderArchivedItem = useCallback((discussion: DiscussionInfo) => {
     const item = discussion as ArchiveDiscussionItem

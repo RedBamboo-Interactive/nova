@@ -19,6 +19,7 @@ import { withWaitingActivity } from "../lib/waiting-activity"
 import { permissionNoticeText } from "../lib/permission-notices"
 import { WorktreeChips } from "../components/discussion/worktree-chips"
 import { DiscussionBehaviourList, OrchestrationStatus, type BehaviourItem } from "../components/discussion/discussion-behaviour"
+import { BEHAVIOUR_ICONS, agentsWithHeartbeat, effectiveBehaviours, hasIntrinsicBehaviours } from "../lib/discussion-behaviours"
 import { AttachSkillDialog, SkillChips } from "../components/discussion/skill-chips"
 import { ReactionPills, AddReactionButton, useReactionEmoji } from "../components/discussion/reactions"
 import { reactionMenuEntries } from "../components/discussion/reaction-actions"
@@ -1246,17 +1247,16 @@ export function ChatView({
   )
 
   // The Agent's Heartbeat is what picks an Orchestrated discussion up: without an open one, nothing would.
-  const agentHasHeartbeat = !!activeDiscussion && discussions.some(d =>
-    d.type === "heartbeat" && d.agentId === activeDiscussion.agentId && d.status !== "archived" && d.status !== "archiving")
-  const behaviours: BehaviourItem[] = !activeDiscussion ? [] : [
-    ...(activeDiscussion.type === "live" || activeDiscussion.type === "heartbeat" ? [] : [{
+  const agentHasHeartbeat = !!activeDiscussion && agentsWithHeartbeat(discussions).has(activeDiscussion.agentId)
+  const effective = activeDiscussion ? effectiveBehaviours(activeDiscussion, agentHasHeartbeat) : null
+  const behaviours: BehaviourItem[] = !activeDiscussion || !effective ? [] : [
+    ...(hasIntrinsicBehaviours(activeDiscussion) ? [] : [{
       key: "orchestrated",
-      icon: "ph-bold ph-heartbeat",
+      icon: BEHAVIOUR_ICONS.orchestrated,
       title: "Orchestrated",
       accent: "var(--color-accent-red)",
       description: "When it goes idle, the Heartbeat picks it up and decides what's next",
-      // Shown off while it can't run (Confidential, or no Heartbeat): the mark is kept and resumes when it can.
-      checked: (activeDiscussion.orchestrated ?? false) && !activeDiscussion.confidential && agentHasHeartbeat,
+      checked: effective.orchestrated,
       pending: orchestratedPending,
       blocked: activeDiscussion.confidential ? "Not while Confidential: the Heartbeat would read it"
         : !agentHasHeartbeat ? "Its Agent has no Heartbeat, so nothing would pick it up"
@@ -1267,22 +1267,22 @@ export function ChatView({
     }]),
     {
       key: "liveTimeline",
-      icon: "ph-bold ph-broadcast",
+      icon: BEHAVIOUR_ICONS.liveTimeline,
       title: "LIVE timeline",
       accent: "var(--color-accent-teal)",
       description: "Recent LIVE events (mail, automations, lights, music, other discussions) in its context",
-      checked: activeDiscussion.liveTimeline ?? (activeDiscussion.type === "live" || activeDiscussion.type === "heartbeat"),
+      checked: effective.liveTimeline,
       pending: liveTimelinePending,
       settingPath: "discussion.liveTimeline",
       onChange: handleLiveTimelineToggle,
     },
     {
       key: "confidential",
-      icon: "ph-bold ph-lock-simple",
+      icon: BEHAVIOUR_ICONS.confidential,
       title: "Confidential",
       accent: "var(--color-accent-gold)",
       description: "Kept out of LIVE, the Heartbeat, other discussions and bulk exports; the share control is hidden",
-      checked: activeDiscussion.confidential ?? false,
+      checked: effective.confidential,
       pending: confidentialityPending,
       settingPath: "discussion.confidential",
       onChange: handleConfidentialToggle,

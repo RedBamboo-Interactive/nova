@@ -1,6 +1,37 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { Switch, cn } from "@redbamboo/ui"
 import type { DiscussionInfo } from "../../lib/types"
+import { BEHAVIOUR_ICONS, behaviourMarks } from "../../lib/discussion-behaviours"
+
+const markClass = "text-[10px]"
+
+/**
+ * The discussion list's quiet marks beside a title (the row's badge slot, so a long title never hides them): the icon of each behaviour switched on, in the
+ * Info modal's order. The heartbeat turns red only while the Heartbeat's check is due. Intrinsic
+ * behaviours (the LIVE timeline of LIVE and Heartbeat discussions) aren't marked: they aren't choices.
+ */
+export function DiscussionBehaviourMarks({ discussion, agentHasHeartbeat }: { discussion: DiscussionInfo; agentHasHeartbeat: boolean }) {
+  const { orchestrated, armed, liveTimeline, confidential } = behaviourMarks(discussion, agentHasHeartbeat)
+  if (!orchestrated && !liveTimeline && !confidential) return null
+  return (
+    <span data-slot="discussion-behaviour-marks" className="inline-flex shrink-0 items-center gap-1">
+      {orchestrated && (
+        <i
+          role="img"
+          aria-label={armed ? "Orchestrated, Heartbeat check due" : "Orchestrated"}
+          title={armed ? "Orchestrated · the Heartbeat checks in soon" : "Orchestrated"}
+          className={cn(BEHAVIOUR_ICONS.orchestrated, markClass, armed ? "text-accent-red" : "text-text-muted opacity-60")}
+        />
+      )}
+      {liveTimeline && (
+        <i role="img" aria-label="LIVE timeline" title="LIVE timeline" className={cn(BEHAVIOUR_ICONS.liveTimeline, markClass, "text-text-muted opacity-60")} />
+      )}
+      {confidential && (
+        <i role="img" aria-label="Confidential" title="Confidential" className={cn(BEHAVIOUR_ICONS.confidential, markClass, "text-text-muted opacity-60")} />
+      )}
+    </span>
+  )
+}
 
 /** One behaviour of a discussion: a row in the Info modal's grouped Behaviour list. */
 export interface BehaviourItem {
