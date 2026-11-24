@@ -319,7 +319,8 @@ public sealed class CallbackDeliveryTests
         public IEnumerable<DiscussionMessage> LiveMessages => Records.Where(m => m.DiscussionId == live.Id);
 
         public Fixture(bool confidential = false, bool sessionless = false,
-            AgentActivitySignals? activity = null, string type = "chat", IReadOnlyList<LeafEntity>? extraEntities = null)
+            AgentActivitySignals? activity = null, string type = "chat", IReadOnlyList<LeafEntity>? extraEntities = null,
+            Func<Guid, IEnumerable<LeafEntity>>? agentEntities = null)
         {
             var agent = Entity("agent", "nova", new());
             AgentId = agent.Id;
@@ -333,7 +334,8 @@ public sealed class CallbackDeliveryTests
                 // The same person's LIVE: a delegated session's line reaches only its owner's.
                 ["owner_id"] = "test-owner",
             });
-            all = new[] { Target, live, agent, Entity("plugin", "nova", new()) }.Concat(extraEntities ?? []).ToArray();
+            all = new[] { Target, live, agent, Entity("plugin", "nova", new()) }.Concat(extraEntities ?? [])
+                .Concat(agentEntities?.Invoke(agent.Id) ?? []).ToArray();
             var entities = Proxy.Create<IEntityStore>((method, args) => method switch {
                 "GetBySlugAsync" => Task.FromResult(args.Length > 1 && args[1] is string typedSlug
                     ? all.FirstOrDefault(e => e.TypeSlug == (string)args[0]! && e.Slug == typedSlug)
@@ -434,8 +436,13 @@ public sealed class CallbackDeliveryTests
         public string Answer { get; set; } = "{\"accepted\":true}";
         // RedCompute refuses a reused admission key whose body differs (idempotency_conflict).
         public int Conflicts { get; private set; }
+        /// <summary>The session status a GET /ai-session/sessions/{id} probe reports; null answers 404.</summary>
+        public string? SessionStatus { get; set; } = "Idle";
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
+            if (request.Method == HttpMethod.Get && request.RequestUri!.ToString().Contains("/ai-session/sessions/"))
+                return SessionStatus is null ? new(HttpStatusCode.NotFound)
+                    : new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new { session = new { status = SessionStatus } })) };
             Assert.EndsWith("/message", request.RequestUri!.ToString());
             Assert.NotNull(provenance);
             Attempts++;
@@ -473,5 +480,5 @@ public sealed class CallbackDeliveryTests
         }
     }
     private sealed class Noop : IDisposable { public void Dispose() { } }
-    private static LeafEntity Entity(string type, string slug, JsonObject data) => new(Guid.NewGuid(), type, slug, slug, data, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "test");
+    internal static LeafEntity Entity(string type, string slug, JsonObject data) => new(Guid.NewGuid(), type, slug, slug, data, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "test");
 }

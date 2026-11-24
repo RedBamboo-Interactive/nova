@@ -2,7 +2,7 @@ import { useState, useCallback, useDeferredValue, useEffect, useLayoutEffect, us
 import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Switch, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, PluginExtensionSlot, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
@@ -18,6 +18,7 @@ import { DelegationsInfo, delegationActivityGroup } from "../components/delegati
 import { withWaitingActivity } from "../lib/waiting-activity"
 import { permissionNoticeText } from "../lib/permission-notices"
 import { WorktreeChips } from "../components/discussion/worktree-chips"
+import { DiscussionBehaviourList, OrchestrationStatus, type BehaviourItem } from "../components/discussion/discussion-behaviour"
 import { AttachSkillDialog, SkillChips } from "../components/discussion/skill-chips"
 import { ReactionPills, AddReactionButton, useReactionEmoji } from "../components/discussion/reactions"
 import { reactionMenuEntries } from "../components/discussion/reaction-actions"
@@ -306,6 +307,7 @@ export function ChatView({
     updateDiscussionTitle,
     setConfidential,
     setLiveTimeline,
+    setOrchestrated,
     setRunOnNode,
     reopenDiscussion,
     loadEarlierMessages,
@@ -542,6 +544,7 @@ export function ChatView({
   const [reopenPending, setReopenPending] = useState(false)
   const [confidentialityPending, setConfidentialityPending] = useState(false)
   const [liveTimelinePending, setLiveTimelinePending] = useState(false)
+  const [orchestratedPending, setOrchestratedPending] = useState(false)
   const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const providersRef = useRef(providers)
@@ -967,6 +970,22 @@ export function ChatView({
     }
   }, [activeDiscussionId, liveTimelinePending, setLiveTimeline, toast])
 
+  const handleOrchestratedToggle = useCallback(async (checked: boolean) => {
+    if (!activeDiscussionId || orchestratedPending) return
+    setOrchestratedPending(true)
+    try {
+      await setOrchestrated(activeDiscussionId, checked)
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "Could not update Orchestrated",
+        description: error instanceof Error ? error.message : "Unknown error",
+      })
+    } finally {
+      setOrchestratedPending(false)
+    }
+  }, [activeDiscussionId, orchestratedPending, setOrchestrated, toast])
+
   const [runOnPending, setRunOnPending] = useState(false)
   const handleRunOnChange = useCallback(async (nodeId: string | null) => {
     if (!activeDiscussionId || runOnPending) return
@@ -1226,49 +1245,51 @@ export function ChatView({
     </Tabs>
   )
 
+  // The Agent's Heartbeat is what picks an Orchestrated discussion up: without an open one, nothing would.
+  const agentHasHeartbeat = !!activeDiscussion && discussions.some(d =>
+    d.type === "heartbeat" && d.agentId === activeDiscussion.agentId && d.status !== "archived" && d.status !== "archiving")
+  const behaviours: BehaviourItem[] = !activeDiscussion ? [] : [
+    ...(activeDiscussion.type === "live" || activeDiscussion.type === "heartbeat" ? [] : [{
+      key: "orchestrated",
+      icon: "ph-bold ph-heartbeat",
+      title: "Orchestrated",
+      accent: "var(--color-accent-red)",
+      description: "When it goes idle, the Heartbeat picks it up and decides what's next",
+      // Shown off while it can't run (Confidential, or no Heartbeat): the mark is kept and resumes when it can.
+      checked: (activeDiscussion.orchestrated ?? false) && !activeDiscussion.confidential && agentHasHeartbeat,
+      pending: orchestratedPending,
+      blocked: activeDiscussion.confidential ? "Not while Confidential: the Heartbeat would read it"
+        : !agentHasHeartbeat ? "Its Agent has no Heartbeat, so nothing would pick it up"
+        : null,
+      status: <OrchestrationStatus discussion={activeDiscussion} />,
+      settingPath: "discussion.orchestrated",
+      onChange: handleOrchestratedToggle,
+    }]),
+    {
+      key: "liveTimeline",
+      icon: "ph-bold ph-broadcast",
+      title: "LIVE timeline",
+      accent: "var(--color-accent-teal)",
+      description: "Recent LIVE events (mail, automations, lights, music, other discussions) in its context",
+      checked: activeDiscussion.liveTimeline ?? (activeDiscussion.type === "live" || activeDiscussion.type === "heartbeat"),
+      pending: liveTimelinePending,
+      settingPath: "discussion.liveTimeline",
+      onChange: handleLiveTimelineToggle,
+    },
+    {
+      key: "confidential",
+      icon: "ph-bold ph-lock-simple",
+      title: "Confidential",
+      accent: "var(--color-accent-gold)",
+      description: "Kept out of LIVE, the Heartbeat, other discussions and bulk exports; the share control is hidden",
+      checked: activeDiscussion.confidential ?? false,
+      pending: confidentialityPending,
+      settingPath: "discussion.confidential",
+      onChange: handleConfidentialToggle,
+    },
+  ]
   const sessionInfoContent = activeDiscussion && (
-    <div className="space-y-3">
-      <div className="flex items-start justify-between gap-3 rounded-lg border border-overlay-6 bg-overlay-3 px-3 py-2.5">
-        <div className="flex min-w-0 items-start gap-2.5">
-          <i className="ph-bold ph-lock-simple mt-0.5 text-sm text-text-muted" aria-hidden="true" />
-          <div className="min-w-0">
-            <div className="text-xs font-medium text-contrast">Confidential</div>
-            <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
-              Excludes this discussion from Live activity, heartbeat and other discussions&apos; context, and bulk exports. The share control is hidden. It remains stored and accessible here.
-            </p>
-          </div>
-        </div>
-        <Switch
-          size="sm"
-          className="mt-0.5 shrink-0"
-          checked={activeDiscussion.confidential ?? false}
-          onCheckedChange={handleConfidentialToggle}
-          disabled={confidentialityPending || discussionClosed}
-          aria-busy={confidentialityPending}
-          aria-label="Confidential discussion"
-        />
-      </div>
-      <div data-setting-path="discussion.liveTimeline" className="flex items-start justify-between gap-3 rounded-lg border border-overlay-6 bg-overlay-3 px-3 py-2.5">
-        <div className="flex min-w-0 items-start gap-2.5">
-          <i className="ph-bold ph-broadcast mt-0.5 text-sm text-text-muted" aria-hidden="true" />
-          <div className="min-w-0">
-            <div className="text-xs font-medium text-contrast">LIVE timeline</div>
-            <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
-              Include recent LIVE events (mail, automations, lights, music, other discussions) in this discussion&apos;s context
-            </p>
-          </div>
-        </div>
-        <Switch
-          size="sm"
-          className="mt-0.5 shrink-0"
-          checked={activeDiscussion.liveTimeline ?? (activeDiscussion.type === "live" || activeDiscussion.type === "heartbeat")}
-          onCheckedChange={handleLiveTimelineToggle}
-          disabled={liveTimelinePending || discussionClosed}
-          aria-busy={liveTimelinePending}
-          aria-label="LIVE timeline"
-        />
-      </div>
-    </div>
+    <DiscussionBehaviourList items={behaviours} closed={discussionClosed} />
   )
 
   const chatHeader = activeDiscussion && (

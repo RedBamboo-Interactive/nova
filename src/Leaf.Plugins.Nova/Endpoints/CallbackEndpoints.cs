@@ -23,6 +23,16 @@ public static class CallbackEndpoints
         try { body = await ctx.Request.ReadFromJsonAsync<JsonElement>(ctx.RequestAborted); }
         catch { return Results.BadRequest(new { error = "invalid_body" }); }
 
+        // An Orchestrated discussion's own turn settled: its Agent's Heartbeat decides what's next.
+        if (ctx.Request.Query[DiscussionOrchestration.QueryFlag] == "1")
+        {
+            var orchestrated = ctx.Request.Query["discussionId"].ToString();
+            return string.IsNullOrEmpty(orchestrated)
+                ? Results.BadRequest(new { error = "discussionId is required" })
+                : await DiscussionOrchestration.HandleCallbackAsync(body, orchestrated, store, store.Entities,
+                    TimeProvider.System, ctx.RequestAborted);
+        }
+
         var sessionId = body.TryGetProperty("sessionId", out var s) ? s.GetString() : null;
         string? callbackId = null;
         if (body.TryGetProperty("callbackId", out var callback))

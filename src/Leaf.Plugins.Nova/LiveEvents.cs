@@ -397,6 +397,8 @@ public sealed class EventInjector(
                  new ComputeContextReference("event", uid, NameSnapshot: source)], method: "POST", ct: ct,
                 // An injected event is never a person talking, even in a discussion a person started.
                 cause: senderAgentId is not null ? ComputeCauses.Agent : ComputeCauses.App);
+            await DiscussionOrchestration.RegisterPromptAsync(redCompute, entities, discussion, sessionId, uid,
+                fromPerson: false, logger, ct);
             var result = await redCompute.SendMessageDetailedAsync(
                 sessionId, messageBody, provenance, ct, idempotencyKey: admissionKey);
             // An injected event (heartbeat, automation, callback, delegation, Discord

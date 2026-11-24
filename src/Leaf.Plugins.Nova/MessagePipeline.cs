@@ -502,9 +502,11 @@ public sealed class MessagePipeline(
 
         // Skills attached here on demand: written back into scratch if it was cleared, named on every turn.
         // MCP servers attached here are named the same way; RedLeaf's gateway serves their tools.
+        // An Orchestrated discussion says so, so its Agent ends turns in a state its Heartbeat can pick up.
         var attachedSkillLines = discussionSkills is null
             ? null
-            : (await discussionSkills.PrepareTurnAsync(discussion, ct)).Concat(DiscussionMcpService.ContextLines(discussion)).ToList();
+            : (await discussionSkills.PrepareTurnAsync(discussion, ct)).Concat(DiscussionMcpService.ContextLines(discussion))
+                .Concat(DiscussionOrchestration.ContextLines(discussion)).ToList();
 
         string contextBlock;
         if (fullContext)
@@ -565,6 +567,8 @@ public sealed class MessagePipeline(
             };
         }
 
+        await DiscussionOrchestration.RegisterPromptAsync(redCompute, entities, discussion, sessionId, requestedMessageUid,
+            fromPerson: humanInitiated, logger, ct);
         var sendResult = await redCompute.SendMessageDetailedAsync(
             sessionId, requestBody, provenance, ct,
             idempotencyKey: idempotencyKey);
@@ -847,6 +851,8 @@ public sealed class MessagePipeline(
         var content = NovaContextBuilder.BuildReactionNote(notes.Lines, DateTime.UtcNow, device,
             current.Id, agent.Name, steer);
         var messageUid = Guid.NewGuid().ToString("N");
+        await DiscussionOrchestration.RegisterPromptAsync(redCompute, entities, current, current.SessionId, messageUid,
+            fromPerson: false, logger, ct);
         var result = await redCompute.SendMessageDetailedAsync(current.SessionId, new
         {
             content,

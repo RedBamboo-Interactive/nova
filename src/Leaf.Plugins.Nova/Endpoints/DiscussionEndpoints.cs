@@ -38,6 +38,8 @@ public class CreateDiscussionRequest
     /// </summary>
     [System.Text.Json.Serialization.JsonPropertyName("nodeId")]
     public string? RunOnNodeId { get; set; }
+    /// <summary>Orchestrated from the start: whenever it goes idle, its Agent's Heartbeat decides what's next.</summary>
+    public bool? Orchestrated { get; set; }
 }
 
 /// <summary>
@@ -73,6 +75,12 @@ public class DiscussionConfidentialRequest
 public class DiscussionLiveTimelineRequest
 {
     public JsonElement LiveTimeline { get; set; }
+}
+
+/// <summary><c>orchestrated</c>: true to hand the discussion to its Agent's Heartbeat whenever it goes idle.</summary>
+public class DiscussionOrchestratedRequest
+{
+    public JsonElement Orchestrated { get; set; }
 }
 
 public class AttachWorktreeRequest
@@ -349,6 +357,15 @@ public static class DiscussionEndpoints
         // under another Agent's identity and memory.
         var agentId = createReq?.AgentId ?? SignedAgentId(ctx) ?? agents.NovaAgentId;
         var type = createReq?.Type ?? "chat";
+        if (createReq?.Orchestrated == true && type is "live" or HeartbeatService.DiscussionType)
+            return Results.BadRequest(new
+            {
+                error = "not_orchestratable",
+                message = "LIVE and Heartbeat discussions are not orchestrated: the Heartbeat is the orchestrator.",
+            });
+        // Refused before anything exists: an Orchestrated discussion nobody would pick up is a silent trap.
+        if (createReq?.Orchestrated == true && !await DiscussionOrchestration.HasHeartbeatAsync(store, agentId, ctx.RequestAborted))
+            return Results.Conflict(new { error = "not_orchestratable", message = DiscussionOrchestration.NoHeartbeat });
 
         if (type is "live" or HeartbeatService.DiscussionType)
         {
@@ -387,6 +404,9 @@ public static class DiscussionEndpoints
         if (created && createReq?.RunOnNodeId is { } runOnNodeId)
             discussion = await store.SetRunOnNodeAsync(discussion.EntityId, runOnNodeId, ctx.RequestAborted)
                 ?? discussion;
+        // Orchestrated before the brief, so the first turn already registers its idle callback.
+        if (created && createReq?.Orchestrated == true && DiscussionOrchestration.Refusal(discussion) is null)
+            discussion = await store.SetOrchestratedAsync(discussion.EntityId, true, ctx.RequestAborted) ?? discussion;
 
         if (created)
         {
@@ -539,6 +559,36 @@ public static class DiscussionEndpoints
         if (updated is null) return NotFound();
         if (updated.LiveTimelineSetting != discussion.LiveTimelineSetting)
             await PublishChangedAsync(events, updated, ctx.RequestAborted);
+        return Results.Ok(DiscussionStore.ToInfo(updated));
+    }
+
+    /// <summary>
+    /// Marks or clears a discussion as Orchestrated. Same access as its LIVE timeline: the person, or an Agent
+    /// acting for them. Turning it on while the discussion is idle hands it to the Heartbeat at once.
+    /// </summary>
+    internal static async Task<IResult> SetOrchestratedAsync(DiscussionRead discussion,
+        DiscussionOrchestratedRequest? request, HttpContext ctx, DiscussionStore store, EventInjector injector,
+        IPluginEvents? events = null)
+    {
+        if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+        if (request?.Orchestrated.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            return Results.BadRequest(new { error = "invalid_request", message = "orchestrated must be true or false" });
+        var value = request!.Orchestrated.ValueKind == JsonValueKind.True;
+        if (DiscussionStatus.IsClosed(discussion.Status)) return Closed();
+        if (value && await DiscussionOrchestration.RefusalAsync(store, discussion, ctx.RequestAborted) is { } refusal)
+            return Results.Conflict(new { error = "not_orchestratable", message = refusal });
+
+        var updated = await store.SetOrchestratedAsync(discussion.EntityId, value, ctx.RequestAborted);
+        if (updated is null) return NotFound();
+        if (updated.Orchestrated != discussion.Orchestrated)
+        {
+            await PublishChangedAsync(events, updated, ctx.RequestAborted);
+            if (value && updated.Status == DiscussionStatus.Idle && updated.SessionId is not null)
+            {
+                await DiscussionOrchestration.HandOffNowAsync(store, store.Entities, injector, updated, ctx.RequestAborted);
+                updated = await store.GetAsync(updated.Id, ctx.RequestAborted) ?? updated;
+            }
+        }
         return Results.Ok(DiscussionStore.ToInfo(updated));
     }
 
@@ -820,7 +870,7 @@ public static class DiscussionEndpoints
             catch { /* body is optional */ }
             return await CreateDiscussionAsync(createReq, ctx, store, agents, pipeline, events, live, injector);
         })
-            .WithSummary("Creates a discussion and starts its provider session, owned by the signed-in person or the calling Agent's beneficiary. The body is optional: agentId, type, qualityTier, provider, deferSession, idempotencyKey, title (kept: automatic titling won't overwrite it), liveTimeline (boolean: whether its context carries the LIVE timeline; omitted follows the type: on for live and heartbeat, off otherwise), nodeId (\"Run on\": a node id from GET /compute/nodes its sessions run on; omitted or null is Automatic), brief (what it should do: posted as an event the new session takes, the server stating who sent it), requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, needs a brief, 403 for a discussion the caller can't read). brief with deferSession is a 400; a retry under idempotencyKey reuses the discussion and its brief. A second open live or heartbeat discussion for the same Agent returns 409.")
+            .WithSummary("Creates a discussion and starts its provider session, owned by the signed-in person or the calling Agent's beneficiary. The body is optional: agentId, type, qualityTier, provider, deferSession, idempotencyKey, title (kept: automatic titling won't overwrite it), liveTimeline (boolean: whether its context carries the LIVE timeline; omitted follows the type: on for live and heartbeat, off otherwise), nodeId (\"Run on\": a node id from GET /compute/nodes its sessions run on; omitted or null is Automatic), brief (what it should do: posted as an event the new session takes, the server stating who sent it), requestedIn ({discussionId, messageUid}: the message where the person asked for this; signed Agents only, needs a brief, 403 for a discussion the caller can't read). brief with deferSession is a 400; a retry under idempotencyKey reuses the discussion and its brief. A second open live or heartbeat discussion for the same Agent returns 409. orchestrated (boolean): Orchestrated from the start (see PUT /discussions/{id}/orchestrated); 400 for live or heartbeat, 409 not_orchestratable when the Agent has no open Heartbeat.")
             .WithMetadata(new AcceptsMetadata([], typeof(CreateDiscussionRequest)));
 
         group.MapGet("/discussions/live", async (HttpContext ctx, DiscussionStore store) =>
@@ -1713,6 +1763,15 @@ public static class DiscussionEndpoints
             return discussion is null ? NotFound() : await SetLiveTimelineAsync(discussion, request, ctx, store, events);
         })
             .WithSummary("Sets whether a discussion's context carries the LIVE timeline (the latest 15 LIVE events from every source: mail, automations, lights, music, other discussions...). Off, its context lists no LIVE events and says how to read them from GET /live/timeline. Body: liveTimeline (true or false; null follows the type's default again: on for live and heartbeat, off otherwise). Same access as renaming; the discussion carries liveTimeline and liveTimelineSource (explicit or default).");
+
+        group.MapPut("/discussions/{id}/orchestrated", async (string id,
+            DiscussionOrchestratedRequest request, HttpContext ctx, DiscussionStore store, EventInjector injector,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
+        {
+            var discussion = await store.GetAsync(id, ctx.RequestAborted);
+            return discussion is null ? NotFound() : await SetOrchestratedAsync(discussion, request, ctx, store, injector, events);
+        })
+            .WithSummary("Marks a discussion Orchestrated, or clears it. Body: orchestrated (true or false). Orchestrated, a turn that settles with nothing queued (not a stop or interrupt) arms a quiet window; new input cancels it. When it ends and the session is still idle, the Agent's open Heartbeat gets an orchestrated-idle note and decides, with its heartbeat-orchestration Skill, whether to send the next step. The window is 3 minutes for the first 5 hand-offs since the person last wrote there, then doubles per hand-off up to an hour; the person's message resets it. The discussion carries orchestration {dueAt, chain}. Turning it on while the discussion is idle hands it over at once. 409 not_orchestratable for LIVE, Heartbeat, confidential, another app's or Agent-less discussions, and when the Agent has no open Heartbeat. Same access as the LIVE timeline; returns the discussion with orchestrated.");
 
         group.MapPut("/discussions/{id}/node", async (string id,
             DiscussionRunOnRequest request, HttpContext ctx, DiscussionStore store,

@@ -2295,6 +2295,12 @@ export function useDiscussions(eventResolver?: EventResolver) {
     upsertDiscussion(updated)
   }, [])
 
+  /** Orchestrated: when it goes idle, its Agent's Heartbeat decides what's next. */
+  const setOrchestrated = useCallback(async (id: string, orchestrated: boolean) => {
+    const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/orchestrated`, { orchestrated })
+    upsertDiscussion(updated)
+  }, [])
+
   /** "Run on": the node the discussion's next sessions run on; null is Automatic. */
   const setRunOnNode = useCallback(async (id: string, nodeId: string | null) => {
     const updated = await api.put<DiscussionInfo>(`/api/apps/nova/discussions/${id}/node`, { nodeId })
@@ -2347,6 +2353,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     updateDiscussionTitle,
     setConfidential,
     setLiveTimeline,
+    setOrchestrated,
     setRunOnNode,
     reopenDiscussion,
     loadEarlierMessages,

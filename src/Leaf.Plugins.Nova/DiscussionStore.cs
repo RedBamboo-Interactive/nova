@@ -107,7 +107,9 @@ public sealed record DiscussionRead(
     bool? LiveTimelineSetting = null,
     string? RunOnNodeId = null,
     IReadOnlyList<CapabilityAttachment>? Capabilities = null,
-    IReadOnlyList<CapabilityRequest>? CapabilityRequests = null)
+    IReadOnlyList<CapabilityRequest>? CapabilityRequests = null,
+    bool Orchestrated = false,
+    OrchestrationState? Orchestration = null)
 {
     /// <summary>The Skills attached to this discussion on demand, beside the Agent's defaults.</summary>
     public IReadOnlyList<CapabilityAttachment> AttachedSkills
@@ -237,6 +239,9 @@ public sealed record DiscussionRollback(
 public sealed class DiscussionStore(
     IEntityStore entities, IDiscussions discussions, AgentActivitySignals? activity = null)
 {
+    /// <summary>The entity store behind it, for state written under <see cref="DiscussionEntityGate"/> elsewhere.</summary>
+    internal IEntityStore Entities => entities;
+
     internal const int QueryPageSize = 500;
     internal const int MaxListedDiscussions = 10_000;
     private static readonly string[] OpenStatuses =
@@ -1378,7 +1383,9 @@ public sealed class DiscussionStore(
             Bool(d, LiveTimelineContext.DataKey) ?? Bool(d, LiveTimelineContext.LegacyDataKey),
             Str(d, RunOnNodeKey),
             CapabilityAttachment.Read(d),
-            CapabilityRequest.Read(d));
+            CapabilityRequest.Read(d),
+            Bool(d, OrchestratedKey) ?? false,
+            OrchestrationState.Read(d));
     }
 
     /// <summary>
@@ -1398,6 +1405,26 @@ public sealed class DiscussionStore(
             var entity = await RequireNovaOwnedAsync(entityId, ct);
             if (entity is null || Map(entity) is null) return null;
             await entities.PatchAsync(entityId, new JsonObject { [RunOnNodeKey] = nodeId }, ct: ct);
+            var updated = await entities.GetAsync(entityId, ct);
+            return updated is null ? null : Map(updated);
+        }, ct);
+
+    /// <summary>
+    /// The data key of the Orchestrated mark: when the discussion goes idle, its Agent's Heartbeat is told
+    /// and decides whether to continue it. Absent is false.
+    /// </summary>
+    public const string OrchestratedKey = "orchestrated";
+
+    /// <summary>Marks or clears a discussion as Orchestrated; the change applies from its next turn.</summary>
+    public Task<DiscussionRead?> SetOrchestratedAsync(Guid entityId, bool orchestrated, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<DiscussionRead?>(entityId, async () =>
+        {
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
+            if (entity is null || Map(entity) is null) return null;
+            // Clearing the mark also drops any armed hand-off and the pacing.
+            var patch = new JsonObject { [OrchestratedKey] = orchestrated };
+            if (!orchestrated) patch[OrchestrationState.DataKey] = null;
+            await entities.PatchAsync(entityId, patch, ct: ct);
             var updated = await entities.GetAsync(entityId, ct);
             return updated is null ? null : Map(updated);
         }, ct);
@@ -1426,6 +1453,12 @@ public sealed class DiscussionStore(
         liveTimelineSource = d.LiveTimelineSetting is null ? "default" : "explicit",
         // The node new sessions run on (a RedCompute /nodes id); null is Automatic.
         nodeId = d.RunOnNodeId,
+        // When idle, its Agent's Heartbeat decides whether to continue it.
+        orchestrated = d.Orchestrated,
+        // When its Heartbeat is told it's idle (null: not armed), and hand-offs since the person last wrote.
+        orchestration = d.Orchestrated
+            ? new { dueAt = d.Orchestration?.DueAt, chain = d.Orchestration?.Chain ?? 0 }
+            : null,
         setupBootstrapMessageUid = d.SetupBootstrapMessageUid,
         worktrees = d.Worktrees ?? [],
         // Skills attached here on demand, and the Agent's requests waiting for (or settled by) the person.

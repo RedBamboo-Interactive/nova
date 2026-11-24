@@ -63,6 +63,10 @@ export interface DiscussionInfo {
   liveTimelineSource?: "explicit" | "default"
   /** "Run on": the node its next sessions run on (a /compute/nodes id); null or absent is Automatic. */
   nodeId?: string | null
+  /** Orchestrated: whenever it goes idle, its Agent's Heartbeat decides whether to continue it. */
+  orchestrated?: boolean
+  /** While Orchestrated: when the Heartbeat is told it's idle (null: not armed), and hand-offs since the person last wrote. */
+  orchestration?: { dueAt: string | null; chain: number } | null
   /** Worktrees this discussion works in, newest last. */
   worktrees?: WorktreeAttachment[]
   /** Skills attached to this discussion only, beside the Agent's defaults, newest last. */

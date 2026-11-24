@@ -35,6 +35,7 @@ public static class HeartbeatSkills
         "heartbeat-conversation-nudges",
         "heartbeat-action-items",
         "heartbeat-leaf-discord",
+        DiscussionOrchestration.SkillSlug,
     ];
 
     public static HeartbeatSkillSet Select(IEnumerable<LeafEntity> skills)

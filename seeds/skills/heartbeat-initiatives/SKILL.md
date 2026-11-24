@@ -5,10 +5,10 @@ description: "Start work nobody asked for from the Heartbeat, each piece in its 
 
 Between conversations, do real work: fix what you noticed, finish what's owed, research what was deferred. Start work nobody asked for when it should exist and nobody else owns it. A tick having run is not a reason.
 
-Anything bigger than a quick fix gets its own discussion, which starts the work. POST http://127.0.0.1:18804/api/apps/nova/discussions with {"title": "Initiative: <what changes>", "brief": "<the whole job>", "idempotencyKey": "<stable name for this job>"} and your `REDLEAF_EXECUTION_TOKEN` as the bearer. Never open one to ask for a yes. The brief is all it knows: why, the evidence, what done means, the limits, the simplicity rule, when to report. One new one per tick at most; check the digest for one already open.
+Anything bigger than a quick fix gets its own discussion, which starts the work. POST http://127.0.0.1:18804/api/apps/nova/discussions with {"title": "Initiative: <what changes>", "brief": "<the whole job>", "idempotencyKey": "<stable name for this job>", "orchestrated": true} and your `REDLEAF_EXECUTION_TOKEN` as the bearer. Never open one to ask for a yes. The brief is all it knows: why, the evidence, what done means, the limits, the simplicity rule, when to report. One new one per tick at most; check the digest for one already open.
 
 Keep it simple: no problem earns a bespoke system. Fix the path that exists; consolidate or delete before adding. No new service, store, queue, registry, state machine or abstraction unless the existing path can't carry it; then propose it in LIVE.
 
 Limits: your identity's limits win, including on touching source. memory/meta/standing-invitations.md, if it exists, holds what your owner granted. Without a grant: nothing outside this machine, nothing in your owner's name, nothing that spends money or destroys information, no restart, rebuild or release. Propose those in LIVE.
 
-Report once in LIVE, plainly, when it lands or truly needs their word. When a tick ends idle, ask whether there was really nothing or you just didn't start.
+Report once in LIVE, plainly, when it lands or truly needs their word. When a tick ends idle, ask whether there was nothing or you just didn't start.

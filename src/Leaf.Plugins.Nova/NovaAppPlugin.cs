@@ -263,6 +263,12 @@ public sealed class NovaAppPlugin : ILeafPlugin
             sp.GetRequiredService<EventInjector>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DiscussionSkillService>>(),
             sp.GetService<IAssets>()));
+        services.AddSingleton(sp => new OrchestrationSweeper(
+            sp.GetRequiredService<DiscussionStore>(),
+            sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+            sp.GetRequiredService<EventInjector>(),
+            sp.GetRequiredService<RedComputeClient>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<OrchestrationSweeper>>()));
         services.AddSingleton(sp => new DiscussionMcpService(
             sp.GetRequiredService<DiscussionStore>(),
             sp.GetRequiredKeyedService<IEntityStore>(PluginId),
@@ -391,6 +397,10 @@ public sealed class NovaAppPlugin : ILeafPlugin
         // (RedCompute down, restart between intent and finalization).
         var lifecycle = host.GetRequiredService<DiscussionLifecycle>();
         _ = Task.Run(() => lifecycle.RunReconcilerAsync(lifetime.ApplicationStopping), CancellationToken.None);
+
+        // Orchestrated discussions whose quiet window ended: their Heartbeat is told they are idle.
+        var orchestration = host.GetRequiredService<OrchestrationSweeper>();
+        _ = Task.Run(() => orchestration.RunAsync(lifetime.ApplicationStopping), CancellationToken.None);
     }
 
 }
