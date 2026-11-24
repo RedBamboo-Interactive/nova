@@ -1,4 +1,4 @@
 interface:
   display_name: "Heartbeat: Orchestration"
-  short_description: "Keep Orchestrated discussions moving when they go idle"
+  short_description: "Own Orchestrated discussions when they go idle"
   default_prompt: "Use $heartbeat-orchestration on this orchestrated-idle note."
