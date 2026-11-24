@@ -148,7 +148,7 @@ public static class DiscussionOrchestration
     public static IEnumerable<string> ContextLines(DiscussionRead discussion)
     {
         if (!IsActive(discussion)) yield break;
-        yield return "This discussion is Orchestrated: a few minutes after it goes idle, your Heartbeat reads it and may send it the next step. End each turn with where the work stands and what is next.";
+        yield return "This discussion is Orchestrated: the work keeps going without its person. A few minutes after it goes idle, your Heartbeat picks it up and drives it on, so leave each turn easy to pick up: where it really stands and what comes next.";
     }
 
     /// <summary>What the completion callback says about the turn, reduced to the orchestration decision.</summary>
