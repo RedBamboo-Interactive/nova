@@ -81,6 +81,21 @@ public sealed class DiscussionSkillTests : IDisposable
         context = new[] { new { kind = "browser", route = "/apps/nova" } },
     });
 
+    // The loopback browser: local-user, signed as the Nova app at a browser, benefiting the system.
+    private static ClaimsPrincipal LoopbackPerson() => new(new ClaimsIdentity(
+    [
+        new Claim("sub", "local-user"),
+        new Claim("name", "Local User"),
+        new Claim("token_use", "execution"),
+        new Claim("execution_identity", JsonSerializer.Serialize(new
+        {
+            app = new { id = "nova", name = "Nova" },
+            actor = new { kind = "app", id = "nova", name = "Nova" },
+            beneficiary = new { kind = "system", reason = "Browser work requested through the loopback LocalDefault identity" },
+            context = new[] { new { kind = "browser", route = "/apps/nova" } },
+        })),
+    ], "test"));
+
     private static ClaimsPrincipal Agent(World world, string? entityId = null) => Signed(new
     {
         app = new { id = "nova", name = "Nova" },
@@ -89,7 +104,13 @@ public sealed class DiscussionSkillTests : IDisposable
         context = new[] { new { kind = "discussion", id = "target" } },
     });
 
-    private static HttpContext Context(ClaimsPrincipal user) => new DefaultHttpContext { User = user };
+    // The kernel filter stamps who owns the installation on every request; local-user stands for them.
+    private static HttpContext Context(ClaimsPrincipal user)
+    {
+        var ctx = new DefaultHttpContext { User = user };
+        ctx.Items[InstallationOwner.RequestItem] = Owner;
+        return ctx;
+    }
 
     private static (int Status, JsonElement Body) Read(IResult result)
         => (((IStatusCodeHttpResult)result).StatusCode ?? 200,
@@ -124,6 +145,19 @@ public sealed class DiscussionSkillTests : IDisposable
         Assert.Contains("name: \"outfit\"", note);
         Assert.Contains("Pick an outfit.", note);
         Assert.Equal(["discussion.changed"], w.Published);
+    }
+
+    [Fact]
+    public async Task A_loopback_browser_is_recorded_and_named_as_the_discussions_owner()
+    {
+        using var w = NewWorld();
+
+        var (status, _) = await Attach(w, LoopbackPerson(), "outfit");
+
+        Assert.Equal(200, status);
+        var attached = Assert.Single((await w.Target()).AttachedSkills);
+        Assert.Equal((CapabilityAttachment.ByUser, Owner), (attached.AttachedBy, attached.AttachedById));
+        Assert.StartsWith("Your owner attached the Skill \"Outfit\"", Assert.Single(Notes(w)));
     }
 
     [Fact]

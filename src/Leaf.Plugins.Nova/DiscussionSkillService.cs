@@ -178,16 +178,41 @@ public sealed class DiscussionSkillService(
     {
         try
         {
-            // A note the Agent acts on, after whatever it is doing now: attaching from inside a turn
+            // The note is Nova's own, so it goes out under the discussion's Agent and owner, never under
+            // the request that caused it: the kernel's compute gateway reads the ambient caller, and a
+            // loopback browser (local-user) would have the owner's send refused. Awaited, so the note
+            // is in place before the response; a note the session cannot take now waits in its queue.
+            // A note the Agent acts on after whatever it is doing now: attaching from inside a turn
             // must not interrupt that turn.
-            await injector.InjectAsync(discussion, content, null, EventSource,
-                idempotencyKey: idempotencyKey, ct: ct, deliveryIdempotencyKey: idempotencyKey,
-                delivery: DelegateEndpoints.AfterCurrent);
+            Task<bool> send;
+            using (ExecutionContext.SuppressFlow())
+                send = Task.Run(() => injector.InjectAsync(discussion, content, null, EventSource,
+                    idempotencyKey: idempotencyKey, ct: CancellationToken.None, deliveryIdempotencyKey: idempotencyKey,
+                    delivery: DelegateEndpoints.AfterCurrent));
+            if (!await send.WaitAsync(ct))
+                logger.LogInformation("The Skill note for discussion {Discussion} is recorded but was not forwarded now (no session yet, or refused)", discussion.Id);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "The Skill note for discussion {Discussion} was not delivered", discussion.Id);
         }
+    }
+
+    /// <summary>
+    /// The person as the note names them. A loopback browser signs in as local-user ("Local User"),
+    /// who stands for the installation owner: name the discussion's owner instead.
+    /// </summary>
+    public async Task<DiscussionSkillEndpoints.CallerInfo> NamePersonAsync(DiscussionRead discussion,
+        DiscussionSkillEndpoints.CallerInfo caller, CancellationToken ct)
+    {
+        if (caller.Kind != CapabilityAttachment.ByUser
+            || (caller.Id is not null && caller.Id != OwnerScope.LocalUser && !string.IsNullOrWhiteSpace(caller.Name)))
+            return caller;
+        var owner = await NovaComputeProvenance.ResolveBeneficiaryAsync(entities, discussion.OwnerId, ct);
+        if (owner.Kind != "user" || string.IsNullOrWhiteSpace(owner.Id)) return caller;
+        var name = string.IsNullOrWhiteSpace(owner.NameSnapshot) ? null : owner.NameSnapshot;
+        return new DiscussionSkillEndpoints.CallerInfo(caller.Kind, owner.Id, name,
+            string.IsNullOrWhiteSpace(name) ? "Your owner" : name.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0]);
     }
 
     private async Task<byte[]?> ReadAssetAsync(string assetId, CancellationToken ct)

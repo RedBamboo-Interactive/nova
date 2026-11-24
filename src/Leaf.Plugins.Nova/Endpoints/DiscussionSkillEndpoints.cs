@@ -66,7 +66,8 @@ public static class DiscussionSkillEndpoints
                 var discussion = await store.GetAsync(id, ctx.RequestAborted);
                 if (discussion is null) return DiscussionEndpoints.NotFound();
                 if (Refusal(discussion, ctx) is { } refused) return refused;
-                if (Caller(discussion, ctx) is not { } caller) return NotAllowed();
+                if (Caller(discussion, ctx) is not { } signed) return NotAllowed();
+                var caller = await skills.NamePersonAsync(discussion, signed, ctx.RequestAborted);
                 var result = await skills.DetachAsync(discussion, skill, caller.Text, ctx.RequestAborted);
                 if (result is not var (items, removed)) return DiscussionEndpoints.NotFound();
                 if (removed is not null) await DiscussionEndpoints.PublishDiscussionChangedAsync(events, discussion, ctx.RequestAborted);
@@ -112,8 +113,9 @@ public static class DiscussionSkillEndpoints
         if (Refusal(discussion, ctx) is { } refused) return refused;
         if (string.IsNullOrWhiteSpace(request.Skill))
             return Results.BadRequest(new { error = "invalid_request", message = "skill (an agent-skill entity id or slug) is required" });
-        if (Caller(discussion, ctx) is not { } caller) return NotAllowed();
+        if (Caller(discussion, ctx) is not { } signed) return NotAllowed();
         var ct = ctx.RequestAborted;
+        var caller = await skills.NamePersonAsync(discussion, signed, ct);
         var skill = await skills.ResolveSkillAsync(request.Skill, ct);
         if (skill is null)
             return Results.NotFound(new { error = "skill_not_found", message = $"No Skill '{request.Skill}' in the library. GET /discussions/{discussion.Id}/skills?library=true lists them." });
@@ -178,8 +180,8 @@ public static class DiscussionSkillEndpoints
         if (!request.IsPending)
             return Results.Json(new { error = "request_settled", message = $"This request was already {request.Status}.", request },
                 statusCode: StatusCodes.Status409Conflict);
-        var caller = Caller(discussion, ctx)!;
         var ct = ctx.RequestAborted;
+        var caller = await skills.NamePersonAsync(discussion, Caller(discussion, ctx)!, ct);
         var now = DateTimeOffset.UtcNow;
 
         if (decision == "decline")
