@@ -20,6 +20,8 @@ export function normalizeFriezeDensity(value: unknown): FriezeDensity {
   return value === "quiet" || value === "minimal" ? value : "detailed"
 }
 
+export const JOB_MARKER_KEY = "job"
+
 export const NO_HIDDEN_FRIEZE_MARKERS: HiddenFriezeMarkers = { live: [], discussions: [] }
 
 export function friezeMarkerScope(discussionType: string | null | undefined): FriezeMarkerScope {
@@ -39,8 +41,8 @@ export function normalizeHiddenFriezeMarkers(value: unknown): HiddenFriezeMarker
  * needs attention (failed delivery, in flight, awaiting approval).
  */
 export function friezeMarkerVisibility(hidden: readonly string[]): FriezeMarkerVisibility | undefined {
-  if (!hidden.length) return undefined
-  const keys = new Set(hidden)
+  const keys = new Set(hidden.filter(key => key !== JOB_MARKER_KEY))
+  if (!keys.size) return undefined
   return part => {
     const key = friezeMarkerKey(part)
     return !key || !keys.has(key)
@@ -95,6 +97,7 @@ export function activityMarkerRows(): FriezeMarkerSettingRow[] {
   return [
     ...FRIEZE_TOOL_CATEGORIES.map(category => ({ key: `tool:${category}`, ...TOOL_ROWS[category], shape: "square" as const })),
     { key: "thinking", name: "Thinking", color: "var(--color-domain-imagination, #7C4DFF)", shape: "square" },
+    { key: JOB_MARKER_KEY, name: "Jobs", color: TOOL_ROWS.agent.color, shape: "square" },
   ]
 }
 

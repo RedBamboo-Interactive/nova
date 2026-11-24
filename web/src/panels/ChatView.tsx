@@ -23,7 +23,7 @@ import { reactionMenuEntries } from "../components/discussion/reaction-actions"
 import { createNovaSpeechBackend } from "../lib/speech"
 import { useDiscussionGrouping } from "../hooks/use-discussion-grouping"
 import { useLocalSettings } from "../hooks/use-local-settings"
-import { friezeMarkerScope, friezeMarkerVisibility, normalizeFriezeDensity, normalizeHiddenFriezeMarkers } from "../lib/frieze-marker-settings"
+import { JOB_MARKER_KEY, friezeMarkerScope, friezeMarkerVisibility, normalizeFriezeDensity, normalizeHiddenFriezeMarkers } from "../lib/frieze-marker-settings"
 import { computeJobHref, createDiscussionJobsTransport, jobFrameConcernsDiscussion, stopDiscussionJob } from "../lib/discussion-jobs"
 import { useAgents } from "../hooks/use-agents"
 import { versionedAvatarSrc } from "../lib/agent-directory-sync"
@@ -1714,21 +1714,21 @@ export function ChatView({
   ) : null, [activeDiscussionId, activePendingContext, pendingContext])
 
   const { opacity: avatarOpacity } = useAvatarStyle()
-  const { showAvatar: avatarEnabled, showDiscussionAvatars, hiddenFriezeMarkers, friezeDensity, jobCards } = useLocalSettings()
+  const { showAvatar: avatarEnabled, showDiscussionAvatars, hiddenFriezeMarkers, friezeDensity } = useLocalSettings()
   // Live and every other discussion keep separate marker preferences.
   const markerScope = friezeMarkerScope(activeDiscussion?.type)
   // The store keeps one object until the setting changes, so this stays stable.
-  const isFriezeMarkerVisible = useMemo(
-    () => friezeMarkerVisibility(normalizeHiddenFriezeMarkers(hiddenFriezeMarkers)[markerScope]),
+  const hiddenMarkers = useMemo(
+    () => normalizeHiddenFriezeMarkers(hiddenFriezeMarkers)[markerScope],
     [hiddenFriezeMarkers, markerScope],
   )
-  // Job cards: off, nothing is read and the panel renders exactly as without them. Live shows the jobs its own turns started.
+  const isFriezeMarkerVisible = useMemo(() => friezeMarkerVisibility(hiddenMarkers), [hiddenMarkers])
   const jobsTransport = useMemo(() => activeDiscussionId
     ? createDiscussionJobsTransport(activeDiscussionId, (path, init) => novaExecution.fetch(path, init))
     : null, [activeDiscussionId])
   const jobsDiscussion = activeDiscussion ? { id: activeDiscussion.id, sessionId: activeDiscussion.sessionId } : null
   const jobs = useChatJobs({
-    enabled: jobCards !== false && !!activeDiscussion,
+    enabled: !!activeDiscussion,
     conversationKey: activeDiscussionId,
     since: activeMessages[0]?.timestamp,
     transport: jobsTransport,
@@ -1868,6 +1868,7 @@ export function ChatView({
         resolveAgentNote={resolveAgentNote}
         isFriezeMarkerVisible={isFriezeMarkerVisible}
         friezeDensity={normalizeFriezeDensity(friezeDensity)}
+        hideJobMarkers={hiddenMarkers.includes(JOB_MARKER_KEY)}
         jobs={jobs}
         onStopJob={jobs ? handleStopJob : undefined}
         renderStatusLine={renderStatusLine}

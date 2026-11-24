@@ -25,8 +25,6 @@ export type LocalSettings = {
   /** Timeline marker kinds hidden in Live and in other discussions (display only). */
   hiddenFriezeMarkers: HiddenFriezeMarkers
   friezeDensity: FriezeDensity
-  /** A small card in the agent message that started an image, video, music or workflow job. */
-  jobCards: boolean
 }
 
 export const settingsStore = createLocalStore<LocalSettings>("nova_settings", {
@@ -48,7 +46,6 @@ export const settingsStore = createLocalStore<LocalSettings>("nova_settings", {
   voiceProcessing: true,
   hiddenFriezeMarkers: { live: [], discussions: [] },
   friezeDensity: "detailed",
-  jobCards: true,
 })
 
 export const getSettings = settingsStore.get

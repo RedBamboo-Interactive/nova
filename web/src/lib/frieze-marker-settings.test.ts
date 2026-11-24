@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { MessagePart } from "@redbamboo/chat"
 import {
+  JOB_MARKER_KEY,
   activityMarkerRows,
   eventMarkerRows,
   friezeMarkerScope,
@@ -31,6 +32,7 @@ test("Live has its own scope; every other discussion shares one", () => {
 
 test("nothing hidden hands ChatPanel no predicate at all", () => {
   assert.equal(friezeMarkerVisibility([]), undefined)
+  assert.equal(friezeMarkerVisibility([JOB_MARKER_KEY]), undefined)
 })
 
 test("the predicate hides exactly the chosen kinds", () => {
@@ -72,8 +74,8 @@ test("event rows come from the API, plus built-ins it doesn't list, once each", 
   assert.equal(rows.find(row => row.key === "event:callback")!.shape, "dot")
 })
 
-test("activity rows cover every tool category and thinking", () => {
-  assert.deepEqual(activityMarkerRows().map(row => row.key), ["tool:read-only", "tool:mutating", "tool:shell", "tool:agent", "tool:other", "thinking"])
+test("activity rows cover every tool category, thinking, and jobs", () => {
+  assert.deepEqual(activityMarkerRows().map(row => row.key), ["tool:read-only", "tool:mutating", "tool:shell", "tool:agent", "tool:other", "thinking", JOB_MARKER_KEY])
 })
 
 test("the folded row says what is hidden where, or that nothing is", () => {

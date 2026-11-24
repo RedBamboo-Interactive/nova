@@ -80,7 +80,7 @@ export function FriezeMarkerSettings() {
       </CollapsibleTrigger>
       <CollapsibleContent>
         <p className="text-xs text-muted-a60 mt-1 leading-relaxed">
-          Hiding a kind only changes what you see. A failed delivery or a pending approval always shows.
+          Hiding a kind only changes what you see. Active or failed jobs, failed deliveries, and pending approvals stay visible.
         </p>
         {group("Events", eventMarkerRows(types))}
         {group("Activity", activityMarkerRows())}

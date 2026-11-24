@@ -1,7 +1,7 @@
 import type { ChatJobsTransport, ComputeJobRecord } from "@redbamboo/chat"
 
 /**
- * Nova's side of the chat's job cards: the discussion's own authorized job routes. The browser
+ * Nova's side of the chat's job markers: the discussion's own authorized job routes. The browser
  * never calls RedCompute for them, and job outputs come through the discussion's output route.
  */
 
