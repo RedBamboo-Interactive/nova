@@ -15,6 +15,7 @@ interface RedComputeSession {
   messageCount?: number
   outputTokens?: number
   cachedInputTokens?: number
+  promptCache?: SessionStats["promptCache"]
   contextTokens?: number
   contextWindow?: number
   effort?: string
@@ -52,17 +53,20 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
   const prevStreaming = useRef(isStreaming)
 
   useEffect(() => {
+    const wasStreaming = prevStreaming.current
+    prevStreaming.current = isStreaming
     if (!sessionId) {
       dataSessionRef.current = null
       setSessionData(null)
       return
     }
 
+    if (dataSessionRef.current === sessionId && !(wasStreaming && !isStreaming)) return
     let cancelled = false
 
     const fetchStats = async () => {
       try {
-        const data = await api.get<{ session: RedComputeSession }>(`/ai-session/sessions/${sessionId}`)
+        const data = await api.get<{ session: RedComputeSession }>(`/ai-session/sessions/${sessionId}?tail=1`)
         if (!cancelled && data.session) {
           dataSessionRef.current = sessionId
           setSessionData(data.session)
@@ -73,21 +77,6 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
     fetchStats()
 
     return () => { cancelled = true }
-  }, [sessionId])
-
-  useEffect(() => {
-    const wasStreaming = prevStreaming.current
-    prevStreaming.current = isStreaming
-
-    if (wasStreaming && !isStreaming && sessionId) {
-      api.get<{ session: RedComputeSession }>(`/ai-session/sessions/${sessionId}`)
-        .then(data => {
-          if (!data.session) return
-          dataSessionRef.current = sessionId
-          setSessionData(data.session)
-        })
-        .catch(() => {})
-    }
   }, [isStreaming, sessionId])
 
   const applyAccessLevel = useCallback((changedSessionId: string, level: AccessLevel) => {
@@ -96,7 +85,7 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
   }, [])
 
   const stats = useMemo(() => {
-    if (!sessionData || !sessionId) return null
+    if (!sessionData || !sessionId || dataSessionRef.current !== sessionId) return null
     return {
       name: discussion?.title || undefined,
       sessionId,
@@ -110,6 +99,7 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
       messageCount: sessionData.messageCount,
       outputTokens: sessionData.outputTokens,
       cachedInputTokens: sessionData.cachedInputTokens,
+      promptCache: sessionData.promptCache,
       contextTokens: sessionData.contextTokens,
       contextWindow: sessionData.contextWindow,
       effort: sessionData.effort,
