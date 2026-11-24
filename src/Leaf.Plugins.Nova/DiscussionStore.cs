@@ -105,8 +105,14 @@ public sealed record DiscussionRead(
     IReadOnlyList<WorktreeAttachment>? Worktrees = null,
     ReactionCursor? ReactionsNoted = null,
     bool? LiveTimelineSetting = null,
-    string? RunOnNodeId = null)
+    string? RunOnNodeId = null,
+    IReadOnlyList<CapabilityAttachment>? Capabilities = null,
+    IReadOnlyList<CapabilityRequest>? CapabilityRequests = null)
 {
+    /// <summary>The Skills attached to this discussion on demand, beside the Agent's defaults.</summary>
+    public IReadOnlyList<CapabilityAttachment> AttachedSkills
+        => (Capabilities ?? []).Where(a => a.Kind == CapabilityAttachment.SkillKind).ToList();
+
     /// <summary>
     /// Whether this discussion's context carries the LIVE timeline: the explicit choice when someone
     /// made one, else on for LIVE and Heartbeat and off for everything else.
@@ -664,6 +670,89 @@ public sealed class DiscussionStore(
             if (kept.Count == items.Count) return (items, false);
             await entities.PatchAsync(entityId, new JsonObject { [WorktreeAttachment.DataKey] = WorktreeAttachment.ToJson(kept) }, null, ct);
             return (kept, true);
+        }, ct);
+
+    /// <summary>
+    /// Attaches a capability. Idempotent per kind and entity: attaching it again changes nothing and keeps
+    /// the first record. A pending request for the same entity is settled as approved by it.
+    /// </summary>
+    public Task<(IReadOnlyList<CapabilityAttachment> Items, bool Added)?> AttachCapabilityAsync(
+        Guid entityId, CapabilityAttachment attachment, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<(IReadOnlyList<CapabilityAttachment>, bool)?>(entityId, async () =>
+        {
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
+            if (entity is null || Map(entity) is null) return null;
+            var items = CapabilityAttachment.Read(entity.Data) ?? [];
+            if (items.Any(a => a.Kind == attachment.Kind && a.EntityId == attachment.EntityId))
+                return (items, false);
+            var updated = items.Append(attachment).ToList();
+            var requests = CapabilityRequest.Read(entity.Data);
+            var patch = new JsonObject { [CapabilityAttachment.DataKey] = CapabilityAttachment.ToJson(updated) };
+            if (requests.Any(r => r.IsPending && r.Kind == attachment.Kind && r.EntityId == attachment.EntityId))
+                patch[CapabilityRequest.DataKey] = CapabilityRequest.ToJson(requests.Select(r =>
+                    r.IsPending && r.Kind == attachment.Kind && r.EntityId == attachment.EntityId
+                        ? r with { Status = CapabilityRequest.Approved, DecidedAt = attachment.AttachedAt }
+                        : r));
+            await entities.PatchAsync(entityId, patch, null, ct);
+            return (updated, true);
+        }, ct);
+
+    /// <summary>Detaches a capability by kind and entity id or slug. It never touches the entity itself.</summary>
+    public Task<(IReadOnlyList<CapabilityAttachment> Items, CapabilityAttachment? Removed)?> DetachCapabilityAsync(
+        Guid entityId, string kind, string reference, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<(IReadOnlyList<CapabilityAttachment>, CapabilityAttachment?)?>(entityId, async () =>
+        {
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
+            if (entity is null || Map(entity) is null) return null;
+            var items = CapabilityAttachment.Read(entity.Data) ?? [];
+            var removed = items.FirstOrDefault(a => a.Kind == kind
+                && (string.Equals(a.EntityId, reference, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(a.Slug, reference, StringComparison.OrdinalIgnoreCase)));
+            if (removed is null) return (items, null);
+            var kept = items.Where(a => a != removed).ToList();
+            await entities.PatchAsync(entityId, new JsonObject { [CapabilityAttachment.DataKey] = CapabilityAttachment.ToJson(kept) }, null, ct);
+            return (kept, removed);
+        }, ct);
+
+    /// <summary>
+    /// Records an Agent's request to attach something. One pending request per kind and entity: asking
+    /// again returns the waiting one (Added false). Null when the discussion is gone.
+    /// </summary>
+    public Task<(CapabilityRequest Request, bool Added)?> RequestCapabilityAsync(
+        Guid entityId, CapabilityRequest request, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<(CapabilityRequest, bool)?>(entityId, async () =>
+        {
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
+            if (entity is null || Map(entity) is null) return null;
+            var requests = CapabilityRequest.Read(entity.Data);
+            if (requests.FirstOrDefault(r => r.IsPending && r.Kind == request.Kind && r.EntityId == request.EntityId) is { } waiting)
+                return (waiting, false);
+            await entities.PatchAsync(entityId, new JsonObject
+            {
+                [CapabilityRequest.DataKey] = CapabilityRequest.ToJson(requests.Append(request)),
+            }, null, ct);
+            return (request, true);
+        }, ct);
+
+    /// <summary>
+    /// Settles a pending request as declined. Approval goes through <see cref="AttachCapabilityAsync"/>,
+    /// which settles it in the same write. Returns the request as it now stands, or null when unknown.
+    /// </summary>
+    public Task<CapabilityRequest?> DeclineCapabilityRequestAsync(
+        Guid entityId, string requestId, DateTimeOffset at, CancellationToken ct = default)
+        => DiscussionEntityGate.RunAsync<CapabilityRequest?>(entityId, async () =>
+        {
+            var entity = await RequireNovaOwnedAsync(entityId, ct);
+            if (entity is null || Map(entity) is null) return null;
+            var requests = CapabilityRequest.Read(entity.Data);
+            var found = requests.FirstOrDefault(r => r.Id == requestId);
+            if (found is not { IsPending: true }) return found;
+            var declined = found with { Status = CapabilityRequest.Declined, DecidedAt = at };
+            await entities.PatchAsync(entityId, new JsonObject
+            {
+                [CapabilityRequest.DataKey] = CapabilityRequest.ToJson(requests.Select(r => r.Id == requestId ? declined : r)),
+            }, null, ct);
+            return declined;
         }, ct);
 
     public Task TouchAsync(Guid entityId, CancellationToken ct = default)
@@ -1283,7 +1372,9 @@ public sealed class DiscussionStore(
             WorktreeAttachment.Read(d),
             ReactionCursor.Read(d),
             Bool(d, LiveTimelineContext.DataKey) ?? Bool(d, LiveTimelineContext.LegacyDataKey),
-            Str(d, RunOnNodeKey));
+            Str(d, RunOnNodeKey),
+            CapabilityAttachment.Read(d),
+            CapabilityRequest.Read(d));
     }
 
     /// <summary>
@@ -1333,6 +1424,9 @@ public sealed class DiscussionStore(
         nodeId = d.RunOnNodeId,
         setupBootstrapMessageUid = d.SetupBootstrapMessageUid,
         worktrees = d.Worktrees ?? [],
+        // Skills attached here on demand, and the Agent's requests waiting for (or settled by) the person.
+        skills = d.AttachedSkills,
+        skillRequests = (d.CapabilityRequests ?? []).Where(r => r.Kind == CapabilityAttachment.SkillKind).ToList(),
         ownedBy = DiscussionApplicationOwner.IsForeign(d)
             ? new { app = d.OwnerApp }
             : null,

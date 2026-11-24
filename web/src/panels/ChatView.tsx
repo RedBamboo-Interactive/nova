@@ -18,6 +18,7 @@ import { DelegationsInfo, delegationActivityGroup } from "../components/delegati
 import { withWaitingActivity } from "../lib/waiting-activity"
 import { permissionNoticeText } from "../lib/permission-notices"
 import { WorktreeChips } from "../components/discussion/worktree-chips"
+import { AttachSkillDialog, SkillChips } from "../components/discussion/skill-chips"
 import { ReactionPills, AddReactionButton, useReactionEmoji } from "../components/discussion/reactions"
 import { reactionMenuEntries } from "../components/discussion/reaction-actions"
 import { createNovaSpeechBackend } from "../lib/speech"
@@ -536,6 +537,7 @@ export function ChatView({
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false)
   const [titleEditing, setTitleEditing] = useState(false)
+  const [attachSkillOpen, setAttachSkillOpen] = useState(false)
   const [reopenPending, setReopenPending] = useState(false)
   const [confidentialityPending, setConfidentialityPending] = useState(false)
   const [liveTimelinePending, setLiveTimelinePending] = useState(false)
@@ -1152,6 +1154,8 @@ export function ChatView({
 
   // Desktop shortcuts for the open discussion; the menus show the same keys.
   const canManageDiscussion = activeDiscussion?.type === "chat" && !discussionClosed && !owningApp
+  // A Skill for this discussion only: any open discussion a person talks in, LIVE included.
+  const canAttachSkills = !!activeDiscussion && activeDiscussion.type !== "heartbeat" && !discussionClosed && !owningApp
 
   const liveViews = findLiveHeartbeatPair(discussions, journalOpen ? journalLive : activeDiscussion)
   // Without the Journal tab, a lone Live has nothing to switch to.
@@ -1304,6 +1308,7 @@ export function ChatView({
               showShortcuts: true,
               onVoice: owningApp ? undefined : openVoice,
               voiceDisabled: !voiceAvailable,
+              onAttachSkill: canAttachSkills ? () => setAttachSkillOpen(true) : undefined,
               onInfo: openSessionInfo,
               onArtifacts: openArtifacts,
               onRename: canManageDiscussion ? () => setTitleEditing(true) : undefined,
@@ -1335,6 +1340,22 @@ export function ChatView({
       )}
     </PanelHeader>
       <WorktreeChips worktrees={activeDiscussion.worktrees} />
+      <SkillChips
+        discussionId={activeDiscussion.id}
+        skills={activeDiscussion.skills}
+        requests={activeDiscussion.skillRequests}
+        agentName={activeAgent?.name}
+        disabled={!canAttachSkills}
+      />
+      {canAttachSkills && (
+        <AttachSkillDialog
+          discussionId={activeDiscussion.id}
+          agentName={activeAgent?.name}
+          open={attachSkillOpen}
+          onOpenChange={setAttachSkillOpen}
+          onError={message => toast({ variant: "error", title: "Skill not attached", description: message })}
+        />
+      )}
       {earlierHistoryLoadFailure && (
         <div
           role="alert"

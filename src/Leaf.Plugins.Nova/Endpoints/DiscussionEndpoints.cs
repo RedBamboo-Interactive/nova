@@ -621,6 +621,9 @@ public static class DiscussionEndpoints
     }
 
     // The header chips read the discussion record; this is the event that makes clients re-read it.
+    internal static Task PublishDiscussionChangedAsync(IPluginEvents? events, DiscussionRead discussion, CancellationToken ct)
+        => PublishChangedAsync(events, discussion, ct);
+
     private static async Task PublishChangedAsync(IPluginEvents? events, DiscussionRead discussion, CancellationToken ct)
     {
         if (events is null) return;

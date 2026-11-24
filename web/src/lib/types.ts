@@ -1,3 +1,5 @@
+import type { SkillAttachment, SkillRequest } from "./discussion-skills"
+
 export interface DelegationSessionActivity {
   sessionId: string
   title: string | null
@@ -63,6 +65,10 @@ export interface DiscussionInfo {
   nodeId?: string | null
   /** Worktrees this discussion works in, newest last. */
   worktrees?: WorktreeAttachment[]
+  /** Skills attached to this discussion only, beside the Agent's defaults, newest last. */
+  skills?: SkillAttachment[]
+  /** The Agent's requests to attach a Skill: pending ones wait for the person's tap. */
+  skillRequests?: SkillRequest[]
   /** Internal first-turn identity. Raw RedCompute history includes this turn;
    * clients hide it while retaining the real session and its tool trace. */
   setupBootstrapMessageUid?: string | null

@@ -20,6 +20,16 @@
   },
   {
     "parentType": "agent",
+    "slug": "optional_skills",
+    "name": "Optional Skills",
+    "fieldType": "entity_list",
+    "sortOrder": 9,
+    "description": "Skills this Agent may attach to one discussion itself, when the conversation needs them, without asking. They are not on every discussion like its Skills. You can attach any Skill to a discussion from its header; the Agent asks you first for one that is not listed here.",
+    "constraints": "{\"target_type\": \"agent-skill\"}",
+    "icon": "ph-bold ph-puzzle-piece"
+  },
+  {
+    "parentType": "agent",
     "slug": "heartbeat_automation",
     "name": "Heartbeat Automation",
     "fieldType": "entity_ref",

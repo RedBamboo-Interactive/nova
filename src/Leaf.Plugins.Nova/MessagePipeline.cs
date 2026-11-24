@@ -46,7 +46,8 @@ public sealed class MessagePipeline(
     AgentActivitySignals? activity = null,
     EventInjector? eventInjector = null,
     ExtensionReadinessContext? extensionReadiness = null,
-    InstallationOwner? installationOwner = null)
+    InstallationOwner? installationOwner = null,
+    DiscussionSkillService? discussionSkills = null)
 {
     private readonly InstallationOwner _installationOwner = installationOwner ?? new InstallationOwner(entities);
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -499,11 +500,16 @@ public sealed class MessagePipeline(
         // RedCompute echoes a caller's uid, so the tag and the transcript record agree.
         requestedMessageUid ??= Guid.NewGuid().ToString("N");
 
+        // Skills attached here on demand: written back into scratch if it was cleared, named on every turn.
+        var attachedSkillLines = discussionSkills is null
+            ? null
+            : await discussionSkills.PrepareTurnAsync(discussion, ct);
+
         string contextBlock;
         if (fullContext)
-            contextBlock = NovaContextBuilder.BuildFullContext(currentSnapshot, discussion.Id, now, device, input, agentName, reactions.Lines, discussion.Worktrees, requestedMessageUid);
+            contextBlock = NovaContextBuilder.BuildFullContext(currentSnapshot, discussion.Id, now, device, input, agentName, reactions.Lines, discussion.Worktrees, requestedMessageUid, attachedSkillLines);
         else
-            contextBlock = NovaContextBuilder.BuildDeltaContext(currentSnapshot, previousSnapshot!, discussion.Id, now, device, input, agentName, reactions.Lines, discussion.Worktrees, requestedMessageUid);
+            contextBlock = NovaContextBuilder.BuildDeltaContext(currentSnapshot, previousSnapshot!, discussion.Id, now, device, input, agentName, reactions.Lines, discussion.Worktrees, requestedMessageUid, attachedSkillLines);
 
         var metadata = NovaContextBuilder.BuildMetadata(currentSnapshot, now, device, input, discussion.Id, agentName);
 

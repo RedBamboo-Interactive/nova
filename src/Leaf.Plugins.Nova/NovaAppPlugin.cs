@@ -245,7 +245,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<AgentActivitySignals>(),
                 sp.GetRequiredService<EventInjector>(),
                 sp.GetRequiredService<ExtensionReadinessContext>(),
-                sp.GetRequiredService<InstallationOwner>()));
+                sp.GetRequiredService<InstallationOwner>(),
+                sp.GetRequiredService<DiscussionSkillService>()));
         services.AddSingleton(sp => new InstallationOwner(sp.GetRequiredKeyedService<IEntityStore>(PluginId)));
         // Soft dependency: kernels before KernelApi 0.1.6 have no extension catalog, and then no line.
         services.AddSingleton(sp =>
@@ -254,6 +255,14 @@ public sealed class NovaAppPlugin : ILeafPlugin
             return new ExtensionReadinessContext(KernelExtensionCatalog.TryResolve(sp, logger), TimeProvider.System, logger);
         });
         services.AddSingleton<ReactionTriggers>();
+        services.AddSingleton(sp => new DiscussionSkillService(
+            sp.GetRequiredService<DiscussionStore>(),
+            sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+            sp.GetRequiredService<AgentDirectory>(),
+            sp.GetRequiredService<IAgentScratchSpace>(),
+            sp.GetRequiredService<EventInjector>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DiscussionSkillService>>(),
+            sp.GetService<IAssets>()));
     }
 
     public void MapEndpoints(RouteGroupBuilder group)
@@ -281,6 +290,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
         DiscussionEndpoints.Map(group);
         DiscussionGroupingEndpoints.Map(group);
         DiscussionRollbackEndpoints.Map(group);
+        DiscussionSkillEndpoints.Map(group);
         DiscussionJobEndpoints.Map(group);
         JournalEndpoints.Map(group);
         VoiceSessionEndpoints.Map(group);

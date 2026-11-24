@@ -22,6 +22,8 @@ export const DISCUSSION_SHORTCUTS = {
 export interface DiscussionActionHandlers extends Omit<ConversationActionHandlers, "leading" | "afterShare" | "trailing"> {
   onVoice?: () => void
   voiceDisabled?: boolean
+  /** Opens the Skill picker: a Skill for this discussion only. */
+  onAttachSkill?: () => void
   onFloat?: () => void
   onReset?: () => void
 }
@@ -31,13 +33,19 @@ export interface DiscussionActionHandlers extends Omit<ConversationActionHandler
  * Stop, Close) with Nova's entries in its slots. Voice leads, Float and Reset timeline follow Share.
  * The header menu, each sidebar row menu and the rows' context menu render this one array.
  */
-export function discussionActionEntries({ onVoice, voiceDisabled = false, onFloat, onReset, ...handlers }: DiscussionActionHandlers): ContextMenuEntry[] {
+export function discussionActionEntries({ onVoice, voiceDisabled = false, onAttachSkill, onFloat, onReset, ...handlers }: DiscussionActionHandlers): ContextMenuEntry[] {
   const shortcut = (keys: string) => conversationShortcut(keys, handlers.showShortcuts)
   const leading: ContextMenuEntry[] = []
   if (onVoice) {
     leading.push({
       id: "voice", label: "Voice", icon: "ph-bold ph-waveform", disabled: voiceDisabled,
       shortcut: shortcut(DISCUSSION_SHORTCUTS.voice), run: () => onVoice(), attributes: { "aria-haspopup": "dialog" },
+    })
+  }
+  if (onAttachSkill) {
+    leading.push({
+      id: "attach-skill", label: "Attach Skill…", icon: "ph-bold ph-puzzle-piece",
+      run: () => onAttachSkill(), attributes: { "aria-haspopup": "dialog" },
     })
   }
   const afterShare: ContextMenuEntry[] = []

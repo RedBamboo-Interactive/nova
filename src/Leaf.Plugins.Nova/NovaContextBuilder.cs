@@ -188,7 +188,7 @@ public static class NovaContextBuilder
         ContextSnapshot snapshot,
         string currentId, DateTime now, ResolvedDevice device, string input, string? agentName,
         List<string>? reactionLines = null, IReadOnlyList<WorktreeAttachment>? worktrees = null,
-        string? messageUid = null)
+        string? messageUid = null, IReadOnlyList<string>? attachedSkillLines = null)
     {
         var sb = new StringBuilder();
 
@@ -275,6 +275,7 @@ public static class NovaContextBuilder
             sb.Append($"\n\n{snapshot.Outfit}");
 
         AppendWorktrees(sb, worktrees, leadingBlankLine: true);
+        AppendAttachedSkills(sb, attachedSkillLines, leadingBlankLine: worktrees is not { Count: > 0 });
 
         return Frame(sb, now, device, input, currentId, agentName, messageUid, NoReplyHint);
     }
@@ -323,7 +324,7 @@ public static class NovaContextBuilder
         ContextSnapshot current, ContextSnapshot previous,
         string currentId, DateTime now, ResolvedDevice device, string input, string? agentName,
         List<string>? reactionLines = null, IReadOnlyList<WorktreeAttachment>? worktrees = null,
-        string? messageUid = null)
+        string? messageUid = null, IReadOnlyList<string>? attachedSkillLines = null)
     {
         var changes = new List<string>();
 
@@ -450,6 +451,7 @@ public static class NovaContextBuilder
         }
 
         AppendWorktrees(sb, worktrees, leadingBlankLine: false);
+        AppendAttachedSkills(sb, attachedSkillLines, leadingBlankLine: false);
 
         return Frame(sb, now, device, input, currentId, agentName, messageUid);
     }
@@ -468,6 +470,18 @@ public static class NovaContextBuilder
         if (leadingBlankLine) sb.Append('\n');
         foreach (var worktree in worktrees)
             sb.Append('\n').Append(worktree.ContextLine());
+    }
+
+    /// <summary>
+    /// The Skills attached to this discussion on demand, on every turn like the worktrees: a model
+    /// resumed or compacted at any point still knows which Skills it follows here and where they are.
+    /// </summary>
+    private static void AppendAttachedSkills(StringBuilder sb, IReadOnlyList<string>? lines, bool leadingBlankLine)
+    {
+        if (lines is not { Count: > 0 }) return;
+        if (leadingBlankLine) sb.Append('\n');
+        foreach (var line in lines)
+            sb.Append('\n').Append(line);
     }
 
     public static string SerializeSnapshot(ContextSnapshot snapshot)
