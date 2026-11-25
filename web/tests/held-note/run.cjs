@@ -11,6 +11,8 @@ const base = process.env.REDLEAF_BASE_URL || 'http://127.0.0.1:18804'
 const token = process.env.REDLEAF_EXECUTION_TOKEN
 if (!token) throw new Error('REDLEAF_EXECUTION_TOKEN is required for the loopback API calls')
 const HELD = 'Held: it joins the next turn'
+// Optional: a folder for screenshots of both states.
+const shots = process.env.NOVA_E2E_SHOTS
 
 async function api(method, route, body) {
   const response = await fetch(base + route, {
@@ -57,6 +59,7 @@ async function waitIdle(id, assistantTexts) {
     await heldMarker.waitFor({ timeout: 30_000 })
     assert.equal(await heldMarker.getAttribute('data-pending'), 'true')
     assert.match(await heldMarker.getAttribute('aria-label'), new RegExp(HELD))
+    if (shots) await page.screenshot({ path: path.join(shots, 'held-note-held.png') })
 
     // An ordinary note starts the turn; the held one joins it and stops looking held, live.
     const plain = await api('POST', `/api/apps/nova/discussions/${id}/event`, { content: 'Ordinary note. Code word: amber.', delivery: 'after-current' })
@@ -68,6 +71,7 @@ async function waitIdle(id, assistantTexts) {
     await plainMarker.waitFor()
     assert.equal(await plainMarker.getAttribute('data-pending'), null)
     assert.doesNotMatch(await heldMarker.getAttribute('aria-label'), new RegExp(HELD))
+    if (shots) await page.screenshot({ path: path.join(shots, 'held-note-joined.png') })
 
     // The server agrees after a reload.
     await waitIdle(id, 2)
