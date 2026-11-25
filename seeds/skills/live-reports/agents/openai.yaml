@@ -1,0 +1,4 @@
+interface:
+  display_name: "LIVE reports"
+  short_description: "Report on several discussions as one structured card"
+  default_prompt: "Use $live-reports to report on these discussions."

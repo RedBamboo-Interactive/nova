@@ -3,7 +3,9 @@ import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment } from "@redbamboo/chat"
+import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment, ChatBlockRenderersProvider } from "@redbamboo/chat"
+import { LiveReportBlock, LiveReportHostProvider, type LiveReportHost } from "../components/live-report/live-report"
+import { LIVE_REPORT_LANGUAGE } from "../lib/live-report"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, PluginExtensionSlot, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
 import { DiscussionThumbnail, DiscussionThumbnailCacheContext, useDiscussionThumbnailCache } from "../components/discussion/discussion-thumbnail"
@@ -222,6 +224,9 @@ export interface ChatViewProps {
   onNewDiscussion?: () => void
   onDock?: () => void
 }
+
+/** Fenced blocks Nova renders itself in its messages: one stable map, so the chat never re-creates its components. */
+const NOVA_BLOCKS = { [LIVE_REPORT_LANGUAGE]: LiveReportBlock }
 
 export function ChatView({
   presentation = "standard",
@@ -756,6 +761,20 @@ export function ChatView({
     if (!activeDiscussionId) return
     return sendMessage(activeDiscussionId, content, images, options)
   }, [activeDiscussionId, sendMessage])
+
+  // What a LIVE report needs around it: titles, workstreams (the sidebar groups) and a way to answer.
+  const liveReportHost = useMemo<LiveReportHost>(() => ({
+    discussions,
+    groupOf: (discussionId) => {
+      const discussion = discussions.find(d => d.id === discussionId)
+      const label = discussion && settings.groupDiscussions ? discussionLabel(discussion, grouping.view) : undefined
+      if (!label?.group) return null
+      const visual = grouping.view?.groups?.find(group => group.name === label.group)
+      return { name: label.group, icon: `ph-bold ph-${groupingIcon(visual?.icon)}` }
+    },
+    agent: null,
+    reply: (text) => { void handleSend(text) },
+  }), [discussions, grouping.view, handleSend, settings.groupDiscussions])
 
   const handleSendInput = useCallback((input: ChatInputPart[], attachments: UploadedAttachment[], options?: SendOptions) => {
     if (!activeDiscussionId) return
@@ -1872,99 +1891,103 @@ export function ChatView({
           context={{ discussionId: activeDiscussion.id, isStreaming }}
         />
       )}
-      <ChatPanel
-        messages={historyRenderPending ? NO_MESSAGES : activeMessages}
-        isStreaming={isStreaming}
-        supportsSteering={supportsSteering}
-        rollback={conversationRollback}
-        backgroundTasks={backgroundTasks}
-        onStopBackgroundTask={handleStopBackgroundTask}
-        hostActivity={hostRowActivity}
-        renderMessageExtra={renderPermissionNotices}
-        isReconnecting={!upstreamConnected}
-        interrupting={isInterrupting}
-        resumePending={isResumePending}
-        onSend={handleSend}
-        onSendInput={handleSendInput}
-        queueTransport={queueTransport}
-        queuedEventsWait
-        maintenanceStatus={maintenance.status}
-        maintenanceStatusUnavailable={maintenance.unavailable}
-        hasServerSession={Boolean(payloadSessionId)}
-        prepareOutgoingMessage={prepareOutgoingMessage}
-        attachmentTransport={attachmentTransport}
-        enableFileAttachments
-        onInterrupt={handleInterrupt}
-        sessionId={activeDiscussionId}
-        autoFocusMode={autoFocusMode}
-        draftStorageKey={NOVA_DRAFT_STORAGE_KEY}
-        disabled={discussionClosed || !!owningApp}
-        hideComposer={activeDiscussion.type === "heartbeat" || discussionClosed || !!owningApp}
-        pendingQuestion={pendingQuestion}
-        questionOutcome={questionOutcome}
-        onAnswerQuestion={handleAnswerQuestion}
-        permissionApprovals={permissionApprovals}
-        onPermissionDecision={owningApp || discussionClosed ? undefined : handlePermissionDecision}
-        hasEarlierMessages={hasEarlierMessages && !earlierHistoryLoadFailure}
-        onLoadEarlier={handleLoadEarlier}
-        isLoadingEarlier={isLoadingEarlier}
-        focusMessageRequest={focusRequest}
-        onFocusMessageResult={handleFocusMessageResult}
-        placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}
-        header={chatHeader}
-        speechBackend={speechBackend}
-        pushToTalkKey={pushToTalk.key}
-        globalPushToTalk={floating}
-        resolveImageSrc={resolveImageSrc}
-        resolveFileLink={resolveFileLink}
-        resolveEventLink={resolveEventLink}
-        loadTranscriptPayload={loadTranscriptPayload}
-        getTranscriptPayloadMediaUrl={getTranscriptPayloadMediaUrl}
-        getTranscriptPayloadDownloadUrl={getTranscriptPayloadDownloadUrl}
-        assistantAvatar={avatarSrc}
-        resolveAgentInfo={resolveAgentInfo}
-        resolveAgentNote={resolveAgentNote}
-        isFriezeMarkerVisible={isFriezeMarkerVisible}
-        friezeDensity={normalizeFriezeDensity(friezeDensity)}
-        hideJobMarkers={hiddenMarkers.includes(JOB_MARKER_KEY)}
-        jobs={jobs}
-        onStopJob={jobs ? handleStopJob : undefined}
-        renderStatusLine={renderStatusLine}
-        renderComposerAttachments={renderWhatISeeAttachment}
-        renderAttachmentActions={renderWhatISeeAction}
-        renderSideActions={renderSideActions}
-        getMessageActions={getMessageActions}
-        footer={owningApp ? (
-          <div
-            data-slot="owned-discussion-bar"
-            className="shrink-0 border-t border-overlay-8 bg-card px-4 py-3"
-          >
-            <div className="mx-auto flex max-w-3xl items-center gap-2 text-sm text-text-muted">
-              <i aria-hidden="true" className="ph-bold ph-plugs-connected shrink-0" />
-              <span>This discussion belongs to {owningApp}. Continue it there.</span>
-            </div>
-          </div>
-        ) : discussionClosed ? (
-          <div
-            data-slot="archived-discussion-bar"
-            className="shrink-0 border-t border-overlay-8 bg-card px-4 py-3"
-          >
-            <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
-              <span className="text-sm text-text-muted">This discussion is archived</span>
-              <button
-                type="button"
-                onClick={() => { void handleReopen() }}
-                disabled={reopenPending || activeDiscussion.status === "archiving" || !activeDiscussion.sessionId}
-                title={!activeDiscussion.sessionId ? "This archive has no provider session to reopen" : undefined}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      <LiveReportHostProvider host={liveReportHost}>
+        <ChatBlockRenderersProvider renderers={NOVA_BLOCKS}>
+          <ChatPanel
+            messages={historyRenderPending ? NO_MESSAGES : activeMessages}
+            isStreaming={isStreaming}
+            supportsSteering={supportsSteering}
+            rollback={conversationRollback}
+            backgroundTasks={backgroundTasks}
+            onStopBackgroundTask={handleStopBackgroundTask}
+            hostActivity={hostRowActivity}
+            renderMessageExtra={renderPermissionNotices}
+            isReconnecting={!upstreamConnected}
+            interrupting={isInterrupting}
+            resumePending={isResumePending}
+            onSend={handleSend}
+            onSendInput={handleSendInput}
+            queueTransport={queueTransport}
+            queuedEventsWait
+            maintenanceStatus={maintenance.status}
+            maintenanceStatusUnavailable={maintenance.unavailable}
+            hasServerSession={Boolean(payloadSessionId)}
+            prepareOutgoingMessage={prepareOutgoingMessage}
+            attachmentTransport={attachmentTransport}
+            enableFileAttachments
+            onInterrupt={handleInterrupt}
+            sessionId={activeDiscussionId}
+            autoFocusMode={autoFocusMode}
+            draftStorageKey={NOVA_DRAFT_STORAGE_KEY}
+            disabled={discussionClosed || !!owningApp}
+            hideComposer={activeDiscussion.type === "heartbeat" || discussionClosed || !!owningApp}
+            pendingQuestion={pendingQuestion}
+            questionOutcome={questionOutcome}
+            onAnswerQuestion={handleAnswerQuestion}
+            permissionApprovals={permissionApprovals}
+            onPermissionDecision={owningApp || discussionClosed ? undefined : handlePermissionDecision}
+            hasEarlierMessages={hasEarlierMessages && !earlierHistoryLoadFailure}
+            onLoadEarlier={handleLoadEarlier}
+            isLoadingEarlier={isLoadingEarlier}
+            focusMessageRequest={focusRequest}
+            onFocusMessageResult={handleFocusMessageResult}
+            placeholder={`Talk to ${activeAgent?.name ?? "Nova"}...`}
+            header={chatHeader}
+            speechBackend={speechBackend}
+            pushToTalkKey={pushToTalk.key}
+            globalPushToTalk={floating}
+            resolveImageSrc={resolveImageSrc}
+            resolveFileLink={resolveFileLink}
+            resolveEventLink={resolveEventLink}
+            loadTranscriptPayload={loadTranscriptPayload}
+            getTranscriptPayloadMediaUrl={getTranscriptPayloadMediaUrl}
+            getTranscriptPayloadDownloadUrl={getTranscriptPayloadDownloadUrl}
+            assistantAvatar={avatarSrc}
+            resolveAgentInfo={resolveAgentInfo}
+            resolveAgentNote={resolveAgentNote}
+            isFriezeMarkerVisible={isFriezeMarkerVisible}
+            friezeDensity={normalizeFriezeDensity(friezeDensity)}
+            hideJobMarkers={hiddenMarkers.includes(JOB_MARKER_KEY)}
+            jobs={jobs}
+            onStopJob={jobs ? handleStopJob : undefined}
+            renderStatusLine={renderStatusLine}
+            renderComposerAttachments={renderWhatISeeAttachment}
+            renderAttachmentActions={renderWhatISeeAction}
+            renderSideActions={renderSideActions}
+            getMessageActions={getMessageActions}
+            footer={owningApp ? (
+              <div
+                data-slot="owned-discussion-bar"
+                className="shrink-0 border-t border-overlay-8 bg-card px-4 py-3"
               >
-                <i aria-hidden="true" className={`ph-bold ${reopenPending ? "ph-spinner animate-spin" : "ph-arrow-counter-clockwise"}`} />
-                {activeDiscussion.status === "archiving" ? "Finalizing…" : reopenPending ? "Reopening…" : "Reopen"}
-              </button>
-            </div>
-          </div>
-        ) : null}
-      />
+                <div className="mx-auto flex max-w-3xl items-center gap-2 text-sm text-text-muted">
+                  <i aria-hidden="true" className="ph-bold ph-plugs-connected shrink-0" />
+                  <span>This discussion belongs to {owningApp}. Continue it there.</span>
+                </div>
+              </div>
+            ) : discussionClosed ? (
+              <div
+                data-slot="archived-discussion-bar"
+                className="shrink-0 border-t border-overlay-8 bg-card px-4 py-3"
+              >
+                <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
+                  <span className="text-sm text-text-muted">This discussion is archived</span>
+                  <button
+                    type="button"
+                    onClick={() => { void handleReopen() }}
+                    disabled={reopenPending || activeDiscussion.status === "archiving" || !activeDiscussion.sessionId}
+                    title={!activeDiscussion.sessionId ? "This archive has no provider session to reopen" : undefined}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <i aria-hidden="true" className={`ph-bold ${reopenPending ? "ph-spinner animate-spin" : "ph-arrow-counter-clockwise"}`} />
+                    {activeDiscussion.status === "archiving" ? "Finalizing…" : reopenPending ? "Reopening…" : "Reopen"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          />
+        </ChatBlockRenderersProvider>
+      </LiveReportHostProvider>
     </div>
   ) : (
     <div

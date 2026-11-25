@@ -82,7 +82,7 @@ const sessionPath = (sessionId: string) => delegationSessionPath({ sessionId })
 // Same shape as `WorktreeChips`, with room for a thumb.
 const CHIP_CLASS = "inline-flex min-h-7 max-w-full items-center gap-1.5 rounded-md bg-overlay-6 px-2 py-1 text-[11px] text-text-secondary"
 
-function JournalChip({ chip }: { chip: JournalChipLink }) {
+export function JournalChip({ chip }: { chip: JournalChipLink }) {
   const content = (
     <>
       <i aria-hidden="true" className={cn("ph-bold shrink-0 text-[12px]", chip.icon)} />
