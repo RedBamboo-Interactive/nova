@@ -11,10 +11,12 @@ namespace Leaf.Plugins.Nova;
 
 /// <summary>
 /// Where an Orchestrated discussion stands between turns. <see cref="DueAt"/> is when its Heartbeat is told it
-/// is idle (null: nothing armed); <see cref="TurnKey"/> names the settled turn; <see cref="Chain"/> counts the
-/// hand-offs since its person last wrote there, which paces the next one.
+/// is idle (null: nothing armed); <see cref="TurnKey"/> names the settled turn, or a watch
+/// (<see cref="DiscussionOrchestration.WatchPrefix"/>) armed by time rather than by a turn; <see cref="Chain"/>
+/// counts the hand-offs since its person last wrote there, which paces the next one; <see cref="Revisits"/> counts
+/// the hand-offs in a row that started no turn, which backs the watch off.
 /// </summary>
-public sealed record OrchestrationState(DateTimeOffset? DueAt, string? TurnKey, int Chain, bool LastTurnFailed = false)
+public sealed record OrchestrationState(DateTimeOffset? DueAt, string? TurnKey, int Chain, bool LastTurnFailed = false, int Revisits = 0)
 {
     public const string DataKey = "orchestration";
     public static readonly OrchestrationState Empty = new(null, null, 0);
@@ -27,7 +29,8 @@ public sealed record OrchestrationState(DateTimeOffset? DueAt, string? TurnKey, 
         var turn = o["turn"] is JsonValue t && t.TryGetValue<string>(out var turnText) ? turnText : null;
         var chain = o["chain"] is JsonValue c && c.TryGetValue<int>(out var n) && n > 0 ? n : 0;
         var failed = o["lastTurnFailed"] is JsonValue f && f.TryGetValue<bool>(out var b) && b;
-        return new(due, turn, chain, failed);
+        var revisits = o["revisits"] is JsonValue r && r.TryGetValue<int>(out var m) && m > 0 ? m : 0;
+        return new(due, turn, chain, failed, revisits);
     }
 
     public JsonObject ToJson() => new()
@@ -36,6 +39,7 @@ public sealed record OrchestrationState(DateTimeOffset? DueAt, string? TurnKey, 
         ["turn"] = TurnKey,
         ["chain"] = Chain,
         ["lastTurnFailed"] = LastTurnFailed,
+        ["revisits"] = Revisits,
     };
 }
 
@@ -45,6 +49,12 @@ public sealed record OrchestrationState(DateTimeOffset? DueAt, string? TurnKey, 
 /// left arms a quiet window (<see cref="Window"/>); new input cancels it. When the window ends and the session is
 /// still idle, the <see cref="OrchestrationSweeper"/> tells the Agent's Heartbeat, whose
 /// <c>heartbeat-orchestration</c> Skill decides: send it the next step, tell LIVE, or leave it.
+/// <para>
+/// Leaving it does not end the loop. A hand-off that starts no turn arms a watch, and the Heartbeat is told again
+/// that it is still idle 6 minutes later, then 12, 24, 48 and every hour, so a workstream waiting on something is
+/// looked at again on its own. Marking a discussion while a turn is running watches that turn too: its prompt was
+/// sent before the mark, so it has no idle callback.
+/// </para>
 /// <para>
 /// Pacing, not a cap: the window is 3 minutes for the first <see cref="FreeSteps"/> hand-offs since the person last
 /// wrote in the discussion, then doubles per hand-off up to an hour. The person's message resets it.
@@ -65,6 +75,24 @@ public static class DiscussionOrchestration
     public static readonly TimeSpan QuietWindow = TimeSpan.FromMinutes(3);
     public static readonly TimeSpan MaxWindow = TimeSpan.FromHours(1);
     public const int FreeSteps = 5;
+    internal const string WatchPrefix = "watch:";
+
+    internal static bool IsWatch(string? turnKey) => turnKey?.StartsWith(WatchPrefix, StringComparison.Ordinal) == true;
+
+    /// <summary>How long a watch waits after <paramref name="revisits"/> hand-offs in a row that started no turn.</summary>
+    public static TimeSpan RevisitWindow(int revisits)
+    {
+        if (revisits <= 0) return QuietWindow;
+        var window = TimeSpan.FromTicks(QuietWindow.Ticks << Math.Min(revisits, 10));
+        return window < MaxWindow ? window : MaxWindow;
+    }
+
+    /// <summary>The watch armed after hand-off <paramref name="step"/>: paced like a turn, backed off by the revisits.</summary>
+    internal static OrchestrationState Watching(DateTimeOffset now, int step, int revisits, bool lastTurnFailed = false)
+    {
+        var window = Window(step) > RevisitWindow(revisits) ? Window(step) : RevisitWindow(revisits);
+        return new(now + window, $"{WatchPrefix}{step}:{revisits}", step, lastTurnFailed, revisits);
+    }
 
     /// <summary>How long a settled turn waits before the Heartbeat is told, given the hand-offs since the person last wrote.</summary>
     public static TimeSpan Window(int chain)
@@ -133,7 +161,7 @@ public static class DiscussionOrchestration
         try
         {
             await UpdateAsync(entities, discussion.EntityId,
-                s => s with { DueAt = null, TurnKey = null, Chain = fromPerson ? 0 : s.Chain }, ct);
+                s => s with { DueAt = null, TurnKey = null, Chain = fromPerson ? 0 : s.Chain, Revisits = 0 }, ct);
             if (!await redCompute.RegisterCallbackAsync(sessionId, CallbackUrl(discussion.Id), force: true, ct,
                     callbackId: CallbackPrefix + promptMessageUid, promptMessageUid: promptMessageUid))
                 logger?.LogWarning("Orchestrated discussion {Discussion}: RedCompute refused the idle callback", discussion.Id);
@@ -197,7 +225,7 @@ public static class DiscussionOrchestration
         var armed = await UpdateAsync(entities, discussion.EntityId,
             s => s.TurnKey == report.TurnKey && s.DueAt is not null
                 ? s // the same turn reported again keeps its original deadline
-                : s with { DueAt = now + Window(s.Chain), TurnKey = report.TurnKey, LastTurnFailed = report.TurnOutcome == "failed" },
+                : s with { DueAt = now + Window(s.Chain), TurnKey = report.TurnKey, LastTurnFailed = report.TurnOutcome == "failed", Revisits = 0 },
             ct);
         return Results.Ok(new { handled = armed is not null, dueAt = armed?.DueAt });
     }
@@ -235,22 +263,36 @@ public static class DiscussionOrchestration
 
     /// <summary>
     /// Turning the mark on while the discussion is idle is the person saying "take it from here": the Heartbeat is
-    /// told at once and the pacing starts fresh.
+    /// told at once, the pacing starts fresh, and a watch looks again if that starts nothing.
     /// </summary>
     internal static async Task HandOffNowAsync(DiscussionStore store, IEntityStore entities, EventInjector injector,
-        DiscussionRead discussion, CancellationToken ct)
+        DiscussionRead discussion, CancellationToken ct, TimeProvider? clock = null)
     {
         var result = await HandOffAsync(store, injector, discussion, "was just marked Orchestrated", 1, false,
             $"orchestrated-marked:{discussion.Id}:{discussion.ConversationRevision}", ct);
+        var now = (clock ?? TimeProvider.System).GetUtcNow();
         await UpdateAsync(entities, discussion.EntityId,
-            _ => new(null, null, result == HandOff.Delivered ? 1 : 0), ct);
+            _ => result == HandOff.Delivered ? Watching(now, 1, 1) : new(null, null, 0), ct);
+    }
+
+    /// <summary>
+    /// Turning the mark on while a turn is running: that turn's prompt went out before the mark, so it has no idle
+    /// callback. A watch checks back in <see cref="QuietWindow"/> and hands it over once the session is idle.
+    /// </summary>
+    internal static Task WatchRunningTurnAsync(IEntityStore entities, DiscussionRead discussion, CancellationToken ct,
+        TimeProvider? clock = null)
+    {
+        var now = (clock ?? TimeProvider.System).GetUtcNow();
+        return UpdateAsync(entities, discussion.EntityId,
+            s => s.DueAt is null ? new(now + QuietWindow, $"{WatchPrefix}0:0", 0) : s, ct);
     }
 }
 
 /// <summary>
 /// Fires armed hand-offs whose quiet window has ended. Before telling the Heartbeat it asks RedCompute whether the
 /// session is still idle: a session that is working again only loses its armed state, and its next settled turn
-/// arms a new one. RedCompute unreachable, or a delivery that failed, leaves the state for the next sweep.
+/// arms a new one, while a watch keeps watching. Every delivered hand-off arms a watch, which a prompt reaching the
+/// discussion cancels. RedCompute unreachable, or a delivery that failed, leaves the state for the next sweep.
 /// </summary>
 public sealed class OrchestrationSweeper(
     DiscussionStore store, IEntityStore entities, EventInjector injector, RedComputeClient redCompute,
@@ -286,22 +328,31 @@ public sealed class OrchestrationSweeper(
 
             var probe = await redCompute.ProbeSessionAsync(discussion.SessionId, ct);
             if (!probe.Reachable) continue;
+            var watch = DiscussionOrchestration.IsWatch(state.TurnKey);
             if (probe.Status != "Idle")
             {
-                // Working again, or gone: nothing to hand over for this turn.
+                // A turn-armed hand-off whose session works again has a new prompt and callback: drop it.
+                // A watch has no callback to wait for, so it keeps watching.
                 await DiscussionOrchestration.UpdateAsync(entities, discussion.EntityId,
-                    s => s.TurnKey == state.TurnKey ? s with { DueAt = null, TurnKey = null } : s, ct);
+                    s => s.TurnKey != state.TurnKey ? s
+                        : watch ? s with { DueAt = now + DiscussionOrchestration.QuietWindow }
+                        : s with { DueAt = null, TurnKey = null }, ct);
                 continue;
             }
 
             var step = state.Chain + 1;
-            var result = await DiscussionOrchestration.HandOffAsync(store, injector, discussion, "went idle", step,
+            var why = watch && state.Revisits > 0
+                ? $"is still idle: nothing has happened there since hand-off {state.Chain}"
+                : "went idle";
+            var result = await DiscussionOrchestration.HandOffAsync(store, injector, discussion, why, step,
                 state.LastTurnFailed, $"orchestrated-idle:{discussion.Id}:{state.TurnKey}", ct);
             if (result == DiscussionOrchestration.HandOff.Failed) continue;
+            var revisits = (watch ? state.Revisits : 0) + 1;
             await DiscussionOrchestration.UpdateAsync(entities, discussion.EntityId,
-                s => s.TurnKey == state.TurnKey
-                    ? s with { DueAt = null, TurnKey = null, Chain = result == DiscussionOrchestration.HandOff.Delivered ? step : s.Chain }
-                    : s, ct);
+                s => s.TurnKey != state.TurnKey ? s
+                    : result == DiscussionOrchestration.HandOff.Delivered
+                        ? DiscussionOrchestration.Watching(now, step, revisits, state.LastTurnFailed)
+                        : s with { DueAt = null, TurnKey = null }, ct);
             if (result == DiscussionOrchestration.HandOff.Delivered) handed++;
         }
         return handed;

@@ -97,7 +97,80 @@ public sealed class DiscussionOrchestrationTests
         Assert.Contains("Hand-off 1 since its person last wrote there", note);
         Assert.Empty(h.F.TargetMessages);
         Assert.Empty(h.F.LiveMessages);
-        Assert.Equal((null, null, 1), (h.State.DueAt, h.State.TurnKey, h.State.Chain));
+        Assert.Equal(1, h.State.Chain);
+        Assert.True(DiscussionOrchestration.IsWatch(h.State.TurnKey));
+        Assert.Equal(h.Clock.Now + TimeSpan.FromMinutes(6), h.State.DueAt);
+    }
+
+    [Fact]
+    public async Task Leaving_it_does_not_end_the_loop_the_Heartbeat_is_told_again_later_each_time()
+    {
+        using var h = new Harness();
+        await h.Settled();
+        h.Clock.Now += TimeSpan.FromMinutes(3);
+        await h.Sweeper.SweepAsync();   // hand-off 1, and the Heartbeat sends nothing
+
+        var gaps = new List<int>();
+        for (var i = 0; i < 6; i++)
+        {
+            var due = h.State.DueAt!.Value;
+            gaps.Add((int)(due - h.Clock.Now).TotalMinutes);
+            h.Clock.Now = due;
+            Assert.Equal(1, await h.Sweeper.SweepAsync());
+        }
+
+        Assert.Equal([6, 12, 24, 48, 60, 60], gaps);
+        var notes = h.HeartbeatMessages.Select(m => m.Content).ToList();
+        Assert.Equal(7, notes.Count);
+        Assert.Contains("is still idle: nothing has happened there since hand-off 1.", notes[1]);
+        Assert.Contains("Hand-off 2 since its person last wrote there", notes[1]);
+        Assert.Contains("Hand-off 7 since its person last wrote there", notes[6]);
+    }
+
+    [Fact]
+    public async Task A_note_reaching_the_discussion_cancels_the_watch_and_its_back_off()
+    {
+        using var h = new Harness();
+        await h.Settled();
+        h.Clock.Now += TimeSpan.FromMinutes(3);
+        await h.Sweeper.SweepAsync();
+        h.Clock.Now += TimeSpan.FromMinutes(6);
+        await h.Sweeper.SweepAsync();
+        Assert.Equal(2, h.State.Revisits);
+        var discussion = (await h.F.Store.GetAsync("target"))!;
+        var client = new RedComputeClient(CallbackDeliveryTests.Proxy.Create<IComputeGateway>((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK))));
+
+        await DiscussionOrchestration.RegisterPromptAsync(client, h.F.Entities, discussion, "s", "uid-note", fromPerson: false, null, default);
+
+        Assert.Equal((null, null, 2, 0), (h.State.DueAt, h.State.TurnKey, h.State.Chain, h.State.Revisits));
+        await h.Settled("turn-2");
+        Assert.Equal(h.Clock.Now + TimeSpan.FromMinutes(3), h.State.DueAt);
+        Assert.Equal("turn-2", h.State.TurnKey);
+    }
+
+    [Fact]
+    public async Task Marking_it_mid_turn_watches_that_turn_and_hands_it_over_once_idle()
+    {
+        using var h = new Harness(orchestrated: false);
+        var discussion = (await h.F.Store.SetOrchestratedAsync(h.F.Target.Id, true))!;
+
+        await DiscussionOrchestration.WatchRunningTurnAsync(h.F.Entities, discussion, default, h.Clock);
+        Assert.Equal(h.Clock.Now + TimeSpan.FromMinutes(3), h.State.DueAt);
+
+        h.Clock.Now += TimeSpan.FromMinutes(3);
+        h.F.Gateway.SessionStatus = "Active";
+        Assert.Equal(0, await h.Sweeper.SweepAsync());
+        Assert.Equal(h.Clock.Now + TimeSpan.FromMinutes(3), h.State.DueAt);   // still working: keeps watching
+
+        h.Clock.Now += TimeSpan.FromMinutes(3);
+        h.F.Gateway.SessionStatus = "Idle";
+        Assert.Equal(1, await h.Sweeper.SweepAsync());
+
+        var note = Assert.Single(h.HeartbeatMessages).Content;
+        Assert.Contains("went idle", note);
+        Assert.Contains("Hand-off 1 since its person last wrote there", note);
+        Assert.Equal(h.Clock.Now + TimeSpan.FromMinutes(6), h.State.DueAt);
     }
 
     [Fact]
@@ -236,10 +309,11 @@ public sealed class DiscussionOrchestrationTests
         using var h = new Harness(orchestrated: false);
         var discussion = (await h.F.Store.SetOrchestratedAsync(h.F.Target.Id, true))!;
 
-        await DiscussionOrchestration.HandOffNowAsync(h.F.Store, h.F.Entities, h.F.Injector, discussion, default);
+        await DiscussionOrchestration.HandOffNowAsync(h.F.Store, h.F.Entities, h.F.Injector, discussion, default, h.Clock);
 
         Assert.Contains("was just marked Orchestrated", Assert.Single(h.HeartbeatMessages).Content);
         Assert.Equal(1, h.State.Chain);
+        Assert.Equal(h.Clock.Now + TimeSpan.FromMinutes(6), h.State.DueAt);   // and looks again if that starts nothing
     }
 
     [Theory]

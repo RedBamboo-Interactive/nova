@@ -564,7 +564,8 @@ public static class DiscussionEndpoints
 
     /// <summary>
     /// Marks or clears a discussion as Orchestrated. Same access as its LIVE timeline: the person, or an Agent
-    /// acting for them. Turning it on while the discussion is idle hands it to the Heartbeat at once.
+    /// acting for them. Turning it on while the discussion is idle hands it to the Heartbeat at once; mid-turn, a watch
+    /// hands it over once that turn is done.
     /// </summary>
     internal static async Task<IResult> SetOrchestratedAsync(DiscussionRead discussion,
         DiscussionOrchestratedRequest? request, HttpContext ctx, DiscussionStore store, EventInjector injector,
@@ -586,6 +587,12 @@ public static class DiscussionEndpoints
             if (value && updated.Status == DiscussionStatus.Idle && updated.SessionId is not null)
             {
                 await DiscussionOrchestration.HandOffNowAsync(store, store.Entities, injector, updated, ctx.RequestAborted);
+                updated = await store.GetAsync(updated.Id, ctx.RequestAborted) ?? updated;
+            }
+            else if (value)
+            {
+                // Mid-turn: that turn's prompt has no idle callback, so watch it instead.
+                await DiscussionOrchestration.WatchRunningTurnAsync(store.Entities, updated, ctx.RequestAborted);
                 updated = await store.GetAsync(updated.Id, ctx.RequestAborted) ?? updated;
             }
         }
@@ -1771,7 +1778,7 @@ public static class DiscussionEndpoints
             var discussion = await store.GetAsync(id, ctx.RequestAborted);
             return discussion is null ? NotFound() : await SetOrchestratedAsync(discussion, request, ctx, store, injector, events);
         })
-            .WithSummary("Marks a discussion Orchestrated, or clears it. Body: orchestrated (true or false). Orchestrated, a turn that settles with nothing queued (not a stop or interrupt) arms a quiet window; new input cancels it. When it ends and the session is still idle, the Agent's open Heartbeat gets an orchestrated-idle note and decides, with its heartbeat-orchestration Skill, whether to send the next step. The window is 3 minutes for the first 5 hand-offs since the person last wrote there, then doubles per hand-off up to an hour; the person's message resets it. The discussion carries orchestration {dueAt, chain}. Turning it on while the discussion is idle hands it over at once. 409 not_orchestratable for LIVE, Heartbeat, confidential, another app's or Agent-less discussions, and when the Agent has no open Heartbeat. Same access as the LIVE timeline; returns the discussion with orchestrated.");
+            .WithSummary("Marks a discussion Orchestrated, or clears it. Body: orchestrated (true or false). Orchestrated, a turn that settles with nothing queued (not a stop or interrupt) arms a quiet window; new input cancels it. When it ends and the session is still idle, the Agent's open Heartbeat gets an orchestrated-idle note and decides, with its heartbeat-orchestration Skill, whether to send the next step. The window is 3 minutes for the first 5 hand-offs since the person last wrote there, then doubles per hand-off up to an hour; the person's message resets it. The discussion carries orchestration {dueAt, chain}. Turning it on while the discussion is idle hands it over at once; turning it on mid-turn watches that turn and hands it over once idle. A hand-off that starts no turn is not the end: the Heartbeat is told again that the discussion is still idle after 6 minutes, then 12, 24, 48 and every hour, until a turn runs there or the mark is cleared. 409 not_orchestratable for LIVE, Heartbeat, confidential, another app's or Agent-less discussions, and when the Agent has no open Heartbeat. Same access as the LIVE timeline; returns the discussion with orchestrated.");
 
         group.MapPut("/discussions/{id}/node", async (string id,
             DiscussionRunOnRequest request, HttpContext ctx, DiscussionStore store,
