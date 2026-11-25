@@ -63,6 +63,7 @@ import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToC
 import { delegationEventPath } from "../lib/delegation-session-link"
 import { AGENT_NOTE_KEY } from "../lib/agent-note"
 import { AgentNoteExchange } from "../components/discussion/agent-note-exchange"
+import type { DiscussionInfo } from "../lib/types"
 import { DelegationExchange } from "../components/discussion/delegation-exchange"
 import { describeAgentNote, type NoteOriginDiscussion } from "../lib/agent-note-presentation"
 import { HELD_EVENT_LABEL } from "../lib/held-events"
@@ -1615,7 +1616,7 @@ export function ChatView({
 
   // Read from what this client already lists, so a confidential origin it may
   // not read has no title to show, and a retitle shows without reloading history.
-  const resolveNoteDiscussion = useCallback((id: string): NoteOriginDiscussion | undefined => {
+  const resolveNoteDiscussion = useCallback((id: string): (NoteOriginDiscussion & { summary: DiscussionInfo }) | undefined => {
     const open = discussions.find(candidate => candidate.id === id)
     const known = open ?? archivedDiscussions.find(candidate => candidate.id === id)
     if (!known) return undefined
@@ -1624,6 +1625,7 @@ export function ChatView({
       title: createDiscussionTitleResolver([...discussions, ...archivedDiscussions])(known),
       agentId: known.agentId ?? null,
       archived: !open || closed,
+      summary: known,
     }
   }, [archivedDiscussions, discussions])
 
@@ -1648,38 +1650,46 @@ export function ChatView({
     return {
       ...presentation,
       renderExchange: ({ part, ...slot }) => (
-        <AgentNoteExchange
-          key={activeDiscussion.id + ":" + counterpart}
-          {...slot}
-          current={{
-            id: activeDiscussion.id,
-            title: activeDisplayTitle ?? "Untitled discussion",
-            agentId: activeDiscussion.agentId,
-            type: activeDiscussion.type,
-            canOpen: true,
-          }}
-          other={{
-            id: counterpart,
-            title: presentation.discussion,
-            agentId: other?.agentId ?? null,
-            canOpen: !!presentation.discussionHref,
-          }}
-          clicked={{
-            uid: part.messageUid ?? part.messageId ?? "opened-note",
-            direction: sent ? "sent" : "received",
-            content: event.text,
-            timestamp: event.postedAt ?? event.timestamp,
-            agentId: sent ? activeDiscussion.agentId : typeof event.data?.agent === "string" ? event.data.agent : other?.agentId ?? null,
-            failed: sent && event.data?.failed === true,
-          }}
-          onOpenDiscussion={handleSelectDiscussion}
-          resolveAgent={resolveAgentInfo}
-          resolveImageSrc={resolveImageSrc}
-          resolveFileLink={resolveFileLink}
-        />
+        <DiscussionThumbnailCacheContext.Provider value={thumbnails}>
+          <AgentNoteExchange
+            key={activeDiscussion.id + ":" + counterpart}
+            {...slot}
+            current={{
+              id: activeDiscussion.id,
+              title: activeDisplayTitle ?? "Untitled discussion",
+              agentId: activeDiscussion.agentId,
+              summary: activeDiscussion,
+              canOpen: true,
+            }}
+            other={{
+              id: counterpart,
+              title: presentation.discussion,
+              agentId: other?.agentId ?? null,
+              summary: other?.summary.confidential && !activeDiscussion.confidential ? undefined : other?.summary,
+              canOpen: !!presentation.discussionHref,
+            }}
+            clicked={{
+              uid: part.messageUid ?? part.messageId ?? "opened-note",
+              direction: sent ? "sent" : "received",
+              content: event.text,
+              timestamp: event.postedAt ?? event.timestamp,
+              agentId: sent ? activeDiscussion.agentId : typeof event.data?.agent === "string" ? event.data.agent : other?.agentId ?? null,
+              failed: sent && event.data?.failed === true,
+            }}
+            onOpenDiscussion={handleSelectDiscussion}
+            resolveAgent={resolveAgentInfo}
+            resolveImageSrc={resolveImageSrc}
+            resolveFileLink={resolveFileLink}
+            visualSettings={{
+              grouping: grouping.view,
+              showAvatars: settings.showDiscussionAvatars,
+              useThumbnails: settings.useDiscussionThumbnails,
+            }}
+          />
+        </DiscussionThumbnailCacheContext.Provider>
       ),
     } satisfies import("@redbamboo/chat").AgentNotePresentation
-  }, [activeDiscussion, activeDiscussionId, activeDisplayTitle, handleSelectDiscussion, resolveAgentInfo, resolveFileLink, resolveNoteDiscussion])
+  }, [activeDiscussion, activeDiscussionId, activeDisplayTitle, grouping.view, handleSelectDiscussion, resolveAgentInfo, resolveFileLink, resolveImageSrc, resolveNoteDiscussion, settings.showDiscussionAvatars, settings.useDiscussionThumbnails, thumbnails])
 
   const renderEventDetails = useCallback<RenderEventDetails>((event, { part, ...slot }) => {
     if (!activeDiscussion || activeDiscussion.id !== activeDiscussionId || !delegationEventPath(event.key, event.data)) return null

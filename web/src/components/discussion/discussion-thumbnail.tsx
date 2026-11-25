@@ -54,10 +54,10 @@ export function useDiscussionThumbnailCache(discussions: DiscussionInfo[]) {
   return cache
 }
 
-/** Read authorized artifacts lazily, reusing thumbnails across sidebar mounts. */
-export function DiscussionThumbnail({ id, icon, target }: { id: string; icon: string; target?: string | null }) {
+/** Read authorized artifacts lazily, sharing cached images across discussion surfaces. */
+export function useDiscussionThumbnailSource<T extends HTMLElement>(id: string, target?: string | null) {
   const cache = useContext(DiscussionThumbnailCacheContext)
-  const ref = useRef<HTMLSpanElement>(null)
+  const ref = useRef<T>(null)
   const key = id + "\n" + (target ?? "")
   const [loaded, setLoaded] = useState<{ key: string; url: string } | null>(null)
   const source = cache?.get(key) ?? (loaded?.key === key ? loaded.url : null)
@@ -89,8 +89,16 @@ export function DiscussionThumbnail({ id, icon, target }: { id: string; icon: st
     else void load()
     return () => { abort.abort(); observer?.disconnect(); if (temporaryUrl) URL.revokeObjectURL(temporaryUrl) }
   }, [cache, id, key, target])
+  return {
+    ref, source,
+    onError: () => { if (source) cache?.delete(key, source); setLoaded(null) },
+  }
+}
+
+export function DiscussionThumbnail({ id, icon, target }: { id: string; icon: string; target?: string | null }) {
+  const { ref, source, onError } = useDiscussionThumbnailSource<HTMLSpanElement>(id, target)
   return <span ref={ref} className="absolute inset-0 flex items-center justify-center overflow-hidden rounded-lg" aria-hidden="true">
-    {source ? <img src={source} alt="" className="h-full w-full object-cover" onError={() => { cache?.delete(key, source); setLoaded(null) }} />
+    {source ? <img src={source} alt="" className="h-full w-full object-cover" onError={onError} />
       : <i className={"ph ph-" + groupingIcon(icon) + " text-base text-text-muted"} />}
   </span>
 }

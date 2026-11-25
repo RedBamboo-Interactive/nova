@@ -3,6 +3,8 @@ import { ChatMessage, MarkdownRenderer, PART_COLOR, USER_BUBBLE_SHAPE_STYLE, typ
 import { Badge, Button, DialogHeader, DialogTitle, EntityCard } from "@redbamboo/ui"
 import { api } from "../../lib/api"
 import { createDiscussionTitleResolver } from "../../lib/discussion-display-title"
+import { discussionLabel, groupingIcon, type DiscussionGroupingView } from "../../lib/discussion-grouping"
+import { useDiscussionThumbnailSource } from "./discussion-thumbnail"
 import type { DiscussionInfo } from "../../lib/types"
 
 export interface ExchangeNote {
@@ -28,11 +30,18 @@ interface NoteDiscussion {
   id: string
   title: string
   agentId: string | null
-  type?: DiscussionInfo["type"]
+  summary?: DiscussionInfo
   canOpen: boolean
 }
 
+interface DiscussionVisualSettings {
+  grouping: DiscussionGroupingView | null
+  showAvatars: boolean
+  useThumbnails: boolean
+}
+
 interface AgentNoteExchangeProps extends Omit<AgentNoteExchangeSlot, "part"> {
+  visualSettings: DiscussionVisualSettings
   current: NoteDiscussion
   other: NoteDiscussion
   clicked: ExchangeNote
@@ -57,32 +66,43 @@ function withOpenedExchangeNote(notes: ExchangeNote[], clicked: ExchangeNote): E
   return index === -1 ? [...notes, clicked] : [...notes.slice(0, index), clicked, ...notes.slice(index)]
 }
 
-function ExchangeDiscussionCard({ discussion, current, agent, onOpen }: {
+function ExchangeDiscussionCard({ discussion, current, agent, onOpen, visualSettings }: {
   discussion: NoteDiscussion
   current?: boolean
-  agent?: string
+  agent?: ReturnType<AgentNoteExchangeProps["resolveAgent"]>
   onOpen: (id: string) => void
+  visualSettings: DiscussionVisualSettings
 }) {
+  const { summary } = discussion
+  const showVisual = visualSettings.showAvatars && !!summary
+  const label = showVisual && summary ? discussionLabel(summary, visualSettings.grouping) : undefined
+  const target = visualSettings.useThumbnails ? label?.thumbnailTarget : undefined
+  const { ref, source, onError } = useDiscussionThumbnailSource<HTMLDivElement>(discussion.id, target)
   const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     event.preventDefault()
     onOpen(discussion.id)
   }
-  const icon = discussion.type === "live" ? "ph ph-pulse"
-    : discussion.type === "heartbeat" ? "ph ph-heartbeat" : "ph ph-chat-circle-dots"
+  const icon = label ? "ph ph-" + groupingIcon(label.icon)
+    : summary?.type === "live" ? "ph ph-pulse"
+      : summary?.type === "heartbeat" ? "ph ph-heartbeat"
+        : summary?.status === "archived" ? "ph ph-archive" : "ph ph-chat-circle-dots"
   return (
-    <EntityCard
-      className="h-full min-w-0 [&_[data-slot=entity-name]]:whitespace-normal [&_[data-slot=entity-name]]:break-words [&_[data-slot=entity-subtitle]]:whitespace-normal"
-      entity={{ id: discussion.id, typeSlug: "discussion", name: discussion.title }}
-      visual={{ icon }}
-      variant="outlined"
-      subtitle={current ? ["This discussion", agent].filter(Boolean).join(" · ") : agent}
-      current={current}
-      action={discussion.canOpen ? {
-        kind: "link", href: "/apps/nova/chat/" + encodeURIComponent(discussion.id),
-        ariaLabel: "Open " + discussion.title, onClick,
-      } : undefined}
-    />
+    <div ref={ref} className="min-w-0 self-stretch" onErrorCapture={source ? onError : undefined}>
+      <EntityCard
+        className={"h-full min-w-0 [&_[data-slot=entity-name]]:whitespace-normal [&_[data-slot=entity-name]]:break-words [&_[data-slot=entity-subtitle]]:whitespace-normal"
+          + (label ? " [&_[data-slot=entity-media]]:grid [&_[data-slot=entity-media]]:size-8 [&_[data-slot=entity-media]]:place-items-center [&_[data-slot=entity-media]]:rounded [&_[data-slot=entity-media]]:bg-overlay-6" : "")}
+        entity={{ id: discussion.id, typeSlug: "discussion", name: discussion.title }}
+        visual={{ icon, src: label ? source : showVisual ? agent?.avatarUrl : undefined }}
+        variant="outlined"
+        subtitle={current ? ["This discussion", agent?.name].filter(Boolean).join(" · ") : agent?.name}
+        current={current}
+        action={discussion.canOpen ? {
+          kind: "link", href: "/apps/nova/chat/" + encodeURIComponent(discussion.id),
+          ariaLabel: "Open " + discussion.title, onClick,
+        } : undefined}
+      />
+    </div>
   )
 }
 
@@ -136,7 +156,7 @@ function NoteMessage({ note, selected, agent, links }: {
 }
 
 export function AgentNoteExchange({
-  open, current, other, clicked, navigation, queueStatus, onClose, onOpenDiscussion, resolveAgent, resolveImageSrc, resolveFileLink,
+  open, current, other, clicked, navigation, queueStatus, onClose, onOpenDiscussion, resolveAgent, resolveImageSrc, resolveFileLink, visualSettings,
 }: AgentNoteExchangeProps) {
   const [load, setLoad] = useState<ExchangeLoad>({ kind: "loading" })
   const [attempt, setAttempt] = useState(0)
@@ -174,14 +194,14 @@ export function AgentNoteExchange({
     id: counterpart.id,
     title: createDiscussionTitleResolver([counterpart])(counterpart) ?? other.title,
     agentId: counterpart.agentId,
-    type: counterpart.type,
+    summary: counterpart,
     canOpen: counterpart.status !== "archived" && counterpart.status !== "archiving",
   } : other
   const openDiscussion = (id: string) => {
     onClose()
     if (id !== current.id) onOpenDiscussion(id)
   }
-  const agentName = (room: NoteDiscussion) => room.agentId ? resolveAgent(room.agentId)?.name : undefined
+  const discussionAgent = (room: NoteDiscussion) => room.agentId ? resolveAgent(room.agentId) : undefined
   const links = { resolveImageSrc, resolveFileLink }
 
   return (
@@ -192,9 +212,9 @@ export function AgentNoteExchange({
           {navigation}
         </div>
         <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:gap-3">
-          <ExchangeDiscussionCard discussion={current} current agent={agentName(current)} onOpen={openDiscussion} />
+          <ExchangeDiscussionCard discussion={current} current agent={discussionAgent(current)} onOpen={openDiscussion} visualSettings={visualSettings} />
           <i aria-hidden className="ph ph-arrows-left-right text-text-muted" />
-          <ExchangeDiscussionCard discussion={displayOther} agent={agentName(displayOther)} onOpen={openDiscussion} />
+          <ExchangeDiscussionCard discussion={displayOther} agent={discussionAgent(displayOther)} onOpen={openDiscussion} visualSettings={visualSettings} />
         </div>
       </DialogHeader>
       {queueStatus}
