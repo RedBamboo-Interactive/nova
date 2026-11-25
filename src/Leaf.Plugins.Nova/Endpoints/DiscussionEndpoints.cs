@@ -1026,6 +1026,30 @@ public static class DiscussionEndpoints
         })
             .WithSummary("Exports recent readable, non-confidential discussions as Markdown. Query: since (ISO time, default last 7 days), limit (1 to 200, default 50).");
 
+        group.MapGet("/discussions/{id}/delegation-exchange", async (
+            string id, [FromQuery] string session, HttpContext ctx, DiscussionStore store,
+            IDiscussions discussions, RedComputeClient compute) =>
+        {
+            var current = await store.GetAsync(id, ctx.RequestAborted);
+            if (current is null) return NotFound();
+            if (!DiscussionAccessPolicy.CanRead(current, ctx)) return AccessDenied(current);
+            if (!DelegationActivity.ValidSessionId(session)) return NotFound();
+
+            try
+            {
+                var exchange = await DelegationExchange.ReadAsync(discussions, compute, current, session, ctx.RequestAborted);
+                return exchange is null ? NotFound() : Results.Ok(exchange);
+            }
+            catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Nova.DelegationExchange")
+                    .LogWarning(ex, "Could not read delegation exchange for discussion {DiscussionId}", id);
+                return Results.Json(new { error = "delegation_exchange_unavailable" }, statusCode: 503);
+            }
+        })
+            .WithSummary("Reads the authorized exchange between this discussion and a Code session it delegated to. Query: session (Code session ID).");
+
         group.MapGet("/discussions/{id}/note-exchange", async (
             string id, [FromQuery] string other, HttpContext ctx, DiscussionStore store, IDiscussions discussions) =>
         {

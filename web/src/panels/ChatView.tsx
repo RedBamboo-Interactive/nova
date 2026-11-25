@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment, ChatBlockRenderersProvider, eventInputMessageUid, type EventQueueStatus, type ResolveEventQueueStatus } from "@redbamboo/chat"
+import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type RenderEventDetails, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment, ChatBlockRenderersProvider, eventInputMessageUid, parseEventPart, type EventQueueStatus, type ResolveEventQueueStatus } from "@redbamboo/chat"
 import { LiveReportBlock, LiveReportHostProvider, type LiveReportHost } from "../components/live-report/live-report"
 import { LIVE_REPORT_LANGUAGE } from "../lib/live-report"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, PluginExtensionSlot, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
@@ -63,6 +63,7 @@ import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToC
 import { delegationEventPath } from "../lib/delegation-session-link"
 import { AGENT_NOTE_KEY } from "../lib/agent-note"
 import { AgentNoteExchange } from "../components/discussion/agent-note-exchange"
+import { DelegationExchange } from "../components/discussion/delegation-exchange"
 import { describeAgentNote, type NoteOriginDiscussion } from "../lib/agent-note-presentation"
 import { HELD_EVENT_LABEL } from "../lib/held-events"
 import { formatOwningApp } from "../lib/discussion-owner"
@@ -1680,6 +1681,43 @@ export function ChatView({
     } satisfies import("@redbamboo/chat").AgentNotePresentation
   }, [activeDiscussion, activeDiscussionId, activeDisplayTitle, handleSelectDiscussion, resolveAgentInfo, resolveFileLink, resolveNoteDiscussion])
 
+  const renderEventDetails = useCallback<RenderEventDetails>((event, { part, ...slot }) => {
+    if (!activeDiscussion || activeDiscussion.id !== activeDiscussionId || !delegationEventPath(event.key, event.data)) return null
+    const sessionId = event.data!.sessionId as string
+    const uid = part.messageUid ?? part.messageId
+    if (!uid) return null
+    let revision: string | null = null
+    for (let index = activeMessages.length - 1; index >= 0; index--) {
+      const latest = activeMessages[index].parts.findLast(item => {
+        if (item.toolName !== "event:delegation" && item.toolName !== "event:delegate") return false
+        return parseEventPart(item)?.data?.sessionId === sessionId
+      })
+      if (!latest) continue
+      revision = latest.messageUid ?? latest.messageId ?? activeMessages[index].id
+      break
+    }
+    return (
+      <DelegationExchange
+        key={activeDiscussion.id + ":" + sessionId}
+        {...slot}
+        discussion={{
+          id: activeDiscussion.id,
+          title: activeDisplayTitle ?? "Untitled discussion",
+          agent: activeDiscussion.agentId ? resolveAgentInfo(activeDiscussion.agentId)?.name : undefined,
+        }}
+        sessionId={sessionId}
+        opened={{
+          uid,
+          kind: event.key === "delegate" ? "update" : event.data?.continued === true ? "follow-up" : "brief",
+          content: event.text,
+          timestamp: event.postedAt ?? event.timestamp,
+        }}
+        revision={revision}
+        navigate={navigate}
+      />
+    )
+  }, [activeDiscussion, activeDiscussionId, activeDisplayTitle, activeMessages, navigate, resolveAgentInfo])
+
   const { reactions, react, unreact } = useReactions(activeDiscussionId)
 
   const renderSideActions = useCallback((block: MessageBlock) => {
@@ -1989,6 +2027,7 @@ export function ChatView({
             assistantAvatar={avatarSrc}
             resolveAgentInfo={resolveAgentInfo}
             resolveAgentNote={resolveAgentNote}
+            renderEventDetails={renderEventDetails}
             resolveHostEventStatus={resolveHeldEvent}
             isFriezeMarkerVisible={isFriezeMarkerVisible}
             friezeDensity={normalizeFriezeDensity(friezeDensity)}
