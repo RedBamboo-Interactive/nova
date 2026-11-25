@@ -687,7 +687,9 @@ public sealed class RedComputeClient(IComputeGateway gateway)
 
     /// <summary>Result of <see cref="ProbeSessionAsync"/>: <c>Reachable</c> false means we
     /// could not get an answer; <c>Status</c> null with <c>Reachable</c> true means the
-    /// session no longer exists (a definitive "nothing is running").</summary>
+    /// session no longer exists (a definitive "nothing is running"). <c>Denied</c> means
+    /// RedCompute answered but refused this caller the session (403); <c>Reachable</c>
+    /// stays false then, so callers that need the session's state keep treating it as unknown.</summary>
     public sealed record SessionProbe(
         bool Reachable,
         string? Status,
@@ -695,7 +697,8 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         string? ProviderSessionId = null,
         bool Unattended = false,
         string? MaxAccessLevel = null,
-        string? AccessLevel = null);
+        string? AccessLevel = null,
+        bool Denied = false);
 
     /// <summary>
     /// Provider-neutral state needed by the discussion resume path. A persisted
@@ -750,6 +753,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
                 $"/ai-session/sessions/{sessionId}");
             using var resp = await gateway.SendAsync(request, provenance: null, ct);
             if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return new(true, null);
+            if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden) return new(false, null, Denied: true);
             if (!resp.IsSuccessStatusCode) return new(false, null);
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
             if (!doc.RootElement.TryGetProperty("session", out var session))

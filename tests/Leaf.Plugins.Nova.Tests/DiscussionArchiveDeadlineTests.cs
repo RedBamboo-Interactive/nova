@@ -114,6 +114,42 @@ public sealed class DiscussionArchiveDeadlineTests
         Assert.Equal(DiscussionStatus.Archived, fixture.StatusOf(chat));
     }
 
+    // 3dc82a3f and three more (2026-11-25): an agent archived discussions whose sessions it may not
+    // see. RedCompute answered 403 to the stop and to every probe, which read as "unreachable", so
+    // the deadline never applied and they stayed archiving.
+    [Fact]
+    public async Task Session_the_finalizer_may_not_see_is_finalized_at_the_deadline()
+    {
+        var fixture = new Fixture();
+        var chat = fixture.Add("chat", "s1");
+        fixture.Compute.SetSession("s1", "Idle", stopLands: false);
+        fixture.Compute.Denied = true;
+        await fixture.BeginAndSettleAsync(chat);
+
+        fixture.Clock.Set(Deadline - TimeSpan.FromSeconds(1));
+        await fixture.Lifecycle.ReconcilePendingAsync();
+        Assert.Equal(DiscussionStatus.Archiving, fixture.StatusOf(chat));
+
+        fixture.Clock.Set(Deadline);
+        await fixture.Lifecycle.ReconcilePendingAsync();
+
+        Assert.Equal(DiscussionStatus.Archived, fixture.StatusOf(chat));
+        Assert.Contains(fixture.Logs, l => l.Contains("without a confirmed stop") && l.Contains("s1"));
+    }
+
+    [Fact]
+    public async Task A_refused_probe_is_still_unreachable_for_every_other_caller()
+    {
+        var compute = new FakeCompute { Denied = true };
+        compute.SetSession("s1", "Idle", stopLands: false);
+
+        var probe = await new RedComputeClient(compute).ProbeSessionAsync("s1");
+
+        Assert.False(probe.Reachable);
+        Assert.True(probe.Denied);
+        Assert.Null(probe.Status);
+    }
+
     [Fact]
     public async Task Discussion_found_archiving_after_a_restart_gets_a_fresh_bounded_wait()
     {
@@ -250,6 +286,8 @@ public sealed class DiscussionArchiveDeadlineTests
         private readonly Dictionary<string, (string Status, bool StopLands, bool StopThrows)> sessions = [];
         private readonly Dictionary<string, int> stops = [];
         public bool Unreachable { get; set; }
+        // RedCompute answers, but this caller may not see the session (a different owner).
+        public bool Denied { get; set; }
 
         public void SetSession(string id, string status, bool stopLands, bool stopThrows = false)
             => sessions[id] = (status, stopLands, stopThrows);
@@ -267,6 +305,7 @@ public sealed class DiscussionArchiveDeadlineTests
             if (isStop)
             {
                 stops[id] = stops.GetValueOrDefault(id) + 1;
+                if (Denied) return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden));
                 // The production failure: no execution identity on a background POST.
                 if (sessions.TryGetValue(id, out var s) && s.StopThrows)
                     throw new InvalidOperationException("RedCompute mutations require a signed execution identity");
@@ -277,6 +316,11 @@ public sealed class DiscussionArchiveDeadlineTests
             }
 
             if (Unreachable) throw new HttpRequestException("down");
+            if (Denied) return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent("{\"error\":\"forbidden\",\"message\":\"You do not have access to this session\"}",
+                    System.Text.Encoding.UTF8, "application/json"),
+            });
             if (!sessions.TryGetValue(id, out var session))
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
             var payload = JsonSerializer.Serialize(new { session = new { id, status = session.Status } });

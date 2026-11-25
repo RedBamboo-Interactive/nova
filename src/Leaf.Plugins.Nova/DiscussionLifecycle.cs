@@ -16,8 +16,8 @@ namespace Leaf.Plugins.Nova;
 /// <see cref="ForceFinalizeAfter"/> (far beyond the client's 5-second close undo, which
 /// is resolved before this server intent exists) is finalized even if its session
 /// could not be confirmed stopped — otherwise it shows "Finalizing…" forever. Only a
-/// session that was reached and still reports a live status is overridden; an
-/// unreachable RedCompute never forces anything. Nothing is deleted: the archived
+/// session that was reached and still reports a live status, or that RedCompute refuses to
+/// this caller, is overridden; an unreachable RedCompute never forces anything. Nothing is deleted: the archived
 /// discussion keeps its full transcript and can be reopened.
 /// </para>
 /// </summary>
@@ -70,10 +70,13 @@ public sealed class DiscussionLifecycle(
                 catch { /* verification below decides, not the stop call */ }
 
                 var probe = await redCompute.ProbeSessionAsync(sessionId, ct);
-                if (!probe.Reachable) return false;
+                // No answer at all: nothing is known, so nothing is forced.
+                if (!probe.Reachable && !probe.Denied) return false;
 
-                // "Stopped"/"Error" and a 404 (Status null) all mean no live process.
-                var running = probe.Status is "Starting" or "Active" or "Idle";
+                // "Stopped"/"Error" and a 404 (Status null) all mean no live process. A session
+                // RedCompute refuses this caller (another owner) is treated as still live: its
+                // stop could not land either, so it is held only until the deadline.
+                var running = probe.Denied || probe.Status is "Starting" or "Active" or "Idle";
                 if (running)
                 {
                     var waited = clock.GetUtcNow() - since;
@@ -81,7 +84,7 @@ public sealed class DiscussionLifecycle(
 
                     logger?.LogWarning(
                         "Archive of discussion {EntityId} finalized without a confirmed stop: session {SessionId} still {Status} after {Waited:F0} min in archiving",
-                        entityId, sessionId, probe.Status, waited.TotalMinutes);
+                        entityId, sessionId, probe.Denied ? "refused to this caller" : probe.Status, waited.TotalMinutes);
                 }
             }
 
