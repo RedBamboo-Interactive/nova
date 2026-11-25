@@ -69,6 +69,31 @@ public sealed class DiscordServiceRegistrationTests
         Assert.NotNull(provider.GetRequiredService<ExternalAgentConversationProvider>());
     }
 
+    // 2026-11-25: the archive lifecycle asked for an unkeyed IEntityStore, which the kernel never
+    // registers, and the next in-process restart failed with Leaf down until the tray restarted it.
+    [Fact]
+    public void Discussion_lifecycle_resolves_with_the_plugin_keyed_entity_store()
+    {
+        var plugin = new NovaAppPlugin();
+        var services = new ServiceCollection();
+        plugin.ConfigureServices(services, new PluginContext
+        {
+            Manifest = plugin.Manifest,
+            PluginDirectory = AppContext.BaseDirectory,
+            DevMode = true,
+        });
+
+        services.AddLogging();
+        services.AddKeyedSingleton<IEntityStore>(NovaAppPlugin.PluginId, new NoIoEntityStore());
+        services.AddSingleton(Uninitialized<DiscussionStore>());
+        services.AddSingleton(Uninitialized<RedComputeClient>());
+        services.AddSingleton(Uninitialized<AgentDirectory>());
+
+        var provider = services.BuildServiceProvider();
+
+        Assert.NotNull(provider.GetRequiredService<DiscussionLifecycle>());
+    }
+
     [Fact]
     public void Nova_treats_sentinel_as_optional_and_needs_the_kernel_api_that_declares_it()
     {

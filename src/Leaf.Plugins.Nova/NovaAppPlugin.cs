@@ -145,7 +145,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
         services.AddSingleton<DiscussionActivity>();
         services.AddSingleton(sp =>
         {
-            var entities = sp.GetRequiredService<IEntityStore>();
+            var entities = sp.GetRequiredKeyedService<IEntityStore>(PluginId);
             var agents = sp.GetRequiredService<AgentDirectory>();
             return new DiscussionLifecycle(sp.GetRequiredService<DiscussionStore>(), sp.GetRequiredService<RedComputeClient>(),
                 sp.GetRequiredService<ILogger<DiscussionLifecycle>>(),
