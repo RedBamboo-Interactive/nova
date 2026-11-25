@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Leaf.Sdk.Services;
 using Microsoft.Extensions.Logging;
 
 namespace Leaf.Plugins.Nova;
@@ -20,10 +21,17 @@ namespace Leaf.Plugins.Nova;
 /// this caller, is overridden; an unreachable RedCompute never forces anything. Nothing is deleted: the archived
 /// discussion keeps its full transcript and can be reopened.
 /// </para>
+/// <para>
+/// The first attempt runs as whoever archived. The sweep has no caller, so it stops each session
+/// under <paramref name="sweepIdentity"/>: the discussion's own work, for its owner (see
+/// <see cref="ArchiveSweepIdentity"/>). Without one, its stop is refused for want of a signed
+/// identity and only the bounded wait finishes the archive.
+/// </para>
 /// </summary>
 public sealed class DiscussionLifecycle(
     DiscussionStore store, RedComputeClient redCompute,
-    ILogger<DiscussionLifecycle>? logger = null, TimeProvider? clock = null)
+    ILogger<DiscussionLifecycle>? logger = null, TimeProvider? clock = null,
+    Func<DiscussionRead, CancellationToken, Task<ComputeProvenance?>>? sweepIdentity = null)
 {
     private static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(60);
 
@@ -57,7 +65,8 @@ public sealed class DiscussionLifecycle(
     /// for the next sweep, until the bounded wait (<see cref="ForceFinalizeAfter"/>)
     /// runs out and a reachable-but-still-live session no longer blocks finalization.
     /// </summary>
-    public async Task<bool> FinalizeAsync(Guid entityId, string? sessionId, CancellationToken ct = default)
+    public async Task<bool> FinalizeAsync(Guid entityId, string? sessionId, CancellationToken ct = default,
+        ComputeProvenance? stopAs = null)
     {
         try
         {
@@ -66,7 +75,7 @@ public sealed class DiscussionLifecycle(
             {
                 // Issued on every attempt, so the pass that finds the deadline expired
                 // has just re-issued the stop once more before deciding.
-                try { await redCompute.StopAsync(sessionId, ct); }
+                try { await redCompute.StopAsync(sessionId, ct, stopAs); }
                 catch { /* verification below decides, not the stop call */ }
 
                 var probe = await redCompute.ProbeSessionAsync(sessionId, ct);
@@ -129,6 +138,19 @@ public sealed class DiscussionLifecycle(
         foreach (var tracked in archivingSince.Keys)
             if (!pendingIds.Contains(tracked)) archivingSince.TryRemove(tracked, out _);
         foreach (var discussion in pending)
-            await FinalizeAsync(discussion.EntityId, discussion.SessionId, ct);
+            await FinalizeAsync(discussion.EntityId, discussion.SessionId, ct,
+                await SweepIdentityAsync(discussion, ct));
+    }
+
+    private async Task<ComputeProvenance?> SweepIdentityAsync(DiscussionRead discussion, CancellationToken ct)
+    {
+        if (sweepIdentity is null || discussion.SessionId is null) return null;
+        try { return await sweepIdentity(discussion, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // No identity: the stop is refused and the bounded wait decides, as before.
+            logger?.LogWarning(ex, "Archive sweep could not sign a stop for discussion {EntityId}", discussion.EntityId);
+            return null;
+        }
     }
 }

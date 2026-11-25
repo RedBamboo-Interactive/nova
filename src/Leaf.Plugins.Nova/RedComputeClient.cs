@@ -590,10 +590,13 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         return receipt.RootElement.TryGetProperty("removed", out var removed) && removed.ValueKind == JsonValueKind.True;
     }
 
-    public async Task<bool> StopAsync(string sessionId, CancellationToken ct = default)
+    /// <summary>Stops a session as the ambient caller, or as <paramref name="provenance"/> when the
+    /// work has no caller of its own (the archive reconciler: see <see cref="ArchiveSweepIdentity"/>).</summary>
+    public async Task<bool> StopAsync(string sessionId, CancellationToken ct = default,
+        ComputeProvenance? provenance = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/ai-session/sessions/{sessionId}/stop");
-        using var resp = await gateway.SendAsync(request, provenance: null, ct);
+        using var resp = await gateway.SendAsync(request, provenance, ct);
         return resp.IsSuccessStatusCode;
     }
 

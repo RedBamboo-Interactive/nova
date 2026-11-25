@@ -144,8 +144,13 @@ public sealed class NovaAppPlugin : ILeafPlugin
                 sp.GetRequiredService<InstallationOwner>()));
         services.AddSingleton<DiscussionActivity>();
         services.AddSingleton(sp =>
-            new DiscussionLifecycle(sp.GetRequiredService<DiscussionStore>(), sp.GetRequiredService<RedComputeClient>(),
-                sp.GetRequiredService<ILogger<DiscussionLifecycle>>()));
+        {
+            var entities = sp.GetRequiredService<IEntityStore>();
+            var agents = sp.GetRequiredService<AgentDirectory>();
+            return new DiscussionLifecycle(sp.GetRequiredService<DiscussionStore>(), sp.GetRequiredService<RedComputeClient>(),
+                sp.GetRequiredService<ILogger<DiscussionLifecycle>>(),
+                sweepIdentity: (discussion, ct) => ArchiveSweepIdentity.CreateAsync(entities, agents, discussion, ct));
+        });
         // Automation action "nova-session" — collected by the kernel after build and
         // dispatched from its AutomationService for entities with that action_type.
         services.AddSingleton(sp =>

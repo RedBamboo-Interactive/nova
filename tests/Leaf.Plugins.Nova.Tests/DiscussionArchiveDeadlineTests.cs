@@ -228,8 +228,77 @@ public sealed class DiscussionArchiveDeadlineTests
         Assert.Equal(DiscussionStatus.Archiving, fixture.StatusOf(chat));
     }
 
+    // 2026-11-25: the sweep runs with no ambient identity, so its stop never landed and a
+    // session idled on until RedCompute parked it. It now stops each session as that
+    // discussion's own work, for that discussion's owner.
+    [Fact]
+    public async Task The_sweep_stops_each_session_as_its_own_owner_and_finalizes_without_waiting()
+    {
+        var fixture = new Fixture();
+        var system = fixture.Add("chat", "s-system", ownerId: "system", agentId: Fixture.AgentId);
+        var person = fixture.Add("chat", "s-person", ownerId: Fixture.PersonId, agentId: Fixture.AgentId);
+        fixture.Compute.SetSession("s-system", "Idle", stopLands: true, owner: "system");
+        fixture.Compute.SetSession("s-person", "Idle", stopLands: true, owner: Fixture.PersonId);
+        // The immediate pass runs as the archiving caller; here there is none, as after a restart.
+        await fixture.BeginAndSettleAsync(system);
+        await fixture.BeginAndSettleAsync(person);
+        Assert.Equal(DiscussionStatus.Archiving, fixture.StatusOf(system));
+
+        await fixture.Lifecycle.ReconcilePendingAsync();
+
+        Assert.Equal(DiscussionStatus.Archived, fixture.StatusOf(system));
+        Assert.Equal(DiscussionStatus.Archived, fixture.StatusOf(person));
+        var systemStop = Assert.Single(fixture.Compute.SignedStops("s-system"));
+        var personStop = Assert.Single(fixture.Compute.SignedStops("s-person"));
+        Assert.Equal("system", systemStop.OnBehalfOf.Kind);
+        Assert.Equal(("user", Fixture.PersonId), (personStop.OnBehalfOf.Kind, personStop.OnBehalfOf.Id));
+        foreach (var (stop, discussion) in new[] { (systemStop, system), (personStop, person) })
+        {
+            Assert.Equal(ComputeCauses.App, stop.Cause);
+            Assert.Equal(("startup", ArchiveSweepIdentity.Route),
+                (stop.Origin.Entrypoint.Kind, stop.Origin.Entrypoint.Route));
+            Assert.Equal(("agent", Fixture.AgentId), (stop.Actor.Kind, stop.Actor.EntityId));
+            Assert.Contains(stop.Context, c => c.Kind == ArchiveSweepIdentity.ArchiveContextKind && c.Id == discussion.Id);
+        }
+    }
+
+    [Fact]
+    public async Task A_stop_signed_for_one_owner_is_refused_on_another_owners_session()
+    {
+        var fixture = new Fixture();
+        // The discussion names one owner but its session belongs to another: the signed stop
+        // must not land, and the archive waits for the deadline as before.
+        var chat = fixture.Add("chat", "s1", ownerId: Fixture.PersonId, agentId: Fixture.AgentId);
+        fixture.Compute.SetSession("s1", "Idle", stopLands: true, owner: "someone-else");
+        await fixture.BeginAndSettleAsync(chat);
+
+        await fixture.Lifecycle.ReconcilePendingAsync();
+
+        Assert.Equal(DiscussionStatus.Archiving, fixture.StatusOf(chat));
+        Assert.Equal("Idle", fixture.Compute.StatusOf("s1"));
+        fixture.Clock.Set(Deadline);
+        await fixture.Lifecycle.ReconcilePendingAsync();
+        Assert.Equal(DiscussionStatus.Archived, fixture.StatusOf(chat));
+    }
+
+    [Fact]
+    public async Task A_discussion_with_no_agent_to_sign_for_still_waits_for_the_deadline()
+    {
+        var fixture = new Fixture();
+        var chat = fixture.Add("chat", "s1", ownerId: "system");
+        fixture.Compute.SetSession("s1", "Idle", stopLands: true, owner: "system");
+        await fixture.BeginAndSettleAsync(chat);
+
+        await fixture.Lifecycle.ReconcilePendingAsync();
+
+        Assert.Equal(DiscussionStatus.Archiving, fixture.StatusOf(chat));
+        Assert.Empty(fixture.Compute.SignedStops("s1"));
+    }
+
     private sealed class Fixture
     {
+        public const string PersonId = "4d3c2b1a-0000-4000-8000-000000000001";
+        public const string AgentId = "9a8b7c6d-0000-4000-8000-000000000002";
         public ManualClock Clock { get; } = new();
         public FakeCompute Compute { get; } = new();
         public List<string> Logs { get; } = [];
@@ -240,11 +309,18 @@ public sealed class DiscussionArchiveDeadlineTests
         public Fixture()
         {
             Store = new DiscussionStore(Entities, new MemoryDiscussions());
+            Entities.Items.Add(new LeafEntity(Guid.Parse(AgentId), "agent", "nova", "Nova", new JsonObject(),
+                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "system"));
+            Entities.Items.Add(new LeafEntity(Guid.NewGuid(), "plugin", NovaAppPlugin.PluginId, "Nova", new JsonObject(),
+                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "system"));
+            var agents = new AgentDirectory(Entities, new NoEvents());
             Lifecycle = new DiscussionLifecycle(Store, new RedComputeClient(Compute),
-                new ListLogger(Logs), Clock);
+                new ListLogger(Logs), Clock,
+                (discussion, ct) => ArchiveSweepIdentity.CreateAsync(Entities, agents, discussion, ct));
         }
 
-        public DiscussionRead Add(string type, string sessionId, string status = DiscussionStatus.Idle)
+        public DiscussionRead Add(string type, string sessionId, string status = DiscussionStatus.Idle,
+            string? ownerId = null, string? agentId = null)
         {
             var id = Guid.NewGuid().ToString("N")[..8];
             var data = new JsonObject
@@ -256,6 +332,8 @@ public sealed class DiscussionArchiveDeadlineTests
                 ["session_id"] = sessionId,
                 ["title"] = id,
             };
+            if (ownerId is not null) data["owner_id"] = ownerId;
+            if (agentId is not null) data["agent"] = agentId;
             Entities.Items.Add(new LeafEntity(Guid.NewGuid(), "discussion", DiscussionStore.Slug(id), id, data,
                 DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "test"));
             return Store.GetAsync(id).GetAwaiter().GetResult()!;
@@ -283,16 +361,22 @@ public sealed class DiscussionArchiveDeadlineTests
 
     private sealed class FakeCompute : IComputeGateway
     {
-        private readonly Dictionary<string, (string Status, bool StopLands, bool StopThrows)> sessions = [];
+        private readonly Dictionary<string, (string Status, bool StopLands, bool StopThrows, string? Owner)> sessions = [];
         private readonly Dictionary<string, int> stops = [];
+        private readonly Dictionary<string, List<ComputeProvenance>> signedStops = [];
         public bool Unreachable { get; set; }
         // RedCompute answers, but this caller may not see the session (a different owner).
         public bool Denied { get; set; }
 
-        public void SetSession(string id, string status, bool stopLands, bool stopThrows = false)
-            => sessions[id] = (status, stopLands, stopThrows);
+        /// <param name="owner">When set, RedCompute's ownership rule applies to the stop: a stop with
+        /// no signed identity is refused as in production, and only a stop for this owner lands.</param>
+        public void SetSession(string id, string status, bool stopLands, bool stopThrows = false, string? owner = null)
+            => sessions[id] = (status, stopLands, stopThrows, owner);
 
         public int StopCalls(string id) => stops.GetValueOrDefault(id);
+        public IReadOnlyList<ComputeProvenance> SignedStops(string id)
+            => signedStops.TryGetValue(id, out var list) ? list : [];
+        public string? StatusOf(string id) => sessions.TryGetValue(id, out var s) ? s.Status : null;
 
         public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             ComputeProvenance? provenance = null, CancellationToken ct = default)
@@ -310,6 +394,19 @@ public sealed class DiscussionArchiveDeadlineTests
                 if (sessions.TryGetValue(id, out var s) && s.StopThrows)
                     throw new InvalidOperationException("RedCompute mutations require a signed execution identity");
                 if (Unreachable) throw new HttpRequestException("down");
+                if (provenance is not null)
+                {
+                    if (!signedStops.TryGetValue(id, out var list)) signedStops[id] = list = [];
+                    list.Add(provenance);
+                }
+                if (sessions.TryGetValue(id, out s) && s.Owner is { } owner)
+                {
+                    if (provenance is null)
+                        throw new InvalidOperationException("RedCompute mutations require a signed execution identity");
+                    var signedFor = provenance.OnBehalfOf.Kind == "system" ? "system" : provenance.OnBehalfOf.Id;
+                    if (signedFor != owner)
+                        return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden));
+                }
                 if (sessions.TryGetValue(id, out s) && s.StopLands)
                     sessions[id] = s with { Status = "Stopped" };
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
@@ -328,6 +425,19 @@ public sealed class DiscussionArchiveDeadlineTests
             {
                 Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json"),
             });
+        }
+    }
+
+    private sealed class NoEvents : IPluginEvents
+    {
+        public Task PublishAsync(string eventType, JsonObject payload, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public IDisposable Subscribe(string eventType, Func<PluginEvent, Task> handler) => new Nothing();
+
+        private sealed class Nothing : IDisposable
+        {
+            public void Dispose() { }
         }
     }
 
