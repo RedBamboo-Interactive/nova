@@ -12,4 +12,5 @@ A note costs its receiver a whole turn, and by default it joins the turn already
 - Before telling a discussion what to do, read its latest turn. Most corrections were orders it had already overtaken.
 - The server states who you are and where you write from: no "From <id>:" opener. Lead with what changes their work, then where the evidence lives, not the evidence itself.
 - Use steer-current only when the receiver's current turn is going wrong without it (stop, wrong target, a blocking fact). Otherwise after-current.
-- When a note arrives that changes nothing in your work, end silently. Don't restate another thread's status in yours; name the thread instead.
+- A note asking LIVE to put something to your person is an ask on them: it passes the same test as any ask (only their name, their money, or a promise to someone else) before you send it. Twice that day an ask reached Laurent and was retracted within half an hour, which cost him two messages for nothing.
+- When a note or a callback arrives that changes nothing in your work, end silently. Don't restate another thread's status in yours; name the thread instead.
