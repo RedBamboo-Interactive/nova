@@ -8,6 +8,9 @@ import { useUiEnvironment } from "@redbamboo/ui"
 import { AppShell } from "./components/layout/app-shell"
 import { useDiscussions } from "./hooks/use-discussions"
 import { useEventTypes } from "./hooks/use-event-types"
+import { useDiscussionGrouping } from "./hooks/use-discussion-grouping"
+import { useLocalSettings } from "./hooks/use-local-settings"
+import type { DiscussionGroupingSort } from "./lib/discussion-grouping"
 import type { WsEvent } from "./lib/types"
 import { createRoutes } from "./routes"
 import { resolveKnownDiscussion } from "./lib/archive-discussion-store"
@@ -18,6 +21,8 @@ type DiscussionsHook = ReturnType<typeof useDiscussions>
 
 interface AppContext {
   disc: DiscussionsHook
+  grouping: ReturnType<typeof useDiscussionGrouping>
+  groupSort: DiscussionGroupingSort
   pendingContext: PendingVisibleContextController
 }
 
@@ -25,6 +30,11 @@ const AppContextValue = createContext<AppContext>(null!)
 
 export function useDisc(): DiscussionsHook {
   return useContext(AppContextValue).disc
+}
+
+export function useSidebarGrouping() {
+  const { grouping, groupSort } = useContext(AppContextValue)
+  return { grouping, groupSort }
 }
 
 export function useNovaPendingContext(): PendingVisibleContextController {
@@ -84,11 +94,19 @@ export function NovaRuntimeProvider({
 }) {
   const { resolve: resolveEventType } = useEventTypes()
   const disc = useDiscussions(resolveEventType)
+  const { groupDiscussions, discussionGroupSort, discussionGroupOrder, groupedDiscussionSort, refineDiscussionTitles } = useLocalSettings()
+  const grouping = useDiscussionGrouping(groupDiscussions && !disc.archiveMode, disc.discussions)
+  const groupSort = useMemo<DiscussionGroupingSort>(() => ({
+    mode: discussionGroupSort,
+    manualOrder: discussionGroupOrder,
+    discussionMode: groupedDiscussionSort,
+    refineTitles: refineDiscussionTitles,
+  }), [discussionGroupSort, discussionGroupOrder, groupedDiscussionSort, refineDiscussionTitles])
   const discRef = useRef(disc)
   discRef.current = disc
   const pendingContext = usePendingVisibleContext()
 
-  const appCtx = useMemo<AppContext>(() => ({ disc, pendingContext }), [disc, pendingContext])
+  const appCtx = useMemo<AppContext>(() => ({ disc, grouping, groupSort, pendingContext }), [disc, grouping, groupSort, pendingContext])
   return (
     <>
       <WsDiscussionBridge discRef={discRef} />

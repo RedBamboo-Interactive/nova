@@ -9,7 +9,7 @@ import { LIVE_REPORT_LANGUAGE } from "../lib/live-report"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, PluginExtensionSlot, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
 import { DiscussionThumbnail, DiscussionThumbnailCacheContext, useDiscussionThumbnailCache } from "../components/discussion/discussion-thumbnail"
-import { discussionGroupSortOptions, discussionLabel, discussionSections, groupedDiscussionSortOptions, groupingIcon, moveDiscussionGroup, type DiscussionGroupingSort, type DiscussionGroupSortMode, type GroupedDiscussionSortMode } from "../lib/discussion-grouping"
+import { discussionGroupSortOptions, discussionLabel, discussionSections, groupedDiscussionSortOptions, groupingIcon, moveDiscussionGroup, type DiscussionGroupSortMode, type GroupedDiscussionSortMode } from "../lib/discussion-grouping"
 import { isMobileClient } from "../components/floating-nova-support"
 import { DISCUSSION_SHORTCUTS, discussionActionEntries } from "../components/discussion/discussion-actions"
 import { ArtifactsSurface } from "../components/discussion/artifacts-surface"
@@ -26,7 +26,6 @@ import { AttachSkillDialog, SkillChips } from "../components/discussion/skill-ch
 import { ReactionPills, AddReactionButton, useReactionEmoji } from "../components/discussion/reactions"
 import { reactionMenuEntries } from "../components/discussion/reaction-actions"
 import { createNovaSpeechBackend } from "../lib/speech"
-import { useDiscussionGrouping } from "../hooks/use-discussion-grouping"
 import { useLocalSettings } from "../hooks/use-local-settings"
 import { JOB_MARKER_KEY, friezeMarkerScope, friezeMarkerVisibility, normalizeFriezeDensity, normalizeHiddenFriezeMarkers } from "../lib/frieze-marker-settings"
 import { computeJobHref, createDiscussionJobsTransport, jobFrameConcernsDiscussion, stopDiscussionJob } from "../lib/discussion-jobs"
@@ -35,7 +34,7 @@ import { versionedAvatarSrc } from "../lib/agent-directory-sync"
 import { recordingUsageLoader, resolveLiveProvider, usageKey } from "../lib/provider-usage-store"
 import { LiveQuotaContext, providerUsageStore, type LiveQuotaContextValue } from "../components/discussion/live-quota-ring"
 import { useReactions } from "../hooks/use-reactions"
-import { useDisc, useNovaPendingContext } from "../App"
+import { useDisc, useNovaPendingContext, useSidebarGrouping } from "../App"
 import { useSessionStats } from "../hooks/use-session-stats"
 import { useSessionInfoSources } from "../hooks/use-session-info-sources"
 import { DiscussionRunOnSetting, runOnAvailable } from "../components/run-on"
@@ -431,13 +430,8 @@ export function ChatView({
   const multiAgent = agents.length > 1
   const settings = useLocalSettings()
   const pushToTalk = usePushToTalkSettings()
-  const { agentFilter, collapsedDiscussionGroups, discussionGroupSort, discussionGroupOrder, groupedDiscussionSort, refineDiscussionTitles } = settings
-  const groupSort = useMemo<DiscussionGroupingSort>(() => ({
-    mode: discussionGroupSort,
-    manualOrder: discussionGroupOrder,
-    discussionMode: groupedDiscussionSort,
-    refineTitles: refineDiscussionTitles,
-  }), [discussionGroupSort, discussionGroupOrder, groupedDiscussionSort, refineDiscussionTitles])
+  const { agentFilter, collapsedDiscussionGroups, discussionGroupSort, groupedDiscussionSort } = settings
+  const { grouping, groupSort } = useSidebarGrouping()
 
   const toggleDiscussionGroup = useCallback((group: string | null) => {
     const collapsed = getSettings().collapsedDiscussionGroups
@@ -448,7 +442,6 @@ export function ChatView({
     })
   }, [])
 
-  const grouping = useDiscussionGrouping(settings.groupDiscussions && !archiveMode, discussions)
   const thumbnails = useDiscussionThumbnailCache(discussions)
   const reorderDiscussionGroups = useCallback((source: string, target: string, visibleNames: readonly string[]) => {
     const current = getSettings()

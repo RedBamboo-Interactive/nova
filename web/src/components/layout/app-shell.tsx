@@ -5,7 +5,7 @@ import { SearchOverlay } from "../../components/discussion/search-overlay"
 import { NewDiscussionPicker } from "../../components/new-discussion-picker"
 import { useLocalSettings } from "../../hooks/use-local-settings"
 import { getAdjacentSidebarDiscussion } from "../../lib/discussion-navigation"
-import { useDisc } from "../../App"
+import { useDisc, useSidebarGrouping } from "../../App"
 import { novaExecution } from "../../lib/api"
 
 /**
@@ -21,7 +21,8 @@ function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: st
     archiveDiscussion,
     interruptDiscussion,
   } = useDisc()
-  const { agentFilter } = useLocalSettings()
+  const { agentFilter, collapsedDiscussionGroups } = useLocalSettings()
+  const { grouping, groupSort } = useSidebarGrouping()
 
   useCommand("nova-new-discussion", {
     label: "New Discussion",
@@ -39,7 +40,7 @@ function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: st
     shortcut: "Alt+ArrowDown",
     keywords: ["switch", "cycle", "next", "tab"],
     action: () => {
-      const next = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, 1, agentFilter)
+      const next = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, 1, agentFilter, grouping.view, collapsedDiscussionGroups, groupSort)
       if (next) navigate(`/apps/nova/chat/${next.id}`)
     },
   })
@@ -51,7 +52,7 @@ function DiscussionCommands({ navigate, onNewDiscussion }: { navigate: (path: st
     shortcut: "Alt+ArrowUp",
     keywords: ["switch", "cycle", "previous", "prev", "tab"],
     action: () => {
-      const prev = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, -1, agentFilter)
+      const prev = getAdjacentSidebarDiscussion(discussions, activeDiscussionId, -1, agentFilter, grouping.view, collapsedDiscussionGroups, groupSort)
       if (prev) navigate(`/apps/nova/chat/${prev.id}`)
     },
   })
