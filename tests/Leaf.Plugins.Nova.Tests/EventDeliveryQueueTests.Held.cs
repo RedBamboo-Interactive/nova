@@ -142,6 +142,44 @@ public sealed partial class EventDeliveryQueueTests
     }
 
     [Fact]
+    public async Task History_shows_a_held_event_as_held_until_its_copy_is_in_the_transcript()
+    {
+        using var w = new World("session-1");
+        await w.PostEventAsync("FYI", delivery: WithNext);
+        var record = w.EventRecords().Single();
+        var uid = record.Metadata["uid"]!.GetValue<string>();
+        var none = new HashSet<string>();
+
+        var held = DiscussionEndpoints.ProjectHistoryOverlays([record], none, none, sessionBacked: true,
+            allowUserBridges: true, heldUids: w.Discussion().HeldEventUids).Single();
+        Assert.True(held.Held);
+
+        // Released: the entry is gone, and its copy reached the transcript.
+        await w.PostEventAsync("Next turn");
+        Assert.Empty(w.Discussion().HeldEventUids!);
+        var joined = DiscussionEndpoints.ProjectHistoryOverlays([record], new HashSet<string> { uid }, none,
+            sessionBacked: true, allowUserBridges: true, heldUids: [uid]).Single();
+        Assert.Null(joined.Held);
+    }
+
+    [Fact]
+    public async Task Clients_hear_that_an_event_is_held_and_when_it_joins_a_turn()
+    {
+        using var w = new World("session-1");
+        await w.PostEventAsync("FYI", delivery: WithNext);
+        await w.PostEventAsync("Plain");
+        var uid = w.EventRecords().First().Metadata["uid"]!.GetValue<string>();
+
+        List<(string Name, System.Text.Json.Nodes.JsonObject? Data)> published;
+        lock (w.Published) published = [.. w.Published];
+        var arrivals = published.Where(p => p.Name == "discussion.event").ToList();
+        Assert.True(arrivals[0].Data!["held"]!.GetValue<bool>());
+        Assert.Null(arrivals[1].Data!["held"]);
+        var released = Assert.Single(published, p => p.Name == "discussion.event-released");
+        Assert.Equal(uid, released.Data!["messageUid"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_held_redelivery_under_one_key_is_held_once()
     {
         using var w = new World("session-1");

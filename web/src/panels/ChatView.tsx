@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment, ChatBlockRenderersProvider } from "@redbamboo/chat"
+import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment, ChatBlockRenderersProvider, eventInputMessageUid, type EventQueueStatus, type ResolveEventQueueStatus } from "@redbamboo/chat"
 import { LiveReportBlock, LiveReportHostProvider, type LiveReportHost } from "../components/live-report/live-report"
 import { LIVE_REPORT_LANGUAGE } from "../lib/live-report"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, PluginExtensionSlot, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
@@ -65,6 +65,7 @@ import { delegationEventPath } from "../lib/delegation-session-link"
 import { AGENT_NOTE_KEY } from "../lib/agent-note"
 import { AgentNoteExchange } from "../components/discussion/agent-note-exchange"
 import { describeAgentNote, type NoteOriginDiscussion } from "../lib/agent-note-presentation"
+import { HELD_EVENT_LABEL } from "../lib/held-events"
 import { formatOwningApp } from "../lib/discussion-owner"
 import { useVoiceSession } from "../hooks/use-voice-session"
 import { VoiceSessionPanel } from "../components/voice-session-panel"
@@ -227,6 +228,7 @@ export interface ChatViewProps {
 }
 
 /** Fenced blocks Nova renders itself in its messages: one stable map, so the chat never re-creates its components. */
+const HELD_EVENT_STATUS: EventQueueStatus = { label: HELD_EVENT_LABEL, failed: false, pending: true, actions: null }
 const NOVA_BLOCKS = { [LIVE_REPORT_LANGUAGE]: LiveReportBlock }
 
 export function ChatView({
@@ -322,6 +324,7 @@ export function ChatView({
     isLoadingMessages,
     isResolvingDiscussion,
     hasEarlierMessages,
+    heldEventUids,
     isLoadingEarlier,
     historyLoadFailure,
     earlierHistoryLoadFailure,
@@ -1630,6 +1633,12 @@ export function ChatView({
     }
   }, [archivedDiscussions, discussions])
 
+  // A note held for the session's next turn is in the discussion but not in the conversation yet.
+  const resolveHeldEvent = useCallback<ResolveEventQueueStatus>(part => {
+    const uid = eventInputMessageUid(part)
+    return uid && heldEventUids?.has(uid) ? HELD_EVENT_STATUS : undefined
+  }, [heldEventUids])
+
   const resolveAgentNote = useCallback((event: ParsedEvent) => {
     const presentation = describeAgentNote(event, {
       currentDiscussionId: activeDiscussionId,
@@ -1987,6 +1996,7 @@ export function ChatView({
             assistantAvatar={avatarSrc}
             resolveAgentInfo={resolveAgentInfo}
             resolveAgentNote={resolveAgentNote}
+            resolveHostEventStatus={resolveHeldEvent}
             isFriezeMarkerVisible={isFriezeMarkerVisible}
             friezeDensity={normalizeFriezeDensity(friezeDensity)}
             hideJobMarkers={hiddenMarkers.includes(JOB_MARKER_KEY)}

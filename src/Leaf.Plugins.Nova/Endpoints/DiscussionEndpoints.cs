@@ -152,7 +152,9 @@ internal sealed record HistoryOverlayDto(
     string Timestamp,
     string? SenderAgentId,
     string Source,
-    object? StampedSender = null);
+    object? StampedSender = null,
+    // True while the event waits for the session's next turn (delivery with-next).
+    bool? Held = null);
 
 internal sealed record OverlayPageRead(
     IReadOnlyList<DiscussionMessage> Messages,
@@ -1226,7 +1228,8 @@ public static class DiscussionEndpoints
                 canonicalUserUids,
                 canonicalAssistantUids,
                 sessionBacked: discussion.SessionId is not null,
-                allowUserBridges: direction != "before");
+                allowUserBridges: direction != "before",
+                heldUids: discussion.HeldEventUids);
 
             var canonicalMessages = ProjectCanonicalHistoryMessages(transcript?.Messages ?? []);
             var oldestBoundary = BoundaryAt(canonicalMessages, first: true)
@@ -3083,7 +3086,8 @@ public static class DiscussionEndpoints
         IReadOnlySet<string> canonicalUserUids,
         IReadOnlySet<string> canonicalAssistantUids,
         bool sessionBacked,
-        bool allowUserBridges)
+        bool allowUserBridges,
+        IReadOnlyCollection<string>? heldUids = null)
     {
         var selected = new Dictionary<string, DiscussionMessage>(StringComparer.Ordinal);
         foreach (var message in records)
@@ -3136,7 +3140,11 @@ public static class DiscussionEndpoints
                     timestamp.UtcDateTime.ToString("o"),
                     message.Metadata["sender_agent_id"]?.GetValue<string>(),
                     source,
-                    EventSender.Read(message.Metadata)?.ToDto());
+                    EventSender.Read(message.Metadata)?.ToDto(),
+                    // Held until its copy is in the transcript: then it joined a turn.
+                    message.Metadata["uid"]?.GetValue<string>() is { } eventUid
+                        && heldUids?.Contains(eventUid) == true
+                        && !canonicalUserUids.Contains(eventUid) ? true : null);
             })
             .ToArray();
     }

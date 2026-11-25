@@ -251,7 +251,8 @@ public sealed class EventInjector(
         // Do not mirror that summary/evidence link into the public plugin bus.
         if (persisted)
             await PublishEventAsync(discussion, discussion.Confidential || recipient is not null,
-                uid, content, source, senderAgentId, metadata, ct, stamped);
+                uid, content, source, senderAgentId, metadata, ct, stamped,
+                held: role != "system" && requested == DelegateEndpoints.WithNext);
 
         if (role == "system")
             return new(EventDelivery.Recorded, uid, Report: NotForwarded(requested, null, null));
@@ -330,7 +331,8 @@ public sealed class EventInjector(
             && effective.GetString() == DelegateEndpoints.SteerCurrent;
 
     private Task PublishEventAsync(DiscussionRead discussion, bool changedOnly, string uid, string content,
-        string? source, string? senderAgentId, JsonElement? metadata, CancellationToken ct, EventSender? stamped = null)
+        string? source, string? senderAgentId, JsonElement? metadata, CancellationToken ct, EventSender? stamped = null,
+        bool held = false)
     {
         var timestamp = DateTimeOffset.UtcNow.ToString("O");
         return changedOnly
@@ -351,8 +353,24 @@ public sealed class EventInjector(
                 ["stampedSender"] = stamped is null ? null : JsonSerializer.SerializeToNode(stamped.ToDto()),
                 ["metadata"] = metadata is { } m ? JsonNode.Parse(m.GetRawText()) : null,
                 ["timestamp"] = timestamp,
+                ["held"] = held ? true : null,
             }, ct);
     }
+
+    /// <summary>A held event joined a turn: clients stop showing it as held.</summary>
+    private Task PublishReleasedAsync(DiscussionRead discussion, string uid, CancellationToken ct)
+        => discussion.Confidential
+            ? events.PublishAsync("discussion.changed", new JsonObject
+            {
+                ["discussionId"] = discussion.Id,
+                ["timestamp"] = DateTimeOffset.UtcNow.ToString("O"),
+                ["confidential"] = true,
+            }, ct)
+            : events.PublishAsync("discussion.event-released", new JsonObject
+            {
+                ["discussionId"] = discussion.Id,
+                ["messageUid"] = uid,
+            }, ct);
 
     private static string? StoredUid(DiscussionMessage? stored)
         => stored?.Metadata["uid"] is JsonValue storedUid && storedUid.TryGetValue<string>(out var value)
@@ -779,6 +797,7 @@ public sealed class EventInjector(
                 if (result.Success || result.ErrorCode == "idempotency_conflict")
                 {
                     await RemoveHeldAsync(discussionEntityId, entry.Uid, ct);
+                    await PublishReleasedAsync(current, entry.Uid, ct);
                     released++;
                     continue;
                 }

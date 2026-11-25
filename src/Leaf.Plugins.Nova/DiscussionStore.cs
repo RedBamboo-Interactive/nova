@@ -109,7 +109,9 @@ public sealed record DiscussionRead(
     IReadOnlyList<CapabilityAttachment>? Capabilities = null,
     IReadOnlyList<CapabilityRequest>? CapabilityRequests = null,
     bool Orchestrated = false,
-    OrchestrationState? Orchestration = null)
+    OrchestrationState? Orchestration = null,
+    // Events held for the session's next turn (delivery with-next), by uid.
+    IReadOnlyList<string>? HeldEventUids = null)
 {
     /// <summary>The Skills attached to this discussion on demand, beside the Agent's defaults.</summary>
     public IReadOnlyList<CapabilityAttachment> AttachedSkills
@@ -1385,7 +1387,8 @@ public sealed class DiscussionStore(
             CapabilityAttachment.Read(d),
             CapabilityRequest.Read(d),
             Bool(d, OrchestratedKey) ?? false,
-            OrchestrationState.Read(d));
+            OrchestrationState.Read(d),
+            HeldEventDeliveries.Read(d).Select(entry => entry.Uid).ToList());
     }
 
     /// <summary>

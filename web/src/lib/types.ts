@@ -140,6 +140,8 @@ export interface MessagePartDto {
  */
 export interface DiscussionHistoryOverlay extends DiscussionMessage {
   source: string
+  /** True while the event waits for the session's next turn (delivery with-next). */
+  held?: boolean | null
 }
 
 export interface DiscussionHistorySession {

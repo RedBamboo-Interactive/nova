@@ -15,6 +15,7 @@ const APPROVALS: ApprovalLifecycle = {
 import type { PersistedMessage } from "@redbamboo/chat"
 import { appendEvent, byTimestamp, isRawEventMessage, markEventFrameSources, orderMessages, withCurrentEventPresentation } from "../lib/message-order"
 import { readNoteSender } from "../lib/agent-note"
+import { heldFromOverlays, withHeld, withoutHeld, type HeldEvents } from "../lib/held-events"
 import { accumulateHistoryOverlays, coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeNovaMessageArrival, mergePagedDiscussionRecordsAndOverlays } from "../lib/discussion-transcript"
 import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch, sendNeedsExplicitResume, sessionStreamEffects, shouldRequestSessionTitleSync } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
@@ -235,6 +236,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
   }, [])
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Record<string, MessageBlock[]>>({})
+  // Events held for each discussion's next turn, by uid (delivery with-next).
+  const [heldEvents, setHeldEvents] = useState<HeldEvents>({})
   const transcriptAccumulatorsRef = useRef(new Map<string, TranscriptAccumulator>())
   const durableTranscriptPagersRef = useRef(new Map<string, DurableTranscriptPager>())
   const historyOverlaysRef = useRef(new Map<string, Map<string, DiscussionHistoryOverlay>>())
@@ -788,6 +791,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     if (!historyLifecycleRef.current.canRun(id)
       || !isCurrentHistoryGeneration(loadGenerationRef.current, id, generation))
       return "stale"
+    setHeldEvents(prev => heldFromOverlays(prev, id, data.overlays))
     if (isClosed(data.discussion.status)) {
       upsertArchivedDiscussion(data.discussion)
     } else if (runtimeRead && runtimeReadIsCurrent(id, runtimeRead)) {
@@ -1900,8 +1904,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
       loadedRef.current.delete(discussionId)
       void catchUpMessages(discussionId)
     } else if (event.type === "discussion.event") {
-      const { discussionId, content, source, senderAgentId, stampedSender, messageUid, metadata, timestamp: serverTs } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; stampedSender?: DiscussionMessage["stampedSender"]; messageUid?: string | null; metadata?: Record<string, unknown> | null; timestamp?: string }
+      const { discussionId, content, source, senderAgentId, stampedSender, messageUid, metadata, timestamp: serverTs, held } = event.data as { discussionId: string; sessionId: string; content: string; source: string; senderAgentId?: string; stampedSender?: DiscussionMessage["stampedSender"]; messageUid?: string | null; metadata?: Record<string, unknown> | null; timestamp?: string; held?: boolean | null }
       if (!discussionId) return
+      if (held && messageUid) setHeldEvents(prev => withHeld(prev, discussionId, messageUid))
       const ts = serverTs ?? new Date().toISOString()
       if (messageUid && shouldAccumulatePushedHistoryOverlay(
         historyModesRef.current.get(discussionId),
@@ -1939,6 +1944,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
           stampedSender: readNoteSender(stampedSender),
         }, eventResolver),
       }))
+    } else if (event.type === "discussion.event-released") {
+      const { discussionId, messageUid } = event.data as { discussionId?: string; messageUid?: string }
+      if (discussionId && messageUid) setHeldEvents(prev => withoutHeld(prev, discussionId, messageUid))
     } else if (event.type === "discussion.nova-message") {
       const { discussionId, content, audioUrl, senderAgentId, messageUid, timestamp: serverTs,
         conversationRevision, readConversationRevision } = event.data as {
@@ -2367,6 +2375,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     isLoadingMessages: loadingDiscussionId === activeDiscussionId && loadingDiscussionId !== null,
     isResolvingDiscussion: resolvingDiscussionId === activeDiscussionId && resolvingDiscussionId !== null,
     hasEarlierMessages: activeDiscussionId ? hasEarlierMessages[activeDiscussionId] ?? false : false,
+    heldEventUids: activeDiscussionId ? heldEvents[activeDiscussionId] : undefined,
     isLoadingEarlier: loadingEarlierDiscussionId === activeDiscussionId && loadingEarlierDiscussionId !== null,
     historyLoadFailure: activeDiscussionId ? historyLoadFailures[activeDiscussionId]?.initial ?? null : null,
     earlierHistoryLoadFailure: activeDiscussionId ? historyLoadFailures[activeDiscussionId]?.earlier ?? null : null,
