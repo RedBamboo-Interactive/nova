@@ -171,3 +171,16 @@ export function groupingStillVisible(view: DiscussionGroupingView, discussions: 
     return !discussion.confidential && discussion.type === "chat"
   })
 }
+
+/** A single failed pass (often a RedLeaf restart) retries quietly; the banner appears only when it keeps failing. */
+export const GROUPING_BANNER_AFTER_FAILURES = 2
+/** Automatic retries stop here so a persistently broken provider is not called forever; Retry still works. */
+export const GROUPING_MAX_AUTO_RETRIES = 3
+
+export const groupingFailureVisible = (consecutiveFailures: number) => consecutiveFailures >= GROUPING_BANNER_AFTER_FAILURES
+
+/** Delay before retrying a failed pass by itself, just after the server backoff ends, or null when the person decides. */
+export function groupingAutoRetryDelayMs(consecutiveFailures: number, retryAfterSeconds: number): number | null {
+  if (consecutiveFailures < 1 || consecutiveFailures > GROUPING_MAX_AUTO_RETRIES) return null
+  return (Math.max(retryAfterSeconds, 5) + 1) * 1000
+}

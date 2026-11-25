@@ -167,3 +167,15 @@ test("sorts rows independently of manual heading order and uses the visible titl
   assert.equal(getAdjacentSidebarDiscussion(data, "cloud", 1, null, view, ["Lands of Lore"], sort)?.id, "other")
   assert.equal(getAdjacentSidebarDiscussion(data, "cloud", 1, null, null, [], sort)?.id, "other")
 })
+
+test("a single failed grouping pass retries quietly after the server backoff", async () => {
+  const { groupingAutoRetryDelayMs, groupingFailureVisible, GROUPING_MAX_AUTO_RETRIES } = await import("./discussion-grouping.ts")
+  assert.equal(groupingFailureVisible(0), false)
+  assert.equal(groupingFailureVisible(1), false)
+  assert.equal(groupingFailureVisible(2), true)
+  assert.equal(groupingAutoRetryDelayMs(0, 120), null)
+  assert.equal(groupingAutoRetryDelayMs(1, 120), 121_000)
+  assert.equal(groupingAutoRetryDelayMs(1, 0), 6_000)
+  assert.equal(groupingAutoRetryDelayMs(GROUPING_MAX_AUTO_RETRIES, 120), 121_000)
+  assert.equal(groupingAutoRetryDelayMs(GROUPING_MAX_AUTO_RETRIES + 1, 120), null)
+})
