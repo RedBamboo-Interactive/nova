@@ -124,39 +124,45 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         => (await CreateSessionWithReasonAsync(body, provenance, ct)).SessionId;
 
     /// <summary>
-    /// Creates a session and, on refusal, returns RedCompute's status and error body so the
-    /// caller can log why instead of reporting an anonymous failure.
+    /// Creates a session and, on refusal, returns why: RedCompute's status, error code and message, or
+    /// RedLeaf's own identity refusal, so the caller can say what happened instead of "could not be reached".
     /// </summary>
-    public async Task<(string? SessionId, string? FailureReason)> CreateSessionWithReasonAsync(
+    public async Task<(string? SessionId, SessionCreateRefusal? Refusal)> CreateSessionWithReasonAsync(
         Dictionary<string, object?> body, ComputeProvenance provenance, CancellationToken ct = default)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/ai-session/sessions")
         {
             Content = JsonContent.Create(body, options: JsonOptions),
         };
-        using var resp = await gateway.SendAsync(req, provenance, ct);
-        if (!resp.IsSuccessStatusCode)
+        HttpResponseMessage resp;
+        try
         {
-            if (resp.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable)
-            {
-                try
-                {
-                    var error = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions, ct);
-                    if (error.ValueKind == JsonValueKind.Object && error.TryGetProperty("error", out var code)
-                        && code.ValueKind == JsonValueKind.String && code.GetString() == ComputeMaintenanceException.ErrorCode)
-                        throw new ComputeMaintenanceException();
-                }
-                catch (JsonException) { /* Preserve generic failure for malformed responses. */ }
-            }
-            var detail = await resp.Content.ReadAsStringAsync(ct);
-            if (detail.Length > 500) detail = detail[..500];
-            return (null, $"HTTP {(int)resp.StatusCode}: {detail}");
+            resp = await gateway.SendAsync(req, provenance, ct);
         }
+        catch (Exception ex) when (ex.GetType().Name.Equals(
+            "ExecutionIdentityValidationException", StringComparison.Ordinal))
+        {
+            // RedLeaf would not sign this start for the caller (the discussion belongs to someone else):
+            // nothing reached RedCompute.
+            return (null, new SessionCreateRefusal(403, SessionCreateRefusal.IdentityRefused, ex.Message));
+        }
+        using (resp)
+        {
+            if (!resp.IsSuccessStatusCode)
+            {
+                // Read once: the response stream cannot be read a second time.
+                var refusal = SessionCreateRefusal.FromResponse((int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
+                if (resp.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable
+                    && refusal.Code == ComputeMaintenanceException.ErrorCode)
+                    throw new ComputeMaintenanceException();
+                return (null, refusal);
+            }
 
-        var session = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions, ct);
-        return session.TryGetProperty("id", out var idProp)
-            ? (idProp.GetString(), null)
-            : (null, "RedCompute returned no session id");
+            var session = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions, ct);
+            return session.TryGetProperty("id", out var idProp) && idProp.GetString() is { Length: > 0 } id
+                ? (id, null)
+                : (null, new SessionCreateRefusal((int)resp.StatusCode, "no_session_id", "RedCompute returned no session id"));
+        }
     }
 
     /// <summary>

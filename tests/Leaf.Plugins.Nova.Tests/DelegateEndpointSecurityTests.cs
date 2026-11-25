@@ -222,12 +222,15 @@ public sealed class DelegateEndpointSecurityTests
             }));
         var client = new RedComputeClient(gateway);
 
-        var (sessionId, reason) = await client.CreateSessionWithReasonAsync(
+        var (sessionId, refusal) = await client.CreateSessionWithReasonAsync(
             new Dictionary<string, object?> { ["provider"] = "anthropic-direct" }, Provenance());
 
         Assert.Null(sessionId);
-        Assert.StartsWith("HTTP 422: ", reason, StringComparison.Ordinal);
-        Assert.Contains("developer_instructions_not_supported", reason, StringComparison.Ordinal);
+        Assert.NotNull(refusal);
+        Assert.Equal(422, refusal.Status);
+        Assert.Equal("developer_instructions_not_supported", refusal.Code);
+        Assert.Equal("Provider 'claude-code' does not support session developer instructions", refusal.Message);
+        Assert.StartsWith("HTTP 422 developer_instructions_not_supported: ", refusal.ToString(), StringComparison.Ordinal);
     }
 
     [Theory]

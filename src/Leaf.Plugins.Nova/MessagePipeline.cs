@@ -126,7 +126,8 @@ public sealed class MessagePipeline(
         bool confidential = false, string? developerInstructions = null,
         string? modelOverride = null, string? effortOverride = null, bool keepResident = false,
         string? cause = null, bool unattended = false, string? maxAccessLevel = null,
-        string? callerSessionId = null, bool deliveredAsOneMessage = false, string? runOnNodeId = null)
+        string? callerSessionId = null, bool deliveredAsOneMessage = false, string? runOnNodeId = null,
+        Action<SessionCreateRefusal>? refused = null)
     {
         var agent = agentId != null ? await agents.GetAgentAsync(agentId, ct) : null;
         if (agent == null)
@@ -190,10 +191,13 @@ public sealed class MessagePipeline(
         if (runOnNodeId is not null)
             placement = await WithRunOnNodeAsync(placement, runOnNodeId, agent.Id, provenance, ct);
         ComputePlacement.AddTo(body, placement);
-        var (sessionId, failure) = await redCompute.CreateSessionWithReasonAsync(body, provenance, ct);
+        var (sessionId, refusal) = await redCompute.CreateSessionWithReasonAsync(body, provenance, ct);
         if (sessionId is null)
+        {
             logger.LogWarning("RedCompute refused session creation for agent {AgentId} via {Provider}: {Reason}",
-                agent.Id, effectiveProvider ?? "default", failure);
+                agent.Id, effectiveProvider ?? "default", refusal?.ToString() ?? "no reason given");
+            if (refusal is not null) refused?.Invoke(refusal);
+        }
         return sessionId;
     }
 
@@ -339,6 +343,7 @@ public sealed class MessagePipeline(
             computeOwnerId = DiscussionOwnership.ResolveForSessionStart(
                 discussion.OwnerId, userId, needsSession: true,
                 await _installationOwner.ResolveAsync(ct));
+            SessionCreateRefusal? refusal = null;
             try
             {
                 sessionId = await TryCreateSessionAsync(discussion.AgentId, computeOwnerId,
@@ -346,7 +351,8 @@ public sealed class MessagePipeline(
                     confidential: discussion.Confidential,
                     keepResident: KeepsSessionResident(discussion),
                     cause: cause, unattended: StartsUnattended(discussion),
-                    callerSessionId: callerSessionId, runOnNodeId: discussion.RunOnNodeId);
+                    callerSessionId: callerSessionId, runOnNodeId: discussion.RunOnNodeId,
+                    refused: value => refusal = value);
             }
             catch (ComputeMaintenanceException ex)
             {
@@ -362,7 +368,9 @@ public sealed class MessagePipeline(
             }
 
             if (sessionId is null)
-                return new(false, null, "redcompute_unavailable", "RedCompute refused to create a session.");
+                return refusal is null
+                    ? new(false, null, "redcompute_unavailable", "RedCompute refused to create a session.")
+                    : new(false, null, refusal.Code, refusal.Describe());
 
             sessionIsNew = true;
             var sessionPatch = new JsonObject { ["session_id"] = sessionId };
