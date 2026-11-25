@@ -1,0 +1,4 @@
+interface:
+  display_name: "Notes between discussions"
+  short_description: "Send a note only when it moves work, to one receiver, without acknowledgements"
+  default_prompt: "Use $notes-between-discussions before writing this note."
