@@ -7,6 +7,8 @@ import { commitChip, discussionPath, sessionChip, type JournalChipLink } from ".
 import { fetchJournalDay } from "../../lib/journal-api"
 import type { JournalDay, JournalEntry } from "../../lib/journal-types"
 import { delegationSessionPath } from "../../lib/delegation-session-link"
+import { api } from "../../lib/api"
+import { createDiscussionLookup, unlistedIds } from "../../lib/discussion-lookup"
 import type { DiscussionInfo } from "../../lib/types"
 import {
   groupLiveReport,
@@ -94,15 +96,43 @@ function factChips(entry: JournalEntry | undefined): JournalChipLink[] {
   return [...chips.slice(0, MAX_FACTS - 1), { key: "more", label: `${chips.length - MAX_FACTS + 1} more in the Journal`, icon: "ph-notebook", to: null }]
 }
 
+// ── Discussions the client doesn't list ──────────────────────────────────────
+// A sweep archives exactly the discussions it reports done, so a report names closed discussions the
+// open list no longer carries. Each is read once by id, under the person's own access.
+
+const lookupDiscussion = createDiscussionLookup(async (id) =>
+  (await api.get<{ discussion: DiscussionInfo }>(`/api/apps/nova/discussions/${encodeURIComponent(id)}?tail=1`)).discussion)
+
+function useUnlistedDiscussions(ids: readonly string[], listed: ReadonlyMap<string, DiscussionInfo>): ReadonlyMap<string, DiscussionInfo> {
+  const missing = unlistedIds(ids, id => listed.has(id)).join(" ")
+  const [found, setFound] = useState<ReadonlyMap<string, DiscussionInfo>>(EMPTY_FOUND)
+  useEffect(() => {
+    if (!missing) return
+    let current = true
+    const ids = missing.split(" ")
+    void Promise.all(ids.map(lookupDiscussion)).then((results) => {
+      if (!current) return
+      const next = new Map<string, DiscussionInfo>()
+      results.forEach((discussion, index) => { if (discussion) next.set(ids[index], discussion) })
+      if (next.size) setFound(next)
+    })
+    return () => { current = false }
+  }, [missing])
+  return found
+}
+
+const EMPTY_FOUND: ReadonlyMap<string, DiscussionInfo> = new Map()
+
 // ── Rows ──────────────────────────────────────────────────────────────────────
 
 function DiscussionLink({ id, discussion }: { id: string; discussion: DiscussionInfo | undefined }) {
   if (!discussion) {
-    return <span className="min-w-0 truncate font-mono text-[12px] text-text-muted" title="Not among the open discussions">{id}</span>
+    return <span className="min-w-0 truncate font-mono text-[12px] text-text-muted" title="Not among your discussions">{id}</span>
   }
   const working = discussion.status === "thinking"
+  const closed = discussion.status === "archived" || discussion.status === "archiving"
   return (
-    <Link to={discussionPath(id)} className="group/d inline-flex min-w-0 items-center gap-1.5 text-[13px] font-semibold text-contrast">
+    <Link to={discussionPath(id)} title={closed ? "Archived" : undefined} className="group/d inline-flex min-w-0 items-center gap-1.5 text-[13px] font-semibold text-contrast">
       <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", working ? "bg-accent-gold" : discussion.status === "idle" ? "bg-accent-teal" : "bg-text-disabled")} />
       <span className="min-w-0 truncate group-hover/d:underline">{discussion.title || id}</span>
       {discussion.orchestrated && <i role="img" aria-label="Orchestrated" className="ph-bold ph-heartbeat shrink-0 text-[10px] text-text-muted opacity-60" />}
@@ -196,7 +226,9 @@ export function LiveReportBlock({ source }: ChatBlockProps) {
   const host = useContext(LiveReportHostContext)
   const report = useMemo(() => parseLiveReport(source), [source])
   const discussions = host?.discussions
-  const byId = useMemo(() => new Map((discussions ?? []).map(d => [d.id, d])), [discussions])
+  const listed = useMemo(() => new Map((discussions ?? []).map(d => [d.id, d])), [discussions])
+  const unlisted = useUnlistedDiscussions(report.rows.map(r => r.discussionId), listed)
+  const byId = useMemo(() => unlisted.size ? new Map([...unlisted, ...listed]) : listed, [listed, unlisted])
   const threads = useJournalThreads(host?.agent ?? null, report.sinceAt)
   const groupOf = host?.groupOf ?? (() => null)
   const groups = groupLiveReport(report.rows, groupOf)
