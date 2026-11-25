@@ -34,7 +34,8 @@ export function useDiscussionGrouping(enabled: boolean, discussions: DiscussionI
       refreshTimer = setTimeout(() => {
         setLoading(true)
         void api.post<DiscussionGroupingView>("/api/apps/nova/discussion-groups/refresh", undefined, abort.signal)
-          .then(updated => { if (accept(updated)) setUnavailable(updated.fingerprint !== updated.sourceFingerprint) })
+          // A stale result only means the list moved on during the pass; the next input change refreshes it.
+          .then(updated => { if (accept(updated)) setUnavailable(updated.retryAfterSeconds > 0) })
           .catch(() => { if (isCurrent()) setUnavailable(true) })
           .finally(() => { if (isCurrent()) setLoading(false) })
       }, 600)

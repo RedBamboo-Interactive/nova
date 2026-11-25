@@ -21,9 +21,14 @@ public sealed class DiscussionGroupingTests
     [Fact]
     public void Strict_ids_and_lengths_prevent_model_invented_rows()
     {
-        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(Output.Replace("\"a\"", "\"unknown\""), Inputs, null, Now));
-        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(Output.Replace("\"b\"", "\"a\""), Inputs, null, Now));
-        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(Output.Replace("Inventory", new string('x', 91)), Inputs, null, Now));
+        // Invented and repeated rows are dropped without discarding the valid rest of the answer.
+        var invented = DiscussionGroupingPolicy.Parse(Output.Replace("\"a\"", "\"unknown\""), Inputs, null, Now);
+        Assert.Equal("b", Assert.Single(invented.Assignments).DiscussionId);
+        var repeated = DiscussionGroupingPolicy.Parse(Output.Replace("\"b\"", "\"a\""), Inputs, null, Now);
+        Assert.Equal("Inventory", Assert.Single(repeated.Assignments).Label);
+        var tooLong = DiscussionGroupingPolicy.Parse(Output.Replace("Inventory", new string('x', 91)), Inputs, null, Now);
+        Assert.Equal("inventory", tooLong.Assignments.Single(a => a.DiscussionId == "a").Label);
+        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(Output.Replace("\"a\"", "\"x\"").Replace("\"b\"", "\"y\""), Inputs, null, Now));
         Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse("[]", Inputs, null, Now));
         Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse("{\"assignments\":false}", Inputs, null, Now));
     }
@@ -153,19 +158,26 @@ public sealed class DiscussionGroupingTests
     }
 
     [Fact]
-    public void Group_visuals_reject_unknown_duplicate_and_cross_group_members()
+    public void Group_visuals_drop_unknown_duplicate_and_cross_group_members_without_failing_the_pass()
     {
-        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(Output.Replace("\"thumbnailDiscussionId\":\"b\"", "\"thumbnailDiscussionId\":\"foreign\""), Inputs, null, Now));
+        var foreign = DiscussionGroupingPolicy.Parse(Output.Replace("\"thumbnailDiscussionId\":\"b\"", "\"thumbnailDiscussionId\":\"foreign\""), Inputs, null, Now);
+        Assert.Null(Assert.Single(foreign.Groups!).ThumbnailDiscussionId);
         var extra = Inputs.Append(new("c", "Unrelated", "agent", [])).ToArray();
-        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(Output.Replace("\"thumbnailDiscussionId\":\"b\"", "\"thumbnailDiscussionId\":\"c\""), extra, null, Now));
+        var crossGroup = DiscussionGroupingPolicy.Parse(Output.Replace("\"thumbnailDiscussionId\":\"b\"", "\"thumbnailDiscussionId\":\"c\""), extra, null, Now);
+        Assert.Null(Assert.Single(crossGroup.Groups!).ThumbnailDiscussionId);
         var parsed = JsonNode.Parse(Output)!;
         var groups = parsed["groups"]!.AsArray();
-        groups.Add(groups[0]!.DeepClone());
-        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(parsed.ToJsonString(), Inputs, null, Now));
+        var duplicate = groups[0]!.DeepClone();
+        duplicate["icon"] = "cube";
+        groups.Add(duplicate);
+        groups.Add(new JsonObject { ["name"] = "Unused heading", ["icon"] = "cube" });
+        var first = DiscussionGroupingPolicy.Parse(parsed.ToJsonString(), Inputs, null, Now);
+        Assert.Equal("mountains", Assert.Single(first.Groups!).Icon);
         parsed["groups"] = new JsonArray(42);
-        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(parsed.ToJsonString(), Inputs, null, Now));
-        parsed["groups"] = new JsonArray();
-        Assert.Throws<JsonException>(() => DiscussionGroupingPolicy.Parse(parsed.ToJsonString(), Inputs, null, Now));
+        Assert.Equal("chats-circle", Assert.Single(DiscussionGroupingPolicy.Parse(parsed.ToJsonString(), Inputs, null, Now).Groups!).Icon);
+        parsed.AsObject().Remove("groups");
+        var missing = DiscussionGroupingPolicy.Parse(parsed.ToJsonString(), Inputs, null, Now);
+        Assert.Equal(new DiscussionGroupVisual("Lands of Lore", "chats-circle", null), Assert.Single(missing.Groups!));
         var fallback = DiscussionGroupingPolicy.Parse(Output.Replace("mountains", "invalid"), Inputs, null, Now);
         Assert.Equal("chats-circle", Assert.Single(fallback.Groups!).Icon);
     }
@@ -401,11 +413,51 @@ public sealed class DiscussionGroupingTests
         Assert.Null(Assert.Single(refreshed.Groups!).ThumbnailDiscussionId);
         Assert.Equal(2, world.Gateway.Calls);
         Assert.DoesNotContain("Lands of Lore icons", world.Gateway.Body);
+        // A verified archive no longer makes the model start cold: surviving rows offer their prior choices.
+        var userData = world.PromptData();
+        Assert.Equal("Lands of Lore", Assert.Single(userData["existingGroups"]!.AsArray())!.GetValue<string>());
+        Assert.Equal("a", Assert.Single(userData["existingAssignments"]!.AsArray())!["discussionId"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_message_or_a_new_discussion_arriving_during_the_pass_keeps_the_result()
+    {
+        var world = new World();
+        world.Gateway.BeforeReturn = () => { world.AddMessage("a", "Another turn"); world.Add("c", "Opened meanwhile"); };
+        var refreshed = await world.Refresh();
+        Assert.Single(world.Records.Rows);
+        Assert.Equal(0, refreshed.RetryAfterSeconds);
+        Assert.NotEqual(refreshed.Fingerprint, refreshed.SourceFingerprint);
+        Assert.Equal(["a", "b"], refreshed.Assignments.Select(a => a.DiscussionId).Order().ToArray());
+        Assert.All(refreshed.Assignments, a => Assert.Equal("Lands of Lore", a.Group));
+    }
+
+    [Fact]
+    public async Task A_renamed_row_offers_its_previous_group_as_a_hint_without_pinning_it()
+    {
+        var world = new World();
+        await world.Refresh();
+        world.Entities.Items.Single(e => e.Slug == DiscussionStore.Slug("b")).Data["title"] = "Lands of Lore palette";
+        world.Gateway.Output = Output.Replace("\"discussionId\":\"b\",\"group\":\"Lands of Lore\"", "\"discussionId\":\"b\",\"group\":\"Art\"")
+            .Replace("\"groups\":[", "\"groups\":[{\"name\":\"Art\",\"icon\":\"paint-brush\"},");
+        var refreshed = await world.Refresh();
+        var hinted = world.PromptData()["existingAssignments"]!.AsArray().Single(a => a!["discussionId"]!.GetValue<string>() == "b")!;
+        Assert.Equal("Lands of Lore", hinted["group"]!.GetValue<string>());
+        Assert.Equal("Art", refreshed.Assignments.Single(a => a.DiscussionId == "b").Group);
+        Assert.Equal("Lands of Lore", refreshed.Assignments.Single(a => a.DiscussionId == "a").Group);
+    }
+
+    [Fact]
+    public async Task The_owners_nova_classifies_even_when_another_agents_row_sorts_first()
+    {
+        var world = new World();
+        var other = Guid.NewGuid().ToString();
+        world.Entities.Items.Add(new(Guid.Parse(other), "agent", "gemma", "Gemma", new JsonObject { ["provider"] = "ollama-local" }, Now, Now, null));
+        world.Add("0", "Roleplay scenario test", agent: other);
+        world.NovaAgentId = world.AgentId;
+        await world.Refresh();
         var request = JsonNode.Parse(world.Gateway.Body)!;
-        var content = request["messages"]![0]!["content"]!.GetValue<string>();
-        var userData = JsonNode.Parse(content[content.IndexOf("{\"discussions\":", StringComparison.Ordinal)..])!;
-        Assert.Empty(userData["existingGroups"]!.AsArray());
-        Assert.Empty(userData["existingAssignments"]!.AsArray());
+        Assert.Equal("codex-default", request["provider"]!.GetValue<string>());
     }
 
     [Fact]
@@ -420,9 +472,16 @@ public sealed class DiscussionGroupingTests
         world.Gateway.BeforeReturn = () => archived.Data["confidential"] = true;
 
         var refreshed = await world.Refresh();
-        Assert.Null(Assert.Single(refreshed.Assignments).Group);
+        // The model was offered hints derived with that member, so its answer is not stored either.
+        Assert.Empty(refreshed.Assignments);
         Assert.Empty(refreshed.GroupOrder);
         Assert.Empty(refreshed.Groups!);
+        Assert.Single(world.Records.Rows);
+
+        world.Gateway.BeforeReturn = null;
+        var cold = await world.Refresh();
+        Assert.Empty(world.PromptData()["existingAssignments"]!.AsArray());
+        Assert.Null(Assert.Single(cold.Assignments, a => a.DiscussionId == "a").Group);
     }
 
     [Fact]
@@ -586,8 +645,15 @@ public sealed class DiscussionGroupingTests
             Entities.Items.Add(new(Guid.NewGuid(), "plugin", "nova", "Nova", new JsonObject(), Now, Now, null));
             _service = Service();
         }
-        public void Add(string id, string title, string owner = "owner", bool confidential = false, string status = "idle", string type = "chat") => Entities.Items.Add(new(Guid.NewGuid(), "discussion", DiscussionStore.Slug(id), title,
-            new JsonObject { ["discussion_id"] = id, ["app"] = "nova", ["title"] = title, ["type"] = type, ["status"] = status, ["owner_id"] = owner, ["agent"] = _agentId, ["confidential"] = confidential }, Now, Now, null));
+        public string AgentId => _agentId;
+        public string? NovaAgentId;
+        public void Add(string id, string title, string owner = "owner", bool confidential = false, string status = "idle", string type = "chat", string? agent = null) => Entities.Items.Add(new(Guid.NewGuid(), "discussion", DiscussionStore.Slug(id), title,
+            new JsonObject { ["discussion_id"] = id, ["app"] = "nova", ["title"] = title, ["type"] = type, ["status"] = status, ["owner_id"] = owner, ["agent"] = agent ?? _agentId, ["confidential"] = confidential }, Now, Now, null));
+        public JsonNode PromptData()
+        {
+            var content = JsonNode.Parse(Gateway.Body)!["messages"]![0]!["content"]!.GetValue<string>();
+            return JsonNode.Parse(content[content.IndexOf("{\"discussions\":", StringComparison.Ordinal)..])!;
+        }
         public void AddMessage(string id, string content, string source = "user-message", string role = "user")
         {
             var entity = Entities.Items.Single(e => e.Slug == DiscussionStore.Slug(id));
@@ -601,9 +667,11 @@ public sealed class DiscussionGroupingTests
                 new JsonObject { ["session_id"] = sessionId, ["confidential"] = confidential }, Now, Now, null));
         }
         public DiscussionGrouping Service() => new(new DiscussionStore(Entities, Messages), Records,
-            new AgentDirectory(Entities, new Events()), new RedComputeClient(Gateway), Entities, Messages);
+            Agents, new RedComputeClient(Gateway), Entities, Messages);
+        private AgentDirectory? _agents;
+        private AgentDirectory Agents => _agents ??= new AgentDirectory(Entities, new Events());
         public Task<DiscussionGroupingView> Read() => _service.ReadAsync("owner", Human(), default);
-        public Task<DiscussionGroupingView> Refresh() => _service.RefreshAsync("owner", Human(), default);
+        public Task<DiscussionGroupingView> Refresh() { Agents.NovaAgentId = NovaAgentId; return _service.RefreshAsync("owner", Human(), default); }
     }
 
     private sealed class Gateway : IComputeGateway

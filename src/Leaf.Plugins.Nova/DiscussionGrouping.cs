@@ -7,6 +7,8 @@ using System.Text.Json.Nodes;
 using Leaf.Sdk;
 using Leaf.Sdk.Services;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Leaf.Plugins.Nova;
 
@@ -55,6 +57,33 @@ public static class DiscussionGroupingPolicy
     {
         var byId = current.ToDictionary(d => d.Id, StringComparer.Ordinal);
         return snapshot.Inputs.All(old => byId.TryGetValue(old.Id, out var now) && CanRetainAssignment(old, now));
+    }
+
+    /// <summary>
+    /// A result is still safe to store when every discussion the model saw is still eligible with the
+    /// same identity. Added discussions and grown context only make it stale, and the next pass covers them.
+    /// </summary>
+    public static bool StillCovers(GroupingInput[] seen, GroupingInput[] current)
+    {
+        var byId = current.ToDictionary(d => d.Id, StringComparer.Ordinal);
+        return seen.All(old => byId.TryGetValue(old.Id, out var now) && CanRetainAssignment(old, now));
+    }
+
+    /// <summary>
+    /// Prior choices for discussions that are still eligible, including rows whose title or session moved on.
+    /// They are suggestions for the model, never pinned memberships.
+    /// </summary>
+    public static DiscussionGroupingSnapshot Hints(DiscussionGroupingSnapshot snapshot, GroupingInput[] current)
+    {
+        var ids = current.Select(input => input.Id).ToHashSet(StringComparer.Ordinal);
+        var assignments = snapshot.Assignments.Where(assignment => ids.Contains(assignment.DiscussionId)).ToArray();
+        var names = assignments.Select(assignment => assignment.Group).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        return snapshot with
+        {
+            Assignments = assignments,
+            GroupOrder = snapshot.GroupOrder.Where(names.Contains).ToArray(),
+            Groups = snapshot.Groups?.Where(group => names.Contains(group.Name)).ToArray(),
+        };
     }
 
     // Growing context can make classification stale while its previous result stays visible.
@@ -156,8 +185,8 @@ public static class DiscussionGroupingPolicy
             raw = raw[(newline + 1)..^3].Trim();
         }
         using var doc = JsonDocument.Parse(raw);
-        if (doc.RootElement.ValueKind != JsonValueKind.Object || !doc.RootElement.TryGetProperty("assignments", out var items) || items.ValueKind != JsonValueKind.Array
-            || items.GetArrayLength() > MaxDiscussions) throw new JsonException("Invalid grouping assignments");
+        if (doc.RootElement.ValueKind != JsonValueKind.Object || !doc.RootElement.TryGetProperty("assignments", out var items) || items.ValueKind != JsonValueKind.Array)
+            throw new JsonException("Invalid grouping assignments");
         var known = inputs.ToDictionary(d => d.Id, StringComparer.Ordinal);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var assignments = new List<DiscussionGroupLabel>();
@@ -167,22 +196,21 @@ public static class DiscussionGroupingPolicy
         DiscussionGroupingImageChoice? ImageChoice(JsonElement item)
             => item.TryGetProperty("thumbnailId", out var id) && id.ValueKind == JsonValueKind.String
                 && images.TryGetValue(id.GetString()!, out var choice) ? choice : null;
+        // One sloppy field costs only that field. Model text is never trusted beyond its bounds.
+        static string? Field(JsonElement item, string key, int max)
+        {
+            if (!item.TryGetProperty(key, out var value) || value.ValueKind != JsonValueKind.String) return null;
+            var text = value.GetString()!.Trim();
+            return text.Length > max || text.Any(char.IsControl) ? null : text;
+        }
         var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var name in previous?.GroupOrder ?? []) names.TryAdd(name, name);
         foreach (var item in items.EnumerateArray())
         {
-            if (item.ValueKind != JsonValueKind.Object) throw new JsonException("Invalid assignment object");
-            string Read(string key, int max)
-            {
-                if (!item.TryGetProperty(key, out var value) || value.ValueKind != JsonValueKind.String)
-                    throw new JsonException("Grouping fields must be strings");
-                var valueText = value.GetString()!.Trim();
-                if (valueText.Length > max || valueText.Any(char.IsControl)) throw new JsonException("Grouping field too long");
-                return valueText;
-            }
-            var id = Read("discussionId", 100);
-            if (!known.TryGetValue(id, out var source) || !seen.Add(id)) throw new JsonException("Unknown or duplicate discussion ID");
-            var group = Read("group", 64);
+            if (item.ValueKind != JsonValueKind.Object) continue;
+            // Invented or repeated rows are dropped; they never reach the sidebar.
+            if (Field(item, "discussionId", 100) is not { } id || !known.TryGetValue(id, out var source) || !seen.Add(id)) continue;
+            var group = Field(item, "group", 64) ?? "";
             if (ProviderGroupNames.Contains(group) || group.Equals("Other", StringComparison.OrdinalIgnoreCase)
                 || group.Equals("General", StringComparison.OrdinalIgnoreCase)
                 || group.Equals("Miscellaneous", StringComparison.OrdinalIgnoreCase)) group = "";
@@ -191,13 +219,14 @@ public static class DiscussionGroupingPolicy
                 if (!names.TryGetValue(group, out var canonical)) names[group] = canonical = group;
                 group = canonical;
             }
-            var label = Read("label", 90);
-            var icon = Read("icon", 32);
+            var label = Field(item, "label", 90) ?? "";
+            var icon = Field(item, "icon", 32) ?? "";
             if (!Icons.Contains(icon, StringComparer.Ordinal)) icon = "chats-circle";
             var selected = ImageChoice(item);
             assignments.Add(new(id, source.Title, group.Length > 0 ? group : null,
                 label.Length > 0 ? label : source.Title, icon, selected?.DiscussionId == id ? selected.Target : null));
         }
+        if (assignments.Count == 0 && inputs.Length > 0) throw new JsonException("No usable grouping assignments");
         // Existing meaningful memberships are stable when another thread arrives.
         foreach (var old in previous?.Assignments ?? [])
         {
@@ -219,35 +248,23 @@ public static class DiscussionGroupingPolicy
         var order = (previous?.GroupOrder ?? []).Where(projectNames.Contains).Concat(projectNames.Order(StringComparer.Ordinal))
             .Distinct(StringComparer.Ordinal).ToArray();
         // Group identity is chosen explicitly, never borrowed from whichever row is first.
-        if (!doc.RootElement.TryGetProperty("groups", out var groups) || groups.ValueKind != JsonValueKind.Array
-            || groups.GetArrayLength() > MaxDiscussions) throw new JsonException("Invalid group visuals");
         var visuals = new Dictionary<string, DiscussionGroupVisual>(StringComparer.Ordinal);
         var visualNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var item in groups.EnumerateArray())
+        var groups = doc.RootElement.TryGetProperty("groups", out var listed) && listed.ValueKind == JsonValueKind.Array
+            ? listed.EnumerateArray().ToArray() : [];
+        foreach (var item in groups)
         {
-            if (item.ValueKind != JsonValueKind.Object) throw new JsonException("Invalid group visual object");
-            string ReadVisual(string key, int max)
-            {
-                if (!item.TryGetProperty(key, out var value) || value.ValueKind != JsonValueKind.String)
-                    throw new JsonException("Group visual fields must be strings");
-                var text = value.GetString()!.Trim();
-                if (text.Length > max || text.Any(char.IsControl)) throw new JsonException("Invalid group visual field");
-                return text;
-            }
-            var name = ReadVisual("name", 64);
-            if (ProviderGroupNames.Contains(name)) continue;
-            if (!names.TryGetValue(name, out var canonical) || !visualNames.Add(canonical))
-                throw new JsonException("Unknown or duplicate group visual");
-            var icon = ReadVisual("icon", 32);
+            if (item.ValueKind != JsonValueKind.Object || Field(item, "name", 64) is not { } name
+                || ProviderGroupNames.Contains(name)) continue;
+            // A visual for an unused, unknown or repeated name is ignored.
+            if (!names.TryGetValue(name, out var canonical) || !projectNames.Contains(canonical) || !visualNames.Add(canonical)) continue;
+            var icon = Field(item, "icon", 32) ?? "";
             if (!Icons.Contains(icon, StringComparer.Ordinal)) icon = "chats-circle";
             var imageChoice = ImageChoice(item);
-            var member = imageChoice?.DiscussionId ?? (item.TryGetProperty("thumbnailDiscussionId", out _)
-                ? ReadVisual("thumbnailDiscussionId", 100) : "");
-            if (member.Length > 0 && !known.ContainsKey(member)) throw new JsonException("Unknown thumbnail member");
-            if (!projectNames.Contains(canonical)) continue;
+            var member = imageChoice?.DiscussionId ?? Field(item, "thumbnailDiscussionId", 100) ?? "";
+            // A thumbnail must come from a current member of its own group; anything else is dropped.
             if (member.Length > 0 && !final.Any(a => a.Group == canonical && a.DiscussionId == member))
             {
-                if (imageChoice is null) throw new JsonException("Thumbnail must belong to its group");
                 imageChoice = null;
                 member = "";
             }
@@ -259,8 +276,9 @@ public static class DiscussionGroupingPolicy
                 || final.Any(a => a.Group == old.Name && a.DiscussionId == old.ThumbnailDiscussionId))
                 && (!visuals.ContainsKey(old.Name) || samePolicy && !final.Any(a => a.Group == old.Name && reviewed.Contains(a.DiscussionId))))
                 visuals[old.Name] = old;
-        if (order.Any(name => !visuals.ContainsKey(name))) throw new JsonException("Missing group visual");
-        return new(Fingerprint(inputs), inputs, final, order, now, order.Select(name => visuals[name]).ToArray());
+        // A group the model forgot to describe still gets a plain identity rather than failing the pass.
+        return new(Fingerprint(inputs), inputs, final, order, now,
+            order.Select(name => visuals.GetValueOrDefault(name) ?? new DiscussionGroupVisual(name, "chats-circle", null)).ToArray());
     }
 }
 
@@ -270,8 +288,10 @@ public static class DiscussionGroupingPolicy
 /// </summary>
 public sealed class DiscussionGrouping(
     DiscussionStore store, IRecordStreams records, AgentDirectory agents,
-    RedComputeClient compute, IEntityStore entities, IDiscussions messages, TimeProvider? time = null, IAssets? assets = null)
+    RedComputeClient compute, IEntityStore entities, IDiscussions messages, TimeProvider? time = null, IAssets? assets = null,
+    ILogger<DiscussionGrouping>? logger = null)
 {
+    private readonly ILogger _log = logger ?? NullLogger<DiscussionGrouping>.Instance;
     private const string Stream = "discussion-groups";
     private const string CorrectionStream = "discussion-group-corrections";
     private const int ExcerptLength = 400;
@@ -429,20 +449,24 @@ public sealed class DiscussionGrouping(
             var corrections = await LoadCorrectionsAsync(subject, ct);
             var view = View(subject, inputs, display, corrections);
             if (view.SourceFingerprint == view.Fingerprint || view.RetryAfterSeconds > 0 || inputs.Length == 0) return view;
-            // Start model inference without old hints when a source has left the input set.
-            var currentIds = inputs.Select(input => input.Id).ToHashSet(StringComparer.Ordinal);
-            var hadMissingInput = stored?.Inputs.Any(input => !currentIds.Contains(input.Id)) == true;
-            var hints = hadMissingInput ? null : display;
-            DiscussionGroupingView BackOff()
+            // Prior choices for still-eligible rows keep names and memberships stable across passes. They are
+            // only offered when every row that left the list is verified closed (display is not null), so
+            // nothing derived from a now-private source reaches the model.
+            var hints = stored is not null && display is not null ? DiscussionGroupingPolicy.Hints(stored, inputs) : null;
+            DiscussionGroupingView BackOff(string reason)
             {
                 ct.ThrowIfCancellationRequested();
+                _log.LogWarning("Discussion grouping pass failed for {Count} discussions: {Reason}. Retrying in 2 minutes.",
+                    inputs.Length, reason);
                 _retryAt[subject] = _time.GetUtcNow().AddMinutes(2);
                 return View(subject, inputs, display, corrections);
             }
 
-            var agent = await agents.GetAgentAsync(inputs.Select(d => d.AgentId).FirstOrDefault(id => id is not null)
-                ?? agents.NovaAgentId ?? "", ct);
-            if (agent is null) return BackOff();
+            // The owner's Nova classifies the list. Borrowing whichever row sorts first swapped the
+            // model (local Gemma, Codex, ...) depending on which discussions happened to be open.
+            var agent = (agents.NovaAgentId is { } nova ? await agents.GetAgentAsync(nova, ct) : null)
+                ?? await agents.GetAgentAsync(inputs.Select(d => d.AgentId).FirstOrDefault(id => id is not null) ?? "", ct);
+            if (agent is null) return BackOff("no agent available");
             // Cache scope may canonicalize local-user to the installation owner. Compute
             // authority must retain the actual caller's user/system beneficiary boundary.
             var beneficiary = await NovaComputeProvenance.ResolveBeneficiaryAsync(
@@ -482,7 +506,7 @@ public sealed class DiscussionGrouping(
             }
 
             var checkedInputs = await InputsAsync(context, ct);
-            if (DiscussionGroupingPolicy.Fingerprint(checkedInputs) != view.Fingerprint)
+            if (!DiscussionGroupingPolicy.StillCovers(inputs, checkedInputs))
                 return View(subject, checkedInputs, await ProjectAsync(stored, checkedInputs, context, ct), corrections);
 
             var promptInputs = inputs.Select(d => new
@@ -564,16 +588,19 @@ public sealed class DiscussionGrouping(
                 result = await GenerateAsync(media);
             }
             ct.ThrowIfCancellationRequested();
-            if (!result.Success || string.IsNullOrWhiteSpace(result.Text)) return BackOff();
-            // Access/lifecycle/title could have changed while the model was running.
+            if (!result.Success || string.IsNullOrWhiteSpace(result.Text))
+                return BackOff(result.Success ? "empty model output" : $"model call failed with status {result.StatusCode}");
+            // Access/lifecycle/title could have changed while the model was running. New messages or new
+            // discussions only make the result stale; they no longer throw a good answer away.
             var current = await InputsAsync(context, ct);
-            if (DiscussionGroupingPolicy.Fingerprint(current) != view.Fingerprint)
+            if (!DiscussionGroupingPolicy.StillCovers(inputs, current))
                 return View(subject, current, await ProjectAsync(stored, current, context, ct), corrections);
-            // Preserve open rows' memberships after a verified archive, even though the model saw no old hints.
-            var retained = hadMissingInput ? await ProjectAsync(stored, current, context, ct) : display;
+            var retained = await ProjectAsync(stored, current, context, ct);
+            // A row that went private during the pass invalidates the hints the model was given.
+            if (hints is not null && retained is null) return View(subject, current, null, corrections);
             DiscussionGroupingSnapshot snapshot;
             try { snapshot = DiscussionGroupingPolicy.Parse(result.Text, inputs, retained, _time.GetUtcNow(), media.Select(image => image.Choice).ToArray()); }
-            catch (JsonException) { return BackOff(); }
+            catch (JsonException error) { return BackOff($"unusable model output ({error.Message})"); }
             ct.ThrowIfCancellationRequested();
             await records.AppendAsync(Stream, new JsonObject { ["projection"] = JsonSerializer.SerializeToNode(snapshot, Json) }, userId: subject, ct: ct);
             _retryAt.TryRemove(subject, out _);

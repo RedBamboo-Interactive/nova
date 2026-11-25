@@ -36,9 +36,14 @@ configured Fast tier and verified tool-free stateless inference. The client does
 this asynchronously on meaningful title/membership changes, not on activity or
 streaming events. Only authorized, non-confidential open chat metadata enters the
 bounded classifier. Projection snapshots live in Nova's per-user
-`discussion-groups` record stream. Reads recheck access, and results are rechecked
-before persistence. Model failures or quota notices keep the ordinary list usable
-and apply a two-minute server backoff. Existing artifacts provide lazy row
+`discussion-groups` record stream. The owner's Nova Agent supplies the provider,
+whichever discussions are open. Reads recheck access, and results are rechecked
+before persistence: a pass is kept when every discussion it saw is still eligible
+with the same title, session and repositories, so new messages or new rows only
+make it stale. Prior choices for still-eligible rows are offered to the model as
+hints, never when a departed row cannot be verified closed. Invalid fields in the
+model's answer are dropped individually. Model failures or quota notices keep the
+ordinary list usable, are logged with their reason, and apply a two-minute server backoff. Existing artifacts provide lazy row
 thumbnails; missing or unsupported images retain a small icon.
 
 ## Delegation recovery and verification
