@@ -569,3 +569,29 @@ test("a live note and its later reload converge on one row", () => {
   assert.deepEqual(payloadOf(row).data, reload.data)
   assert.equal(row.content, reload.part.content)
 })
+
+// f0f57b1c, 2026-11-25: RedCompute's own inputs drew as the person's message, frame and all.
+const SERVICE_INPUTS = [
+  ["restart-continuation", '<restart-continuation stoppedAt="2026-11-25T18:46:17.4451413Z" reason="maintenance_restart">\na planned RedCompute restart stopped this session.\n</restart-continuation>'],
+  ["transient-retry", '<transient-retry attempt="1" of="3" failedAt="2026-11-25T18:46:17Z">\nYour previous turn stopped on a transient provider error.\n</transient-retry>'],
+] as const
+
+for (const [source, content] of SERVICE_INPUTS) {
+  test(`a ${source} RedCompute wrote is an event without its frame, never the person`, () => {
+    const attachmentsJson = JSON.stringify({ inputMessageUids: ["e9d3ba5f"], attachments: [], metadata: { source, stopReason: "maintenance_restart", workState: "idle" } })
+    const [block] = rebuild([record({ content, messageUid: "e9d3ba5f", attachmentsJson })])
+    assert.ok(isRawEventMessage(block!))
+    const [part] = orderMessages([block!], resolved).flatMap(b => b.parts)
+    assert.equal(part!.toolName, `event:${source}`)
+    assert.equal(part!.messageUid, "e9d3ba5f")
+    assert.doesNotMatch(part!.content ?? "", /<\/?(restart-continuation|transient-retry)/)
+    assert.match(part!.content ?? "", /^(a planned RedCompute restart|Your previous turn)/)
+  })
+}
+
+test("a person who types such a frame is still the person", () => {
+  const attachmentsJson = JSON.stringify({ metadata: { app: "nova", discussionId: "f0f57b1c", internalMessage: false, source: "restart-continuation" } })
+  const [block] = rebuild([record({ content: SERVICE_INPUTS[0][1], messageUid: "p1", attachmentsJson })])
+  assert.equal(isRawEventMessage(block!), false)
+  assert.equal(block!.role, "user")
+})

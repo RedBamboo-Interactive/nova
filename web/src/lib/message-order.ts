@@ -63,8 +63,18 @@ export interface FriezeEvent {
 export const byTimestamp = (a: MessageBlock, b: MessageBlock) =>
   new Date(a.timestamp ?? 0).getTime() - new Date(b.timestamp ?? 0).getTime()
 
-/** Strip the `<nova-event>` carrier, keeping the text the event actually holds. */
+/**
+ * Inputs RedCompute writes into a session itself: a continuation after a restart cut the work, a
+ * retry after a transient provider failure. They reach the transcript as user records, but nobody
+ * typed them, so each one renders as an event, without its frame (f0f57b1c, 2026-11-25).
+ */
+const SERVICE_INPUT_SOURCES: ReadonlySet<string> = new Set(["restart-continuation", "transient-retry"])
+const SERVICE_FRAME = /^\s*<(restart-continuation|transient-retry)\b[^>]*>([\s\S]*?)<\/\1>\s*$/
+
+/** Strip the `<nova-event>` carrier (or a RedCompute input's frame), keeping the text the event actually holds. */
 function unwrapEventText(content: string): string {
+  const service = SERVICE_FRAME.exec(content)
+  if (service) return service[2]!.trim() || content
   return content.replace(/<nova-event[^>]*>([\s\S]*?)<\/nova-event>/g, "$1").trim() || content
 }
 
@@ -114,6 +124,11 @@ export function markEventFrameSources(blocks: MessageBlock[], records: Persisted
     if (record.role !== "user") continue
     const id = record.messageUid || `db-${record.id}`
     const content = record.content ?? ""
+    const service = serviceInputSource(record)
+    if (service) {
+      marks.set(id, { source: `event:${service}` })
+      continue
+    }
     const admission = readAdmission(record)
     if (admission === "person") {
       if (/<nova-event\s/.test(content)) marks.set(id, { [PERSON_INPUT_KEY]: true })
@@ -133,6 +148,18 @@ export function markEventFrameSources(blocks: MessageBlock[], records: Persisted
     const mark = block.role === "user" && !block.metadata?.source ? marks.get(block.id) : undefined
     return mark ? { ...block, metadata: { ...block.metadata, ...mark } } : block
   })
+}
+
+/** The RedCompute source of an input it wrote itself, by its admission metadata alone. */
+function serviceInputSource(record: PersistedMessage): string | null {
+  if (!record.attachmentsJson) return null
+  try {
+    const metadata = JSON.parse(record.attachmentsJson)?.metadata
+    if (!metadata || typeof metadata !== "object" || metadata.app !== undefined) return null
+    return typeof metadata.source === "string" && SERVICE_INPUT_SOURCES.has(metadata.source) ? metadata.source : null
+  } catch {
+    return null
+  }
 }
 
 function readAdmission(record: PersistedMessage): "plain-event" | "marked-event" | "person" | "other" {
