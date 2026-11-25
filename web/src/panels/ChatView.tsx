@@ -453,6 +453,8 @@ export function ChatView({
     if (next) setSettings({ discussionGroupOrder: next })
   }, [discussions, grouping.view])
   const filteredDiscussions = getSidebarDiscussionOrder(discussions, agentFilter)
+  // From the unfiltered list: the sidebar order drops Heartbeat discussions.
+  const heartbeatAgents = useMemo(() => agentsWithHeartbeat(discussions), [discussions])
   const filteredArchivedDiscussions = getSidebarDiscussionOrder(archivedDiscussions, agentFilter)
 
   useEffect(() => {
@@ -1247,7 +1249,7 @@ export function ChatView({
   )
 
   // The Agent's Heartbeat is what picks an Orchestrated discussion up: without an open one, nothing would.
-  const agentHasHeartbeat = !!activeDiscussion && agentsWithHeartbeat(discussions).has(activeDiscussion.agentId)
+  const agentHasHeartbeat = !!activeDiscussion && heartbeatAgents.has(activeDiscussion.agentId)
   const effective = activeDiscussion ? effectiveBehaviours(activeDiscussion, agentHasHeartbeat) : null
   const behaviours: BehaviourItem[] = !activeDiscussion || !effective ? [] : [
     ...(hasIntrinsicBehaviours(activeDiscussion) ? [] : [{
@@ -2080,6 +2082,7 @@ export function ChatView({
                   onFloat={floatingSurface?.supported && !floating ? handleFloatDiscussion : undefined}
                   onStop={stopDiscussion}
                   getAgent={getAgent}
+                  heartbeatAgents={heartbeatAgents}
                   showAvatars={showDiscussionAvatars}
                   grouping={grouping.view}
                   groupingEnabled={!!settings.groupDiscussions}

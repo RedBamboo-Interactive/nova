@@ -12,7 +12,6 @@ import { isDiscussionUnread } from "../../lib/discussion-unread"
 import { discussionActivityIndicator } from "../../lib/delegation-activity"
 import { discussionActionEntries } from "./discussion-actions"
 import { DiscussionBehaviourMarks } from "./discussion-behaviour"
-import { agentsWithHeartbeat } from "../../lib/discussion-behaviours"
 import { LiveQuotaBorder } from "./live-quota-ring"
 import { DiscussionThumbnail } from "./discussion-thumbnail"
 import { discussionLabel, discussionSections, groupingIcon, sidebarDiscussionTitle, type DiscussionGroupingSort, type DiscussionGroupingView } from "../../lib/discussion-grouping"
@@ -116,6 +115,8 @@ interface Props {
   /** Stops a running chat's session process; the next send resumes it. */
   onStop?: (id: string) => void
   getAgent?: (id: string | null) => AgentInfo | undefined
+  /** Agents with an open Heartbeat, from the unfiltered list: the sidebar's own list never holds Heartbeat discussions. */
+  heartbeatAgents?: ReadonlySet<string | null>
   /** Show each row's Agent avatar, with the status as a corner badge. */
   showAvatars?: boolean
   grouping?: DiscussionGroupingView | null
@@ -137,7 +138,9 @@ interface Props {
   onLoadMoreArchived?: () => void
 }
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars = true, grouping = null, groupingEnabled = false, refineTitles, useThumbnails, groupingLoading = false, groupingUnavailable = false, onRetryGrouping, collapsedGroups, onToggleGroup, groupSort, onReorderGroups, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
+const NO_HEARTBEATS: ReadonlySet<string | null> = new Set()
+
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, heartbeatAgents = NO_HEARTBEATS, showAvatars = true, grouping = null, groupingEnabled = false, refineTitles, useThumbnails, groupingLoading = false, groupingUnavailable = false, onRetryGrouping, collapsedGroups, onToggleGroup, groupSort, onReorderGroups, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -149,7 +152,6 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
     return { live, chat }
   }, [discussions])
   const titleOf = useMemo(() => createDiscussionTitleResolver(discussions), [discussions])
-  const heartbeatAgents = useMemo(() => agentsWithHeartbeat(discussions), [discussions])
   const sections = useMemo(() => discussionSections(chat, grouping, groupSort), [chat, grouping, groupSort])
   const groupNames = useMemo(() => sections.flatMap(section => section.name === null ? [] : [section.name]), [sections])
   const draggedGroup = useRef<string | null>(null)
