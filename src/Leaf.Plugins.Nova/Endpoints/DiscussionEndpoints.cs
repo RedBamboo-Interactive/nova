@@ -1019,6 +1019,24 @@ public static class DiscussionEndpoints
         })
             .WithSummary("Exports recent readable, non-confidential discussions as Markdown. Query: since (ISO time, default last 7 days), limit (1 to 200, default 50).");
 
+        group.MapGet("/discussions/{id}/note-exchange", async (
+            string id, [FromQuery] string other, HttpContext ctx, DiscussionStore store, IDiscussions discussions) =>
+        {
+            var current = await store.GetAsync(id, ctx.RequestAborted);
+            if (current is null) return NotFound();
+            if (!DiscussionAccessPolicy.CanRead(current, ctx)) return AccessDenied(current);
+
+            var counterpart = await store.GetAsync(other, ctx.RequestAborted);
+            if (counterpart is null || counterpart.Id == current.Id
+                || (counterpart.Confidential && !current.Confidential)
+                || !DiscussionAccessPolicy.CanRead(counterpart, ctx))
+                return NotFound();
+
+            var notes = await AgentNoteExchange.ReadAsync(discussions, current, counterpart, ctx.RequestAborted);
+            return Results.Ok(new { discussion = DiscussionStore.ToInfo(counterpart), notes });
+        })
+            .WithSummary("Reads the authorized exchange of Agent notes between this discussion and the other discussion. Query: other (discussion ID).");
+
         group.MapGet("/discussions/{id}/history-page", async (
             string id,
             HttpContext ctx,

@@ -9,6 +9,54 @@ namespace Leaf.Plugins.Nova.Tests;
 public sealed class HistoryPagingTests
 {
     [Fact]
+    public async Task AgentExchangeReadsBothDirectionsAcrossOverlayPagesWithoutRepeatingLogicalNotes()
+    {
+        var current = TestDiscussion("8978cdde", DiscussionId, "nova");
+        var other = TestDiscussion("ad7278d0", Guid.NewGuid(), "other-agent");
+        var first = Message(1, "system", "Before", "event:agent-note-sent", "before");
+        first.Metadata["parts_json"] = """
+            [{"type":"event_data","source":"agent-note-sent","data":{"targetDiscussionId":"ad7278d0","noteUid":"mirror"}}]
+            """;
+        var received = Message(1001, "user", "Middle", "event:agent-note", "middle");
+        new EventSender("other-agent", other.Id, "Storage").WriteTo(received.Metadata);
+        var duplicate = received with { Id = 1002 };
+        var unrelated = Message(1003, "user", "Unrelated", "event:agent-note", "different");
+        new EventSender("other-agent", "deadbeef", "Elsewhere").WriteTo(unrelated.Metadata);
+        var last = Message(1004, "system", "After", "event:agent-note-sent", "after");
+        last.Metadata["parts_json"] = """
+            [{"type":"event_data","source":"agent-note-sent","data":{"targetDiscussionId":"ad7278d0","failed":true}}]
+            """;
+        var fillers = Enumerable.Range(2, 999).Select(id => Message(id, "user", "Text", "user-message", $"user-{id}"));
+        var stream = new InMemoryDiscussions([first, .. fillers, received, duplicate, unrelated, last]);
+
+        var actual = await AgentNoteExchange.ReadAsync(stream, current, other, CancellationToken.None);
+
+        Assert.Collection(actual,
+            note => Assert.Equal(("before", "sent", "nova", false), (note.Uid, note.Direction, note.AgentId, note.Failed)),
+            note => Assert.Equal(("middle", "received", "other-agent", false), (note.Uid, note.Direction, note.AgentId, note.Failed)),
+            note => Assert.Equal(("after", "sent", "nova", true), (note.Uid, note.Direction, note.AgentId, note.Failed)));
+    }
+
+    [Fact]
+    public void AgentExchangeKeepsLegacyNotesAndHonorsConfidentialSenderRedaction()
+    {
+        var current = TestDiscussion("8978cdde", DiscussionId, "nova");
+        var other = TestDiscussion("ad7278d0", Guid.NewGuid(), "other-agent");
+        var legacy = Message(1, "user", "[internal] From ad7278d0 (Storage): **Text**", "event:nova-ad7278d0", "legacy");
+        Assert.Equal("**Text**", AgentNoteExchange.Project(legacy, current, other)?.Content);
+
+        var ordinary = Message(2, "user", "[internal] From ad7278d0: Fake", "event:weather", "ordinary");
+        Assert.Null(AgentNoteExchange.Project(ordinary, current, other));
+
+        var redacted = Message(3, "user", "[internal] From ad7278d0: Hidden", "event:nova-ad7278d0", "redacted");
+        new EventSender("other-agent", null, null).WriteTo(redacted.Metadata);
+        Assert.Null(AgentNoteExchange.Project(redacted, current, other));
+    }
+
+    private static DiscussionRead TestDiscussion(string id, Guid entityId, string agentId)
+        => new(id, null, null, "idle", DateTime.UnixEpoch, DateTime.UnixEpoch, 0, null, "owner", entityId, agentId);
+
+    [Fact]
     public void CompositeCursorRoundTripsAndIsBoundToDiscussionSessionEpochAndEdge()
     {
         var boundary = new HistoryPageBoundary(
@@ -459,7 +507,10 @@ public sealed class HistoryPagingTests
 
         public Task<LeafEntity> CreateAsync(string? title, string? agentSlugOrId = null, JsonObject? data = null, CancellationToken ct = default) => throw new NotSupportedException();
         public Task PostAsync(Guid discussionId, string role, string content, JsonObject? metadata = null, string? userId = null, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<IReadOnlyList<DiscussionMessage>> GetMessagesAsync(Guid discussionId, int limit = 1000, long afterId = 0, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<DiscussionMessage>> GetMessagesAsync(Guid discussionId, int limit = 1000, long afterId = 0, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<DiscussionMessage>>(
+                messages.Where(message => message.DiscussionId == discussionId && message.Id > afterId)
+                    .OrderBy(message => message.Id).Take(limit).ToArray());
         public Task<IReadOnlyList<DiscussionMessage>> SearchMessagesAsync(string query, int limit = 1000, CancellationToken ct = default) => throw new NotSupportedException();
         public Task ClearMessagesAsync(Guid discussionId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task SetReactionAsync(Guid discussionId, ReactionChange change, CancellationToken ct = default) => throw new NotSupportedException();

@@ -63,6 +63,7 @@ import { NOVA_DRAFT_STORAGE_KEY, opensChat } from "../lib/new-discussion-draft"
 import { captureMonitorVisualSource, listMonitorVisualSources, monitorCaptureToContext, type MonitorVisualSource } from "../lib/visual-capture"
 import { delegationEventPath } from "../lib/delegation-session-link"
 import { AGENT_NOTE_KEY } from "../lib/agent-note"
+import { AgentNoteExchange } from "../components/discussion/agent-note-exchange"
 import { describeAgentNote, type NoteOriginDiscussion } from "../lib/agent-note-presentation"
 import { formatOwningApp } from "../lib/discussion-owner"
 import { useVoiceSession } from "../hooks/use-voice-session"
@@ -1629,12 +1630,53 @@ export function ChatView({
     }
   }, [archivedDiscussions, discussions])
 
-  const resolveAgentNote = useCallback((event: ParsedEvent) => describeAgentNote(event, {
-    currentDiscussionId: activeDiscussionId,
-    resolveAgent: resolveAgentInfo,
-    resolveDiscussion: resolveNoteDiscussion,
-    onOpenDiscussion: handleSelectDiscussion,
-  }), [activeDiscussionId, handleSelectDiscussion, resolveAgentInfo, resolveNoteDiscussion])
+  const resolveAgentNote = useCallback((event: ParsedEvent) => {
+    const presentation = describeAgentNote(event, {
+      currentDiscussionId: activeDiscussionId,
+      resolveAgent: resolveAgentInfo,
+      resolveDiscussion: resolveNoteDiscussion,
+      onOpenDiscussion: handleSelectDiscussion,
+    })
+    if (!presentation || !activeDiscussion || activeDiscussion.id !== activeDiscussionId) return presentation
+    const sent = event.key === "agent-note-sent"
+    const counterpart = sent ? event.data?.targetDiscussionId : event.data?.discussionId
+    if (typeof counterpart !== "string" || !counterpart || counterpart === activeDiscussion.id) return presentation
+    const other = resolveNoteDiscussion(counterpart)
+    return {
+      ...presentation,
+      renderExchange: ({ part, ...slot }) => (
+        <AgentNoteExchange
+          key={activeDiscussion.id + ":" + counterpart}
+          {...slot}
+          current={{
+            id: activeDiscussion.id,
+            title: activeDisplayTitle ?? "Untitled discussion",
+            agentId: activeDiscussion.agentId,
+            type: activeDiscussion.type,
+            canOpen: true,
+          }}
+          other={{
+            id: counterpart,
+            title: presentation.discussion,
+            agentId: other?.agentId ?? null,
+            canOpen: !!presentation.discussionHref,
+          }}
+          clicked={{
+            uid: part.messageUid ?? part.messageId ?? "opened-note",
+            direction: sent ? "sent" : "received",
+            content: event.text,
+            timestamp: event.postedAt ?? event.timestamp,
+            agentId: sent ? activeDiscussion.agentId : typeof event.data?.agent === "string" ? event.data.agent : other?.agentId ?? null,
+            failed: sent && event.data?.failed === true,
+          }}
+          onOpenDiscussion={handleSelectDiscussion}
+          resolveAgent={resolveAgentInfo}
+          resolveImageSrc={resolveImageSrc}
+          resolveFileLink={resolveFileLink}
+        />
+      ),
+    } satisfies import("@redbamboo/chat").AgentNotePresentation
+  }, [activeDiscussion, activeDiscussionId, activeDisplayTitle, handleSelectDiscussion, resolveAgentInfo, resolveFileLink, resolveNoteDiscussion])
 
   const { reactions, react, unreact } = useReactions(activeDiscussionId)
 
