@@ -231,11 +231,15 @@ public static class CallbackEndpoints
             interruptedBy = interruptSource is null && interruptedByMessageUid is null ? null
                 : new { source = interruptSource, messageUid = interruptedByMessageUid },
         });
+        // A turn that ended with its background work still running, and a pause RedCompute continues
+        // by itself, both say there is nothing to do yet: they wait for the supervisor's next turn
+        // instead of starting one (17 such turns in one discussion on 2026-11-25).
+        var nothingToDoYet = outcome == "background" || autoContinue;
         var forwarded = await injector.InjectAsync(discussion, eventContent, null, $"delegate:{sessionId}",
             metadata: metadata,
             idempotencyKey: key, redeliverOnReuse: key is not null,
             deliveryIdempotencyKey: key, ct: ctx.RequestAborted, framed: true,
-            delivery: DelegateEndpoints.SteerCurrent);
+            delivery: nothingToDoYet ? DelegateEndpoints.WithNext : DelegateEndpoints.SteerCurrent);
         // Do not introduce extra unkeyed retries from an older sender. Recovery
         // is safe only when the callback carries its stable delivery identity.
         if (key is not null && !forwarded && discussion.SessionId is not null)

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Heartbeat notes"
+  short_description: "Notes from the Heartbeat: one receiver, only when it moves work"
+  default_prompt: "Use $heartbeat-notes before writing this note."

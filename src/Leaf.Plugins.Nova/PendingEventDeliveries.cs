@@ -24,6 +24,8 @@ public enum EventDelivery
     Undeliverable,
     /// <summary>The target refused the write (closed, or scoped LIVE checks failed).</summary>
     Denied,
+    /// <summary>Persisted and held for the session's next turn (delivery with-next): it starts nothing.</summary>
+    Held,
 }
 
 public sealed record EventInjectionResult(
@@ -44,6 +46,39 @@ public sealed record EventDrainResult(
 internal sealed record PendingEventDelivery(
     string Uid, string AdmissionKey, bool Framed, string? ReplyToDiscussionId,
     DateTimeOffset? QueuedAt = null, int Attempts = 0);
+
+/// <summary>
+/// Events their sender held for the receiver's next turn (delivery <c>with-next</c>): persisted and
+/// shown like any event, forwarded to nobody until Nova next gets an input admitted into the
+/// discussion's session. Then each goes in as its own steer, under its own admission key, so it
+/// joins that turn instead of starting one. Stored on the discussion entity beside the queue and
+/// read and written only under <see cref="DiscussionEntityGate"/>. Nothing needed them by
+/// definition, so the oldest and the stale ones leave without a notice.
+/// </summary>
+internal static class HeldEventDeliveries
+{
+    public const string Key = "held_event_deliveries";
+    public const int MaxHeld = 50;
+    public static readonly TimeSpan MaxAge = TimeSpan.FromHours(24);
+
+    public static List<PendingEventDelivery> Read(JsonObject data) => PendingEventDeliveries.ReadList(data, Key);
+
+    public static JsonObject Patch(IReadOnlyList<PendingEventDelivery> entries) => new()
+    {
+        [Key] = entries.Count == 0 ? null : PendingEventDeliveries.List(entries),
+    };
+
+    /// <summary>The held list with <paramref name="entry"/> added once, stale and surplus entries gone.</summary>
+    public static List<PendingEventDelivery> With(List<PendingEventDelivery> held, PendingEventDelivery entry, DateTimeOffset now)
+    {
+        var kept = Fresh(held, now);
+        if (!kept.Any(item => item.Uid == entry.Uid)) kept.Add(entry);
+        return kept.Skip(Math.Max(0, kept.Count - MaxHeld)).ToList();
+    }
+
+    public static List<PendingEventDelivery> Fresh(List<PendingEventDelivery> held, DateTimeOffset now)
+        => held.Where(item => item.QueuedAt is not { } at || now - at <= MaxAge).ToList();
+}
 
 /// <summary>
 /// How long and how many events a discussion keeps for a session that isn't there, and how often
@@ -84,10 +119,12 @@ internal static class PendingEventDeliveries
     public static string AdmissionKey(string identity)
         => "nova-event:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
 
-    public static List<PendingEventDelivery> Read(JsonObject data)
+    public static List<PendingEventDelivery> Read(JsonObject data) => ReadList(data, QueueKey);
+
+    internal static List<PendingEventDelivery> ReadList(JsonObject data, string listKey)
     {
         var entries = new List<PendingEventDelivery>();
-        if (data[QueueKey] is not JsonArray array) return entries;
+        if (data[listKey] is not JsonArray array) return entries;
         foreach (var node in array)
         {
             if (node is not JsonObject item) continue;
@@ -105,7 +142,12 @@ internal static class PendingEventDeliveries
 
     public static JsonObject Patch(IReadOnlyList<PendingEventDelivery> entries) => new()
     {
-        [QueueKey] = new JsonArray(entries.Select(entry => (JsonNode)new JsonObject
+        [QueueKey] = List(entries),
+        [PendingFlagKey] = entries.Count > 0,
+    };
+
+    internal static JsonArray List(IReadOnlyList<PendingEventDelivery> entries)
+        => new(entries.Select(entry => (JsonNode)new JsonObject
         {
             ["uid"] = entry.Uid,
             ["admission_key"] = entry.AdmissionKey,
@@ -113,9 +155,7 @@ internal static class PendingEventDeliveries
             ["reply_to_discussion_id"] = entry.ReplyToDiscussionId,
             ["queued_at"] = entry.QueuedAt?.ToString("O"),
             ["attempts"] = entry.Attempts,
-        }).ToArray()),
-        [PendingFlagKey] = entries.Count > 0,
-    };
+        }).ToArray());
 
     /// <summary>Records why an event left the queue without being delivered, newest last, bounded.</summary>
     public static JsonArray WithUndeliverable(JsonObject data, IEnumerable<(string Uid, string Error)> events)

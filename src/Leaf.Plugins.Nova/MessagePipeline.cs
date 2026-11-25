@@ -615,8 +615,11 @@ public sealed class MessagePipeline(
         }
 
         if (!persistUserMessage)
+        {
+            if (eventInjector is not null) await eventInjector.ReleaseHeldQuietlyAsync(discussion.EntityId, ct);
             return new(true, sessionId, null, null, metadata, messageUid,
                 disposition, queueItemId, queue, item);
+        }
 
         JsonElement[] claimedAttachments = [];
         if (sendResult.Payload is { ValueKind: JsonValueKind.Object } attachmentPayload
@@ -698,6 +701,8 @@ public sealed class MessagePipeline(
             }, acceptedMessageUid, userId, idempotencyKey, ct);
         }
 
+        // Events their senders held for this session's next turn join the one this message starts.
+        if (eventInjector is not null) await eventInjector.ReleaseHeldQuietlyAsync(discussion.EntityId, ct);
         return new(true, sessionId, null, null, metadata, acceptedMessageUid,
             disposition, queueItemId, queue, item);
     }

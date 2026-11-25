@@ -69,6 +69,38 @@ public sealed class BackgroundTurnDelegationTests
         Assert.DoesNotContain("completed", live);
     }
 
+    // 2026-11-25 audit: these said "nothing to do yet" and still cost the supervisor a turn each.
+    [Fact]
+    public async Task Turn_ending_with_background_work_waits_for_the_supervisors_next_turn()
+    {
+        using var f = new CallbackDeliveryTests.Fixture();
+
+        Assert.Equal(200, await f.Complete("prompt-one", backgroundTasksRunning: 2, deliverySequence: 1, workState: "background"));
+        Assert.Single(f.TargetMessages);
+        Assert.Empty(f.Gateway.Admitted);
+
+        Assert.Equal(200, await f.Complete("prompt-one", backgroundTasksRunning: 0, deliverySequence: 2, workState: "idle"));
+
+        Assert.Equal(2, f.Gateway.Admitted.Count);
+        using var completion = System.Text.Json.JsonDocument.Parse(f.Gateway.Bodies[0]);
+        using var released = System.Text.Json.JsonDocument.Parse(f.Gateway.Bodies[1]);
+        Assert.Contains("session-complete", completion.RootElement.GetProperty("content").GetString());
+        Assert.Contains("session-turn-ended", released.RootElement.GetProperty("content").GetString());
+        Assert.Equal("steer-current", released.RootElement.GetProperty("delivery").GetString());
+    }
+
+    [Fact]
+    public async Task A_pause_RedCompute_continues_by_itself_waits_too_and_a_plain_pause_does_not()
+    {
+        using var held = new CallbackDeliveryTests.Fixture();
+        Assert.Equal(200, await held.Complete("prompt-one", "Stopped", "maintenance_restart", autoContinue: true));
+        Assert.Empty(held.Gateway.Admitted);
+
+        using var plain = new CallbackDeliveryTests.Fixture();
+        Assert.Equal(200, await plain.Complete("prompt-one", "Stopped", "maintenance_restart"));
+        Assert.Single(plain.Gateway.Admitted);
+    }
+
     [Fact]
     public async Task Plain_completion_without_workState_is_unchanged()
     {

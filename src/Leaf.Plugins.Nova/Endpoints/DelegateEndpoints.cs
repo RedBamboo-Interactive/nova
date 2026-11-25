@@ -642,6 +642,9 @@ public static class DelegateEndpoints
     internal const string AfterCurrent = "after-current";
     internal const string SteerCurrent = "steer-current";
     internal const string InterruptCurrent = "interrupt-current";
+    /// <summary>Nova's own event delivery, never sent to RedCompute: hold the event for the session's
+    /// next turn (see <see cref="HeldEventDeliveries"/>).</summary>
+    internal const string WithNext = "with-next";
     private static readonly JsonSerializerOptions ReportJson = new(JsonSerializerDefaults.Web);
 
     /// <summary>
@@ -669,8 +672,8 @@ public static class DelegateEndpoints
 
     /// <summary>The same vocabulary for an event, which is always about a session and never kills a turn.</summary>
     internal static object? EventDeliveryError(string? delivery)
-        => delivery == InterruptCurrent || DeliveryError(delivery, isContinuation: true) is not null
-            ? new { error = "invalid_delivery", message = $"delivery must be '{AfterCurrent}' or '{SteerCurrent}'" }
+        => delivery != WithNext && (delivery == InterruptCurrent || DeliveryError(delivery, isContinuation: true) is not null)
+            ? new { error = "invalid_delivery", message = $"delivery must be '{AfterCurrent}', '{SteerCurrent}' or '{WithNext}'" }
             : null;
 
     /// <summary>

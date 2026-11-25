@@ -119,9 +119,10 @@ public sealed class EventInjector(
             $"scoped-live:{projection.Recipient.OwnerUserId}:{projection.Recipient.AgentId}:{projection.IdempotencyKey}",
             false, ct, null, projection.Recipient));
 
-    // Reuse keeps its historical "already handled" true; queued is not forwarded yet.
+    // Reuse keeps its historical "already handled" true; queued is not forwarded yet. Held is handled:
+    // its sender asked for the next turn, and a caller retrying it would only hold it again.
     private static bool Forwarded(EventInjectionResult result)
-        => result.Delivery is EventDelivery.Delivered or EventDelivery.Reused;
+        => result.Delivery is EventDelivery.Delivered or EventDelivery.Reused or EventDelivery.Held;
 
     private async Task<EventInjectionResult> InjectCoreAsync(
         DiscussionRead discussion, string content, string? type, string? source,
@@ -204,7 +205,10 @@ public sealed class EventInjector(
             // Queue before the stream post, in the same gate section: a drain snapshots both under
             // this gate, so every queued uid it sees has its record. A crash in between leaves an
             // entry without a record, which a drain discards; the caller never saw a success.
-            if (role != "system")
+            // A held event waits for the next turn instead of the queue: it never starts one itself.
+            if (role != "system" && delivery == DelegateEndpoints.WithNext)
+                await HoldAsync(discussion.EntityId, QueueEntry(uid), ct);
+            else if (role != "system")
                 decision = await EnqueueIfWaitingAsync(discussion.EntityId, QueueEntry(uid), ct);
             var record = new JsonObject
             {
@@ -252,6 +256,15 @@ public sealed class EventInjector(
         if (role == "system")
             return new(EventDelivery.Recorded, uid, Report: NotForwarded(requested, null, null));
 
+        if (requested == DelegateEndpoints.WithNext)
+        {
+            // A redelivery holds what was first stored (once: the uid keys the entry, and the admission
+            // key makes a second release of an event already released a replay RedCompute absorbs).
+            if (!persisted)
+                await DiscussionEntityGate.RunAsync(discussion.EntityId, () => HoldAsync(discussion.EntityId, QueueEntry(uid), ct), ct);
+            return new(EventDelivery.Held, uid, Report: NotForwarded(requested, DelegateEndpoints.WithNext, null));
+        }
+
         // A redelivery decides against the authoritative entity too, never the caller's snapshot.
         decision ??= await DiscussionEntityGate.RunAsync(discussion.EntityId,
             () => EnqueueIfWaitingAsync(discussion.EntityId, QueueEntry(uid), ct), ct);
@@ -280,7 +293,11 @@ public sealed class EventInjector(
         var forwarded = await ForwardAsync(discussion with { SessionId = sessionId }, sessionId, content, uid,
             source, senderAgentId, replyToDiscussionId, framed, admissionKey, ct, stamped, delivery);
         var report = DelegateEndpoints.ReportDelivery(requested, forwarded.Payload);
-        if (forwarded.Success) return new(EventDelivery.Delivered, uid, Report: report);
+        if (forwarded.Success)
+        {
+            await ReleaseHeldQuietlyAsync(discussion.EntityId, ct);
+            return new(EventDelivery.Delivered, uid, Report: report);
+        }
         // The queue drained this key as after-current while the retry asks for the steer first stored:
         // RedCompute holds the event, once. Only that policy differs, the content came from the record.
         if (stored is not null && delivery == DelegateEndpoints.SteerCurrent && forwarded.ErrorCode == "idempotency_conflict")
@@ -553,7 +570,11 @@ public sealed class EventInjector(
             {
                 var (current, queue, records) = await DiscussionEntityGate.RunAsync(discussionEntityId,
                     () => ReadQueueAsync(discussionEntityId, ct), ct);
-                if (current is null || queue.Count == 0) return new(EventDrainStatus.Drained, delivered);
+                if (current is null || queue.Count == 0)
+                {
+                    if (delivered > 0) await ReleaseHeldQuietlyAsync(discussionEntityId, ct);
+                    return new(EventDrainStatus.Drained, delivered);
+                }
                 if (current.SessionId is not { } sessionId) return new(EventDrainStatus.WaitingForSession, delivered);
 
                 foreach (var entry in queue)
@@ -712,6 +733,126 @@ public sealed class EventInjector(
         }
         return (current, queue, records);
     }
+
+    /// <summary>Under the gate: adds the event to the discussion's held list, once.</summary>
+    private async Task HoldAsync(Guid entityId, PendingEventDelivery entry, CancellationToken ct)
+    {
+        var entity = await entities.GetAsync(entityId, ct);
+        if (entity is not { TypeSlug: "discussion" }) return;
+        var held = HeldEventDeliveries.With(HeldEventDeliveries.Read(entity.Data), entry, Clock());
+        await entities.PatchAsync(entityId, HeldEventDeliveries.Patch(held), null, ct);
+    }
+
+    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> ReleaseLocks = new();
+
+    /// <summary>
+    /// Sends the discussion's held events into its session, oldest first, each as its own steer under
+    /// its fixed admission key, so they join the turn that Nova just got admitted instead of starting
+    /// one (a session that went idle in between runs them as its next turn, which is what an event
+    /// cost before). Each leaves the list once RedCompute holds it or refuses it for good; a
+    /// transient failure keeps it and the rest for the next release. A release already running takes
+    /// care of the list, so a second one returns at once. Returns how many went in.
+    /// </summary>
+    public async Task<int> ReleaseHeldAsync(Guid discussionEntityId, CancellationToken ct = default)
+    {
+        var releaseLock = ReleaseLocks.GetOrAdd(discussionEntityId, _ => new SemaphoreSlim(1, 1));
+        if (!await releaseLock.WaitAsync(0, ct)) return 0;
+        try
+        {
+            var (current, held, records) = await DiscussionEntityGate.RunAsync(discussionEntityId,
+                () => ReadHeldAsync(discussionEntityId, ct), ct);
+            if (current?.SessionId is not { } sessionId || held.Count == 0) return 0;
+            var released = 0;
+            foreach (var entry in held)
+            {
+                if (!records.TryGetValue(entry.Uid, out var record))
+                {
+                    // Held, then the process stopped before the stream post: nothing was shown.
+                    await RemoveHeldAsync(discussionEntityId, entry.Uid, ct);
+                    continue;
+                }
+                var source = record.Metadata["source"]?.GetValue<string>() is { } tag && tag.StartsWith("event:", StringComparison.Ordinal)
+                    ? tag["event:".Length..] : null;
+                var result = await ForwardAsync(current, sessionId, record.Content, entry.Uid, source,
+                    record.Metadata["sender_agent_id"]?.GetValue<string>(), entry.ReplyToDiscussionId,
+                    entry.Framed, entry.AdmissionKey, ct, EventSender.Read(record.Metadata), DelegateEndpoints.SteerCurrent);
+                if (result.Success || result.ErrorCode == "idempotency_conflict")
+                {
+                    await RemoveHeldAsync(discussionEntityId, entry.Uid, ct);
+                    released++;
+                    continue;
+                }
+                if (IsPermanentRefusal(result.StatusCode))
+                {
+                    logger?.LogError("RedCompute refused held event {Uid} for discussion {DiscussionId}: {Error}",
+                        entry.Uid, current.Id, result.ErrorCode ?? $"http_{result.StatusCode}");
+                    await RemoveHeldAsync(discussionEntityId, entry.Uid, ct);
+                    continue;
+                }
+                logger?.LogWarning("Held event {Uid} for discussion {DiscussionId} not released yet: {Error}",
+                    entry.Uid, current.Id, result.ErrorCode ?? $"http_{result.StatusCode}");
+                break;
+            }
+            return released;
+        }
+        finally { releaseLock.Release(); }
+    }
+
+    /// <summary>A release after Nova's own admission: it must never fail the input that triggered it.</summary>
+    internal async Task ReleaseHeldQuietlyAsync(Guid discussionEntityId, CancellationToken ct)
+    {
+        try { await ReleaseHeldAsync(discussionEntityId, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex, "Held events for discussion entity {EntityId} could not be released", discussionEntityId);
+        }
+    }
+
+    /// <summary>Under the gate: the held list without stale entries, and the stream record of each.</summary>
+    private async Task<(DiscussionRead? Current, List<PendingEventDelivery> Held, Dictionary<string, DiscussionMessage> Records)>
+        ReadHeldAsync(Guid entityId, CancellationToken ct)
+    {
+        var records = new Dictionary<string, DiscussionMessage>(StringComparer.Ordinal);
+        var entity = await entities.GetAsync(entityId, ct);
+        var current = entity is { TypeSlug: "discussion" } ? DiscussionStore.Map(entity) : null;
+        if (current is null) return (null, [], records);
+        var all = HeldEventDeliveries.Read(entity!.Data);
+        if (all.Count == 0) return (current, all, records);
+        var held = HeldEventDeliveries.Fresh(all, Clock());
+        if (held.Count != all.Count)
+        {
+            logger?.LogInformation("{Count} held event(s) for discussion {DiscussionId} were never needed and expired",
+                all.Count - held.Count, current.Id);
+            await entities.PatchAsync(entityId, HeldEventDeliveries.Patch(held), null, ct);
+        }
+        if (current.SessionId is null || held.Count == 0) return (current, held, records);
+
+        var wanted = held.Select(entry => entry.Uid).ToHashSet(StringComparer.Ordinal);
+        long afterId = 0;
+        while (records.Count < wanted.Count)
+        {
+            var page = await discussions.GetMessagesAsync(entityId, limit: 1000, afterId: afterId, ct: ct);
+            foreach (var message in page)
+                if (message.Metadata["uid"] is JsonValue value
+                    && value.TryGetValue<string>(out var messageUid) && wanted.Contains(messageUid))
+                    records.TryAdd(messageUid, message);
+            if (page.Count < 1000) break;
+            var nextId = page.Max(message => message.Id);
+            if (nextId <= afterId) throw new InvalidOperationException("Discussion event lookup did not advance");
+            afterId = nextId;
+        }
+        return (current, held, records);
+    }
+
+    private Task RemoveHeldAsync(Guid entityId, string uid, CancellationToken ct)
+        => DiscussionEntityGate.RunAsync(entityId, async () =>
+        {
+            var entity = await entities.GetAsync(entityId, ct);
+            if (entity is null) return;
+            var held = HeldEventDeliveries.Read(entity.Data);
+            await entities.PatchAsync(entityId,
+                HeldEventDeliveries.Patch(held.Where(entry => entry.Uid != uid).ToList()), null, ct);
+        }, ct);
 
     private Task RemoveAsync(Guid entityId, string uid, CancellationToken ct)
         => DiscussionEntityGate.RunAsync(entityId, async () =>
