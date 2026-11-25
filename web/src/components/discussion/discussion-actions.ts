@@ -30,35 +30,31 @@ export interface DiscussionActionHandlers extends Omit<ConversationActionHandler
   onReset?: () => void
 }
 
-/**
- * Nova's conversation actions: the shared builder (Info, Artifacts, Rename, Update title, Share,
- * Stop, Close) with Nova's entries in its slots. Voice leads, Float and Reset timeline follow Share.
- * The header menu, each sidebar row menu and the rows' context menu render this one array.
- */
+/** One layout for the discussion header, sidebar actions, and context menu. */
 export function discussionActionEntries({ onVoice, voiceDisabled = false, onAttachSkill, onAttachMcpServer, onFloat, onReset, ...handlers }: DiscussionActionHandlers): ContextMenuEntry[] {
   const shortcut = (keys: string) => conversationShortcut(keys, handlers.showShortcuts)
-  const leading: ContextMenuEntry[] = []
+  const session: ContextMenuEntry[] = []
   if (onVoice) {
-    leading.push({
+    session.push({
       id: "voice", label: "Voice", icon: "ph-bold ph-waveform", disabled: voiceDisabled,
       shortcut: shortcut(DISCUSSION_SHORTCUTS.voice), run: () => onVoice(), attributes: { "aria-haspopup": "dialog" },
     })
   }
   if (onAttachSkill) {
-    leading.push({
+    session.push({
       id: "attach-skill", label: "Attach Skill…", icon: "ph-bold ph-puzzle-piece",
       run: () => onAttachSkill(), attributes: { "aria-haspopup": "dialog" },
     })
   }
   if (onAttachMcpServer) {
-    leading.push({
+    session.push({
       id: "attach-mcp-server", label: "Attach MCP server…", icon: "ph-bold ph-plugs-connected",
       run: () => onAttachMcpServer(), attributes: { "aria-haspopup": "dialog" },
     })
   }
-  const afterShare: ContextMenuEntry[] = []
+  const windowActions: ContextMenuEntry[] = []
   if (onFloat) {
-    afterShare.push({
+    windowActions.push({
       id: "float",
       label: "Float",
       icon: "ph-bold ph-picture-in-picture",
@@ -69,6 +65,30 @@ export function discussionActionEntries({ onVoice, voiceDisabled = false, onAtta
       attributes: { "data-slot": "floating-surface-trigger", "data-ui-surface": "nova:floating-chat", "data-ui-action": "open" },
     })
   }
-  if (onReset) afterShare.push({ id: "reset", label: "Reset timeline", icon: "ph-bold ph-arrows-clockwise", shortcut: shortcut(DISCUSSION_SHORTCUTS.reset), run: () => onReset() })
-  return conversationActionEntries({ ...handlers, leading, afterShare })
+  const common = new Map(conversationActionEntries(handlers).map((entry) => [entry.id, entry]))
+  const entriesFor = (...ids: string[]) => ids.flatMap((id) => {
+    const entry = common.get(id)
+    return entry ? [entry] : []
+  })
+
+  const footer = entriesFor("stop", "close")
+  if (onReset) {
+    footer.unshift({ id: "reset", label: "Reset timeline", icon: "ph-bold ph-arrows-clockwise", shortcut: shortcut(DISCUSSION_SHORTCUTS.reset), run: () => onReset() })
+  }
+
+  const entries: ContextMenuEntry[] = [{
+    id: "discussion-actions",
+    label: "Discussion",
+    group: true,
+    children: entriesFor("info", "artifacts", "share", "rename", "update-title"),
+  }]
+  if (session.length) {
+    entries.push(
+      { id: "session-separator", separator: true },
+      { id: "session-actions", label: "Session", group: true, children: session },
+    )
+  }
+  if (windowActions.length) entries.push({ id: "window-separator", separator: true }, ...windowActions)
+  if (footer.length) entries.push({ id: "footer-separator", separator: true }, ...footer)
+  return entries
 }
