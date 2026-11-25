@@ -88,6 +88,10 @@ public sealed class MessagePipeline(
             }
             catch (ComputeMaintenanceException)
             {
+                // Not an error: the first send retries the start and tells the sender why it waits.
+                logger.LogInformation(
+                    "Session start for discussion {DiscussionId} deferred: RedCompute is draining for an update",
+                    discussion.Id);
                 return null;
             }
             catch (Exception ex)
