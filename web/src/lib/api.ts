@@ -54,6 +54,8 @@ export const api = {
   postWithHeaders: <T>(path: string, body: unknown, headers: Record<string, string>) =>
     request<T>("POST", path, body, headers),
   put: <T>(path: string, body?: unknown) => request<T>("PUT", path, body),
+  putWithHeaders: <T>(path: string, body: unknown, headers: Record<string, string>) =>
+    request<T>("PUT", path, body, headers),
   patch: <T>(path: string, body?: unknown) => request<T>("PATCH", path, body),
   delete: <T>(path: string) => request<T>("DELETE", path),
 }

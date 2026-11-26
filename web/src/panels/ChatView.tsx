@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { JournalView } from "../components/journal/journal-view"
 import { JOURNAL_ROUTE, isJournalPath, journalPath } from "../lib/journal"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger, MasterDetailLayout, PanelHeader, Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger, Tabs, TabsList, TabsTrigger, normalizeIcon, useToast, useUiEnvironment } from "@redbamboo/ui"
-import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, type SessionInferenceSettingsClient, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type RenderEventDetails, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment, ChatBlockRenderersProvider, eventInputMessageUid, parseEventPart, type EventQueueStatus, type ResolveEventQueueStatus } from "@redbamboo/chat"
+import { ChatPanel, ConversationActionsMenu, EditableTitle, MESSAGE_PARAM, PendingContextAttachment, SessionInfoButton, createSessionNodeSettingsClient, type SessionInferenceSettingsClient, ShareDialog, discussionShareSource, fetchTranscriptPayload, messageDeepLinkStep, useConversationShortcuts, useGoToMessage, useMaintenanceStatus, useShare, useTitleUpdate, withoutMessageParam, useComposerFocusSettings, usePushToTalkSettings, useChatJobs, type AttachmentTransport, type ChatJob, type ChatInputPart, type ChatQueueSnapshot, type ChatQueueTransport, type ChatQueuedItem, type ImageAttachment, type OutgoingMessageDraft, type SendOptions, type MessageBlock, type ParsedEvent, type RenderEventDetails, type PermissionDecisionPayload, type ProviderUsageSnapshot, type AccessLevel, type QuestionAnswerPayload, type TranscriptPayloadLoader, type TranscriptPayloadRef, type UploadedAttachment, ChatBlockRenderersProvider, eventInputMessageUid, parseEventPart, type EventQueueStatus, type ResolveEventQueueStatus } from "@redbamboo/chat"
 import { LiveReportBlock, LiveReportHostProvider, type LiveReportHost } from "../components/live-report/live-report"
 import { LIVE_REPORT_LANGUAGE } from "../lib/live-report"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, PluginExtensionSlot, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
@@ -71,6 +71,7 @@ import { formatOwningApp } from "../lib/discussion-owner"
 import { useVoiceSession } from "../hooks/use-voice-session"
 import { VoiceSessionPanel } from "../components/voice-session-panel"
 
+const nodeSettingsClient = createSessionNodeSettingsClient(api)
 const inferenceSettingsClient: SessionInferenceSettingsClient = {
   load: sessionId => api.get(`/ai-session/sessions/${encodeURIComponent(sessionId)}/inference-settings`),
   set: (sessionId, change) => api.put(`/ai-session/sessions/${encodeURIComponent(sessionId)}/inference-settings`, change),
@@ -1140,6 +1141,7 @@ export function ChatView({
     })),
     loadProviderUsage: recordedUsageLoader,
     inferenceSettingsClient: accessChangeable ? inferenceSettingsClient : undefined,
+    nodeSettingsClient: accessChangeable ? nodeSettingsClient : undefined,
     subscribeInferenceSettings: queueTransport?.subscribe,
     onAccessLevelChange: accessChangeable ? handleAccessLevelChange : undefined,
     fullAccessEnabled,
