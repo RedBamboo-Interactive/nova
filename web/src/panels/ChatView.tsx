@@ -1140,6 +1140,7 @@ export function ChatView({
     })),
     loadProviderUsage: recordedUsageLoader,
     inferenceSettingsClient: accessChangeable ? inferenceSettingsClient : undefined,
+    subscribeInferenceSettings: queueTransport?.subscribe,
     onAccessLevelChange: accessChangeable ? handleAccessLevelChange : undefined,
     fullAccessEnabled,
     // The floating window has no RedLeaf shell to open Settings in: the link stays text there.
