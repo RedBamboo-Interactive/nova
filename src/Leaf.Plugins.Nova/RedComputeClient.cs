@@ -657,6 +657,31 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         catch { }
     }
 
+    /// <summary>
+    /// GET /ai-session/sessions/{id} for a caller that must tell RedCompute being unavailable from a missing session:
+    /// the HTTP status and, on success, the parsed document. A transport failure throws HttpRequestException (a
+    /// timeout becomes one too) and the caller's cancellation propagates; <see cref="GetSessionRawAsync"/> folds all
+    /// of these into null.
+    /// </summary>
+    public async Task<(int StatusCode, JsonDocument? Document)> ReadSessionAsync(
+        string sessionId, int? tail = null, CancellationToken ct = default)
+    {
+        var url = tail is { } count
+            ? $"/ai-session/sessions/{sessionId}?tail={count}"
+            : $"/ai-session/sessions/{sessionId}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        try
+        {
+            using var response = await gateway.SendAsync(request, provenance: null, ct);
+            if (!response.IsSuccessStatusCode) return ((int)response.StatusCode, null);
+            return ((int)response.StatusCode, JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct)));
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new HttpRequestException("RedCompute did not answer in time");
+        }
+    }
+
     /// <summary>Raw GET /ai-session/sessions/{id} as parsed JSON, or null when unreachable/missing.</summary>
     public async Task<JsonDocument?> GetSessionRawAsync(
         string sessionId, CancellationToken ct = default, int? tail = null)

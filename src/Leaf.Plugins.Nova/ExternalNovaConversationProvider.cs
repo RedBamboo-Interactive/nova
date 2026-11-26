@@ -694,6 +694,16 @@ public sealed class ExternalAgentConversationProvider(
         => string.Equals(transport, "discord", StringComparison.OrdinalIgnoreCase)
             || string.Equals(transport, "leaf-commons", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// RedCompute could not serve the read: stopping, draining for a deploy, restarting (5xx, 408, 429). That is an
+    /// HttpRequestException, which a caller retries quietly. Any other status is about this session (404, 403) and
+    /// stays an InvalidOperationException.
+    /// </summary>
+    internal static Exception Unavailable(string message, int status)
+        => status is >= 500 or 408 or 429
+            ? new HttpRequestException($"{message} (HTTP {status})", null, (System.Net.HttpStatusCode)status)
+            : new InvalidOperationException($"{message} (HTTP {status})");
+
     public async Task<ExternalConversationPage> ReadSettledAsync(
         ExternalConversationHandle handle,
         ExternalConversationCursor? after = null,
@@ -705,8 +715,8 @@ public sealed class ExternalAgentConversationProvider(
         // Session detail remains the owner of input-queue quiescence. Its one-record
         // compatibility tail is sufficient here; transcript content comes only from
         // the canonical keyset page contract below.
-        using var document = await redCompute.GetSessionRawAsync(handle.SessionId, ct, tail: 1);
-        if (document is null) throw new InvalidOperationException("RedCompute transcript is unavailable");
+        var (sessionStatus, session) = await redCompute.ReadSessionAsync(handle.SessionId, tail: 1, ct);
+        using var document = session ?? throw Unavailable("RedCompute transcript is unavailable", sessionStatus);
         var isQuiescent = IsQuiescent(document.RootElement);
 
         var requestedLimit = Math.Clamp(limit, 1, 500);
@@ -715,8 +725,7 @@ public sealed class ExternalAgentConversationProvider(
             requestedLimit,
             ct: ct);
         if (!newestResult.Success)
-            throw new InvalidOperationException(
-                $"RedCompute transcript page is unavailable (HTTP {newestResult.StatusCode})");
+            throw Unavailable("RedCompute transcript page is unavailable", newestResult.StatusCode);
 
         var newest = newestResult.Value!;
         var currentEpoch = newest.Page.Epoch;
@@ -749,8 +758,7 @@ public sealed class ExternalAgentConversationProvider(
                 before: oldestCursor,
                 ct: ct);
             if (!olderResult.Success)
-                throw new InvalidOperationException(
-                    $"RedCompute transcript page is unavailable (HTTP {olderResult.StatusCode})");
+                throw Unavailable("RedCompute transcript page is unavailable", olderResult.StatusCode);
             var older = olderResult.Value!;
             if (!string.Equals(older.Page.Epoch, currentEpoch, StringComparison.Ordinal))
                 throw new InvalidOperationException("RedCompute transcript epoch changed during settled read");
