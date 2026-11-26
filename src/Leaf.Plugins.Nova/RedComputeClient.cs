@@ -9,6 +9,7 @@ public sealed class SessionMessage
 {
     public long Id { get; set; }
     public string? SessionId { get; set; }
+    public string? Provider { get; set; }
     public string Role { get; set; } = "";
     public string EventType { get; set; } = "";
     public string? Content { get; set; }

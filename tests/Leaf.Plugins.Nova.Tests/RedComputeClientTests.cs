@@ -66,6 +66,34 @@ public sealed class RedComputeClientTests
         Assert.Equal("newer", page.Page.NewestCursor);
     }
 
+    [Fact]
+    public async Task Ordered_logical_history_preserves_each_turns_harness_across_a_return()
+    {
+        var gateway = new StaticComputeGateway(
+            """
+            {"session":{"id":"logical-session","status":"Idle"},"messages":[
+              {"id":12,"sessionId":"logical-session","provider":"claude-code","role":"assistant","eventType":"text","content":"First","messageUid":"first","epoch":"e","sequence":12,"timestamp":"2026-11-26T11:00:00Z","recordCreatedAt":"2026-11-26T11:00:00Z"},
+              {"id":13,"sessionId":"logical-session","provider":"codex","role":"user","eventType":"text","content":"Second","messageUid":"second","epoch":"e","sequence":13,"timestamp":"2026-11-26T11:01:00Z","recordCreatedAt":"2026-11-26T11:01:00Z"},
+              {"id":14,"sessionId":"logical-session","provider":"claude-code","role":"assistant","eventType":"text","content":"Third","messageUid":"third","epoch":"e","sequence":14,"timestamp":"2026-11-26T11:02:00Z","recordCreatedAt":"2026-11-26T11:02:00Z"}
+            ],"page":{"epoch":"e","direction":"newest","hasEarlier":true,"hasLater":false,"oldestCursor":"older","fromSequence":12,"throughSequence":14,"boundaryComplete":true}}
+            """);
+
+        var result = await new RedComputeClient(gateway).GetTranscriptPageAsync("logical-session", 20);
+        var page = Assert.IsType<SessionTranscriptPage>(result.Value);
+        var projected = DiscussionEndpoints.ProjectCanonicalHistoryMessages(page.Messages);
+        using var json = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(projected,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+        Assert.Collection(json.RootElement.EnumerateArray(),
+            row => Assert.Equal(("first", "claude-code", 12L), Read(row)),
+            row => Assert.Equal(("second", "codex", 13L), Read(row)),
+            row => Assert.Equal(("third", "claude-code", 14L), Read(row)));
+        Assert.Equal("older", page.Page.OldestCursor);
+
+        static (string?, string?, long) Read(System.Text.Json.JsonElement row)
+            => (row.GetProperty("messageUid").GetString(), row.GetProperty("provider").GetString(),
+                row.GetProperty("sequence").GetInt64());
+    }
+
     // Background work attribution must survive Nova's typed proxy of the transcript page,
     // or the client renders a subagent's calls as phantom assistant turns.
     [Fact]

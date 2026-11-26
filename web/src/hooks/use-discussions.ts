@@ -2050,8 +2050,9 @@ export function useDiscussions(eventResolver?: EventResolver) {
       setActiveDiscussionId((current) => resolveRotatedDiscussionSelection(current, oldDiscussionId, newDiscussionId))
       refreshDiscussions()
     } else if (event.type === "session.stream") {
-      const { sessionId, event: evt, timestamp: serverTimestamp } = event.data as {
+      const { sessionId, provider, event: evt, timestamp: serverTimestamp } = event.data as {
         sessionId: string
+        provider?: string
         event: ClaudeStreamEvent
         timestamp?: string
       }
@@ -2076,6 +2077,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
       // answer has nothing to echo back and the session stays blocked.
       const chatEvent: ChatEvent = {
         type: evt.type as ChatEvent["type"],
+        provider,
         content: evt.content ?? null,
         toolName: evt.toolName ?? null,
         toolInput: typeof evt.toolInput === "string"

@@ -2995,6 +2995,7 @@ public static class DiscussionEndpoints
             {
                 Id = message.Id,
                 SessionId = message.SessionId,
+                Provider = message.Provider,
                 Role = message.Role,
                 EventType = message.EventType,
                 Content = ConversationExporter.StripInjectedTags(message.Content ?? ""),
