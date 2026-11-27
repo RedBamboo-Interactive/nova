@@ -507,6 +507,29 @@ public sealed class AgentActivitySignalsTests
         Assert.Equal(expected, DiscussionAccessPolicy.IsHumanInitiated(principal));
     }
 
+    [Theory]
+    [InlineData(0, 2)]
+    [InlineData(29.9, 2)]
+    [InlineData(30, 5)]
+    [InlineData(120, 5)]
+    [InlineData(299.9, 5)]
+    [InlineData(300, 10)]
+    [InlineData(3 * 3600, 10)]
+    public void The_watch_backs_off_over_a_long_turn(double turnAgeSeconds, double expectedSeconds)
+        => Assert.Equal(TimeSpan.FromSeconds(expectedSeconds),
+            AgentActivitySignals.BackoffInterval(TimeSpan.FromSeconds(turnAgeSeconds)));
+
+    [Fact]
+    public void A_settling_or_unreadable_turn_is_confirmed_at_the_turn_start_pace()
+    {
+        var late = TimeSpan.FromMinutes(20);
+        Assert.Equal(TimeSpan.FromSeconds(10),
+            AgentActivitySignals.NextPollDelay(AgentActivitySignals.BackoffInterval, late, confirming: false));
+        // A terminal state seen on a 10 s poll is confirmed 2 s later, not 10 s.
+        Assert.Equal(TimeSpan.FromSeconds(2),
+            AgentActivitySignals.NextPollDelay(AgentActivitySignals.BackoffInterval, late, confirming: true));
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────
 
     private static AgentActivitySignals Signals(RecordingEvents bus, IAgentActivityProbe probe)

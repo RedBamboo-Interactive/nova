@@ -118,10 +118,28 @@ public sealed class AgentActivitySignals : IDisposable
     private const int QuietPollsToEnd = 2;
     private const int MaxConsecutiveProbeFailures = 30;
 
+    /// <summary>
+    /// The watcher's poll interval for a turn of age <paramref name="turnAge"/>: 2 s for the
+    /// first 30 s, 5 s until 5 minutes, then 10 s. Phases are display-only, so a long turn
+    /// does not need a fast read; the start of a turn, where phases change most, does.
+    /// </summary>
+    internal static TimeSpan BackoffInterval(TimeSpan turnAge)
+        => turnAge < TimeSpan.FromSeconds(30) ? TimeSpan.FromSeconds(2)
+            : turnAge < TimeSpan.FromMinutes(5) ? TimeSpan.FromSeconds(5)
+            : TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The delay before the next poll. Every poll reads the status, so a terminal state is seen
+    /// within one interval; once one has been seen, or a read failed (<paramref name="confirming"/>),
+    /// the next poll uses the turn-start interval, so the end is not held back by the backoff.
+    /// </summary>
+    internal static TimeSpan NextPollDelay(Func<TimeSpan, TimeSpan> schedule, TimeSpan turnAge, bool confirming)
+        => schedule(confirming ? TimeSpan.Zero : turnAge);
+
     private readonly IPluginEvents events;
     private readonly IAgentActivityProbe probe;
     private readonly ILogger logger;
-    private readonly TimeSpan pollInterval;
+    private readonly Func<TimeSpan, TimeSpan> pollSchedule;
     private readonly TimeSpan startGrace;
     private readonly TimeSpan maxWatch;
     private readonly Channel<JsonObject> queue;
@@ -140,7 +158,8 @@ public sealed class AgentActivitySignals : IDisposable
         this.events = events;
         this.probe = probe;
         this.logger = logger ?? NullLogger<AgentActivitySignals>.Instance;
-        this.pollInterval = pollInterval ?? TimeSpan.FromSeconds(2);
+        // A fixed interval (tests) or the default backoff over the turn's age.
+        pollSchedule = pollInterval is { } fixedInterval ? _ => fixedInterval : BackoffInterval;
         // The admitted message needs a moment to reach the session loop.
         this.startGrace = startGrace ?? TimeSpan.FromSeconds(10);
         this.maxWatch = maxWatch ?? TimeSpan.FromHours(3);
@@ -252,7 +271,11 @@ public sealed class AgentActivitySignals : IDisposable
         {
             while (clock.Elapsed < maxWatch)
             {
-                if (!first) await Task.Delay(pollInterval, ct);
+                // A turn's age restarts when more input is admitted (graceFrom). A settling turn
+                // and an unreadable session keep the turn-start pace, so ending (and giving up
+                // after MaxConsecutiveProbeFailures) takes as long as it did without the backoff.
+                if (!first)
+                    await Task.Delay(NextPollDelay(pollSchedule, clock.Elapsed - graceFrom, quiet > 0 || failures > 0), ct);
                 first = false;
 
                 AgentActivityObservation? observed;
