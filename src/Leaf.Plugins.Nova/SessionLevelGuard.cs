@@ -39,8 +39,12 @@ public static class SessionLevelGuard
             || string.Equals(callerSessionId, targetSessionId, StringComparison.Ordinal))
             return null;
 
-        var caller = await redCompute.ProbeSessionAsync(callerSessionId, ct);
-        var target = await redCompute.ProbeSessionAsync(targetSessionId, ct);
+        // The two reads are independent: run them together.
+        var callerProbe = redCompute.ProbeSessionAsync(callerSessionId, ct);
+        var targetProbe = redCompute.ProbeSessionAsync(targetSessionId, ct);
+        await Task.WhenAll(callerProbe, targetProbe);
+        var caller = await callerProbe;
+        var target = await targetProbe;
         if (!caller.Reachable || !target.Reachable)
             return Results.Json(new
             {

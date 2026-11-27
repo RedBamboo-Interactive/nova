@@ -382,7 +382,7 @@ public sealed class DiscussionArchiveDeadlineTests
             ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
             var path = request.RequestUri?.OriginalString ?? "";
-            var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var parts = path.Split('?')[0].Split('/', StringSplitOptions.RemoveEmptyEntries);
             var id = parts.Length >= 3 ? parts[2] : "";
             var isStop = request.Method == HttpMethod.Post && path.EndsWith("/stop", StringComparison.Ordinal);
 

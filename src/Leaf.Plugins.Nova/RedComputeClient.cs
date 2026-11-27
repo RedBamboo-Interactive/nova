@@ -702,9 +702,17 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         }
     }
 
+    /// <summary>
+    /// The transcript tail a probe that reads only <c>session</c> fields asks for. Without a tail
+    /// RedCompute pages the whole transcript back out of RedLeaf; the session fields do not depend on
+    /// it. RedCompute clamps tail to at least 1.
+    /// </summary>
+    internal const int StatusProbeTail = 1;
+
     public async Task<Guid?> GetSessionJobIdAsync(string sessionId, CancellationToken ct = default)
     {
-        using var session = await GetSessionRawAsync(sessionId, ct);
+        // Reads no transcript: the minimum tail keeps the session's history out of this probe.
+        using var session = await GetSessionRawAsync(sessionId, ct, tail: StatusProbeTail);
         if (session is null) return null;
         var root = session.RootElement;
         if (root.TryGetProperty("jobId", out var job)
@@ -742,7 +750,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get,
-                $"/ai-session/sessions/{sessionId}");
+                $"/ai-session/sessions/{sessionId}?tail={StatusProbeTail}");
             using var resp = await gateway.SendAsync(request, provenance: null, ct);
             if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
                 return new(true, false, null);
@@ -779,7 +787,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get,
-                $"/ai-session/sessions/{sessionId}");
+                $"/ai-session/sessions/{sessionId}?tail={StatusProbeTail}");
             using var resp = await gateway.SendAsync(request, provenance: null, ct);
             if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return new(true, null);
             if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden) return new(false, null, Denied: true);
@@ -900,7 +908,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     public async Task<SessionRuntimeState?> GetSessionStateAsync(
         string sessionId, CancellationToken ct = default)
     {
-        using var doc = await GetSessionRawAsync(sessionId, ct);
+        using var doc = await GetSessionRawAsync(sessionId, ct, tail: StatusProbeTail);
         if (doc == null
             || !doc.RootElement.TryGetProperty("session", out var session)
             || !session.TryGetProperty("status", out var status)

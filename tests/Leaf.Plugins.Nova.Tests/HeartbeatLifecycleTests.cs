@@ -865,7 +865,7 @@ public sealed class HeartbeatLifecycleTests
             var path = request.RequestUri?.IsAbsoluteUri == true
                 ? request.RequestUri.AbsolutePath
                 : request.RequestUri?.OriginalString ?? "";
-            var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var parts = path.Split('?')[0].Split('/', StringSplitOptions.RemoveEmptyEntries);
             var sessionId = parts.Length >= 3 ? parts[2] : "";
             if (!sessions.TryGetValue(sessionId, out var session))
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));

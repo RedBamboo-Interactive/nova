@@ -215,6 +215,25 @@ public sealed class RedComputeClientTests
     }
 
     [Fact]
+    public async Task StatusProbesNeverPageTheTranscript()
+    {
+        // Without a tail RedCompute reads the whole transcript back out of RedLeaf; these
+        // helpers read only session fields, so each asks for the minimum tail.
+        var gateway = new StaticComputeGateway(
+            """{"jobId":"8f1d2b9e-0c39-4d61-9d7a-2f2f6f9e6a10","session":{"status":"Idle","accessLevel":"auto"}}""");
+        var client = new RedComputeClient(gateway);
+
+        Assert.Equal(Guid.Parse("8f1d2b9e-0c39-4d61-9d7a-2f2f6f9e6a10"), await client.GetSessionJobIdAsync("s1"));
+        Assert.True((await client.ProbeSessionForResumeAsync("s1")).Exists);
+        Assert.Equal("auto", (await client.ProbeSessionAsync("s1")).AccessLevel);
+        Assert.Equal("Idle", (await client.GetSessionStateAsync("s1"))?.Status);
+        Assert.Equal("Idle", await client.GetSessionStatusAsync("s1"));
+
+        Assert.Equal(5, gateway.Paths.Count);
+        Assert.All(gateway.Paths, path => Assert.Equal("/ai-session/sessions/s1?tail=1", path));
+    }
+
+    [Fact]
     public async Task ResumeProbeReportsTheLiveStatusSoAResumeOfARunningSessionCanBeSkipped()
     {
         var gateway = new StaticComputeGateway(
@@ -288,12 +307,17 @@ public sealed class RedComputeClientTests
 
     private sealed class StaticComputeGateway(string payload) : IComputeGateway
     {
+        public System.Collections.Concurrent.ConcurrentQueue<string> Paths { get; } = new();
+
         public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             ComputeProvenance? provenance = null, CancellationToken ct = default)
-            => Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Paths.Enqueue(request.RequestUri?.OriginalString ?? "");
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
                 Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json"),
             });
+        }
     }
 
     private sealed class GenerateComputeGateway : IComputeGateway

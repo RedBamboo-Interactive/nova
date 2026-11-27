@@ -106,7 +106,7 @@ public sealed class SessionLevelGuardTests
         public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
             if (!reachable) return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
-            var id = request.RequestUri!.OriginalString.Split('/').Last();
+            var id = request.RequestUri!.OriginalString.Split('?')[0].Split('/').Last();
             if (!levels.TryGetValue(id, out var level))
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
             var body = level is null
