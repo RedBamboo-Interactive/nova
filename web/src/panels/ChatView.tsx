@@ -1042,7 +1042,7 @@ export function ChatView({
 
   const handleRetryDiscussionList = useCallback(() => {
     if (archiveMode) void refreshArchivedDiscussions(archiveQuery, agentFilter).catch(() => {})
-    else syncAndRefresh().catch(() => {})
+    else syncAndRefresh(true).catch(() => {})
   }, [agentFilter, archiveMode, archiveQuery, refreshArchivedDiscussions, syncAndRefresh])
 
   const handleToggleArchiveMode = useCallback(() => {

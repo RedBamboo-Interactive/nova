@@ -117,7 +117,12 @@ public sealed class DelegationActivityTests
         f.Gateway.Set("worker", "Idle");
         Assert.Equal(0, (await f.Read())[f.Parent.Id].OngoingCount);
         f.Gateway.Responses["worker"] = (503, "{}");
-        var unavailable = (await f.Read())[f.Parent.Id];
+        // Settled work is not read again, so an outage cannot touch it.
+        var settled = (await f.Read())[f.Parent.Id];
+        Assert.True(settled.Available);
+        Assert.Empty(settled.Sessions);
+        // A fresh read does look again, and the outage still cannot resurrect it.
+        var unavailable = (await f.Activity.ReadAsync([f.Parent], Human(), fresh: true))[f.Parent.Id];
         Assert.False(unavailable.Available);
         Assert.Empty(unavailable.Sessions);
         f.AddMarker("worker");
@@ -328,11 +333,86 @@ public sealed class DelegationActivityTests
         Assert.Equal("idle", f.Parent.Status);
     }
 
+    [Fact]
+    public async Task FinishedLinkIsNotReadAgainUntilNamedFreshOrContinued()
+    {
+        var f = new Fixture();
+        f.AddMarker("worker");
+        f.Gateway.Set("worker", "Idle");
+        Assert.Equal(0, (await f.Read())[f.Parent.Id].OngoingCount);
+        Assert.Single(f.Gateway.Reads);
+        var lookups = f.EntityCalls.Count;
+
+        // Settled: neither RedCompute nor the entity store is asked again, and it is still linked.
+        f.Gateway.Set("worker", "Active");
+        var quiet = (await f.Read())[f.Parent.Id];
+        Assert.Equal(0, quiet.OngoingCount);
+        Assert.Empty(quiet.Sessions);
+        Assert.Equal(new[] { "worker" }, quiet.LinkedSessionIds);
+        Assert.Single(f.Gateway.Reads);
+        Assert.Equal(lookups, f.EntityCalls.Count);
+
+        // A lifecycle frame for the session names it: read again, and it is running.
+        var named = (await f.Activity.ReadAsync([f.Parent], Human(), changedSessionIds: new HashSet<string> { "worker" }))[f.Parent.Id];
+        Assert.Equal(1, named.OngoingCount);
+        Assert.Equal(2, f.Gateway.Reads.Count);
+        // No longer settled, so an unnamed read keeps following it.
+        f.Advance(3);
+        Assert.Equal(1, (await f.Activity.ReadAsync([f.Parent], Human()))[f.Parent.Id].OngoingCount);
+        Assert.Equal(3, f.Gateway.Reads.Count);
+    }
+
+    [Fact]
+    public async Task AContinuationReopensASettledLink()
+    {
+        var f = new Fixture();
+        f.AddMarker("worker");
+        f.Gateway.Set("worker", "Idle");
+        await f.Read();
+        await f.Read();
+        Assert.Single(f.Gateway.Reads);
+        f.AddMarker("worker", repository: null); // A continuation: a newer marker for the same session.
+        f.Gateway.Set("worker", "Active");
+        var reopened = (await f.Read())[f.Parent.Id];
+        Assert.Equal(1, reopened.OngoingCount);
+        Assert.Equal("Nova", Assert.Single(reopened.Sessions).Repository);
+        Assert.Equal(2, f.Gateway.Reads.Count);
+    }
+
+    [Fact]
+    public async Task MetadataIsFoundOnceBySessionIdAndReadByIdOnEveryRequest()
+    {
+        var f = new Fixture();
+        for (var i = 0; i < 30; i++) f.Gateway.EnsureMetadata($"unlinked-{i}");
+        f.AddMarker("worker");
+        f.Gateway.Set("worker", "Active");
+        for (var i = 0; i < 3; i++) Assert.Equal(1, (await f.Read())[f.Parent.Id].OngoingCount);
+        // Never a page over every ai-session; one lookup by session id, then one read by id per request.
+        var query = Assert.Single(f.EntityCalls, call => call.Method == "QueryAsync");
+        Assert.Equal("worker", query.SessionId);
+        Assert.Equal(2, f.EntityCalls.Count(call => call.Method == "GetAsync"));
+        // A link not linked anywhere is never looked up.
+        Assert.DoesNotContain(f.EntityCalls, call => call.SessionId?.StartsWith("unlinked-") == true);
+    }
+
+    [Fact]
+    public async Task ASessionNotYetWrittenIsLookedUpAgain()
+    {
+        var f = new Fixture();
+        f.AddMarker("worker");
+        f.Gateway.Canonical.TryRemove("worker", out _);
+        f.Gateway.Responses["worker"] = (200, "{}");
+        Assert.Equal(0, (await f.Read())[f.Parent.Id].OngoingCount);
+        f.Gateway.Set("worker", "Active");
+        Assert.Equal(1, (await f.Read())[f.Parent.Id].OngoingCount);
+    }
+
     private sealed class Fixture
     {
         public DiscussionRead Parent = DelegationActivityTests.Parent("parent");
         public readonly List<DiscussionMessage> Records = [];
         public readonly List<(Guid Discussion, long After)> Pages = [];
+        public readonly ConcurrentQueue<(string Method, string? SessionId)> EntityCalls = new();
         public readonly Gateway Gateway = new();
         private readonly IDiscussions messages;
         private readonly IEntityStore entities;
@@ -351,8 +431,15 @@ public sealed class DelegationActivityTests
                     .OrderBy(m => m.Id).Take((int)args[1]!).ToArray());
             });
             entities = CallbackDeliveryTests.Proxy.Create<IEntityStore>((method, args) => {
+                if (method == "GetAsync")
+                {
+                    var found = Gateway.Canonical.Values.FirstOrDefault(entity => entity.Id == (Guid)args[0]!);
+                    EntityCalls.Enqueue((method, found?.Data["session_id"]?.ToString()));
+                    return Task.FromResult(found);
+                }
                 Assert.Equal("QueryAsync", method);
                 var query = (EntityQuery)args[0]!;
+                EntityCalls.Enqueue((method, query.DataEquals?.GetValueOrDefault("session_id")?.ToString()));
                 Assert.Equal("ai-session", query.TypeSlug);
                 return Task.FromResult<IReadOnlyList<LeafEntity>>(Gateway.Canonical.Values
                     .Where(entity => query.DataEquals!.All(pair => entity.Data[pair.Key]?.ToString() == pair.Value?.ToString()))

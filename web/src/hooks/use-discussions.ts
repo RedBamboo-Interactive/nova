@@ -222,8 +222,16 @@ export function useDiscussions(eventResolver?: EventResolver) {
   const freshDelegationRead = useRef(true)
   const delegationInvalidations = useMemo(() => new DeferredInvalidationCoordinator<string>(environment.window, 500), [environment.window])
   useEffect(() => () => delegationInvalidations.clear(), [delegationInvalidations])
+  // A hidden document reads no delegation activity: requests (and what they asked for,
+  // fresh or changed sessions) wait, and one refresh runs when it is visible again.
+  const delegationRefreshDeferred = useRef(false)
   const refreshDelegationActivity = useCallback((fresh = false) => {
     if (fresh) freshDelegationRead.current = true
+    if (environment.document.visibilityState === "hidden") {
+      delegationRefreshDeferred.current = true
+      return Promise.resolve()
+    }
+    delegationRefreshDeferred.current = false
     return delegationReads.current.run("activity", async () => {
       const query = new URLSearchParams()
       if (freshDelegationRead.current) query.set("fresh", "true")
@@ -237,7 +245,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
           ? {} : unavailableDelegationActivity(previous))
       }
     })
-  }, [])
+  }, [environment.document])
+  useEffect(() => {
+    const onVisible = () => {
+      if (environment.document.visibilityState === "visible" && delegationRefreshDeferred.current)
+        void refreshDelegationActivity()
+    }
+    environment.document.addEventListener("visibilitychange", onVisible)
+    return () => environment.document.removeEventListener("visibilitychange", onVisible)
+  }, [environment.document, refreshDelegationActivity])
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Record<string, MessageBlock[]>>({})
   // Events held for each discussion's next turn, by uid (delivery with-next).
@@ -553,8 +569,10 @@ export function useDiscussions(eventResolver?: EventResolver) {
     return map
   }, [discussions])
 
-  const refreshDiscussions = useCallback(async () => {
-    void refreshDelegationActivity(true)
+  const refreshDiscussions = useCallback(async (freshDelegations = false) => {
+    // Fresh (past RedCompute's short cache) only on reconnect, which sets the flag
+    // itself, and on an explicit refresh; every other list refresh reads normally.
+    void refreshDelegationActivity(freshDelegations)
     const reads = new Map(getDiscussionList().map(d => [d.id, captureRuntimeRead(d.id)]))
     let list: DiscussionInfo[]
     try {
@@ -582,13 +600,13 @@ export function useDiscussions(eventResolver?: EventResolver) {
     setDiscussionListLoadState("ready")
   }, [refreshDelegationActivity, captureRuntimeRead, runtimeReadIsCurrent, clearStreamingLatch, clearQuestion])
 
-  const syncAndRefresh = useCallback(async () => {
+  const syncAndRefresh = useCallback(async (freshDelegations = false) => {
     // Sync reconciles every open session with RedCompute and can take seconds,
     // while the persisted list reads in milliseconds. Until the list has been
     // shown once, show it first and let the post-sync refresh correct statuses.
     if (getDiscussionListLoadState() !== "ready") await refreshDiscussions().catch(() => {})
     await api.post("/api/apps/nova/discussions/sync").catch(() => {})
-    await refreshDiscussions()
+    await refreshDiscussions(freshDelegations)
   }, [refreshDiscussions])
 
   const refreshArchivedDiscussions = useCallback(async (

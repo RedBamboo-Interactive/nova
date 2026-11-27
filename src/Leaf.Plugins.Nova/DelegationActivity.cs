@@ -50,6 +50,15 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
         public long MarkerId;
     }
     private readonly ConcurrentDictionary<(string Scope, string Session), SnapshotCache> sessionCache = new();
+    // Markers whose session was last observed finished (a lifecycle fact, keyed by marker so a
+    // continuation's new marker re-opens the link). A settled link is not read again until the
+    // request names its session, asks for a fresh read, or a newer marker supersedes it. What it
+    // contributes to every caller's answer is the same: nothing beyond its id in LinkedSessionIds.
+    private readonly ConcurrentDictionary<(Guid Discussion, long Marker), byte> settled = new();
+    // Session id -> ai-session entity id. Only the location is cached; ownership, Agent and
+    // confidentiality are read from that entity again on every request.
+    private readonly ConcurrentDictionary<string, Guid> metadataEntities = new(StringComparer.Ordinal);
+    internal const int MaxCachedMetadataEntities = 4096;
     internal Func<DateTimeOffset> Now { get; set; } = () => DateTimeOffset.UtcNow;
 
     public async Task<IReadOnlyDictionary<string, DiscussionDelegationActivity>> ReadAsync(
@@ -64,11 +73,24 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
         foreach (var discussion in authorized)
             linked[discussion.Id] = await ReadLinksAsync(discussion, ct);
 
+        // A link last observed finished stays settled unless this request names its session
+        // (a lifecycle frame for it arrived), asks for a fresh read, or a continuation added a
+        // newer marker (a different key). Only the links still needed are read below.
+        // Decided once per request: a concurrent request may settle or re-open a link meanwhile.
+        var skipped = authorized.SelectMany(discussion => linked[discussion.Id]
+                .Where(link => !fresh && changedSessionIds?.Contains(link.SessionId) != true
+                    && settled.ContainsKey((discussion.EntityId, link.MarkerId)))
+                .Select(link => (discussion.EntityId, link.MarkerId)))
+            .ToHashSet();
+        bool IsSettled(DiscussionRead discussion, DelegationLink link) => skipped.Contains((discussion.EntityId, link.MarkerId));
+        var needed = authorized.SelectMany(discussion => linked[discussion.Id]
+                .Where(link => !IsSettled(discussion, link)).Select(link => link.SessionId))
+            .ToHashSet(StringComparer.Ordinal);
+
         // Recheck canonical ownership/confidentiality on EVERY read. Freshness may
         // cache queue observations, never grant continued access to a child's title.
-        // Batch by owner/Agent using existing SDK entities rather than N HTTP probes.
-        var metadata = await ReadMetadataAsync(authorized, linked.Values.SelectMany(value => value)
-            .Select(link => link.SessionId).ToHashSet(StringComparer.Ordinal), ct);
+        // One entity read per needed session rather than N HTTP probes.
+        var metadata = await ReadMetadataAsync(needed, ct);
 
         // One bounded read per distinct linked session, not a global Code-session list
         // or one fanout for every discussion × session pair. No background watcher.
@@ -76,6 +98,7 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
         var snapshots = new ConcurrentDictionary<string, RedComputeClient.DelegationSnapshotResult>();
         var scope = ScopeKey(context);
         await Task.WhenAll(linked.Values.SelectMany(links => links).GroupBy(link => link.SessionId, StringComparer.Ordinal)
+            .Where(group => needed.Contains(group.Key))
             .Select(async group =>
             {
                 if (metadata is null) { snapshots[group.Key] = new(null); return; }
@@ -102,6 +125,8 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
             var unknownCount = 0;
             foreach (var link in linked[discussion.Id])
             {
+                // Settled: finished, so neither ongoing nor unknown, exactly as when it was read.
+                if (IsSettled(discussion, link)) continue;
                 var snapshot = snapshots[link.SessionId];
                 var key = (scope, discussion.EntityId, link.MarkerId);
                 if (snapshot.Denied)
@@ -131,6 +156,10 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
                 }
                 var isOngoing = IsOutstanding(status);
                 lastStatus[key] = status;
+                // Only an observed terminal state settles a link. A denial, a scope mismatch or
+                // an outage leaves it to be read again.
+                if (status == "finished") settled[(discussion.EntityId, link.MarkerId)] = 0;
+                else settled.TryRemove((discussion.EntityId, link.MarkerId), out _);
                 if (isOngoing)
                 {
                     ongoingCount++;
@@ -157,42 +186,59 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
     }
 
     private async Task<Dictionary<string, RedComputeClient.DelegationSnapshot>?> ReadMetadataAsync(
-        IReadOnlyList<DiscussionRead> discussions, IReadOnlySet<string> linked, CancellationToken ct)
+        IReadOnlySet<string> linked, CancellationToken ct)
     {
-        var result = new Dictionary<string, RedComputeClient.DelegationSnapshot>(StringComparer.Ordinal);
-        if (linked.Count == 0) return result;
+        var result = new ConcurrentDictionary<string, RedComputeClient.DelegationSnapshot>(StringComparer.Ordinal);
+        if (linked.Count == 0) return new(StringComparer.Ordinal);
         try
         {
-            foreach (var scope in discussions.Select(d => (d.OwnerId, d.AgentId)).Distinct())
+            using var concurrency = new SemaphoreSlim(4);
+            await Task.WhenAll(linked.Select(async sessionId =>
             {
-                Guid? after = null;
-                while (true)
+                await concurrency.WaitAsync(ct);
+                try
                 {
-                    var page = await entities.QueryAsync(new EntityQuery {
-                        TypeSlug = "ai-session", Limit = 500, OrderById = true, AfterId = after,
-                        DataEquals = new Dictionary<string, object?> { ["user_id"] = scope.OwnerId, ["owner_agent_id"] = scope.AgentId },
-                    }, ct);
-                    foreach (var entity in page)
-                    {
-                        var data = entity.Data;
-                        var id = data["session_id"]?.ToString();
-                        if (entity.TypeSlug != "ai-session" || id is null || !linked.Contains(id)) continue;
-                        // This metadata read authorizes/display-labels the child;
-                        // lifecycle comes exclusively from the Compute observation.
-                        result[id] = new("Unknown", null, entity.Name,
-                            data["user_id"]?.ToString(), data["owner_agent_id"]?.ToString(),
-                            data["confidential"]?.ToString() == "true", data["repository"]?.ToString(), null, null, null);
-                    }
-                    if (page.Count < 500) break;
-                    var next = page[^1].Id;
-                    if (next == after) throw new InvalidOperationException("Delegation metadata cursor did not advance");
-                    after = next;
+                    if (await ReadSessionEntityAsync(sessionId, ct) is not { } entity) return;
+                    var data = entity.Data;
+                    // This metadata read authorizes/display-labels the child;
+                    // lifecycle comes exclusively from the Compute observation.
+                    result[sessionId] = new("Unknown", null, entity.Name,
+                        data["user_id"]?.ToString(), data["owner_agent_id"]?.ToString(),
+                        data["confidential"]?.ToString() == "true", data["repository"]?.ToString(), null, null, null);
                 }
-            }
-            return result;
+                finally { concurrency.Release(); }
+            }));
+            return new(result, StringComparer.Ordinal);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { return null; }
+    }
+
+    /// <summary>
+    /// The session's ai-session entity, read fresh. Finding it by <c>data.session_id</c> happens
+    /// once per session and is remembered (bounded); the entity itself is read by id on every
+    /// request, so a changed owner, Agent or confidentiality applies to the next one.
+    /// </summary>
+    private async Task<LeafEntity?> ReadSessionEntityAsync(string sessionId, CancellationToken ct)
+    {
+        if (metadataEntities.TryGetValue(sessionId, out var entityId))
+        {
+            var known = await entities.GetAsync(entityId, ct);
+            if (known is not null && known.TypeSlug == "ai-session" && known.Data["session_id"]?.ToString() == sessionId)
+                return known;
+            metadataEntities.TryRemove(sessionId, out _);
+        }
+        var page = await entities.QueryAsync(new EntityQuery {
+            TypeSlug = "ai-session", Limit = 10, OrderById = true,
+            DataEquals = new Dictionary<string, object?> { ["session_id"] = sessionId },
+        }, ct);
+        var entity = page.LastOrDefault(candidate => candidate.TypeSlug == "ai-session"
+            && candidate.Data["session_id"]?.ToString() == sessionId);
+        // Not written yet, or gone: nothing is remembered, so the next request looks again.
+        if (entity is null) return null;
+        if (metadataEntities.Count >= MaxCachedMetadataEntities) metadataEntities.Clear();
+        metadataEntities[sessionId] = entity.Id;
+        return entity;
     }
 
     private async Task<RedComputeClient.DelegationSnapshotResult> ReadSnapshotAsync(
