@@ -15,7 +15,7 @@ public static class DiscussionSummaryEndpoints
         group.MapGet("/discussion-summaries", ListAsync)
             .WithSummary("Read owner-authorized Nova discussion status projections and the per-person Fast auto-summary default. No inference.");
         group.MapGet("/discussion-summaries/settings", GetSettingsAsync)
-            .WithSummary("Read the signed beneficiary's Nova auto-summary default. Off until the person opts in.");
+            .WithSummary("Read the signed beneficiary's Nova auto-summary default. On unless the person has saved an opt-out.");
         group.MapPut("/discussion-summaries/settings", PutSettingsAsync)
             .WithSummary("Owner-only. Persist the Nova default for discussions without an override. Body {enabled: boolean}.");
         group.MapGet("/discussions/{id}/summary", ReadAsync)

@@ -15,24 +15,43 @@ public sealed class DiscussionSummaryTests
     private static readonly SummaryText Waiting = new("waiting", "Lab release", "The test is ready.", "Nova runs it after handoff.", null);
 
     [Fact]
-    public async Task Default_off_and_an_explicit_off_make_no_compute_calls()
+    public async Task New_owners_default_on_and_a_saved_owner_opt_out_survives_restart()
     {
         using var h = new Harness();
-        await h.SweepAsync();
-        Assert.Equal(0, h.Compute.Requests);
-        await h.Summaries.SetDefaultAsync(h.Owner, true, default);
-        await h.Summaries.SetOverrideAsync(await h.ReadAsync(), h.Person(), false);
-        await h.SweepAsync();
-        Assert.Equal(0, h.Compute.Requests);
         Assert.True(await h.Summaries.DefaultAsync(h.Owner, default));
-        Assert.False(await h.Summaries.DefaultAsync(Guid.NewGuid().ToString(), default));
+        Assert.True(await h.NewService().DefaultAsync(Guid.NewGuid().ToString(), default));
+        await h.Summaries.SetDefaultAsync(h.Owner, false, default);
+
+        var restarted = h.NewService();
+        Assert.False(await restarted.DefaultAsync(h.Owner, default));
+        Assert.False(DiscussionSummaries.View(await h.ReadAsync(), false).Enabled);
+        await restarted.SweepAsync([await h.ReadAsync()], default);
+        Assert.Equal(0, h.Compute.Requests);
+
+        var overrideOn = await restarted.SetOverrideAsync(await h.ReadAsync(), h.Person(), true);
+        Assert.True(overrideOn?.Enabled);
+        var inherited = await restarted.SetOverrideAsync(await h.ReadAsync(), h.Person(), null);
+        Assert.False(inherited?.Enabled);
+    }
+
+    [Fact]
+    public async Task A_discussion_opt_out_wins_over_the_shipped_default()
+    {
+        using var h = new Harness();
+        var overrideOff = await h.Summaries.SetOverrideAsync(await h.ReadAsync(), h.Person(), false);
+        Assert.False(overrideOff?.Enabled);
+        await h.SweepAsync();
+        Assert.Equal(0, h.Compute.Requests);
+
+        var inherited = await h.Summaries.SetOverrideAsync(await h.ReadAsync(), h.Person(), null);
+        Assert.True(inherited?.Enabled);
+        Assert.Null(inherited?.Override);
     }
 
     [Fact]
     public async Task One_signed_fast_result_after_the_quiet_window_survives_a_worker_restart()
     {
         using var h = new Harness();
-        await h.Summaries.SetDefaultAsync(h.Owner, true, default);
         h.Clock.Now = h.Compute.EndedAt.AddSeconds(179);
         await h.SweepAsync();
         Assert.Equal(0, h.Compute.Generations);

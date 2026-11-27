@@ -8,7 +8,7 @@ Nova shows a concise workstream summary beneath the discussion transcript, immed
 - What happens next and who takes that step?
 - Is a specific action waiting on me?
 
-Nova Settings → Chat supplies a durable per-person default, initially off. Info → Overview → Behaviour supplies an optional per-discussion override with an explicit return to the Nova default. Every existing discussion starts by inheriting the default. The existing live session activity indicator and the inferred workstream state are independent.
+Nova Settings → Chat supplies a durable per-person default. Auto-summary is on until the person opts out. Info → Overview → Behaviour supplies an optional per-discussion override with an explicit return to the Nova default. Discussions without an override inherit the owner's default. Saved defaults and discussion overrides survive upgrades. The existing live session activity indicator and the inferred workstream state are independent.
 
 A Provider picker workstream changed from “waiting for Storage to release the test machine” to “waiting for rollout” and finally to “picker live and verified.” All three points could have a quiet session. The browser check alone established progress toward the agreed goal. The production readback established completion.
 
@@ -49,7 +49,7 @@ The same ownership rules protect the sidebar, API, context and worker. Confident
 
 ## Acceptance
 
-- Settings default persists server-side, an explicit discussion override wins, resetting resumes inheritance, and older discussions default to off.
+- Settings default persists server-side, an explicit discussion override wins, resetting resumes inheritance, and discussions without a saved preference inherit the shipped default.
 - A quiet turn gets one durable Fast result. Duplicate observations, provider errors, new input, restart, rollback and an Agent correction cannot publish an older result over a newer basis.
 - Ordinary signed owner access works. Another owner, unrelated Agent and confidential discussions cannot read or mutate derived private state.
 - Summary-only updates leave ordered transcript history, read revision, queue, callbacks and scroll anchoring intact. A new message renders through the unchanged transcript path.

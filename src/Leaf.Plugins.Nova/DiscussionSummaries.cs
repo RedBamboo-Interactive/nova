@@ -75,18 +75,22 @@ public sealed class DiscussionSummaries(
 
     public static bool Effective(bool? choice, bool defaultEnabled) => choice ?? defaultEnabled;
 
-    public async Task<bool> DefaultAsync(string owner, CancellationToken ct)
+    private async Task<bool?> ReadDefaultPreferenceAsync(string owner, CancellationToken ct)
     {
         var latest = (await records.QueryAsync(PreferenceStream,
             new RecordQuery { UserId = owner, Limit = 1 }, ct)).FirstOrDefault();
-        return latest?.Data["enabled"] is JsonValue value && value.TryGetValue<bool>(out var enabled) && enabled;
+        return latest?.Data["enabled"] is JsonValue value && value.TryGetValue<bool>(out var enabled)
+            ? enabled : null;
     }
+
+    public async Task<bool> DefaultAsync(string owner, CancellationToken ct)
+        => await ReadDefaultPreferenceAsync(owner, ct) ?? true;
 
     public async Task SetDefaultAsync(string owner, bool enabled, CancellationToken ct)
     {
         await DiscussionEntityGate.RunAsync(Guid.Parse(owner), async () =>
         {
-            if (await DefaultAsync(owner, ct) != enabled)
+            if (await ReadDefaultPreferenceAsync(owner, ct) != enabled)
                 await records.AppendAsync(PreferenceStream, new JsonObject { ["enabled"] = enabled }, userId: owner, ct: ct);
         }, ct);
     }
