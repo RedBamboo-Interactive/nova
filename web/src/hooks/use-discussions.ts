@@ -18,7 +18,7 @@ import { appendEvent, byTimestamp, isRawEventMessage, markEventFrameSources, ord
 import { readNoteSender } from "../lib/agent-note"
 import { heldFromOverlays, withHeld, withoutHeld, type HeldEvents } from "../lib/held-events"
 import { accumulateHistoryOverlays, coalesceDiscussionTurnBlocks, filterInternalBootstrapBlock, mergeDiscussionAndSessionBlocks, mergeNovaMessageArrival, mergePagedDiscussionRecordsAndOverlays } from "../lib/discussion-transcript"
-import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch, sendNeedsExplicitResume, sessionStreamEffects, shouldRequestSessionTitleSync } from "../lib/discussion-runtime"
+import { applySessionStatus, applySettledSessionStatus, preservesRecentStreamingLatch, sendNeedsExplicitResume, sessionStreamEffects, shouldRequestSessionTitleSync, type RequestedSessionTitle } from "../lib/discussion-runtime"
 import { resolveRotatedDiscussionSelection } from "../lib/discussion-rotation"
 import { applyConversationMessageArrival, applyDiscussionMessageArrival } from "../lib/discussion-unread"
 import { HistoryLifecycleTombstones, historyRevalidationDirection, invalidateHistoryGeneration, isCurrentHistoryGeneration, shouldAccumulatePushedHistoryOverlay, shouldCatchUpHistory } from "../lib/discussion-history-page"
@@ -217,6 +217,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
   delegationActivityRef.current = delegationActivity
   const delegationReads = useRef(new LatestTaskCoordinator<string>())
   const changedDelegationSessions = useRef(new Set<string>())
+  // The last session title requested per discussion, so repeated frames do not re-request it.
+  const requestedSessionTitlesRef = useRef(new Map<string, RequestedSessionTitle>())
   const freshDelegationRead = useRef(true)
   const delegationInvalidations = useMemo(() => new DeferredInvalidationCoordinator<string>(environment.window, 500), [environment.window])
   useEffect(() => () => delegationInvalidations.clear(), [delegationInvalidations])
@@ -1757,10 +1759,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
         setRollbackSupport(previous => ({ ...previous, [discId]: session.supportsRollback! }))
       if (Array.isArray(session.backgroundTasks))
         setBackgroundTasksByDiscussion(previous => ({ ...previous, [discId]: session.backgroundTasks! }))
-      if (shouldRequestSessionTitleSync(known, session.title)) {
+      if (shouldRequestSessionTitleSync(known, session.title, requestedSessionTitlesRef.current.get(discId))) {
+        const requested: RequestedSessionTitle = { sessionId: known.sessionId ?? null, title: session.title!.trim() }
+        requestedSessionTitlesRef.current.set(discId, requested)
         void api.put<DiscussionInfo>(`/api/apps/nova/discussions/${discId}/title/session`)
           .then(upsertDiscussionMetadata)
-          .catch(() => {})
+          .catch(() => {
+            // Not applied: let the next frame with this title ask again.
+            if (requestedSessionTitlesRef.current.get(discId) === requested) requestedSessionTitlesRef.current.delete(discId)
+          })
       }
 
       const updateGeneration = (sessionUpdateGenerationRef.current[discId] ?? 0) + 1

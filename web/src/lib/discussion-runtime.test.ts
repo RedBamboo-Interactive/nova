@@ -43,6 +43,23 @@ test("standing discussion titles never request session refinement", () => {
   assert.equal(shouldRequestSessionTitleSync(discussion("idle", "chat"), "  "), false)
 })
 
+test("a title already requested, or already shown from the session, is not requested again", () => {
+  const chat = discussion("idle", "chat")
+  const requested = { sessionId: "session-a", title: "Refined" }
+  assert.equal(shouldRequestSessionTitleSync(chat, "Refined", requested), false)
+  assert.equal(shouldRequestSessionTitleSync(chat, "  Refined ", requested), false)
+  // A different title, or the same title for another session, asks again.
+  assert.equal(shouldRequestSessionTitleSync(chat, "Refined again", requested), true)
+  assert.equal(shouldRequestSessionTitleSync({ ...chat, sessionId: "session-b" }, "Refined", requested), true)
+
+  // Shown already from the session or the first message: nothing to apply.
+  assert.equal(shouldRequestSessionTitleSync({ ...chat, title: "Refined", titleSource: "session" }, "Refined"), false)
+  assert.equal(shouldRequestSessionTitleSync({ ...chat, title: "Refined", titleSource: "fallback" }, "Refined"), false)
+  assert.equal(shouldRequestSessionTitleSync({ ...chat, title: "Older", titleSource: "session" }, "Refined"), true)
+  // An unclassified legacy title still asks once: the server decides whether it may change.
+  assert.equal(shouldRequestSessionTitleSync({ ...chat, title: "Refined", titleSource: null }, "Refined"), true)
+})
+
 test("a settled session event clears the active indicator without a refresh", () => {
   const settledAt = "2026-08-07T00:01:00.000Z"
   const [updated] = applySettledSessionStatus(

@@ -20,17 +20,29 @@ export function sessionStreamEffects(
   return { applyTurnState: true, settleIdle, forceActive: !settleIdle && (result.isStreaming || result.resumePending) }
 }
 
+/** The last session title this client asked Nova to apply to a discussion, and for which session. */
+export interface RequestedSessionTitle { sessionId: string | null; title: string }
+
 /**
  * A pushed title is only a signal to ask Nova's server for the current
  * RedCompute title. Selection is deliberately absent: inactive ordinary chats
  * must refine too, while standing LIVE/heartbeat titles remain untouched.
+ *
+ * Most session.updated frames repeat a title that was already requested, or
+ * that the discussion already shows from its session or first message: those
+ * ask for nothing new and are skipped. The server still re-reads the session,
+ * so a stale pushed title can never win; this only drops the no-op requests.
  */
 export function shouldRequestSessionTitleSync(
-  discussion: Pick<DiscussionInfo, "type"> | undefined,
+  discussion: Pick<DiscussionInfo, "type" | "title" | "titleSource" | "sessionId"> | undefined,
   pushedTitle: string | undefined,
+  lastRequested?: RequestedSessionTitle,
 ): boolean {
-
-  return discussion?.type === "chat" && !!pushedTitle?.trim()
+  const title = pushedTitle?.trim()
+  if (discussion?.type !== "chat" || !title) return false
+  if (lastRequested && lastRequested.title === title && lastRequested.sessionId === (discussion.sessionId ?? null)) return false
+  if ((discussion.titleSource === "session" || discussion.titleSource === "fallback") && discussion.title === title) return false
+  return true
 }
 /**
  * Stop reasons RedCompute resumes on its own when a prompt arrives.
