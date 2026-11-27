@@ -77,6 +77,41 @@ public sealed class DiscussionSummaryTests
         Assert.Single(h.Events.Invalidations);
     }
 
+    [Fact]
+    public async Task A_summary_that_matches_the_settled_turn_is_not_reprobed_until_new_activity()
+    {
+        using var h = new Harness();
+        h.Clock.Now = h.Compute.EndedAt.AddMinutes(3);
+        await h.SweepAsync();
+        Assert.NotNull((await h.ReadAsync()).AutoSummary);
+        Assert.Equal(1, h.Compute.Generations);
+
+        // The generation's own retry window ends: one probe finds the summary current.
+        h.Clock.Now = h.Clock.Now.AddMinutes(2);
+        var before = h.Compute.Requests;
+        await h.SweepAsync();
+        Assert.Equal(before + 1, h.Compute.Requests);
+
+        // From then on it waits 30 minutes, not 2, while nothing happens.
+        before = h.Compute.Requests;
+        for (var minute = 2; minute < 30; minute += 2)
+        {
+            h.Clock.Now = h.Clock.Now.AddMinutes(2);
+            await h.SweepAsync();
+        }
+        Assert.Equal(before, h.Compute.Requests);
+        h.Clock.Now = h.Clock.Now.AddMinutes(2);
+        await h.SweepAsync();
+        Assert.Equal(before + 1, h.Compute.Requests);
+
+        // New activity re-arms it at once.
+        before = h.Compute.Requests;
+        await h.F.Store.PatchAsync(h.F.Target.Id, new JsonObject { ["last_activity"] = "2026-11-27T21:30:00Z" });
+        h.Clock.Now = h.Clock.Now.AddSeconds(1);
+        await h.SweepAsync();
+        Assert.True(h.Compute.Requests > before);
+    }
+
     [Theory]
     [InlineData("working", 0)]
     [InlineData("background", 0)]

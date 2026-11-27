@@ -53,8 +53,13 @@ public sealed class DiscussionSummaries(
     private const string PreferenceStream = "discussion-summary-settings";
     private static readonly TimeSpan QuietWindow = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(2);
+    /// <summary>
+    /// When the stored summary already describes the settled turn, nothing can change it until the
+    /// discussion has new activity (or a new session), and either re-arms the check at once.
+    /// </summary>
+    internal static readonly TimeSpan SettledRecheckDelay = TimeSpan.FromMinutes(30);
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
-    private readonly Dictionary<Guid, (DateTime Activity, DateTimeOffset Due)> nextChecks = [];
+    private readonly Dictionary<Guid, (DateTime Activity, string? Session, DateTimeOffset Due)> nextChecks = [];
     private readonly Dictionary<Guid, (string Session, string Turn, DateTime Activity, int Count)> failedGenerations = [];
     private int running;
     private int offset;
@@ -212,7 +217,8 @@ public sealed class DiscussionSummaries(
             offset %= candidates.Length;
             var d = candidates[offset++];
             var now = clock.GetUtcNow();
-            if (nextChecks.TryGetValue(d.EntityId, out var next) && next.Activity == d.LastActivity && next.Due > now)
+            if (nextChecks.TryGetValue(d.EntityId, out var next) && next.Activity == d.LastActivity
+                && next.Session == d.SessionId && next.Due > now)
                 continue;
             if (d.AutoSummaryOverride is null)
             {
@@ -230,7 +236,7 @@ public sealed class DiscussionSummaries(
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
-                nextChecks[d.EntityId] = (d.LastActivity, now + RetryDelay);
+                nextChecks[d.EntityId] = (d.LastActivity, d.SessionId, now + RetryDelay);
                 logger.LogDebug(ex, "Discussion summary retry scheduled for {DiscussionId}", d.Id);
             }
         }
@@ -254,22 +260,22 @@ public sealed class DiscussionSummaries(
         var turn = await ReadTurnAsync(d, provenance, ct);
         if (turn is null)
         {
-            nextChecks[d.EntityId] = (d.LastActivity, now + TimeSpan.FromSeconds(30));
+            nextChecks[d.EntityId] = (d.LastActivity, d.SessionId, now + TimeSpan.FromSeconds(30));
             return false;
         }
         if (d.AutoSummary is { } old && old.SessionId == d.SessionId && old.BasisActivity == d.LastActivity
             && (old.TurnId == turn.Id || old.Source != "fast" && old.UpdatedAt >= turn.EndedAt))
         {
-            nextChecks[d.EntityId] = (d.LastActivity, now + RetryDelay);
+            nextChecks[d.EntityId] = (d.LastActivity, d.SessionId, now + SettledRecheckDelay);
             return false;
         }
         if (turn.EndedAt + QuietWindow > now)
         {
-            nextChecks[d.EntityId] = (d.LastActivity, turn.EndedAt + QuietWindow);
+            nextChecks[d.EntityId] = (d.LastActivity, d.SessionId, turn.EndedAt + QuietWindow);
             return false;
         }
         // Bound repeated invalid or unavailable Fast results for the same settled basis.
-        nextChecks[d.EntityId] = (d.LastActivity, now + RetryDelay);
+        nextChecks[d.EntityId] = (d.LastActivity, d.SessionId, now + RetryDelay);
         var failures = failedGenerations.TryGetValue(d.EntityId, out var failed)
             && failed.Session == d.SessionId && failed.Turn == turn.Id && failed.Activity == d.LastActivity ? failed.Count : 0;
         if (failures >= 3) return false;
