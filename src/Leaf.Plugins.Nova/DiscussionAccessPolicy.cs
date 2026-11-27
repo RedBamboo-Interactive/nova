@@ -42,11 +42,14 @@ public static class DiscussionAccessPolicy
     }
 
     public static bool CanManageConfidentiality(DiscussionRead discussion, HttpContext context)
+        => CanManageNovaOwnerSettings(discussion.OwnerId, context);
+
+    internal static bool CanManageNovaOwnerSettings(string? ownerId, HttpContext context)
     {
-        if (string.IsNullOrWhiteSpace(discussion.OwnerId)) return false;
+        if (string.IsNullOrWhiteSpace(ownerId)) return false;
 
         var userId = context.User.FindFirstValue("sub");
-        if (!string.Equals(userId, discussion.OwnerId, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(userId, ownerId, StringComparison.OrdinalIgnoreCase))
             return false;
 
         if (!IsExecution(context.User)) return IsExplicitHuman(context.User);
@@ -55,8 +58,13 @@ public static class DiscussionAccessPolicy
 
         return TryReadExecution(context.User, out var execution)
             && execution is not null
-            && IsOwnerOperatedNovaBrowserExecution(execution, discussion.OwnerId);
+            && IsOwnerOperatedNovaBrowserExecution(execution, ownerId);
     }
+
+    internal static bool CanManageDiscussionProjection(DiscussionRead discussion, HttpContext context)
+        => CanManageNovaOwnerSettings(discussion.OwnerId, context)
+            || IsExecution(context.User) && TryReadExecution(context.User, out var execution) && execution is not null
+                && IsOwningAgentExecution(execution, discussion);
 
     /// <summary>
     /// Whether the request is the install's owner or an administrator: an identity holding the admin

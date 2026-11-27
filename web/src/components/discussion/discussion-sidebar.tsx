@@ -17,6 +17,7 @@ import { DiscussionThumbnail } from "./discussion-thumbnail"
 import { discussionLabel, discussionSections, groupingIcon, sidebarDiscussionTitle, type DiscussionGroupingSort, type DiscussionGroupingView } from "../../lib/discussion-grouping"
 import { formatOwningApp } from "../../lib/discussion-owner"
 import { createDiscussionTitleResolver } from "../../lib/discussion-display-title"
+import { currentDiscussionSummary, summaryPresentation, type DiscussionSummaryView } from "../../lib/discussion-summaries"
 
 /** Row actions that act through the open discussion's header, so they open it first. */
 export type DiscussionRowAction = "voice" | "info" | "artifacts" | "rename" | "share"
@@ -104,6 +105,7 @@ interface Props {
   /** Live background tasks (subagents, shells) per discussion id. */
   backgroundTasks: Record<string, BackgroundTaskInfo[]>
   awaitingAnswer?: Record<string, boolean>
+  summaryViews?: Record<string, DiscussionSummaryView>
   activeDiscussionId: string | null
   onSelect: (id: string) => void
   onArchive: (id: string) => void
@@ -140,7 +142,7 @@ interface Props {
 
 const NO_HEARTBEATS: ReadonlySet<string | null> = new Set()
 
-export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, heartbeatAgents = NO_HEARTBEATS, showAvatars = true, grouping = null, groupingEnabled = false, refineTitles, useThumbnails, groupingLoading = false, groupingUnavailable = false, onRetryGrouping, collapsedGroups, onToggleGroup, groupSort, onReorderGroups, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
+export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, loadState, onRetryLoad, delegationActivity, backgroundTasks, awaitingAnswer = {}, summaryViews, activeDiscussionId, onSelect, onArchive, onRotate, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, heartbeatAgents = NO_HEARTBEATS, showAvatars = true, grouping = null, groupingEnabled = false, refineTitles, useThumbnails, groupingLoading = false, groupingUnavailable = false, onRetryGrouping, collapsedGroups, onToggleGroup, groupSort, onReorderGroups, archiveMode = false, archiveQuery = "", archiveHasMore = false, onArchiveQueryChange, onExitArchiveMode, onLoadMoreArchived }: Props) {
   const sidebarSelectionId = resolveLiveSidebarSelection(discussions, activeDiscussionId)
   const { live, chat } = useMemo(() => {
     const live: DiscussionInfo[] = []
@@ -264,6 +266,8 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             onStop: onStop && alive && discussion.sessionId ? () => onStop(discussion.id) : undefined,
             onClose: () => onArchive(discussion.id),
           })
+    const summary = currentDiscussionSummary(discussion, summaryViews?.[discussion.id])
+    const status = summary ? summaryPresentation[summary.text.status] : null
     return (
       <DiscussionRowTarget
         entries={entries}
@@ -304,7 +308,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
         ].filter(Boolean).join(" ")}
         title={sidebarDiscussionTitle(discussion, refineTitles ? label?.label : undefined)}
         badge={<DiscussionBehaviourMarks discussion={discussion} agentHasHeartbeat={heartbeatAgents.has(discussion.agentId)} />}
-        subtitle={<span className="inline-flex items-baseline gap-1.5"><span>{formatRelative(discussion.lastActivity)}</span>{visualCue && agent && <span>· {agent.name}</span>}{discussion.ownedBy && <span>· {formatOwningApp(discussion.ownedBy.app)}</span>}</span>}
+        subtitle={<span className="flex min-w-0 items-baseline gap-1.5"><span className="shrink-0">{formatRelative(discussion.lastActivity)}</span>{visualCue && agent && <span>· {agent.name}</span>}{discussion.ownedBy && <span>· {formatOwningApp(discussion.ownedBy.app)}</span>}{summary && status && <span data-slot="discussion-summary-label" className={`min-w-0 truncate ${status.tone}`}>· {status.label} · {summary.text.label}</span>}</span>}
         trailing={
           discussion.status !== "archived" ? (
             <div className="flex items-center gap-1.5">
@@ -320,7 +324,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
       />
       </DiscussionRowTarget>
     )
-  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer, grouping, refineTitles, useThumbnails, heartbeatAgents])
+  }, [activeDiscussionId, onSelect, onArchive, onDismiss, onRowAction, onUpdateTitle, onFloat, onStop, getAgent, showAvatars, delegationActivity, backgroundTasks, awaitingAnswer, summaryViews, grouping, refineTitles, useThumbnails, heartbeatAgents])
 
   const renderArchivedItem = useCallback((discussion: DiscussionInfo) => {
     const item = discussion as ArchiveDiscussionItem

@@ -9,6 +9,9 @@ namespace Leaf.Plugins.Nova;
 
 public sealed class ContextSnapshot
 {
+    [JsonPropertyName("summaryCapability")]
+    public bool SummaryCapability { get; set; }
+
     [JsonPropertyName("discussions")]
     public List<DiscussionEntry> Discussions { get; set; } = [];
 
@@ -153,6 +156,7 @@ public static class NovaContextBuilder
         return new ContextSnapshot
         {
             LiveTimeline = liveTimeline,
+            SummaryCapability = true,
             TakenAt = takenAt,
             Discussions = ownDiscussions.Select(ToEntry).ToList(),
             OtherAgentDiscussions = otherAgentDiscussions?.Select(ToEntry).ToList() ?? [],
@@ -232,6 +236,8 @@ public static class NovaContextBuilder
         sb.Append($"\n\nRecall any discussion: curl -s {ApiBase}/discussions/{{id}}/export -H \"Authorization: Bearer $REDLEAF_EXECUTION_TOKEN\"");
         sb.Append($"\nSearch all discussions: curl -s \"{ApiBase}/discussions/search?q={{query}}\" -H \"Authorization: Bearer $REDLEAF_EXECUTION_TOKEN\"");
         sb.Append($"\nGet full context snapshot: curl -s {ApiBase}/discussions/{{id}}/context -H \"Authorization: Bearer $REDLEAF_EXECUTION_TOKEN\"");
+        if (snapshot.SummaryCapability && active.Any(d => d.Id == currentId && d.Type == "chat"))
+            sb.Append('\n').Append(SummaryCapabilityHint(currentId));
         // The emoji is a JSON escape: a cp1252 shell turns a literal emoji into "??".
         // The body goes through stdin: a Windows command line re-encodes argv through the ANSI code
         // page, so an emoji passed with -d reaches the server as "??".
@@ -294,6 +300,9 @@ public static class NovaContextBuilder
         "\nThis arrived while you were working; take it into account, it needs no reply of its own.";
 
     // The opening tag, the neutralized body, any constant trusted text, the closing tag.
+    private static string SummaryCapabilityHint(string id)
+        => $"Discussion status and next step: GET {ApiBase}/discussions/{id}/summary with your execution bearer. Discover versioned correction and preference routes in /discover/nova. Automatic summaries need no Agent update.";
+
     private static string Frame(StringBuilder body, DateTime now, ResolvedDevice device,
         string input, string currentId, string? agentName, string? messageUid = null, string? trusted = null)
     {
@@ -327,6 +336,9 @@ public static class NovaContextBuilder
         string? messageUid = null, IReadOnlyList<string>? attachedSkillLines = null)
     {
         var changes = new List<string>();
+        if (current.SummaryCapability && !previous.SummaryCapability
+            && current.Discussions.Any(d => d.Id == currentId && d.Type == "chat" && !DiscussionStatus.IsClosed(d.Status)))
+            changes.Add(SummaryCapabilityHint(currentId));
 
         var prevIds = previous.Discussions.Select(d => d.Id).ToHashSet();
         var currIds = current.Discussions.Select(d => d.Id).ToHashSet();

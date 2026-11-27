@@ -296,7 +296,7 @@ public static class DiscussionOrchestration
 /// </summary>
 public sealed class OrchestrationSweeper(
     DiscussionStore store, IEntityStore entities, EventInjector injector, RedComputeClient redCompute,
-    ILogger<OrchestrationSweeper>? logger = null, TimeProvider? clock = null)
+    ILogger<OrchestrationSweeper>? logger = null, TimeProvider? clock = null, DiscussionSummaries? summaries = null)
 {
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
     private readonly TimeProvider clock = clock ?? TimeProvider.System;
@@ -320,7 +320,8 @@ public sealed class OrchestrationSweeper(
     {
         var now = clock.GetUtcNow();
         var handed = 0;
-        foreach (var discussion in await store.ListOpenAsync(ct: ct))
+        var open = await store.ListOpenAsync(ct: ct);
+        foreach (var discussion in open)
         {
             if (!DiscussionOrchestration.IsActive(discussion)) continue;
             var state = discussion.Orchestration ?? OrchestrationState.Empty;
@@ -355,6 +356,7 @@ public sealed class OrchestrationSweeper(
                         : s with { DueAt = null, TurnKey = null }, ct);
             if (result == DiscussionOrchestration.HandOff.Delivered) handed++;
         }
+        summaries?.Tick(open, ct);
         return handed;
     }
 }

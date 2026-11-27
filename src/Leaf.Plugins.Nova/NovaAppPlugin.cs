@@ -51,6 +51,11 @@ public sealed class NovaAppPlugin : ILeafPlugin
             sp.GetRequiredService<IDiscussions>(),
             assets: sp.GetService<IAssets>(),
             logger: sp.GetService<ILogger<DiscussionGrouping>>()));
+        services.AddSingleton(sp => new DiscussionSummaries(
+            sp.GetRequiredService<DiscussionStore>(), sp.GetRequiredKeyedService<IEntityStore>(PluginId),
+            sp.GetRequiredKeyedService<IRecordStreams>(PluginId), sp.GetRequiredService<AgentDirectory>(),
+            sp.GetRequiredService<RedComputeClient>(), sp.GetRequiredKeyedService<IPluginEvents>(PluginId),
+            sp.GetRequiredService<ILogger<DiscussionSummaries>>()));
         services.AddSingleton<CodeWorktreeClient>();
         services.AddSingleton<IJournalPeers, JournalPeers>();
         services.AddSingleton(sp => new JournalReadModel(
@@ -274,7 +279,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
             sp.GetRequiredKeyedService<IEntityStore>(PluginId),
             sp.GetRequiredService<EventInjector>(),
             sp.GetRequiredService<RedComputeClient>(),
-            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<OrchestrationSweeper>>()));
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<OrchestrationSweeper>>(),
+            summaries: sp.GetRequiredService<DiscussionSummaries>()));
         services.AddSingleton(sp => new DiscussionMcpService(
             sp.GetRequiredService<DiscussionStore>(),
             sp.GetRequiredKeyedService<IEntityStore>(PluginId),
@@ -305,6 +311,7 @@ public sealed class NovaAppPlugin : ILeafPlugin
         });
         DiscussionEndpoints.Map(group);
         DiscussionGroupingEndpoints.Map(group);
+        DiscussionSummaryEndpoints.Map(group);
         DiscussionRollbackEndpoints.Map(group);
         DiscussionSkillEndpoints.Map(group);
         DiscussionMcpEndpoints.Map(group);

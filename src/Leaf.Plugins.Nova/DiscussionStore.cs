@@ -111,7 +111,9 @@ public sealed record DiscussionRead(
     bool Orchestrated = false,
     OrchestrationState? Orchestration = null,
     // Events held for the session's next turn (delivery with-next), by uid.
-    IReadOnlyList<string>? HeldEventUids = null)
+    IReadOnlyList<string>? HeldEventUids = null,
+    bool? AutoSummaryOverride = null,
+    DiscussionSummary? AutoSummary = null)
 {
     /// <summary>The Skills attached to this discussion on demand, beside the Agent's defaults.</summary>
     public IReadOnlyList<CapabilityAttachment> AttachedSkills
@@ -1114,6 +1116,7 @@ public sealed class DiscussionStore(
             var patch = new JsonObject
             {
                 ["last_context_json"] = null,
+                [DiscussionSummary.DataKey] = null,
                 ["last_activity"] = DateTimeOffset.UtcNow.ToString("O"),
                 ["read_conversation_revision"] = Long(entity.Data, "conversation_revision") ?? 0,
             };
@@ -1158,12 +1161,14 @@ public sealed class DiscussionStore(
                 ["conversation_revision"] = 0,
                 ["read_conversation_revision"] = 0,
                 ["last_processed_session_assistant_uid"] = "",
+                [DiscussionSummary.DataKey] = null,
             }, ct: ct);
             return current with
             {
                 ConversationRevision = 0,
                 ReadConversationRevision = 0,
                 LastProcessedSessionAssistantUid = "",
+                AutoSummary = null,
             };
         }, ct);
 
@@ -1388,7 +1393,9 @@ public sealed class DiscussionStore(
             CapabilityRequest.Read(d),
             Bool(d, OrchestratedKey) ?? false,
             OrchestrationState.Read(d),
-            HeldEventDeliveries.Read(d).Select(entry => entry.Uid).ToList());
+            HeldEventDeliveries.Read(d).Select(entry => entry.Uid).ToList(),
+            Bool(d, DiscussionSummary.OverrideKey),
+            DiscussionSummary.Read(d));
     }
 
     /// <summary>

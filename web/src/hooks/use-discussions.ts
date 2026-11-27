@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo, useSyncExternalStore, startTransition } from "react"
 import { useToast, useUiEnvironment } from "@redbamboo/ui"
 import { api, ApiError } from "../lib/api"
+import { useDiscussionSummaries } from "./use-discussion-summaries"
 import { newDiscussionBody } from "../lib/new-discussion-request"
 import type { DelegationActivitySnapshot, DiscussionHistoryOverlay, DiscussionHistoryPageResponse, DiscussionInfo, DiscussionMessage, ClaudeStreamEvent, WsEvent, EventType } from "../lib/types"
 import type { BackgroundTaskInfo, ChatInputPart, ChatQueueSummary, MessageBlock, MessagePart, PendingQuestion, PermissionApprovals, PermissionDecisionPayload, QuestionAnswerPayload, QuestionOutcome, QuestionState, ChatEvent, ImageAttachment, SendOptions, TranscriptCursor, UploadedAttachment } from "@redbamboo/chat"
@@ -210,6 +211,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     getArchiveDiscussionState,
   )
   const setDiscussions = setDiscussionList
+  const { views: summaryViews, refresh: refreshSummaries, setOverride: setSummaryOverride } = useDiscussionSummaries(environment.window)
   const [delegationActivity, setDelegationActivity] = useState<DelegationActivitySnapshot>({})
   const delegationActivityRef = useRef(delegationActivity)
   delegationActivityRef.current = delegationActivity
@@ -1893,9 +1895,15 @@ export function useDiscussions(eventResolver?: EventResolver) {
       // Clients that did not originate the create have only the sparse event
       // payload. Hydrate the canonical record so title/session routing works.
       void refreshDiscussions()
+      void refreshSummaries()
     } else if (event.type === "discussion.changed") {
-      const { discussionId } = event.data as { discussionId?: string }
+      const { discussionId, change } = event.data as { discussionId?: string; change?: string }
+      if (change === "summary") {
+        void refreshSummaries()
+        return
+      }
       if (!discussionId) return
+      void refreshSummaries()
       void refreshDiscussions()
       const archive = getArchiveDiscussionState()
       if (archive.enabled)
@@ -2136,7 +2144,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
         return { ...prev, [discId]: reconciled.messages }
       })
     }
-  }, [sessionToDiscussion, clearQuestion, commitQuestionState, clearStreamingLatch, refreshDiscussions, refreshArchivedDiscussions, refreshDelegationActivity, delegationInvalidations, loadMessages, reloadAfterRollback, catchUpMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming, resetHistoryPaging, retireHistoryPaging])
+  }, [sessionToDiscussion, clearQuestion, commitQuestionState, clearStreamingLatch, refreshDiscussions, refreshSummaries, refreshArchivedDiscussions, refreshDelegationActivity, delegationInvalidations, loadMessages, reloadAfterRollback, catchUpMessages, environment.window, latchStreaming, acknowledgeRead, transcriptAccumulator, confidentialInvalidations, reconcileStreaming, resetHistoryPaging, retireHistoryPaging])
   handleWsEventRef.current = handleWsEvent
 
   const handleUpstreamDisconnect = useCallback(() => {
@@ -2161,6 +2169,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     // authoritatively the next time it is selected.
     loadedRef.current.clear()
     refreshDiscussions()
+    void refreshSummaries()
     const activeId = activeIdRef.current
     if (activeId) environment.window.dispatchEvent(new CustomEvent("nova:input-queue-updated", {
       detail: { discussionId: activeId },
@@ -2170,7 +2179,7 @@ export function useDiscussions(eventResolver?: EventResolver) {
     // against the server: the events that would have cleared it were emitted
     // into a connection nobody was holding.
     reconcileStreaming()
-  }, [refreshDiscussions, reloadActiveMessages, reconcileStreaming])
+  }, [refreshDiscussions, refreshSummaries, reloadActiveMessages, reconcileStreaming])
 
   const commitArchive = useCallback(async (id: string, disc: DiscussionInfo | undefined) => {
     try {
@@ -2370,6 +2379,8 @@ export function useDiscussions(eventResolver?: EventResolver) {
     refreshDiscussions,
     delegationActivity,
     refreshDelegationActivity,
+    summaryViews,
+    setSummaryOverride,
     syncAndRefresh,
     reloadActiveMessages,
     retryHistoryLoad,

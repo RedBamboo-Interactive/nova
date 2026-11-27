@@ -684,7 +684,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
 
     /// <summary>Raw GET /ai-session/sessions/{id} as parsed JSON, or null when unreachable/missing.</summary>
     public async Task<JsonDocument?> GetSessionRawAsync(
-        string sessionId, CancellationToken ct = default, int? tail = null)
+        string sessionId, CancellationToken ct = default, int? tail = null, ComputeProvenance? provenance = null)
     {
         try
         {
@@ -692,7 +692,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
                 ? $"/ai-session/sessions/{sessionId}?tail={count}"
                 : $"/ai-session/sessions/{sessionId}";
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            using var resp = await gateway.SendAsync(request, provenance: null, ct);
+            using var resp = await gateway.SendAsync(request, provenance, ct);
             if (!resp.IsSuccessStatusCode) return null;
             return JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
         }
@@ -983,7 +983,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         int limit,
         string? before = null,
         string? after = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default, ComputeProvenance? provenance = null)
     {
         if (!string.IsNullOrWhiteSpace(before) && !string.IsNullOrWhiteSpace(after))
             throw new ArgumentException("before and after are mutually exclusive");
@@ -996,7 +996,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
 
         var url = $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}/transcript-page?{string.Join("&", query)}";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        using var response = await gateway.SendAsync(request, provenance: null, ct);
+        using var response = await gateway.SendAsync(request, provenance, ct);
         var content = await response.Content.ReadAsStringAsync(ct);
         var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/json";
 

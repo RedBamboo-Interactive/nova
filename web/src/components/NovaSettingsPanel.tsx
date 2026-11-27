@@ -1,5 +1,5 @@
-import { useId } from "react"
-import { KeyCaptureInput, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SettingRow, SectionHeader, Switch } from "@redbamboo/ui"
+import { useEffect, useId, useState } from "react"
+import { KeyCaptureInput, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SettingRow, SectionHeader, Switch, useToast, useUiEnvironment } from "@redbamboo/ui"
 import { composerFocusSettingsStore, normalizePushToTalkKey, pushToTalkSettingsStore, useComposerFocusSettings, usePushToTalkSettings, type ComposerAutoFocusMode } from "@redbamboo/chat"
 import { useLocalSettings } from "../hooks/use-local-settings"
 import { discussionGroupSortOptions, groupedDiscussionSortOptions, type DiscussionGroupSortMode, type GroupedDiscussionSortMode } from "../lib/discussion-grouping"
@@ -7,6 +7,11 @@ import { setSettings as setLocalSettings } from "../lib/settings-store"
 import { VoiceDeviceSettings } from "./VoiceDeviceSettings"
 import { FriezeMarkerSettings } from "./FriezeMarkerSettings"
 import { normalizeFriezeDensity } from "../lib/frieze-marker-settings"
+import { apiFetch, createExecutionTokenClient } from "@redbamboo/utility"
+import { SUMMARY_SETTINGS_CHANGED } from "../lib/discussion-summaries"
+
+const summarySettingsExecution = createExecutionTokenClient("redleaf")
+const summarySettingsPath = "/api/apps/nova/discussion-summaries/settings"
 
 const WORK_STEP_OPTIONS = [["detailed", "Detailed"], ["quiet", "Quiet"], ["minimal", "Minimal"]] as const
 
@@ -16,6 +21,29 @@ export function NovaSettingsPanel() {
   const workStepsName = useId()
   const pushToTalk = usePushToTalkSettings()
   const composerFocus = useComposerFocusSettings()
+  const { toast } = useToast()
+  const environment = useUiEnvironment()
+  const [summaryDefault, setSummaryDefault] = useState<boolean | null>(null)
+  const [summarySaving, setSummarySaving] = useState(false)
+  useEffect(() => {
+    const controller = new AbortController()
+    void apiFetch<{ enabled: boolean }>(summarySettingsPath, { execution: summarySettingsExecution, signal: controller.signal })
+      .then(settings => { if (!controller.signal.aborted) setSummaryDefault(settings.enabled) }).catch(() => {})
+    return () => controller.abort()
+  }, [])
+
+  async function changeSummaryDefault(enabled: boolean) {
+    setSummarySaving(true)
+    try {
+      const saved = await apiFetch<{ enabled: boolean }>(summarySettingsPath, { execution: summarySettingsExecution, method: "PUT", json: { enabled } })
+      setSummaryDefault(saved.enabled)
+      environment.window.dispatchEvent(new Event(SUMMARY_SETTINGS_CHANGED))
+    } catch {
+      toast({ variant: "error", title: "Could not save the Auto-summary default" })
+    } finally {
+      setSummarySaving(false)
+    }
+  }
 
   return (
     <div>
@@ -122,6 +150,10 @@ export function NovaSettingsPanel() {
         </div>
       </SettingRow>
       <FriezeMarkerSettings />
+      <SettingRow label="Auto-summary by default" hint="Discussions can override this in Info → Behaviour. Fast summarizes after three minutes idle if Heartbeat hasn’t resumed the work.">
+        <Switch checked={summaryDefault === true} disabled={summaryDefault === null || summarySaving}
+          onCheckedChange={changeSummaryDefault} aria-label="Auto-summary by default" />
+      </SettingRow>
       <SectionHeader>Voice</SectionHeader>
       <VoiceDeviceSettings />
       <SettingRow label="Push-to-talk key" hint="Hold this key to record a voice reply. Float Nova leases the same key globally while open.">

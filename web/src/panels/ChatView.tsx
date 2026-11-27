@@ -8,6 +8,8 @@ import { LiveReportBlock, LiveReportHostProvider, type LiveReportHost } from "..
 import { LIVE_REPORT_LANGUAGE } from "../lib/live-report"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, PluginExtensionSlot, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
+import { DiscussionSummaryCard } from "../components/discussion/discussion-summary"
+import { currentDiscussionSummary } from "../lib/discussion-summaries"
 import { DiscussionThumbnail, DiscussionThumbnailCacheContext, useDiscussionThumbnailCache } from "../components/discussion/discussion-thumbnail"
 import { discussionGroupSortOptions, discussionLabel, discussionSections, groupedDiscussionSortOptions, groupingIcon, moveDiscussionGroup, type DiscussionGroupSortMode, type GroupedDiscussionSortMode } from "../lib/discussion-grouping"
 import { isMobileClient } from "../components/floating-nova-support"
@@ -559,6 +561,7 @@ export function ChatView({
   const [confidentialityPending, setConfidentialityPending] = useState(false)
   const [liveTimelinePending, setLiveTimelinePending] = useState(false)
   const [orchestratedPending, setOrchestratedPending] = useState(false)
+  const [summaryPending, setSummaryPending] = useState(false)
   const [qualityTiers, setQualityTiers] = useState<QualityTierInfo[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const providersRef = useRef(providers)
@@ -1277,6 +1280,19 @@ export function ChatView({
   // The Agent's Heartbeat is what picks an Orchestrated discussion up: without an open one, nothing would.
   const agentHasHeartbeat = !!activeDiscussion && heartbeatAgents.has(activeDiscussion.agentId)
   const effective = activeDiscussion ? effectiveBehaviours(activeDiscussion, agentHasHeartbeat) : null
+  const summaryView = activeDiscussion && !activeDiscussion.confidential ? disc.summaryViews[activeDiscussion.id] : undefined
+  const activeSummary = isStreaming ? null : currentDiscussionSummary(activeDiscussion, summaryView)
+  const setSummaryOverride = async (enabled: boolean | null) => {
+    if (!activeDiscussion || summaryPending) return
+    setSummaryPending(true)
+    try {
+      await disc.setSummaryOverride(activeDiscussion.id, enabled)
+    } catch {
+      toast({ variant: "error", title: "Could not change Auto-summary" })
+    } finally {
+      setSummaryPending(false)
+    }
+  }
   const behaviours: BehaviourItem[] = !activeDiscussion || !effective ? [] : [
     ...(hasIntrinsicBehaviours(activeDiscussion) ? [] : [{
       key: "orchestrated",
@@ -1304,6 +1320,17 @@ export function ChatView({
       settingPath: "discussion.liveTimeline",
       onChange: handleLiveTimelineToggle,
     },
+    ...(summaryView ? [{
+      key: "autoSummary",
+      icon: "ph-bold ph-list-bullets",
+      title: "Auto-summary",
+      accent: "var(--primary)",
+      description: summaryView.override === null ? "Follows the Nova default" : "Override for this discussion",
+      checked: summaryView.enabled,
+      pending: summaryPending,
+      settingPath: "discussion.autoSummary",
+      onChange: (enabled: boolean) => { void setSummaryOverride(enabled) },
+    }] : []),
     {
       key: "confidential",
       icon: BEHAVIOUR_ICONS.confidential,
@@ -1317,7 +1344,13 @@ export function ChatView({
     },
   ]
   const sessionInfoContent = activeDiscussion && (
-    <DiscussionBehaviourList items={behaviours} closed={discussionClosed} />
+    <>
+      <DiscussionBehaviourList items={behaviours} closed={discussionClosed} />
+      {summaryView?.override != null && !discussionClosed && (
+        <button type="button" className="mt-1 rounded px-2 py-1 text-xs text-text-muted hover:bg-overlay-6 hover:text-contrast"
+          disabled={summaryPending} onClick={() => { void setSummaryOverride(null) }}>Use Nova default</button>
+      )}
+    </>
   )
 
   const chatHeader = activeDiscussion && (
@@ -2086,6 +2119,8 @@ export function ChatView({
                   </button>
                 </div>
               </div>
+            ) : activeSummary ? (
+              <div className="shrink-0 px-4 pt-2"><DiscussionSummaryCard summary={activeSummary} /></div>
             ) : null}
           />
         </ChatBlockRenderersProvider>
@@ -2197,6 +2232,7 @@ export function ChatView({
                   delegationActivity={delegationActivity}
                   backgroundTasks={backgroundTasksByDiscussion}
                   awaitingAnswer={awaitingAnswerByDiscussion}
+                  summaryViews={disc.summaryViews}
                   activeDiscussionId={synchronizedDiscussionId ?? activeDiscussionId}
                   onSelect={handleSelectDiscussion}
                   onArchive={handleCloseDiscussion}

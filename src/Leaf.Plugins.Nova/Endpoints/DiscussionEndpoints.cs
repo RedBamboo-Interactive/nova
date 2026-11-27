@@ -1807,7 +1807,11 @@ public static class DiscussionEndpoints
                     }, statusCode: 502);
             }
 
-            await store.PatchAsync(discussion.EntityId, new JsonObject { ["confidential"] = request.Confidential });
+            await store.PatchAsync(discussion.EntityId, new JsonObject
+            {
+                ["confidential"] = request.Confidential,
+                [DiscussionSummary.DataKey] = null,
+            });
             return Results.Ok(DiscussionStore.ToInfo(discussion with { Confidential = request.Confidential }));
         })
             .WithSummary("Sets or clears the confidential flag of a discussion. Body: confidential (boolean). Only callers allowed to manage confidentiality; making it confidential also applies the boundary to its session.");
