@@ -47,8 +47,8 @@ export function DiscussionSummaryDetails({ summary, view, titleOf, onOpenDiscuss
     <div data-slot="discussion-summary-details" className="flex flex-col gap-4 text-sm">
       {details.userAction && (
         <section aria-labelledby="summary-action" data-slot="discussion-summary-action"
-          className="rounded-lg border border-primary-a30 bg-primary-a10 px-3 py-2.5">
-          <h3 id="summary-action" className="mb-1 text-xs font-semibold text-primary">What you need to do</h3>
+          className="rounded-lg border border-accent-gold-a30 bg-accent-gold/10 px-3 py-2.5">
+          <h3 id="summary-action" className="mb-1 text-xs font-semibold text-accent-gold">What you need to do</h3>
           <p className="font-medium text-contrast">{details.userAction}</p>
           {details.actionIn && (
             <p className="mt-1.5 text-xs text-text-muted">
@@ -56,7 +56,7 @@ export function DiscussionSummaryDetails({ summary, view, titleOf, onOpenDiscuss
               {onOpenDiscussion ? (
                 <button type="button" data-slot="discussion-summary-open-via"
                   onClick={() => onOpenDiscussion(details.actionIn!.discussionId)}
-                  className="font-medium text-contrast underline underline-offset-2 hover:text-primary focus-visible:outline-2 focus-visible:outline-primary rounded-sm">
+                  className="font-medium text-contrast underline underline-offset-2 hover:text-accent-gold focus-visible:outline-2 focus-visible:outline-primary rounded-sm">
                   {details.actionIn.title}
                 </button>
               ) : <span className="font-medium text-contrast">{details.actionIn.title}</span>}

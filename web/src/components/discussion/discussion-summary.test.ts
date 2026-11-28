@@ -67,6 +67,8 @@ test("inside a discussion a compact chip opens the full summary in a modal", asy
   const chip = await render(({ StatusChipButton }, h) => h(StatusChipButton, { status: "needs_you", expanded: false, onClick: () => {} }))
   assert.match(chip, /<button type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Status: Needs you\. Show summary"/)
   assert.equal(chip.replace(/<[^>]+>/g, "").trim(), "Needs you")
+  assert.match(chip, /border-accent-gold-a30 bg-accent-gold\/10 text-accent-gold font-semibold/)
+  assert.doesNotMatch(chip, /text-primary|domain-presence/)
   // Closed, the modal's content is not on the page.
   assert.doesNotMatch(chip, /Approve the Sandbox launch/)
   assert.doesNotMatch(chip, /The eval is ready/)
@@ -74,7 +76,7 @@ test("inside a discussion a compact chip opens the full summary in a modal", asy
   const quiet = await render(({ StatusChipButton }, h) => h(StatusChipButton, { status: "waiting", expanded: true, onClick: () => {} }))
   assert.match(quiet, /aria-expanded="true"/)
   assert.match(quiet, /text-text-muted/)
-  assert.doesNotMatch(quiet, /text-primary/)
+  assert.doesNotMatch(quiet, /text-primary|accent-gold/)
 
   // Clicking opens the shared Dialog (base-ui; exercised in the browser) with the details below.
   assert.match(summarySource, /<StatusChipButton status=\{summary\.text\.status\} expanded=\{open\} onClick=\{\(\) => setOpen\(true\)\} \/>/)
@@ -90,6 +92,10 @@ test("inside a discussion a compact chip opens the full summary in a modal", asy
     assert.ok(details.includes(text), text)
   assert.match(details, /data-slot="discussion-summary-open-via"/)
   assert.match(details, /<time dateTime="2026-11-28T09:04:00Z">/)
+  // The action block wears the same amber as the chip, never the brand or magenta.
+  assert.match(details, /data-slot="discussion-summary-action" class="rounded-lg border border-accent-gold-a30 bg-accent-gold\/10 /)
+  assert.match(details, /class="mb-1 text-xs font-semibold text-accent-gold">What you need to do/)
+  assert.doesNotMatch(details, /text-primary|primary-a|domain-presence/)
 
   const complete = await render(({ DiscussionSummaryDetails }, h) => h(DiscussionSummaryDetails, {
     summary: { ...needsYou, text: { ...needsYou.text, status: "complete", userAction: null, waitingOn: null } },

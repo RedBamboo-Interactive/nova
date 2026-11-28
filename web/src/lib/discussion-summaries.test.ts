@@ -22,12 +22,17 @@ const view = (s: DiscussionSummary | null, extra: Partial<DiscussionSummaryView>
 test("only Needs you asks for attention; the others recede", () => {
   const attention = Object.entries(summaryPresentation).filter(([, p]) => p.attention).map(([status]) => status)
   assert.deepEqual(attention, ["needs_you"])
-  assert.equal(summaryPresentation.needs_you.tone, "text-primary")
+  // Amber: not the brand (RedLeaf green in the shell), not magenta (an ongoing Orchestrated discussion).
+  assert.equal(summaryPresentation.needs_you.tone, "text-accent-gold")
+  assert.equal(summaryPresentation.needs_you.chip, "border-accent-gold-a30 bg-accent-gold/10 text-accent-gold font-semibold")
   assert.equal(summaryPresentation.complete.tone, "text-accent-teal")
   for (const status of ["waiting", "in_progress"] as const) assert.equal(summaryPresentation[status].tone, "text-text-muted")
   assert.equal(summaryPresentation.unclear.tone, "text-text-disabled")
-  // No status reuses the old loud gold for waiting.
-  assert.ok(Object.values(summaryPresentation).every(p => !p.tone.includes("gold")))
+  // Gold is Needs you's alone: waiting and the rest stay quiet.
+  for (const [status, p] of Object.entries(summaryPresentation))
+    if (status !== "needs_you") assert.ok(!`${p.tone} ${p.chip}`.includes("gold"), status)
+  for (const p of Object.values(summaryPresentation))
+    assert.ok(!/primary|domain-presence|magenta/.test(`${p.tone} ${p.chip}`), p.label)
 })
 
 test("old records without waitingOn read as waiting on nothing", () => {

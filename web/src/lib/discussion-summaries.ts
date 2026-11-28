@@ -50,13 +50,14 @@ export interface DiscussionSummaryView {
 }
 
 /**
- * Only "Needs you" asks for attention. Complete is calm, everything else recedes.
+ * Only "Needs you" asks for attention, in amber (accent-gold): not the brand colour, which the shell makes RedLeaf
+ * green, and not magenta, which means an Orchestrated discussion is ongoing. Complete is calm, everything else recedes.
  * `tone` colours the glyph; `chip` styles the in-discussion status chip.
  */
 export const summaryPresentation = {
   needs_you: {
-    label: "Needs you", icon: "ph-fill ph-hand-palm", tone: "text-primary", attention: true,
-    chip: "border-primary-a30 bg-primary-a10 text-primary font-semibold",
+    label: "Needs you", icon: "ph-fill ph-hand-palm", tone: "text-accent-gold", attention: true,
+    chip: "border-accent-gold-a30 bg-accent-gold/10 text-accent-gold font-semibold",
   },
   complete: {
     label: "Complete", icon: "ph-bold ph-check-circle", tone: "text-accent-teal", attention: false,
