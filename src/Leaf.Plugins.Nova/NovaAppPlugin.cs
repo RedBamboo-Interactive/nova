@@ -55,7 +55,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
             sp.GetRequiredService<DiscussionStore>(), sp.GetRequiredKeyedService<IEntityStore>(PluginId),
             sp.GetRequiredKeyedService<IRecordStreams>(PluginId), sp.GetRequiredService<AgentDirectory>(),
             sp.GetRequiredService<RedComputeClient>(), sp.GetRequiredKeyedService<IPluginEvents>(PluginId),
-            sp.GetRequiredService<ILogger<DiscussionSummaries>>()));
+            sp.GetRequiredService<ILogger<DiscussionSummaries>>(),
+            delegations: sp.GetRequiredService<DelegationActivity>()));
         services.AddSingleton<CodeWorktreeClient>();
         services.AddSingleton<IJournalPeers, JournalPeers>();
         services.AddSingleton(sp => new JournalReadModel(

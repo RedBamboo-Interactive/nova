@@ -450,6 +450,192 @@ public sealed class DiscussionSummaryTests
         Assert.Equal("external", round!.Text.WaitingOn);
     }
 
+    // ---- Inputs: goal, prior state, structured blocker facts, deterministic precedence, size cap ----
+
+    private const string UnattendedDenialText =
+        "Denied: this session runs at Ask with nobody to approve 'SandboxLaunch'. The installation owner can change this in RedLeaf Settings > Agent permissions, or raise this session in its Info panel. Continue without it.";
+
+    private static SessionMessage ToolUse(string uid, string tool) => new() { Role = "assistant", EventType = "tool_use", MessageUid = uid, ToolName = tool, ToolInput = "{\"secret\":\"input\"}" };
+    private static SessionMessage ToolResult(string uid, string tool, string content) => new() { Role = "assistant", EventType = "tool_result", MessageUid = uid, ToolName = tool, Content = content };
+
+    [Fact]
+    public void Permission_denials_and_agent_notes_become_one_line_facts_without_tool_output()
+    {
+        var facts = DiscussionSummaries.Facts([
+            ToolUse("t1", "Bash"),
+            ToolResult("t1", "Bash", "total 48\nsecret-file.txt\nraw tool output"),
+            ToolUse("t2", "SandboxLaunch"),
+            ToolResult("t2", "SandboxLaunch", UnattendedDenialText),
+            ToolUse("t3", "Write"),
+            ToolResult("t3", "Write", "The user denied 'Write'. Do not retry it; continue another way or ask the user."),
+            ToolUse("t4", "WebFetch"),
+            ToolResult("t4", "WebFetch", "Denied: this session runs at Auto and nobody approved 'WebFetch' within 10 minutes. The installation owner can change this. Continue without it, or ask again when the user is back."),
+            ToolUse("t5", "WebFetch"), // retried later: that denial is superseded
+            new() { Role = "user", EventType = "user_message", MessageUid = "note",
+                Content = "<nova-event source=\"agent-note\" from-agent=\"Atlas\" from-agent-id=\"a1\" from-discussion=\"build-9\">\nThe artefact build   is running.\n</nova-event>" },
+            new() { Role = "user", EventType = "user_message", MessageUid = "mail", Content = "<nova-event source=\"mail\">\nNewsletter\n</nova-event>" },
+        ]);
+
+        Assert.Equal(["SandboxLaunch", "Write", "WebFetch"], facts.Permissions.Select(p => p.Tool));
+        Assert.Equal(["denied_unattended", "denied_by_you", "denied_unanswered"], facts.Permissions.Select(p => p.Outcome));
+        Assert.Equal([true, false, false], facts.Permissions.Select(p => p.OwnerMustAct));
+        Assert.True(facts.Permissions[2].Superseded);
+        Assert.Equal("SandboxLaunch was denied because nobody was there to approve it (session runs at Ask).", facts.Permissions[0].Fact);
+        Assert.Equal("You denied Write.", facts.Permissions[1].Fact);
+        var note = Assert.Single(facts.AgentNotes);
+        Assert.Equal(new DiscussionSummaries.AgentNoteFact("other Agent Atlas", "build-9", "The artefact build is running.", "note"), note);
+        Assert.Equal(new DiscussionSummaries.Blocker("SandboxLaunch", "SandboxLaunch needs your approval",
+            "Approve SandboxLaunch for this discussion, or tell it to continue without it", "t2"), facts.Blocker);
+
+        var json = JsonSerializer.Serialize(facts, DiscussionSummary.Json);
+        Assert.DoesNotContain("raw tool output", json);
+        Assert.DoesNotContain("secret", json);
+        Assert.DoesNotContain("Settings > Agent permissions", json);
+    }
+
+    [Fact]
+    public void A_later_retry_or_the_owner_writing_supersedes_an_unattended_denial()
+    {
+        Assert.Null(DiscussionSummaries.Facts([ToolResult("t", "SandboxLaunch", UnattendedDenialText), ToolUse("t2", "SandboxLaunch")]).Blocker);
+        Assert.Null(DiscussionSummaries.Facts([ToolResult("t", "SandboxLaunch", UnattendedDenialText),
+            new() { Role = "user", EventType = "user_message", MessageUid = "u", Content = "Go ahead without it." }]).Blocker);
+        // Another Agent's note or the Agent's own text is not the owner and does not supersede it.
+        Assert.NotNull(DiscussionSummaries.Facts([ToolResult("t", "SandboxLaunch", UnattendedDenialText),
+            new() { Role = "user", EventType = "user_message", MessageUid = "n", Content = "<nova-event source=\"agent-note\" from-agent=\"Atlas\">\nok\n</nova-event>" },
+            new() { Role = "assistant", EventType = "text", MessageUid = "a", Content = "I could not launch it." }]).Blocker);
+        // A tool whose output merely mentions a denial deeper in its text is not a denial.
+        Assert.Empty(DiscussionSummaries.Facts([ToolResult("t", "Read", "log:\n" + UnattendedDenialText)]).Permissions);
+    }
+
+    [Theory]
+    [InlineData("waiting", null, "Waiting for Sandbox access")]
+    [InlineData("complete", null, "Launched")]
+    [InlineData("in_progress", null, "Launching")]
+    [InlineData("needs_you", "Owner to obtain authorization for the Sandbox launch", "Authorization")]
+    public void A_blocker_fact_makes_it_needs_you_whatever_the_model_wrote(string status, string? userAction, string label)
+    {
+        var evidence = DiscussionSummaries.Excerpts([
+            new SessionMessage { Role = "assistant", EventType = "text", MessageUid = "said", Content = "The Sandbox launch is pending." },
+        ]);
+        var blocker = new DiscussionSummaries.Blocker("SandboxLaunch", "SandboxLaunch needs your approval",
+            "Approve SandboxLaunch for this discussion, or tell it to continue without it", "t2");
+        // Without the fact a "complete" with no evidence would be refused; with it the fact decides.
+        Assert.True(DiscussionSummaries.TryParse(Answer(status, label, "The eval is staged for the Sandbox.", userAction),
+            evidence, out var text, out var cited, "eval", reader: "Sam", blocker: blocker));
+        Assert.Equal("needs_you", text!.Status);
+        Assert.Equal("you", text.WaitingOn);
+        Assert.Equal(blocker.Action, text.UserAction);
+        Assert.Equal(blocker.Label, text.Label);
+        Assert.Equal("The eval is staged for the Sandbox.", text.Overview);
+        Assert.Equal("t2", cited[0]);
+    }
+
+    [Fact]
+    public void A_blocker_keeps_the_models_own_second_person_wording()
+    {
+        var evidence = DiscussionSummaries.Excerpts([
+            new SessionMessage { Role = "assistant", EventType = "text", MessageUid = "said", Content = "Blocked on approval." },
+        ]);
+        var blocker = new DiscussionSummaries.Blocker("SandboxLaunch", "SandboxLaunch needs your approval", "Approve SandboxLaunch", "t2");
+        Assert.True(DiscussionSummaries.TryParse(Answer("needs_you", "Sandbox launch approval", "Ready to launch.",
+            "Approve the Sandbox launch", uids: "said"), evidence, out var text, out var cited, "eval", reader: "Sam", blocker: blocker));
+        Assert.Equal("Approve the Sandbox launch", text!.UserAction);
+        Assert.Equal("Sandbox launch approval", text.Label);
+        Assert.Equal(["t2", "said"], cited);
+    }
+
+    [Fact]
+    public async Task A_sweep_gives_goal_prior_state_and_facts_and_the_fact_decides_the_status()
+    {
+        using var h = new Harness();
+        // The discussion's goal is its first persisted person's message, read from Nova's own records.
+        h.F.Records.Add(new(1, h.F.Target.Id, "user", "Launch the nightly eval in the Sandbox and report the scores.",
+            new JsonObject { ["source"] = "user-message" }, DateTimeOffset.UtcNow));
+        h.F.Records.Add(new(2, h.F.Target.Id, "user", "A later message.", new JsonObject { ["source"] = "user-message" }, DateTimeOffset.UtcNow));
+        await h.F.Store.PatchAsync(h.F.Target.Id, new JsonObject
+        {
+            [DiscussionSummary.DataKey] = JsonSerializer.SerializeToNode(new DiscussionSummary("old",
+                new SummaryText("waiting", "Lab", "Owner to obtain authorization.", null, null), "fast",
+                DateTimeOffset.Parse("2026-11-27T20:00:00Z"), "agent", "older-session", DateTime.Parse("2026-11-27T20:00:00Z")),
+                DiscussionSummary.Json),
+        });
+        h.Compute.Window.AddRange([
+            ToolUse("t2", "SandboxLaunch"),
+            ToolResult("t2", "SandboxLaunch", UnattendedDenialText),
+            new() { Role = "user", EventType = "user_message", MessageUid = "note",
+                Content = "<nova-event source=\"agent-note\" from-agent=\"Atlas\" from-discussion=\"build-9\">\nArtefact ready.\n</nova-event>" },
+        ]);
+        h.Clock.Now = h.Compute.EndedAt.AddMinutes(3);
+        await h.SweepAsync();
+
+        Assert.Contains($"limit={DiscussionSummaries.WindowRecords}", h.Compute.TranscriptPath);
+        var content = h.Compute.RequestBody!["messages"]![0]!["content"]!.GetValue<string>();
+        Assert.True(content.Length <= DiscussionSummaries.MaxInputChars);
+        var input = JsonNode.Parse(content)!;
+        Assert.Equal("first message", input["goal"]!["kind"]!.GetValue<string>());
+        Assert.Equal("Launch the nightly eval in the Sandbox and report the scores.", input["goal"]!["text"]!.GetValue<string>());
+        Assert.Equal("owner", input["goal"]!["from"]!.GetValue<string>());
+        Assert.StartsWith("Previous summary: prior state only", input["priorSummary"]!["note"]!.GetValue<string>());
+        Assert.Equal("Owner to obtain authorization.", input["priorSummary"]!["overview"]!.GetValue<string>());
+        var permission = input["facts"]!["permissions"]![0]!;
+        Assert.Equal("denied_unattended", permission["outcome"]!.GetValue<string>());
+        Assert.True(permission["ownerMustAct"]!.GetValue<bool>());
+        Assert.Equal("build-9", input["facts"]!["agentNotes"]![0]!["discussionId"]!.GetValue<string>());
+        Assert.Empty(input["facts"]!["delegations"]!.AsArray());
+        Assert.DoesNotContain("Settings > Agent permissions", content);
+
+        // The model answered "waiting" (the gateway's canned answer); the fact makes it needs_you.
+        var saved = (await h.ReadAsync()).AutoSummary!;
+        Assert.Equal("needs_you", saved.Text.Status);
+        Assert.Equal("you", saved.Text.WaitingOn);
+        Assert.Equal("Approve SandboxLaunch for this discussion, or tell it to continue without it", saved.Text.UserAction);
+        Assert.Equal("The test is ready.", saved.Text.Overview);
+        Assert.Contains("t2", saved.EvidenceMessageUids!);
+    }
+
+    [Fact]
+    public void A_brief_from_another_Agent_is_the_goal_when_it_comes_first()
+    {
+        var goal = DiscussionSummaries.Goal(new(1, Guid.NewGuid(), "user",
+            "<nova-event source=\"agent-note\" from-agent=\"Atlas\" from-discussion=\"ops-1\">\n" + new string('x', 900) + "\n</nova-event>",
+            new JsonObject { ["source"] = "agent-note", ["idempotency_key"] = "discussion-brief:d1" }, DateTimeOffset.UtcNow))!;
+        Assert.Equal("brief", goal.Kind);
+        Assert.Equal("other Agent Atlas", goal.From);
+        Assert.Equal(600, goal.Text.Length);
+        Assert.Null(DiscussionSummaries.Goal(null));
+    }
+
+    [Fact]
+    public void The_model_input_is_bounded()
+    {
+        var text = new string('a', 850);
+        var evidence = Enumerable.Range(0, 14).Select(i => new DiscussionSummaries.Evidence($"uid-{i:D2}", "user", text, "other Agent " + new string('n', 80))).ToArray();
+        var permissions = Enumerable.Range(0, DiscussionSummaries.MaxPermissionFacts).Select(i => new DiscussionSummaries.PermissionFact(
+            new string('t', 60), "denied_unattended", new string('f', 160), false, true, $"p{i}")).ToArray();
+        var delegations = Enumerable.Range(0, DiscussionSummaries.MaxDelegations).Select(i => new DiscussionSummaries.DelegationFact(
+            Guid.NewGuid().ToString(), new string('d', 120), "blocked", new string('b', 60))).ToArray();
+        var notes = Enumerable.Range(0, DiscussionSummaries.MaxAgentNotes).Select(i => new DiscussionSummaries.AgentNoteFact(
+            "other Agent " + new string('n', 80), new string('i', 80), new string('e', 200), $"n{i}")).ToArray();
+        var related = Enumerable.Range(0, 8).Select(i => new DiscussionSummaries.RelatedDiscussion(new string('r', 80), new string('t', 120))).ToArray();
+        var full = new DiscussionSummaries.SummaryInput("Sam", new string('i', 80), new string('T', 200), "completed",
+            new("first message", "owner", new string('g', 600)),
+            new("Previous summary: prior state only.", "waiting", new string('l', 64), new string('o', 240), null, null, DateTimeOffset.UtcNow),
+            new(permissions, delegations, notes), related, evidence);
+
+        // Every field at its own limit fits without dropping anything.
+        var json = DiscussionSummaries.Input(full);
+        Assert.True(json.Length <= DiscussionSummaries.MaxInputChars, json.Length.ToString());
+        Assert.Equal(14, JsonNode.Parse(json)!["evidence"]!.AsArray().Count);
+
+        // Text that escapes heavily (non-ASCII) is trimmed from the oldest evidence to stay under the cap.
+        var escaped = full with { Evidence = evidence.Select(e => e with { Text = new string('é', 850) }).ToArray() };
+        var bounded = DiscussionSummaries.Input(escaped);
+        Assert.True(bounded.Length <= DiscussionSummaries.MaxInputChars, bounded.Length.ToString());
+        var kept = JsonNode.Parse(bounded)!["evidence"]!.AsArray();
+        Assert.True(kept.Count < 14);
+        Assert.Equal("uid-13", kept[^1]!["messageUid"]!.GetValue<string>());
+    }
+
     private sealed class Harness : IDisposable
     {
         public CallbackDeliveryTests.Fixture F { get; }
@@ -514,6 +700,9 @@ public sealed class DiscussionSummaryTests
         public int Generations { get; private set; }
         public JsonNode? RequestBody { get; private set; }
         public Func<Task>? BeforeOutput { get; set; }
+        /// <summary>Records appended after the default window, newest last.</summary>
+        public List<SessionMessage> Window { get; } = [];
+        public string? TranscriptPath { get; private set; }
         public bool InvalidOutput { get; set; }
 
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ComputeProvenance? provenance = null,
@@ -534,7 +723,7 @@ public sealed class DiscussionSummaryTests
                     },
                     inputQueue = new { depth = Depth },
                 });
-            if (path.Contains("transcript-page", StringComparison.Ordinal))
+            if (path.Contains("transcript-page", StringComparison.Ordinal) && (TranscriptPath ??= path) is not null)
                 return Json(new
                 {
                     session = new { id = "target-session", status = "Idle" },
@@ -544,7 +733,7 @@ public sealed class DiscussionSummaryTests
                         new SessionMessage { Role = "user", EventType = "user_message", MessageUid = "prompt", Content = "Run the browser test." },
                         new SessionMessage { Role = "assistant", EventType = "tool_result", MessageUid = "final", Content = "hidden-tool-output" },
                         new SessionMessage { Role = "assistant", EventType = "text", Phase = "final_answer", MessageUid = "final", Content = "The test is ready and waiting for the lab." },
-                    },
+                    }.Concat(Window).ToArray(),
                 });
             Assert.Equal("/ai-session/generate", path);
             Generations++;

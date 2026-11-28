@@ -185,6 +185,44 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
         return result;
     }
 
+    /// <summary>
+    /// For the summary sweep, which has no caller: the outstanding delegations started from the
+    /// owner's own non-confidential discussion. The same durable links, fresh ownership metadata,
+    /// <see cref="MatchesScope"/> check and Compute observation as <see cref="ReadAsync"/>, under a
+    /// scope of its own; it never settles or alters what a person's read sees. At most
+    /// <paramref name="max"/> sessions are observed. Null when the observation is unavailable.
+    /// </summary>
+    internal async Task<IReadOnlyList<DelegationSessionActivity>?> OutstandingAsync(
+        DiscussionRead discussion, int max, CancellationToken ct)
+    {
+        if (discussion.Confidential || DiscussionStatus.IsClosed(discussion.Status)) return [];
+        var links = (await ReadLinksAsync(discussion, ct))
+            .GroupBy(link => link.SessionId, StringComparer.Ordinal)
+            .Select(group => group.MaxBy(link => link.MarkerId)!)
+            .OrderByDescending(link => link.MarkerId).Take(max).ToArray();
+        if (links.Length == 0) return [];
+        var metadata = await ReadMetadataAsync(links.Select(link => link.SessionId).ToHashSet(StringComparer.Ordinal), ct);
+        if (metadata is null) return null;
+        var result = new List<DelegationSessionActivity>();
+        foreach (var link in links)
+        {
+            if (!metadata.TryGetValue(link.SessionId, out var current)) continue;
+            var snapshot = await ReadSnapshotAsync("summary-sweep", link.SessionId, link.MarkerId, false, ct);
+            if (snapshot.Denied || snapshot.Value is not { } observed) continue;
+            var state = observed with
+            {
+                OwnerId = current.OwnerId, AgentId = current.AgentId, Confidential = current.Confidential,
+                Title = current.Title, RepositoryId = current.RepositoryId,
+            };
+            if (!MatchesScope(discussion, state)) continue;
+            var status = ProjectStatus(state);
+            if (IsOutstanding(status))
+                result.Add(new(link.SessionId, state.Title, state.RepositoryId ?? link.RepositoryId, link.Repository,
+                    status, true, BlockedReason: state.QueueBlockedReason, ErrorCode: state.QueueErrorCode));
+        }
+        return result;
+    }
+
     private async Task<Dictionary<string, RedComputeClient.DelegationSnapshot>?> ReadMetadataAsync(
         IReadOnlySet<string> linked, CancellationToken ct)
     {

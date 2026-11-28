@@ -932,6 +932,16 @@ public sealed class DiscussionStore(
         return title.Length > 60 ? title[..59] + "…" : title;
     }
 
+    /// <summary>
+    /// What a discussion is for: its first persisted person's message or the brief it was created
+    /// with, whichever comes first among its oldest records. One bounded read; null when neither.
+    /// </summary>
+    public async Task<DiscussionMessage?> ReadGoalAsync(Guid entityId, CancellationToken ct = default)
+        => (await discussions.GetMessagesAsync(entityId, 40, 0, ct)).FirstOrDefault(message =>
+            message.Metadata["source"] is JsonValue source && source.TryGetValue<string>(out var tag) && tag == "user-message"
+            || message.Metadata["idempotency_key"] is JsonValue key && key.TryGetValue<string>(out var value)
+                && value.StartsWith("discussion-brief:", StringComparison.Ordinal));
+
     /// <summary>Message post routed through the per-entity gate (the kernel post also
     /// rewrites the discussion entity's data blob for message_count/last_activity).</summary>
     public Task PostMessageAsync(Guid entityId, string role, string content, JsonObject metadata, string? userId = null, CancellationToken ct = default)
