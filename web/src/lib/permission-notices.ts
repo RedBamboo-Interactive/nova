@@ -8,15 +8,25 @@
 export interface PermissionNotice {
   toolName: string
   reason: string
+  action?: string
 }
 
 const MAX_NOTICES = 5
 
 /** The notice a live `permission_denied` event carries: tool name plus the reason in `content`. */
-export function readPermissionNotice(event: { toolName?: string | null; content?: string | null }): PermissionNotice {
+export function readPermissionNotice(event: {
+  toolName?: string | null
+  content?: string | null
+  permission?: unknown
+}): PermissionNotice {
+  const reason = event.content?.trim() || "No reason was given."
+  const permission = event.permission
+  const action = permission && typeof permission === "object" && "summary" in permission
+    && typeof permission.summary === "string" ? permission.summary.trim() : undefined
   return {
     toolName: event.toolName?.trim() || "A tool call",
-    reason: event.content?.trim() || "No reason was given.",
+    reason,
+    ...(action && !reason.includes(action) ? { action } : {}),
   }
 }
 
@@ -24,10 +34,9 @@ export function readPermissionNotice(event: { toolName?: string | null; content?
 export function addPermissionNotice(current: readonly PermissionNotice[] | undefined, notice: PermissionNotice): PermissionNotice[] {
   const list = current ?? []
   const last = list.at(-1)
-  if (last && last.toolName === notice.toolName && last.reason === notice.reason) return list as PermissionNotice[]
+  if (last && last.toolName === notice.toolName && last.reason === notice.reason && last.action === notice.action) return list as PermissionNotice[]
   return [...list, notice].slice(-MAX_NOTICES)
 }
 
-export function permissionNoticeText(notice: PermissionNotice): string {
-  return `${notice.toolName} was denied: ${notice.reason}`
-}
+export const PERMISSION_NOTICE_SUMMARY =
+  "Action blocked because no one was available to approve it. Send a message here while signed in to enable approvals."

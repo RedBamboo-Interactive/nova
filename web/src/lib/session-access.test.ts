@@ -4,6 +4,7 @@ import {
   AGENT_PERMISSIONS_SETTINGS_SECTION,
   FULL_ACCESS_SETTINGS_HREF,
   changeAccessLevel,
+  raiseAccessCap,
   openSettingsFromLink,
   readAccessLevel,
   readAccessLevels,
@@ -35,6 +36,17 @@ test("a change goes to the session's access-level route with the level", async (
   }
   assert.equal(await changeAccessLevel(post, "session/1", "auto"), "auto")
   assert.deepEqual(calls, [{ path: "/ai-session/sessions/session%2F1/access-level", body: { level: "auto" } }])
+})
+
+test("raising the cap only sends the cap and surfaces a person-gate refusal", async () => {
+  const post = async <T,>(path: string, body: unknown) => {
+    assert.equal(path, "/ai-session/sessions/session%2F1/access-level")
+    assert.deepEqual(body, { maxAccessLevel: "auto" })
+    return { accessLevel: "ask", maxAccessLevel: "auto", ok: true } as T
+  }
+  assert.equal(await raiseAccessCap(post, "session/1", "auto"), "auto")
+  const refusal = new Error("Only a person can raise the session cap.")
+  await assert.rejects(raiseAccessCap(async () => { throw refusal }, "s", "auto"), refusal)
 })
 
 test("the server's refusal reaches the modal in its own words", async () => {

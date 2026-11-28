@@ -620,6 +620,16 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         var body = new Dictionary<string, object>();
         if (!string.IsNullOrWhiteSpace(maxAccessLevel)) body["maxAccessLevel"] = maxAccessLevel;
         if (unattended) body["unattended"] = true;
+        return await ChangeSessionAccessLimitsAsync(sessionId, body, provenance, ct);
+    }
+
+    // The gateway carries the browser caller. Supplying Nova provenance would make this an Agent request.
+    internal Task<SendMessageResult> MarkSessionAttendedAsync(string sessionId, CancellationToken ct)
+        => ChangeSessionAccessLimitsAsync(sessionId, new { unattended = false }, provenance: null, ct);
+
+    private async Task<SendMessageResult> ChangeSessionAccessLimitsAsync(string sessionId, object body,
+        ComputeProvenance? provenance, CancellationToken ct)
+    {
         using var request = new HttpRequestMessage(HttpMethod.Post,
             $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}/{TightenAccessRoute}")
         {

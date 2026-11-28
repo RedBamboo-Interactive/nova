@@ -93,6 +93,17 @@ public sealed class DiscussionAccessPolicyTests
     }
 
     [Fact]
+    public void OnlyASignedInRootBrowserCanOpenSessionAttendance()
+    {
+        Assert.True(DiscussionAccessPolicy.CanAttendSession(BrowserExecution(Owner).User));
+        Assert.False(DiscussionAccessPolicy.CanAttendSession(LocalDefault().User));
+        Assert.False(DiscussionAccessPolicy.CanAttendSession(BrowserExecution("local-user").User));
+        Assert.False(DiscussionAccessPolicy.CanAttendSession(AgentExecution(Agent, Owner, "external-conversation").User));
+        Assert.False(DiscussionAccessPolicy.CanAttendSession(BrowserExecution(Owner, actorKind: "automation").User));
+        Assert.False(DiscussionAccessPolicy.CanAttendSession(BrowserExecution(Owner, parentExecutionId: Guid.NewGuid().ToString()).User));
+    }
+
+    [Fact]
     public void LocalDefaultCannotLaunderItselfThroughANovaBrowserToken()
     {
         var discussion = ConfidentialDiscussion("local-user");

@@ -79,6 +79,15 @@ export async function changeAccessLevel(post: Post, sessionId: string, level: Ac
   return applied
 }
 
+export async function raiseAccessCap(post: Post, sessionId: string, cap: AccessLevel): Promise<AccessLevel> {
+  const result = await post<{ maxAccessLevel?: unknown; ok?: unknown }>(
+    `/ai-session/sessions/${encodeURIComponent(sessionId)}/access-level`, { maxAccessLevel: cap })
+  const applied = readAccessLevel(result?.maxAccessLevel)
+  if (result?.ok !== true || applied !== cap)
+    throw new Error(`The session cap didn't change to ${label(cap)}.`)
+  return applied
+}
+
 function label(level: AccessLevel): string {
   return level.charAt(0).toUpperCase() + level.slice(1)
 }

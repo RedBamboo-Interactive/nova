@@ -149,6 +149,10 @@ public static class DiscussionAccessPolicy
                 && string.Equals(subject, LocalDefaultSubjectId, StringComparison.OrdinalIgnoreCase);
     }
 
+    // LocalDefault browser tokens cannot approve commands in RedCompute.
+    internal static bool CanAttendSession(ClaimsPrincipal principal)
+        => IsPersonAtBrowser(principal) && IsHumanInitiated(principal);
+
     /// <summary>
     /// Who a signed execution says is acting (an Agent, an automation, an app at a browser), or
     /// null for a request without a verified execution identity. The id is the actor's entity id

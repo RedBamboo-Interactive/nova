@@ -20,7 +20,7 @@ import { TransitioningAgentAvatar } from "../components/transitioning-agent-avat
 import { NovaStatusLine } from "../components/nova-status-line"
 import { DelegationsInfo, delegationActivityGroup } from "../components/delegation-activity"
 import { withWaitingActivity } from "../lib/waiting-activity"
-import { permissionNoticeText } from "../lib/permission-notices"
+import { PERMISSION_NOTICE_SUMMARY } from "../lib/permission-notices"
 import { WorktreeChips } from "../components/discussion/worktree-chips"
 import { DiscussionBehaviourList, OrchestrationStatus, orchestrationAccent, type BehaviourItem } from "../components/discussion/discussion-behaviour"
 import { BEHAVIOUR_ICONS, agentsWithHeartbeat, effectiveBehaviours, hasIntrinsicBehaviours } from "../lib/discussion-behaviours"
@@ -41,7 +41,7 @@ import { useSessionStats } from "../hooks/use-session-stats"
 import { useSessionInfoSources } from "../hooks/use-session-info-sources"
 import { DiscussionRunOnSetting, runOnAvailable } from "../components/run-on"
 import { useFullAccessEnabled } from "../hooks/use-full-access-enabled"
-import { FULL_ACCESS_SETTINGS_HREF, changeAccessLevel, openSettingsFromLink } from "../lib/session-access"
+import { FULL_ACCESS_SETTINGS_HREF, changeAccessLevel, openSettingsFromLink, raiseAccessCap } from "../lib/session-access"
 import { getSettings, setSettings } from "../lib/settings-store"
 import { api, novaExecution } from "../lib/api"
 import { findCurrentLive, findLiveHeartbeatPair } from "../lib/live-heartbeat"
@@ -544,7 +544,7 @@ export function ChatView({
 
   const sessionStatsDiscussion = useMemo(() => activeDiscussion && { ...activeDiscussion, title: activeDisplayTitle },
     [activeDiscussion, activeDisplayTitle])
-  const { stats: sessionStats, applyAccessLevel, nodeId: sessionNodeId, projectPath: sessionProjectPath } = useSessionStats(activeDiscussion?.sessionId, isStreaming, sessionStatsDiscussion)
+  const { stats: sessionStats, applyAccessSettings, nodeId: sessionNodeId, projectPath: sessionProjectPath } = useSessionStats(activeDiscussion?.sessionId, isStreaming, sessionStatsDiscussion)
   const loadProviderUsage = useCallback((provider: string, forceRefresh = false) =>
     api.get<ProviderUsageSnapshot>(
       `/ai-session/providers/${encodeURIComponent(provider)}/usage${forceRefresh ? "?refresh=true" : ""}`,
@@ -1108,8 +1108,13 @@ export function ChatView({
     if (!activeSessionId) throw new Error("This discussion has no session yet.")
     // A refusal rejects with RedCompute's message, shown under the Permissions row.
     const level = await changeAccessLevel(api.post, activeSessionId, requested)
-    applyAccessLevel(activeSessionId, level)
-  }, [activeSessionId, applyAccessLevel])
+    applyAccessSettings(activeSessionId, { accessLevel: level })
+  }, [activeSessionId, applyAccessSettings])
+  const handleAccessCapRaise = useCallback(async (requested: AccessLevel) => {
+    if (!activeSessionId) throw new Error("This discussion has no session yet.")
+    const cap = await raiseAccessCap(api.post, activeSessionId, requested)
+    applyAccessSettings(activeSessionId, { maxAccessLevel: cap })
+  }, [activeSessionId, applyAccessSettings])
   const activeDelegations = activeDiscussion ? delegationActivity[activeDiscussion.id] : undefined
   // Skills, workspace, memory and node: read each time Info opens.
   const infoSources = useSessionInfoSources({
@@ -1147,6 +1152,7 @@ export function ChatView({
     nodeSettingsClient: accessChangeable ? nodeSettingsClient : undefined,
     subscribeInferenceSettings: queueTransport?.subscribe,
     onAccessLevelChange: accessChangeable ? handleAccessLevelChange : undefined,
+    onAccessCapRaise: accessChangeable ? handleAccessCapRaise : undefined,
     fullAccessEnabled,
     // The floating window has no RedLeaf shell to open Settings in: the link stays text there.
     fullAccessSettingsHref: floating ? undefined : FULL_ACCESS_SETTINGS_HREF,
@@ -1635,10 +1641,15 @@ export function ChatView({
     return (
       <div data-testid="permission-denied-notices" className="mt-1 space-y-0.5">
         {permissionNotices.map((notice, i) => (
-          <p key={i} className="flex items-start gap-1.5 text-xs text-text-muted">
-            <i className="ph-bold ph-prohibit mt-0.5 text-amber-400" aria-hidden />
-            <span>{permissionNoticeText(notice)}</span>
-          </p>
+          <details key={i} className="text-xs text-text-muted">
+            <summary className="cursor-pointer">
+              <span>{PERMISSION_NOTICE_SUMMARY}</span>
+            </summary>
+            <div className="ml-4 mt-1 space-y-1 break-words whitespace-pre-wrap">
+              {notice.action && <div>{notice.action}</div>}
+              <div>{notice.toolName}: {notice.reason}</div>
+            </div>
+          </details>
         ))}
       </div>
     )

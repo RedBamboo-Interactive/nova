@@ -2400,6 +2400,7 @@ public static class DiscussionEndpoints
             var idempotencyKey = ctx.Request.Headers["X-Idempotency-Key"].FirstOrDefault();
 
             var humanInitiated = DiscussionAccessPolicy.IsHumanInitiated(ctx.User);
+            var attendSession = DiscussionAccessPolicy.CanAttendSession(ctx.User);
             var cause = NovaComputeProvenance.RequestCause(ctx, discussion.OwnerId);
             var outcome = request.Input is { Length: > 0 }
                 ? await pipeline.SendInputAsync(
@@ -2407,13 +2408,13 @@ public static class DiscussionEndpoints
                     request.InputMethod ?? "typed", request.Delivery,
                     idempotencyKey, request.DisplayContent, request.MessageUid,
                     humanInitiated: humanInitiated, cause: cause,
-                    callerSessionId: DelegateEndpoints.CallerSessionId(ctx.User))
+                    callerSessionId: DelegateEndpoints.CallerSessionId(ctx.User), attendSession: attendSession)
                 : await pipeline.SendAsync(
                     discussion, userId, request.Content, request.Images, resolved,
                     request.InputMethod ?? "typed", request.Delivery,
                     idempotencyKey, request.DisplayContent, request.MessageUid,
                     humanInitiated: humanInitiated, cause: cause,
-                    callerSessionId: DelegateEndpoints.CallerSessionId(ctx.User));
+                    callerSessionId: DelegateEndpoints.CallerSessionId(ctx.User), attendSession: attendSession);
 
             if (!outcome.Success)
             {

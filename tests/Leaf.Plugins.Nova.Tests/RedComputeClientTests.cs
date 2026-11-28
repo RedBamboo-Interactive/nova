@@ -282,26 +282,45 @@ public sealed class RedComputeClientTests
         new ComputeBeneficiary("user", "user-1", "Laurent"),
         [], new ComputeTrace(), ComputeProvenanceAssurance.Verified, DateTimeOffset.UtcNow);
 
+    [Fact]
+    public async Task MarkAttendedSendsOnlyAttendanceAsTheAmbientBrowserCaller()
+    {
+        var gateway = new RecordingComputeGateway();
+        var result = await new RedComputeClient(gateway).MarkSessionAttendedAsync("session-1", default);
+
+        Assert.True(result.Success);
+        var request = Assert.Single(gateway.Requests);
+        Assert.Equal("/ai-session/sessions/session-1/access-level", request.Path);
+        Assert.Null(request.Provenance);
+        Assert.Equal("""{"unattended":false}""", gateway.AttendanceBody);
+    }
+
     private sealed class RecordingComputeGateway : IComputeGateway
     {
         public List<(string Path, ComputeProvenance? Provenance)> Requests { get; } = [];
+        public string? AttendanceBody { get; private set; }
 
-        public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+        public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             ComputeProvenance? provenance = null, CancellationToken ct = default)
         {
             var path = request.RequestUri?.IsAbsoluteUri == true
                 ? request.RequestUri.AbsolutePath
                 : request.RequestUri?.OriginalString ?? "";
             Requests.Add((path, provenance));
+            if (path.EndsWith("/access-level", StringComparison.Ordinal))
+            {
+                Assert.Equal(HttpMethod.Post, request.Method);
+                AttendanceBody = await request.Content!.ReadAsStringAsync(ct);
+            }
             var content = path.EndsWith("/sessions", StringComparison.Ordinal)
                 ? "{\"id\":\"session-1\"}"
                 : path.EndsWith("/message", StringComparison.Ordinal)
                     ? "{\"sent\":true}"
                     : "{\"items\":[],\"queue\":{\"depth\":0,\"state\":\"empty\"}}";
-            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
                 Content = new StringContent(content, System.Text.Encoding.UTF8, "application/json"),
-            });
+            };
         }
     }
 

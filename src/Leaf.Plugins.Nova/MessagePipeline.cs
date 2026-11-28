@@ -263,10 +263,10 @@ public sealed class MessagePipeline(
         string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
         string? requestedMessageUid = null,
         CancellationToken ct = default, bool humanInitiated = true, string? cause = null,
-        string? callerSessionId = null)
+        string? callerSessionId = null, bool attendSession = false)
         => SendCoreAsync(discussion, userId, content, images, null, device, input,
             delivery, idempotencyKey, displayContent, persistUserMessage: true,
-            requestedMessageUid, ct, humanInitiated, cause, callerSessionId);
+            requestedMessageUid, ct, humanInitiated, cause, callerSessionId, attendSession);
 
     /// <summary>
     /// Starts a real discussion turn while keeping its bootstrap instruction out of
@@ -301,14 +301,14 @@ public sealed class MessagePipeline(
         string? delivery = null, string? idempotencyKey = null, string? displayContent = null,
         string? requestedMessageUid = null,
         CancellationToken ct = default, bool humanInitiated = true, string? cause = null,
-        string? callerSessionId = null)
+        string? callerSessionId = null, bool attendSession = false)
     {
         var content = string.Join("\n", parts
             .Where(part => string.Equals(part.Type, "text", StringComparison.OrdinalIgnoreCase))
             .Select(part => part.Text ?? ""));
         return SendCoreAsync(discussion, userId, content, null, parts, device, input,
             delivery, idempotencyKey, displayContent, persistUserMessage: true,
-            requestedMessageUid, ct, humanInitiated, cause, callerSessionId);
+            requestedMessageUid, ct, humanInitiated, cause, callerSessionId, attendSession);
     }
 
     private async Task<SendMessageOutcome> SendCoreAsync(
@@ -317,7 +317,7 @@ public sealed class MessagePipeline(
         ResolvedDevice device, string input, string? delivery, string? idempotencyKey,
         string? displayContent, bool persistUserMessage, string? requestedMessageUid,
         CancellationToken ct = default, bool humanInitiated = true, string? cause = null,
-        string? callerSessionId = null)
+        string? callerSessionId = null, bool attendSession = false)
     {
         // Endpoint checks provide the immediate 409, while this authoritative
         // re-read protects every internal caller that sends by explicit record.
@@ -577,6 +577,15 @@ public sealed class MessagePipeline(
                 messageUid = requestedMessageUid,
                 metadata = new { app = "nova", discussionId = discussion.Id, internalMessage = !persistUserMessage },
             };
+        }
+
+        if (attendSession && !StartsUnattended(discussion)
+            && (await redCompute.ProbeSessionAsync(sessionId, ct)).Unattended)
+        {
+            var attendance = await redCompute.MarkSessionAttendedAsync(sessionId, ct);
+            if (!attendance.Success)
+                return new(false, sessionId, attendance.ErrorCode ?? "attendance_failed",
+                    attendance.ErrorMessage ?? "The session could not enable approvals. Please try sending again.");
         }
 
         await DiscussionOrchestration.RegisterPromptAsync(redCompute, entities, discussion, sessionId, requestedMessageUid,

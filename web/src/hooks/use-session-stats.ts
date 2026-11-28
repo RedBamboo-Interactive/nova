@@ -38,8 +38,8 @@ interface DiscussionRef {
 
 export interface SessionStatsState {
   stats: SessionStats | null
-  /** Show a level the server just accepted, until the next read of the session says it too. */
-  applyAccessLevel: (sessionId: string, level: AccessLevel) => void
+  /** Show the access settings the server just accepted. */
+  applyAccessSettings: (sessionId: string, settings: { accessLevel?: AccessLevel; maxAccessLevel?: AccessLevel }) => void
   /** The node the session runs on, as the session says; null when unknown. */
   nodeId: string | null
   /** The folder the session works in, as the session says; null when unknown. */
@@ -79,9 +79,9 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
     return () => { cancelled = true }
   }, [isStreaming, sessionId])
 
-  const applyAccessLevel = useCallback((changedSessionId: string, level: AccessLevel) => {
+  const applyAccessSettings = useCallback((changedSessionId: string, settings: { accessLevel?: AccessLevel; maxAccessLevel?: AccessLevel }) => {
     if (dataSessionRef.current !== changedSessionId) return
-    setSessionData(previous => previous ? { ...previous, accessLevel: level } : previous)
+    setSessionData(previous => previous ? { ...previous, ...settings } : previous)
   }, [])
 
   const stats = useMemo(() => {
@@ -114,5 +114,5 @@ export function useSessionStats(sessionId: string | null | undefined, isStreamin
 
   const nodeId = sessionData && sessionId && dataSessionRef.current === sessionId && typeof sessionData.nodeId === "string" ? sessionData.nodeId : null
   const projectPath = sessionData && sessionId && dataSessionRef.current === sessionId && typeof sessionData.projectPath === "string" ? sessionData.projectPath : null
-  return useMemo(() => ({ stats, applyAccessLevel, nodeId, projectPath }), [stats, applyAccessLevel, nodeId, projectPath])
+  return useMemo(() => ({ stats, applyAccessSettings, nodeId, projectPath }), [stats, applyAccessSettings, nodeId, projectPath])
 }
