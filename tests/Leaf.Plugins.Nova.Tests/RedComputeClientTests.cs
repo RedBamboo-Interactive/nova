@@ -230,7 +230,7 @@ public sealed class RedComputeClientTests
         Assert.Equal("Idle", await client.GetSessionStatusAsync("s1"));
 
         Assert.Equal(5, gateway.Paths.Count);
-        Assert.All(gateway.Paths, path => Assert.Equal("/ai-session/sessions/s1?tail=1", path));
+        Assert.All(gateway.Paths, path => Assert.Equal("/ai-session/sessions/s1?tail=0", path));
     }
 
     [Fact]

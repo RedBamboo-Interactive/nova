@@ -495,7 +495,7 @@ public sealed class DelegationActivityTests
         {
             await Task.Yield();
             Assert.Equal(HttpMethod.Get, request.Method);
-            Assert.EndsWith("?tail=1", request.RequestUri!.OriginalString);
+            Assert.EndsWith("?tail=0", request.RequestUri!.OriginalString);
             var id = request.RequestUri.OriginalString.Split('/')[3].Split('?')[0];
             Reads.Add(id);
             var response = Responses[id];

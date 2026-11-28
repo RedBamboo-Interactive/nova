@@ -703,11 +703,12 @@ public sealed class RedComputeClient(IComputeGateway gateway)
     }
 
     /// <summary>
-    /// The transcript tail a probe that reads only <c>session</c> fields asks for. Without a tail
+    /// The transcript tail a probe that reads only <c>session</c> and <c>inputQueue</c> fields asks for. Without a tail
     /// RedCompute pages the whole transcript back out of RedLeaf; the session fields do not depend on
-    /// it. RedCompute clamps tail to at least 1.
+    /// it. 0 is RedCompute's info-only read: no transcript records are read and <c>transcript</c> is absent.
+    /// A RedCompute older than that read clamps 0 to one record, so the probe is correct on both.
     /// </summary>
-    internal const int StatusProbeTail = 1;
+    internal const int StatusProbeTail = 0;
 
     public async Task<Guid?> GetSessionJobIdAsync(string sessionId, CancellationToken ct = default)
     {
@@ -830,7 +831,7 @@ public sealed class RedComputeClient(IComputeGateway gateway)
 
     public async Task<SessionLastTurn> ProbeLastTurnAsync(string sessionId, CancellationToken ct = default)
     {
-        using var doc = await GetSessionRawAsync(sessionId, ct, tail: 1);
+        using var doc = await GetSessionRawAsync(sessionId, ct, tail: StatusProbeTail);
         if (doc is null || !doc.RootElement.TryGetProperty("session", out var session)) return new(false, null);
         string? Str(JsonElement e, string name) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v)
             && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
@@ -868,10 +869,10 @@ public sealed class RedComputeClient(IComputeGateway gateway)
         timeout.CancelAfter(TimeSpan.FromSeconds(8));
         try
         {
-            // The existing detail contract includes the queue summary. Its minimum
-            // tail keeps historical transcript size out of this activity read.
+            // The existing detail contract includes the queue summary. The info-only
+            // read keeps the transcript out of this activity read altogether.
             using var request = new HttpRequestMessage(HttpMethod.Get,
-                $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}?tail=1");
+                $"/ai-session/sessions/{Uri.EscapeDataString(sessionId)}?tail={StatusProbeTail}");
             using var response = await gateway.SendAsync(request, provenance: null, timeout.Token);
             if ((int)response.StatusCode is 401 or 403 or 404) return new(null, true);
             if (!response.IsSuccessStatusCode) return new(null);
