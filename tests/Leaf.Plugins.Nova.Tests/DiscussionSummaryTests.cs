@@ -10,7 +10,7 @@ using Xunit;
 
 namespace Leaf.Plugins.Nova.Tests;
 
-public sealed class DiscussionSummaryTests
+public sealed partial class DiscussionSummaryTests
 {
     private static readonly SummaryText Waiting = new("waiting", "Lab release", "The test is ready.", "Nova runs it after handoff.", null);
 
@@ -786,11 +786,19 @@ public sealed class DiscussionSummaryTests
         public DiscussionSummaries Summaries { get; }
         private readonly Records preferences = new();
 
-        public Harness()
+        /// <param name="heartbeat">Give its Agent an open Heartbeat, so an Orchestrated target can be handed over.</param>
+        /// <param name="more">More entities, given the owner's id.</param>
+        public Harness(bool heartbeat = false, Func<string, IEnumerable<LeafEntity>>? more = null)
         {
             var owner = CallbackDeliveryTests.Entity("user", "summary-owner", new());
             Owner = owner.Id.ToString();
-            F = new(extraEntities: [owner]);
+            var ownerId = Owner;
+            F = new(extraEntities: [owner, .. more?.Invoke(ownerId) ?? []],
+                agentEntities: heartbeat ? agent => [CallbackDeliveryTests.Entity("discussion", DiscussionStore.Slug("heartbeat"), new()
+                {
+                    ["discussion_id"] = "heartbeat", ["app"] = "nova", ["type"] = "heartbeat", ["status"] = "idle",
+                    ["agent"] = agent.ToString(), ["session_id"] = "heartbeat-session", ["owner_id"] = ownerId,
+                })] : null);
             F.Store.PatchAsync(F.Target.Id, new JsonObject
             {
                 ["owner_id"] = Owner, ["status"] = "idle", ["last_activity"] = "2026-11-27T21:00:00Z",

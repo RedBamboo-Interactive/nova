@@ -170,6 +170,49 @@ public sealed class DiscussionSummaries(
         return View(d, defaultEnabled, id => string.Equals(id, otherId, StringComparison.OrdinalIgnoreCase) ? other : null);
     }
 
+    internal const string SettledBySummary = "summary";
+
+    /// <summary>
+    /// The status that settles an Orchestrated discussion, from its current summary as the owner sees it: idle, not
+    /// stale, same session, enabled, resolved one hop through the discussion it waits on. complete or needs_you
+    /// (including needs_you forced by a denial fact); otherwise null.
+    /// </summary>
+    internal static string? SettlingReason(DiscussionRead d, DiscussionSummaryView view)
+        => d.Status == DiscussionStatus.Idle && view is { Enabled: true, Stale: false, Summary.Text.Status: var status }
+            && status is OrchestrationState.Complete or OrchestrationState.NeedsYou ? status : null;
+
+    internal async Task<string?> SettlingReasonAsync(DiscussionRead d, IReadOnlyList<DiscussionRead> open, CancellationToken ct)
+    {
+        if (!Eligible(d) || d.Status != DiscussionStatus.Idle) return null;
+        var byId = new Dictionary<string, DiscussionRead>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in open) byId.TryAdd(item.Id, item);
+        return SettlingReason(d, View(d, await DefaultAsync(d.OwnerId!, ct), id => byId.GetValueOrDefault(id)));
+    }
+
+    /// <summary>
+    /// After a summary changed: settle the Orchestrated discussions it now settles, itself and those of the same
+    /// owner waiting on it. Best effort; the sweeper checks again before any hand-off.
+    /// </summary>
+    private async Task SettleOrchestratedAsync(DiscussionRead changed, CancellationToken ct)
+    {
+        try
+        {
+            var open = await store.ListOpenAsync(ct: ct);
+            foreach (var d in open.Where(d => DiscussionOrchestration.IsActive(d)
+                && string.Equals(d.OwnerId, changed.OwnerId, StringComparison.OrdinalIgnoreCase)
+                && (string.Equals(d.Id, changed.Id, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(d.AutoSummary?.Text.WaitingDiscussion, changed.Id, StringComparison.OrdinalIgnoreCase))))
+            {
+                if (d.Orchestration?.IsSettled == true || await SettlingReasonAsync(d, open, ct) is not { } reason) continue;
+                await DiscussionOrchestration.SettleAsync(entities, d, reason, SettledBySummary, null, clock.GetUtcNow(), events, ct);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogDebug(ex, "Orchestrated discussions not settled after the summary of {DiscussionId}", changed.Id);
+        }
+    }
+
     /// <summary>The owner's views of a set of discussions, each resolved against the others.</summary>
     public static IEnumerable<DiscussionSummaryView> Views(IReadOnlyList<DiscussionRead> discussions, bool defaultEnabled)
     {
@@ -235,7 +278,11 @@ public sealed class DiscussionSummaries(
             }, ct: ct));
             return patched is null ? (404, null) : (200, View(patched, defaultEnabled));
         }, ct);
-        if (result.Status == 200) await PublishAsync(d.Id, ct);
+        if (result.Status == 200)
+        {
+            await PublishAsync(d.Id, ct);
+            if (await store.GetAsync(d.EntityId, ct) is { } saved) await SettleOrchestratedAsync(saved, ct);
+        }
         return result;
     }
 

@@ -22,7 +22,7 @@ import { DelegationsInfo, delegationActivityGroup } from "../components/delegati
 import { withWaitingActivity } from "../lib/waiting-activity"
 import { permissionNoticeText } from "../lib/permission-notices"
 import { WorktreeChips } from "../components/discussion/worktree-chips"
-import { DiscussionBehaviourList, OrchestrationStatus, type BehaviourItem } from "../components/discussion/discussion-behaviour"
+import { DiscussionBehaviourList, OrchestrationStatus, orchestrationAccent, type BehaviourItem } from "../components/discussion/discussion-behaviour"
 import { BEHAVIOUR_ICONS, agentsWithHeartbeat, effectiveBehaviours, hasIntrinsicBehaviours } from "../lib/discussion-behaviours"
 import { AttachSkillDialog, SkillChips } from "../components/discussion/skill-chips"
 import { ReactionPills, AddReactionButton, useReactionEmoji } from "../components/discussion/reactions"
@@ -1298,7 +1298,7 @@ export function ChatView({
       key: "orchestrated",
       icon: BEHAVIOUR_ICONS.orchestrated,
       title: "Orchestrated",
-      accent: "var(--color-accent-red)",
+      accent: orchestrationAccent(activeDiscussion),
       description: "When it goes idle, the Heartbeat picks it up and decides what's next",
       checked: effective.orchestrated,
       pending: orchestratedPending,

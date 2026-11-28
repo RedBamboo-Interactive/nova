@@ -1475,9 +1475,19 @@ public sealed class DiscussionStore(
         nodeId = d.RunOnNodeId,
         // When idle, its Agent's Heartbeat decides whether to continue it.
         orchestrated = d.Orchestrated,
-        // When its Heartbeat is told it's idle (null: not armed), and hand-offs since the person last wrote.
+        // ongoing (we keep driving it) or settled (done or needs its person, left until someone writes);
+        // when its Heartbeat is told it's idle (null: not armed), and hand-offs since the person last wrote.
         orchestration = d.Orchestrated
-            ? new { dueAt = d.Orchestration?.DueAt, chain = d.Orchestration?.Chain ?? 0 }
+            ? new
+            {
+                state = d.Orchestration?.IsSettled == true ? "settled" : "ongoing",
+                dueAt = d.Orchestration?.DueAt,
+                chain = d.Orchestration?.Chain ?? 0,
+                settledReason = d.Orchestration?.Settled,
+                settledBy = d.Orchestration?.SettledBy,
+                settledNote = d.Orchestration?.SettledNote,
+                settledAt = d.Orchestration?.SettledAt,
+            }
             : null,
         setupBootstrapMessageUid = d.SetupBootstrapMessageUid,
         worktrees = d.Worktrees ?? [],

@@ -1,4 +1,4 @@
-import type { DiscussionInfo } from "./types"
+import type { DiscussionInfo, OrchestrationState } from "./types"
 
 /** Each behaviour's icon, shared by the Info modal's Behaviour list and the discussion list's marks. */
 export const BEHAVIOUR_ICONS = {
@@ -33,16 +33,27 @@ export function effectiveBehaviours(discussion: DiscussionInfo, agentHasHeartbea
   }
 }
 
+/** Ongoing while it is kept moving; settled once done or waiting on its person, until someone writes. */
+export function orchestrationState(discussion: DiscussionInfo): OrchestrationState {
+  return discussion.orchestration?.state === "settled" ? "settled" : "ongoing"
+}
+
+/** The heartbeat mark's accessible name and tooltip, in each state. */
+export const ORCHESTRATION_LABELS: Record<OrchestrationState, string> = {
+  ongoing: "Orchestrated · ongoing",
+  settled: "Orchestrated · settled until you write",
+}
+
 /**
  * The marks after a discussion's title in the list: each behaviour switched on, except the
  * intrinsic LIVE timeline of LIVE and Heartbeat discussions, which isn't a choice. The heartbeat
- * is armed while the Heartbeat's check is due.
+ * says whether its orchestration is ongoing or settled.
  */
 export function behaviourMarks(discussion: DiscussionInfo, agentHasHeartbeat: boolean) {
   const on = effectiveBehaviours(discussion, agentHasHeartbeat)
   return {
     orchestrated: on.orchestrated,
-    armed: on.orchestrated && discussion.orchestration?.dueAt != null,
+    orchestration: on.orchestrated ? orchestrationState(discussion) : null,
     liveTimeline: on.liveTimeline && !hasIntrinsicBehaviours(discussion),
     confidential: on.confidential,
   }

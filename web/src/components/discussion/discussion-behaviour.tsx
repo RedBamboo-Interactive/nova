@@ -1,33 +1,46 @@
-import { useEffect, useState, type ReactNode } from "react"
+import type { ReactNode } from "react"
 import { Switch, cn } from "@redbamboo/ui"
 import type { DiscussionInfo } from "../../lib/types"
-import { BEHAVIOUR_ICONS, behaviourMarks } from "../../lib/discussion-behaviours"
+import { BEHAVIOUR_ICONS, ORCHESTRATION_LABELS, behaviourMarks, orchestrationState } from "../../lib/discussion-behaviours"
 
 const markClass = "text-[10px]"
+const quietMark = "text-text-muted opacity-60"
+/**
+ * Ongoing orchestration wears Nova's magenta: --color-domain-presence is the shared token carrying it (#C74B7A,
+ * the "Nova Magenta" colour). Not --primary: in the shell that resolves to the RedLeaf brand.
+ */
+export const ORCHESTRATION_ONGOING_COLOR = "var(--color-domain-presence)"
+const ongoingMark = "text-domain-presence"
+
+/** The Info modal's Orchestrated icon colour: magenta while ongoing, muted once settled, as in the list. */
+export function orchestrationAccent(discussion: DiscussionInfo): string {
+  return orchestrationState(discussion) === "settled" ? "var(--color-text-muted)" : ORCHESTRATION_ONGOING_COLOR
+}
 
 /**
  * The discussion list's quiet marks beside a title (the row's badge slot, so a long title never hides them): the icon of each behaviour switched on, in the
- * Info modal's order. The heartbeat turns red only while the Heartbeat's check is due. Intrinsic
+ * Info modal's order. The heartbeat is magenta while its orchestration is ongoing, grey once settled. Intrinsic
  * behaviours (the LIVE timeline of LIVE and Heartbeat discussions) aren't marked: they aren't choices.
  */
 export function DiscussionBehaviourMarks({ discussion, agentHasHeartbeat }: { discussion: DiscussionInfo; agentHasHeartbeat: boolean }) {
-  const { orchestrated, armed, liveTimeline, confidential } = behaviourMarks(discussion, agentHasHeartbeat)
-  if (!orchestrated && !liveTimeline && !confidential) return null
+  const { orchestration, liveTimeline, confidential } = behaviourMarks(discussion, agentHasHeartbeat)
+  if (!orchestration && !liveTimeline && !confidential) return null
   return (
     <span data-slot="discussion-behaviour-marks" className="inline-flex shrink-0 items-center gap-1">
-      {orchestrated && (
+      {orchestration && (
         <i
           role="img"
-          aria-label={armed ? "Orchestrated, Heartbeat check due" : "Orchestrated"}
-          title={armed ? "Orchestrated · the Heartbeat checks in soon" : "Orchestrated"}
-          className={cn(BEHAVIOUR_ICONS.orchestrated, markClass, armed ? "text-accent-red" : "text-text-muted opacity-60")}
+          data-orchestration={orchestration}
+          aria-label={ORCHESTRATION_LABELS[orchestration]}
+          title={ORCHESTRATION_LABELS[orchestration]}
+          className={cn(BEHAVIOUR_ICONS.orchestrated, markClass, orchestration === "ongoing" ? ongoingMark : quietMark)}
         />
       )}
       {liveTimeline && (
-        <i role="img" aria-label="LIVE timeline" title="LIVE timeline" className={cn(BEHAVIOUR_ICONS.liveTimeline, markClass, "text-text-muted opacity-60")} />
+        <i role="img" aria-label="LIVE timeline" title="LIVE timeline" className={cn(BEHAVIOUR_ICONS.liveTimeline, markClass, quietMark)} />
       )}
       {confidential && (
-        <i role="img" aria-label="Confidential" title="Confidential" className={cn(BEHAVIOUR_ICONS.confidential, markClass, "text-text-muted opacity-60")} />
+        <i role="img" aria-label="Confidential" title="Confidential" className={cn(BEHAVIOUR_ICONS.confidential, markClass, quietMark)} />
       )}
     </span>
   )
@@ -95,42 +108,23 @@ export function DiscussionBehaviourList({ items, closed }: { items: BehaviourIte
   )
 }
 
-/** Re-renders on an interval so a countdown stays honest while the modal is open. */
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), intervalMs)
-    return () => window.clearInterval(id)
-  }, [intervalMs])
-  return now
-}
-
-function inMinutes(ms: number): string {
-  if (ms < 60_000) return "under a minute"
-  const minutes = Math.round(ms / 60_000)
-  return minutes === 1 ? "1 min" : `${minutes} min`
-}
-
-/** What an Orchestrated discussion is doing: armed, working, or handed over, and how far the pacing has gone. */
-export function OrchestrationStatus({ discussion }: { discussion: DiscussionInfo }) {
-  const now = useNow(15_000)
-  const dueAt = discussion.orchestration?.dueAt ? Date.parse(discussion.orchestration.dueAt) : null
-  const chain = discussion.orchestration?.chain ?? 0
-  const parts: string[] = []
-  if (dueAt != null) parts.push(dueAt > now ? `Heartbeat checks in ${inMinutes(dueAt - now)}` : "Heartbeat checking now")
-  else if (discussion.status === "thinking") parts.push("Working · Heartbeat checks once it goes idle")
-  else if (chain > 0) parts.push("With the Heartbeat")
-  else parts.push("Heartbeat checks 3 min after it goes idle")
+/** The Orchestrated row's status in words: ongoing, or settled until you write and why. */
+export function orchestrationStatusText(discussion: DiscussionInfo): string {
+  const o = discussion.orchestration
+  if (orchestrationState(discussion) === "settled") {
+    const why = o?.settledReason === "complete" ? "done"
+      : o?.settledReason === "needs_you" ? "needs you"
+      : o?.settledNote?.trim() || "the Heartbeat left it to you"
+    return `Settled until you write · ${why}`
+  }
+  const chain = o?.chain ?? 0
+  const parts = ["Ongoing", discussion.status === "thinking" ? "working" : "the Heartbeat keeps it moving"]
   if (chain > 0) parts.push(`${chain} ${chain === 1 ? "step" : "steps"} since you last wrote`)
-  return (
-    <span className="flex min-w-0 items-center gap-1.5">
-      {dueAt != null && (
-        <span aria-hidden="true" className="relative flex size-1.5 shrink-0">
-          <span className="absolute inline-flex size-full animate-ping rounded-full bg-accent-red opacity-60" />
-          <span className="relative inline-flex size-1.5 rounded-full bg-accent-red" />
-        </span>
-      )}
-      <span className="truncate">{parts.join(" · ")}</span>
-    </span>
-  )
+  return parts.join(" · ")
+}
+
+/** What an Orchestrated discussion is doing, in words; its row's icon carries the same colour as the list mark. */
+export function OrchestrationStatus({ discussion }: { discussion: DiscussionInfo }) {
+  const text = orchestrationStatusText(discussion)
+  return <span data-orchestration={orchestrationState(discussion)} className="block truncate" title={text}>{text}</span>
 }

@@ -281,7 +281,8 @@ public sealed class NovaAppPlugin : ILeafPlugin
             sp.GetRequiredService<EventInjector>(),
             sp.GetRequiredService<RedComputeClient>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<OrchestrationSweeper>>(),
-            summaries: sp.GetRequiredService<DiscussionSummaries>()));
+            summaries: sp.GetRequiredService<DiscussionSummaries>(),
+            events: sp.GetRequiredKeyedService<IPluginEvents>(PluginId)));
         services.AddSingleton(sp => new DiscussionMcpService(
             sp.GetRequiredService<DiscussionStore>(),
             sp.GetRequiredKeyedService<IEntityStore>(PluginId),

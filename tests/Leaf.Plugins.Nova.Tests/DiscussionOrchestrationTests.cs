@@ -359,6 +359,133 @@ public sealed class DiscussionOrchestrationTests
         Assert.True(info.GetProperty("orchestrated").GetBoolean());
         Assert.Equal(h.Clock.Now + TimeSpan.FromMinutes(3), info.GetProperty("orchestration").GetProperty("dueAt").GetDateTimeOffset());
         Assert.Equal(0, info.GetProperty("orchestration").GetProperty("chain").GetInt32());
+        Assert.Equal("ongoing", info.GetProperty("orchestration").GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, info.GetProperty("orchestration").GetProperty("settledReason").ValueKind);
+    }
+
+    private static RedComputeClient AcceptingClient() => new(CallbackDeliveryTests.Proxy.Create<IComputeGateway>((_, _) =>
+        Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK))));
+
+    private static async Task<DiscussionRead> SettleAsync(Harness h, string reason = OrchestrationState.Complete, string by = "summary",
+        string? note = null)
+    {
+        var discussion = (await h.F.Store.GetAsync("target"))!;
+        Assert.NotNull(await DiscussionOrchestration.SettleAsync(h.F.Entities, discussion, reason, by, note, h.Clock.Now, null, default));
+        return (await h.F.Store.GetAsync("target"))!;
+    }
+
+    [Theory]
+    [InlineData(true)]    // the person writes
+    [InlineData(false)]   // a note reaches it (an Agent's, the Heartbeat's)
+    public async Task New_input_unsettles_it_and_its_turn_arms_as_usual(bool fromPerson)
+    {
+        using var h = new Harness();
+        await DiscussionOrchestration.UpdateAsync(h.F.Entities, h.F.Target.Id, _ => new(null, null, 4), default);
+        var discussion = await SettleAsync(h, OrchestrationState.NeedsYou);
+        Assert.True(h.State.IsSettled);
+
+        await DiscussionOrchestration.RegisterPromptAsync(AcceptingClient(), h.F.Entities, discussion, "s", "uid-in", fromPerson, null, default);
+
+        Assert.False(h.State.IsSettled);
+        Assert.Equal((null, null, null), (h.State.SettledBy, h.State.SettledNote, h.State.SettledAt));
+        Assert.Equal(fromPerson ? 0 : 4, h.State.Chain);   // only the person resets the pacing
+        await h.Settled("turn-2");
+        Assert.Equal(h.Clock.Now + DiscussionOrchestration.Window(h.State.Chain), h.State.DueAt);
+        h.Clock.Now = h.State.DueAt!.Value;
+        Assert.Equal(1, await h.Sweeper.SweepAsync());
+    }
+
+    [Fact]
+    public async Task Settled_it_arms_no_watch_and_its_turns_end_without_a_hand_off()
+    {
+        using var h = new Harness();
+        await h.Settled();
+        await SettleAsync(h, OrchestrationState.ByHeartbeat, "agent:nova", "Done; Laurent reviews it.");
+        Assert.Null(h.State.DueAt);
+
+        // A turn settled while it was parked (the one that was already running) leaves it parked.
+        Assert.Equal(200, await h.Settled("turn-2"));
+        Assert.Null(h.State.DueAt);
+        Assert.Equal(OrchestrationState.ByHeartbeat, h.State.Settled);
+
+        h.Clock.Now += TimeSpan.FromDays(1);
+        Assert.Equal(0, await h.Sweeper.SweepAsync());
+        Assert.Empty(h.HeartbeatMessages);
+    }
+
+    [Fact]
+    public void A_state_stored_before_settling_existed_reads_as_ongoing()
+    {
+        var due = new DateTimeOffset(2026, 11, 24, 20, 3, 0, TimeSpan.Zero);
+        var old = OrchestrationState.Read(new JsonObject
+        {
+            ["orchestration"] = new JsonObject { ["dueAt"] = due.ToString("O"), ["turn"] = "turn-1", ["chain"] = 3, ["revisits"] = 1 },
+        });
+        Assert.False(old.IsSettled);
+        Assert.Equal((due, "turn-1", 3, 1), (old.DueAt, old.TurnKey, old.Chain, old.Revisits));
+
+        // Nor does a value this build does not know settle it.
+        var unknown = OrchestrationState.Read(new JsonObject
+        {
+            ["orchestration"] = new JsonObject { ["dueAt"] = null, ["chain"] = 0, ["settled"] = "maybe" },
+        });
+        Assert.False(unknown.IsSettled);
+
+        var info = JsonSerializer.SerializeToElement(DiscussionStore.ToInfo(Chat() with { Orchestrated = true, Orchestration = old }));
+        Assert.Equal("ongoing", info.GetProperty("orchestration").GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task A_settled_state_lives_on_the_entity_and_survives_a_restart()
+    {
+        using var h = new Harness();
+        await h.Settled();
+        await SettleAsync(h, OrchestrationState.ByHeartbeat, "agent:nova", "Waiting only on Laurent's sign-off.");
+
+        // A new process: a fresh store and sweeper over the same entities.
+        var discussions = CallbackDeliveryTests.Proxy.Create<IDiscussions>((method, _) => throw new NotSupportedException(method));
+        var store = new DiscussionStore(h.F.Entities, discussions, null);
+        var sweeper = new OrchestrationSweeper(store, h.F.Entities, h.F.Injector, new RedComputeClient(h.F.Gateway), clock: h.Clock);
+        var read = (await store.GetAsync("target"))!;
+
+        Assert.Equal(OrchestrationState.ByHeartbeat, read.Orchestration!.Settled);
+        Assert.Equal("agent:nova", read.Orchestration.SettledBy);
+        Assert.Equal("Waiting only on Laurent's sign-off.", read.Orchestration.SettledNote);
+        Assert.Equal(h.Clock.Now, read.Orchestration.SettledAt);
+        h.Clock.Now += TimeSpan.FromHours(2);
+        Assert.Equal(0, await sweeper.SweepAsync());
+        Assert.Empty(h.HeartbeatMessages);
+        var info = JsonSerializer.SerializeToElement(DiscussionStore.ToInfo(read)).GetProperty("orchestration");
+        Assert.Equal("settled", info.GetProperty("state").GetString());
+        Assert.Equal("heartbeat", info.GetProperty("settledReason").GetString());
+        Assert.Equal("agent:nova", info.GetProperty("settledBy").GetString());
+    }
+
+    [Fact]
+    public async Task Turning_the_mark_on_again_takes_it_from_there()
+    {
+        using var h = new Harness();
+        var discussion = await SettleAsync(h);
+
+        await DiscussionOrchestration.HandOffNowAsync(h.F.Store, h.F.Entities, h.F.Injector, discussion, default, h.Clock);
+
+        Assert.False(h.State.IsSettled);
+        Assert.Single(h.HeartbeatMessages);
+    }
+
+    [Fact]
+    public async Task Only_an_Orchestrated_discussion_settles_and_settling_twice_changes_nothing()
+    {
+        using var h = new Harness();
+        var first = await SettleAsync(h);
+        var at = h.State.SettledAt;
+        h.Clock.Now += TimeSpan.FromMinutes(5);
+        Assert.NotNull(await DiscussionOrchestration.SettleAsync(h.F.Entities, first, OrchestrationState.Complete, "summary", null, h.Clock.Now, null, default));
+        Assert.Equal(at, h.State.SettledAt);
+
+        Assert.Null(await DiscussionOrchestration.SettleAsync(h.F.Entities, first with { Orchestrated = false },
+            OrchestrationState.Complete, "summary", null, h.Clock.Now, null, default));
+        Assert.Null(await DiscussionOrchestration.SettleAsync(h.F.Entities, first, "whenever", "summary", null, h.Clock.Now, null, default));
     }
 
     [Fact]

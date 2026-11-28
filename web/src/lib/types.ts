@@ -35,6 +35,10 @@ export interface WorktreeAttachment {
   attachedAt: string
 }
 
+export type OrchestrationState = "ongoing" | "settled"
+/** complete or needs_you: its summary said so; heartbeat: its Heartbeat settled it, with a note. */
+export type OrchestrationSettledReason = "complete" | "needs_you" | "heartbeat"
+
 export interface DiscussionInfo {
   id: string
   entityId: string
@@ -65,8 +69,20 @@ export interface DiscussionInfo {
   nodeId?: string | null
   /** Orchestrated: whenever it goes idle, its Agent's Heartbeat decides whether to continue it. */
   orchestrated?: boolean
-  /** While Orchestrated: when the Heartbeat is told it's idle (null: not armed), and hand-offs since the person last wrote. */
-  orchestration?: { dueAt: string | null; chain: number } | null
+  /**
+   * While Orchestrated: ongoing (kept moving) or settled (done, or waiting on its person; left alone until someone
+   * writes), why it settled, when the Heartbeat is told it's idle (null: not armed), and hand-offs since the person
+   * last wrote. An older server sends no state: ongoing.
+   */
+  orchestration?: {
+    state?: OrchestrationState
+    dueAt: string | null
+    chain: number
+    settledReason?: OrchestrationSettledReason | null
+    settledBy?: string | null
+    settledNote?: string | null
+    settledAt?: string | null
+  } | null
   /** Worktrees this discussion works in, newest last. */
   worktrees?: WorktreeAttachment[]
   /** Skills attached to this discussion only, beside the Agent's defaults, newest last. */

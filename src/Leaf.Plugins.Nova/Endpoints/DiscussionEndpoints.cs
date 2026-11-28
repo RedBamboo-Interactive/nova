@@ -78,6 +78,9 @@ public class DiscussionLiveTimelineRequest
 }
 
 /// <summary><c>orchestrated</c>: true to hand the discussion to its Agent's Heartbeat whenever it goes idle.</summary>
+/// <summary>The Heartbeat parking an Orchestrated discussion: why, in a sentence its owner reads.</summary>
+public sealed record OrchestrationSettleRequest(string? Note);
+
 public class DiscussionOrchestratedRequest
 {
     public JsonElement Orchestrated { get; set; }
@@ -604,6 +607,36 @@ public static class DiscussionEndpoints
             }
         }
         return Results.Ok(DiscussionStore.ToInfo(updated));
+    }
+
+    internal const int MaxSettleNote = 300;
+
+    /// <summary>
+    /// The Heartbeat settles an Orchestrated discussion: done, or waiting only on its person. Only its owner or its
+    /// owning Agent (acting for that owner) may. It arms nothing and is not handed over again until a prompt or a
+    /// note reaches it. Records who settled it and why.
+    /// </summary>
+    internal static async Task<IResult> SettleOrchestrationAsync(DiscussionRead discussion, OrchestrationSettleRequest? request,
+        HttpContext ctx, IEntityStore entities, IPluginEvents? events, TimeProvider? clock = null)
+    {
+        if (!DiscussionAccessPolicy.CanRead(discussion, ctx)) return AccessDenied(discussion);
+        var subject = DiscussionSummaries.Subject(ctx);
+        if (subject is null || !string.Equals(subject, discussion.OwnerId, StringComparison.OrdinalIgnoreCase)
+            || !DiscussionAccessPolicy.CanManageDiscussionProjection(discussion, ctx))
+            return Forbidden();
+        if (DiscussionStatus.IsClosed(discussion.Status)) return Closed();
+        var note = request?.Note?.Trim();
+        if (string.IsNullOrEmpty(note) || note.Length > MaxSettleNote || note.Any(char.IsControl))
+            return Results.BadRequest(new { error = "invalid_request",
+                message = $"note must say why, on one line of at most {MaxSettleNote} characters" });
+        if (!DiscussionOrchestration.IsActive(discussion))
+            return Results.Conflict(new { error = "not_orchestrated", message = "This discussion is not Orchestrated." });
+        var actor = DiscussionAccessPolicy.ReadSignedActor(ctx.User);
+        var by = actor?.IsAgent == true ? $"agent:{actor.Id}" : $"person:{subject}";
+        var settled = await DiscussionOrchestration.SettleAsync(entities, discussion, OrchestrationState.ByHeartbeat, by, note,
+            (clock ?? TimeProvider.System).GetUtcNow(), events, ctx.RequestAborted);
+        if (settled is null) return NotFound();
+        return Results.Ok(DiscussionStore.ToInfo(discussion with { Orchestration = settled }));
     }
 
     private static IResult InvalidRunOnNode() => Results.BadRequest(new
@@ -1832,7 +1865,16 @@ public static class DiscussionEndpoints
             var discussion = await store.GetAsync(id, ctx.RequestAborted);
             return discussion is null ? NotFound() : await SetOrchestratedAsync(discussion, request, ctx, store, injector, events);
         })
-            .WithSummary("Marks a discussion Orchestrated, or clears it. Body: orchestrated (true or false). Orchestrated, a turn that settles with nothing queued (not a stop or interrupt) arms a quiet window; new input cancels it. When it ends and the session is still idle, the Agent's open Heartbeat gets an orchestrated-idle note and decides, with its heartbeat-orchestration Skill, whether to send the next step. The window is 3 minutes for the first 5 hand-offs since the person last wrote there, then doubles per hand-off up to an hour; the person's message resets it. The discussion carries orchestration {dueAt, chain}. Turning it on while the discussion is idle hands it over at once; turning it on mid-turn watches that turn and hands it over once idle. A hand-off that starts no turn is not the end: the Heartbeat is told again that the discussion is still idle after 6 minutes, then 12, 24, 48 and every hour, until a turn runs there or the mark is cleared. 409 not_orchestratable for LIVE, Heartbeat, confidential, another app's or Agent-less discussions, and when the Agent has no open Heartbeat. Same access as the LIVE timeline; returns the discussion with orchestrated.");
+            .WithSummary("Marks a discussion Orchestrated, or clears it. Body: orchestrated (true or false). Orchestrated, a turn that settles with nothing queued (not a stop or interrupt) arms a quiet window; new input cancels it. When it ends and the session is still idle, the Agent's open Heartbeat gets an orchestrated-idle note and decides, with its heartbeat-orchestration Skill, whether to send the next step. The window is 3 minutes for the first 5 hand-offs since the person last wrote there, then doubles per hand-off up to an hour; the person's message resets it. The discussion carries orchestration {state (ongoing or settled), dueAt, chain, settledReason, settledBy, settledNote, settledAt}. Turning it on while the discussion is idle hands it over at once; turning it on mid-turn watches that turn and hands it over once idle. A hand-off that starts no turn is not the end while the work waits on something else: the Heartbeat is told again that the discussion is still idle after 6 minutes, then 12, 24, 48 and every hour, until a turn runs there, the mark is cleared, or it settles (its summary is complete or needs_you, or the Heartbeat settles it with PUT /discussions/{id}/orchestration/settle). 409 not_orchestratable for LIVE, Heartbeat, confidential, another app's or Agent-less discussions, and when the Agent has no open Heartbeat. Same access as the LIVE timeline; returns the discussion with orchestrated.");
+
+        group.MapPut("/discussions/{id}/orchestration/settle", async (string id,
+            OrchestrationSettleRequest? request, HttpContext ctx, DiscussionStore store,
+            [FromKeyedServices(NovaAppPlugin.PluginId)] IPluginEvents events) =>
+        {
+            var discussion = await store.GetAsync(id, ctx.RequestAborted);
+            return discussion is null ? NotFound() : await SettleOrchestrationAsync(discussion, request, ctx, store.Entities, events);
+        })
+            .WithSummary("Settles an Orchestrated discussion: its Heartbeat says the work is done or waits only on its person. Body: note (why, one line, at most 300 characters). Only the discussion's owner or its owning Agent acting for that owner (403 otherwise); 409 not_orchestrated when it is not Orchestrated. Settled, nothing is armed and the Heartbeat is not told again until a prompt or note reaches the discussion, which makes it ongoing again. orchestration.state reads settled with settledReason heartbeat, settledBy (agent:<id> or person:<id>), settledNote and settledAt. Its current summary settles it on its own when complete or needs_you (settledReason complete or needs_you).");
 
         group.MapPut("/discussions/{id}/node", async (string id,
             DiscussionRunOnRequest request, HttpContext ctx, DiscussionStore store,

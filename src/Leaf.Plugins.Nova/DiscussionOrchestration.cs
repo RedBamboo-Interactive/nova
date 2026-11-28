@@ -15,11 +15,28 @@ namespace Leaf.Plugins.Nova;
 /// (<see cref="DiscussionOrchestration.WatchPrefix"/>) armed by time rather than by a turn; <see cref="Chain"/>
 /// counts the hand-offs since its person last wrote there, which paces the next one; <see cref="Revisits"/> counts
 /// the hand-offs in a row that started no turn, which backs the watch off.
+/// <para>
+/// <see cref="Settled"/> parks it: the work is complete or needs its person, so nothing is armed and the Heartbeat
+/// is not told again until new input reaches the discussion. It says why (<c>complete</c>, <c>needs_you</c>, or
+/// <c>heartbeat</c> when the Heartbeat settled it), who settled it and, for the Heartbeat, in its own words.
+/// A state stored before settling existed reads as ongoing.
+/// </para>
 /// </summary>
-public sealed record OrchestrationState(DateTimeOffset? DueAt, string? TurnKey, int Chain, bool LastTurnFailed = false, int Revisits = 0)
+public sealed record OrchestrationState(DateTimeOffset? DueAt, string? TurnKey, int Chain, bool LastTurnFailed = false, int Revisits = 0,
+    string? Settled = null, string? SettledBy = null, string? SettledNote = null, DateTimeOffset? SettledAt = null)
 {
     public const string DataKey = "orchestration";
     public static readonly OrchestrationState Empty = new(null, null, 0);
+    public const string Complete = "complete";
+    public const string NeedsYou = "needs_you";
+    public const string ByHeartbeat = "heartbeat";
+
+    public bool IsSettled => Settled is not null;
+
+    internal static bool IsReason(string? value) => value is Complete or NeedsYou or ByHeartbeat;
+
+    /// <summary>Back to ongoing: what new input does. Pacing and arming are left to the caller.</summary>
+    public OrchestrationState Unsettled() => this with { Settled = null, SettledBy = null, SettledNote = null, SettledAt = null };
 
     public static OrchestrationState Read(JsonObject data)
     {
@@ -30,7 +47,13 @@ public sealed record OrchestrationState(DateTimeOffset? DueAt, string? TurnKey, 
         var chain = o["chain"] is JsonValue c && c.TryGetValue<int>(out var n) && n > 0 ? n : 0;
         var failed = o["lastTurnFailed"] is JsonValue f && f.TryGetValue<bool>(out var b) && b;
         var revisits = o["revisits"] is JsonValue r && r.TryGetValue<int>(out var m) && m > 0 ? m : 0;
-        return new(due, turn, chain, failed, revisits);
+        var settled = o["settled"] is JsonValue sv && sv.TryGetValue<string>(out var reason) && IsReason(reason) ? reason : null;
+        if (settled is null) return new(due, turn, chain, failed, revisits);
+        string? Text(string key) => o[key] is JsonValue v && v.TryGetValue<string>(out var value) ? value : null;
+        DateTimeOffset? settledAt = DateTimeOffset.TryParse(Text("settledAt"), null,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var at) ? at : null;
+        // Settled arms nothing, whatever an older writer left beside it.
+        return new(null, null, chain, failed, 0, settled, Text("settledBy"), Text("settledNote"), settledAt);
     }
 
     public JsonObject ToJson() => new()
@@ -40,6 +63,10 @@ public sealed record OrchestrationState(DateTimeOffset? DueAt, string? TurnKey, 
         ["chain"] = Chain,
         ["lastTurnFailed"] = LastTurnFailed,
         ["revisits"] = Revisits,
+        ["settled"] = Settled,
+        ["settledBy"] = SettledBy,
+        ["settledNote"] = SettledNote,
+        ["settledAt"] = SettledAt?.ToString("O"),
     };
 }
 
@@ -50,9 +77,12 @@ public sealed record OrchestrationState(DateTimeOffset? DueAt, string? TurnKey, 
 /// still idle, the <see cref="OrchestrationSweeper"/> tells the Agent's Heartbeat, whose
 /// <c>heartbeat-orchestration</c> Skill decides: send it the next step, tell LIVE, or leave it.
 /// <para>
-/// Leaving it does not end the loop. A hand-off that starts no turn arms a watch, and the Heartbeat is told again
-/// that it is still idle 6 minutes later, then 12, 24, 48 and every hour, so a workstream waiting on something is
-/// looked at again on its own. Marking a discussion while a turn is running watches that turn too: its prompt was
+/// Leaving it does not end the loop while the work waits on something else. A hand-off that starts no turn arms a
+/// watch, and the Heartbeat is told again that it is still idle 6 minutes later, then 12, 24, 48 and every hour, so
+/// a workstream waiting on something is looked at again on its own. The loop ends by settling: its current summary
+/// is complete or needs its person (directly, through the discussion it waits on, or forced by a denial), or the
+/// Heartbeat settles it. Settled arms nothing and is not handed over again until a prompt or note reaches it.
+/// Marking a discussion while a turn is running watches that turn too: its prompt was
 /// sent before the mark, so it has no idle callback.
 /// </para>
 /// <para>
@@ -150,8 +180,9 @@ public static class DiscussionOrchestration
 
     /// <summary>
     /// A prompt is about to reach an Orchestrated discussion: register its idle callback (before sending, so a fast
-    /// turn cannot outrun it) and cancel any armed hand-off, since the discussion has work again. A person's prompt
-    /// also resets the pacing. Best effort: a failure loses one hand-off, never the prompt.
+    /// turn cannot outrun it) and cancel any armed hand-off, since the discussion has work again. Any prompt, the
+    /// person's or a note's, also unsettles a settled discussion: it is ongoing again and its turn arms as usual.
+    /// A person's prompt also resets the pacing. Best effort: a failure loses one hand-off, never the prompt.
     /// </summary>
     public static async Task RegisterPromptAsync(RedComputeClient redCompute, IEntityStore entities, DiscussionRead discussion,
         string? sessionId, string? promptMessageUid, bool fromPerson, ILogger? logger, CancellationToken ct)
@@ -161,7 +192,7 @@ public static class DiscussionOrchestration
         try
         {
             await UpdateAsync(entities, discussion.EntityId,
-                s => s with { DueAt = null, TurnKey = null, Chain = fromPerson ? 0 : s.Chain, Revisits = 0 }, ct);
+                s => s.Unsettled() with { DueAt = null, TurnKey = null, Chain = fromPerson ? 0 : s.Chain, Revisits = 0 }, ct);
             if (!await redCompute.RegisterCallbackAsync(sessionId, CallbackUrl(discussion.Id), force: true, ct,
                     callbackId: CallbackPrefix + promptMessageUid, promptMessageUid: promptMessageUid))
                 logger?.LogWarning("Orchestrated discussion {Discussion}: RedCompute refused the idle callback", discussion.Id);
@@ -223,11 +254,50 @@ public static class DiscussionOrchestration
 
         var now = clock.GetUtcNow();
         var armed = await UpdateAsync(entities, discussion.EntityId,
-            s => s.TurnKey == report.TurnKey && s.DueAt is not null
+            // Settled during this turn: it stays parked. Its prompt already unsettled anything settled before it.
+            s => s.IsSettled ? s
+                : s.TurnKey == report.TurnKey && s.DueAt is not null
                 ? s // the same turn reported again keeps its original deadline
                 : s with { DueAt = now + Window(s.Chain), TurnKey = report.TurnKey, LastTurnFailed = report.TurnOutcome == "failed", Revisits = 0 },
             ct);
-        return Results.Ok(new { handled = armed is not null, dueAt = armed?.DueAt });
+        return Results.Ok(new { handled = armed is { IsSettled: false }, dueAt = armed?.DueAt, settled = armed?.Settled });
+    }
+
+    /// <summary>
+    /// Parks an Orchestrated discussion: nothing armed, no hand-off, until new input reaches it. Settling again for
+    /// the same reason by the same settler changes nothing. Null when it is not active.
+    /// </summary>
+    internal static async Task<OrchestrationState?> SettleAsync(IEntityStore entities, DiscussionRead discussion,
+        string reason, string by, string? note, DateTimeOffset now, IPluginEvents? events, CancellationToken ct)
+    {
+        if (!IsActive(discussion) || !OrchestrationState.IsReason(reason)) return null;
+        var changed = false;
+        var after = await UpdateAsync(entities, discussion.EntityId, s =>
+        {
+            if (s.Settled == reason && s.SettledBy == by && s.SettledNote == note && s.DueAt is null) return s;
+            changed = true;
+            return s with
+            {
+                DueAt = null, TurnKey = null, Revisits = 0,
+                Settled = reason, SettledBy = by, SettledNote = note, SettledAt = now,
+            };
+        }, ct);
+        if (changed) await PublishChangedAsync(events, discussion.Id, now, ct);
+        return after;
+    }
+
+    internal static async Task PublishChangedAsync(IPluginEvents? events, string discussionId, DateTimeOffset now, CancellationToken ct)
+    {
+        if (events is null) return;
+        try
+        {
+            await events.PublishAsync("discussion.changed", new JsonObject
+            {
+                ["discussionId"] = discussionId, ["change"] = "orchestration",
+                ["timestamp"] = now.ToString("O"), ["confidential"] = false,
+            }, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _ = ex; }
     }
 
     internal static string HeartbeatNote(DiscussionRead discussion, string why, int step, bool lastTurnFailed)
@@ -238,6 +308,7 @@ public static class DiscussionOrchestration
             <nova-event source="{EventSource}" type="orchestrated-idle" discussion="{NovaEventText.Attribute(discussion.Id)}" step="{step}">
             Orchestrated discussion [{discussion.Id}] "{title}" {why}.{failed} Hand-off {step} since its person last wrote there.
             Read it: GET /api/apps/nova/discussions/{discussion.Id}/export. Decide with your {SkillSlug} Skill; without that Skill, leave it and tell LIVE-you.
+            Done, or waiting only on its person: settle it with PUT /api/apps/nova/discussions/{discussion.Id}/orchestration/settle, a JSON note saying why. You are not told again until something reaches it.
             </nova-event>
             """;
     }
@@ -296,7 +367,8 @@ public static class DiscussionOrchestration
 /// </summary>
 public sealed class OrchestrationSweeper(
     DiscussionStore store, IEntityStore entities, EventInjector injector, RedComputeClient redCompute,
-    ILogger<OrchestrationSweeper>? logger = null, TimeProvider? clock = null, DiscussionSummaries? summaries = null)
+    ILogger<OrchestrationSweeper>? logger = null, TimeProvider? clock = null, DiscussionSummaries? summaries = null,
+    IPluginEvents? events = null)
 {
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
     private readonly TimeProvider clock = clock ?? TimeProvider.System;
@@ -325,7 +397,15 @@ public sealed class OrchestrationSweeper(
         {
             if (!DiscussionOrchestration.IsActive(discussion)) continue;
             var state = discussion.Orchestration ?? OrchestrationState.Empty;
-            if (state.DueAt is not { } due || due > now || discussion.SessionId is null) continue;
+            if (state.IsSettled || state.DueAt is not { } due || due > now || discussion.SessionId is null) continue;
+
+            // Its current summary says it is done or needs its person: settle it instead of handing it over.
+            if (summaries is not null && await summaries.SettlingReasonAsync(discussion, open, ct) is { } reason)
+            {
+                await DiscussionOrchestration.SettleAsync(entities, discussion, reason, DiscussionSummaries.SettledBySummary,
+                    null, now, events, ct);
+                continue;
+            }
 
             var probe = await redCompute.ProbeSessionAsync(discussion.SessionId, ct);
             if (!probe.Reachable) continue;
