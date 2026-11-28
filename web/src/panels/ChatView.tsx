@@ -8,7 +8,7 @@ import { LiveReportBlock, LiveReportHostProvider, type LiveReportHost } from "..
 import { LIVE_REPORT_LANGUAGE } from "../lib/live-report"
 import { captureVisibleAppContext, useBreadcrumbLabel, formatContextMessage, getEntityHref, PluginExtensionSlot, runUiSurfaceAction, useCommand, useUiSurface, VisibleAppContextCaptureError, type UiSurfaceActionResult, type VisibleAppContext } from "@redbamboo/utility"
 import { DiscussionSidebar, type DiscussionRowAction } from "../components/discussion/discussion-sidebar"
-import { DiscussionSummaryCard } from "../components/discussion/discussion-summary"
+import { DiscussionStatusChip } from "../components/discussion/discussion-summary"
 import { currentDiscussionSummary } from "../lib/discussion-summaries"
 import { DiscussionThumbnail, DiscussionThumbnailCacheContext, useDiscussionThumbnailCache } from "../components/discussion/discussion-thumbnail"
 import { discussionGroupSortOptions, discussionLabel, discussionSections, groupedDiscussionSortOptions, groupingIcon, moveDiscussionGroup, type DiscussionGroupSortMode, type GroupedDiscussionSortMode } from "../lib/discussion-grouping"
@@ -1669,6 +1669,7 @@ export function ChatView({
       summary: known,
     }
   }, [archivedDiscussions, discussions])
+  const summaryDiscussionTitle = useCallback((id: string) => resolveNoteDiscussion(id)?.title ?? null, [resolveNoteDiscussion])
 
   // A note held for the session's next turn is in the discussion but not in the conversation yet.
   const resolveHeldEvent = useCallback<ResolveEventQueueStatus>(part => {
@@ -2120,7 +2121,12 @@ export function ChatView({
                 </div>
               </div>
             ) : activeSummary ? (
-              <div className="shrink-0 px-4 pt-2"><DiscussionSummaryCard summary={activeSummary} /></div>
+              <div className="shrink-0 px-4 pt-2" data-slot="discussion-status-bar">
+                <div className="mx-auto flex max-w-3xl">
+                  <DiscussionStatusChip key={activeDiscussion.id} summary={activeSummary} view={summaryView}
+                    titleOf={summaryDiscussionTitle} onOpenDiscussion={handleSelectDiscussion} />
+                </div>
+              </div>
             ) : null}
           />
         </ChatBlockRenderersProvider>
