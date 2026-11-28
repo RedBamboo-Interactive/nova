@@ -407,6 +407,44 @@ public sealed class DelegationActivityTests
         Assert.Equal(1, (await f.Read())[f.Parent.Id].OngoingCount);
     }
 
+    [Fact]
+    public async Task The_summary_sweep_reads_only_its_own_outstanding_and_recent_delegations()
+    {
+        var f = new Fixture();
+        f.AddMarker("foreign");
+        f.Gateway.Set("foreign", "Active", owner: "someone-else");
+        f.AddMarker("secret");
+        f.Gateway.Set("secret", "Active", confidential: true);
+        f.AddMarker("running");
+        f.Gateway.Set("running", "Active");
+        f.AddMarker("done");
+        f.Gateway.Set("done", "Idle");
+
+        // Outstanding: running work of the same owner and Agent only; finished, foreign and confidential are not.
+        var outstanding = await f.Activity.OutstandingAsync(f.Parent, 6, default);
+        var only = Assert.Single(outstanding!);
+        Assert.Equal(("running", "running", "Worker title"), (only.SessionId, only.Status, only.Title));
+
+        // Recent workers: running or finished, newest first, same ownership check, no Compute status read.
+        var reads = f.Gateway.Reads.Count;
+        var recent = await f.Activity.RecentWorkersAsync(f.Parent, 6, default);
+        Assert.Equal(["done", "running"], recent!.Select(worker => worker.SessionId));
+        Assert.All(recent!, worker => Assert.NotNull(worker.DelegatedAt));
+        Assert.Equal(reads, f.Gateway.Reads.Count);
+        // Bounded to the most recent delegations.
+        Assert.Equal(["done"], (await f.Activity.RecentWorkersAsync(f.Parent, 1, default))!.Select(worker => worker.SessionId));
+        Assert.Empty((await f.Activity.OutstandingAsync(f.Parent, 1, default))!); // the newest one is finished
+        // A confidential or closed parent gives the sweep nothing.
+        Assert.Empty((await f.Activity.RecentWorkersAsync(f.Parent with { Confidential = true }, 6, default))!);
+        Assert.Empty((await f.Activity.OutstandingAsync(f.Parent with { Status = "archived" }, 6, default))!);
+        // A continuation re-marks the worker: DelegatedAt is the latest delegation to it.
+        var first = recent.Single(worker => worker.SessionId == "running").DelegatedAt;
+        await Task.Delay(5);
+        f.AddMarker("running");
+        var later = (await f.Activity.RecentWorkersAsync(f.Parent, 6, default))!.Single(worker => worker.SessionId == "running").DelegatedAt;
+        Assert.True(later > first);
+    }
+
     private sealed class Fixture
     {
         public DiscussionRead Parent = DelegationActivityTests.Parent("parent");

@@ -362,11 +362,13 @@ public sealed class DiscussionSummaries(
         if (!await StillCurrentAsync(d, turn, provenance, ct)) return false;
         var version = Version(d);
         var readerName = ReaderName(reader.Name);
-        var facts = Facts(page.Messages);
         var delegated = await OptionalAsync(() => delegations is null
             ? Task.FromResult<IReadOnlyList<DelegationSessionActivity>?>([])
             : delegations.OutstandingAsync(d, MaxDelegations, ct), ct);
         var goal = Goal(await OptionalAsync(() => store.ReadGoalAsync(d.EntityId, ct), ct));
+        var workers = await WorkerTailsAsync(d, provenance, ct);
+        var language = Language(input.Select(item => item.Text).Append(goal?.Text));
+        var facts = Facts(page.Messages, workers, language);
         // Other open, non-confidential discussions of the same owner: the only ones waitingOn may name
         // besides one the evidence or an agent note quotes. Those mentioned are offered with their titles.
         var known = open.Where(o => !string.Equals(o.Id, d.Id, StringComparison.OrdinalIgnoreCase) && Eligible(o)
@@ -401,6 +403,24 @@ public sealed class DiscussionSummaries(
         return true;
     }
 
+    /// <summary>
+    /// The newest records of each worker session this discussion delegated to (the
+    /// <see cref="MaxWorkerSessions"/> most recent, running or finished, ownership-checked): one
+    /// tail read each, no cursor. An unreadable worker is skipped.
+    /// </summary>
+    private async Task<IReadOnlyList<WorkerTail>> WorkerTailsAsync(DiscussionRead d, ComputeProvenance provenance, CancellationToken ct)
+    {
+        if (delegations is null
+            || await OptionalAsync(() => delegations.RecentWorkersAsync(d, MaxWorkerSessions, ct), ct) is not { Count: > 0 } workers)
+            return [];
+        var tails = new List<WorkerTail>();
+        foreach (var worker in workers)
+            if (await OptionalAsync(async () => (await compute.GetTranscriptPageAsync(worker.SessionId, WorkerWindowRecords,
+                    ct: ct, provenance: provenance)).Value, ct) is { } page)
+                tails.Add(new(worker.SessionId, worker.Title, worker.DelegatedAt, page.Messages));
+        return tails;
+    }
+
     /// <summary>Transcript records scanned for evidence and facts (the newest of them).</summary>
     internal const int WindowRecords = 120;
     internal const int MaxDelegations = 6;
@@ -421,12 +441,14 @@ public sealed class DiscussionSummaries(
     }
 
     internal sealed record PermissionFact(string Tool, string Outcome, string Fact, bool Superseded, bool OwnerMustAct,
-        string? MessageUid);
+        string? MessageUid, string? WorkerSession = null, string? Worker = null, DateTimeOffset? At = null);
     internal sealed record AgentNoteFact(string From, string? DiscussionId, string Excerpt, string? MessageUid);
     internal sealed record DelegationFact(string SessionId, string? Title, string Status, string? BlockedReason);
     /// <summary>A structured fact that proves the reader must act; it decides the status, the model only words it.</summary>
-    internal sealed record Blocker(string Tool, string Label, string Action, string? MessageUid);
+    internal sealed record Blocker(string Tool, string Label, string Action, string? MessageUid, string? WorkerSession = null);
     internal sealed record SummaryFacts(PermissionFact[] Permissions, AgentNoteFact[] AgentNotes, Blocker? Blocker);
+    /// <summary>The newest records of a worker session delegated from the discussion (a tail read, no cursor).</summary>
+    internal sealed record WorkerTail(string SessionId, string? Title, DateTimeOffset? DelegatedAt, IReadOnlyList<SessionMessage> Messages);
     internal sealed record GoalInput(string Kind, string From, string Text);
     internal sealed record PriorSummary(string Note, string Status, string Label, string Overview, string? UserAction,
         string? WaitingOn, DateTimeOffset UpdatedAt);
@@ -434,6 +456,10 @@ public sealed class DiscussionSummaries(
     internal sealed record SummaryFactsInput(PermissionFact[] Permissions, DelegationFact[]? Delegations, AgentNoteFact[] AgentNotes);
     internal sealed record SummaryInput(string Reader, string DiscussionId, string? Title, string SettledTurn, GoalInput? Goal,
         PriorSummary? PriorSummary, SummaryFactsInput Facts, RelatedDiscussion[] RelatedDiscussions, Evidence[] Evidence);
+
+    /// <summary>Worker sessions read for denials: the most recently delegated, each a tail of this many records.</summary>
+    internal const int MaxWorkerSessions = 6;
+    internal const int WorkerWindowRecords = 60;
 
     private static readonly System.Text.RegularExpressions.Regex UnattendedDenial = new(
         @"^Denied: this session runs at (?<level>[A-Za-z]+) with nobody to approve (?<what>.{1,120}?)\. ",
@@ -445,44 +471,33 @@ public sealed class DiscussionSummaries(
         @"^The user denied '(?<what>[^']{1,120})'", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>
-    /// Blocker facts gathered by code from the transcript window, never inferred: permission
-    /// denials as RedCompute words them in the tool result it keeps (unattended, unanswered, or
-    /// denied by the person) and the latest notes from other Agents with the discussion they came
-    /// from. Each becomes a one-line fact; no tool output is carried. A denial is superseded when
-    /// the same tool runs again later or the person writes afterwards. The newest unattended or
-    /// unanswered denial nothing superseded is the <see cref="Blocker"/>.
+    /// Blocker facts gathered by code, never inferred: permission denials as RedCompute words them in
+    /// the tool result it keeps (unattended, unanswered, or denied by the person), from this
+    /// discussion's window and from the tails of the worker sessions it delegated to, and the latest
+    /// notes from other Agents with the discussion they came from. Each becomes a one-line fact; no
+    /// tool input or output is carried.
+    /// A denial is superseded when, in its own session, the same tool runs again later or a person's
+    /// message follows. A worker's denial is also superseded when this discussion later records the
+    /// owner's message or a later delegation to that worker. The newest unattended or unanswered
+    /// denial nothing superseded is the <see cref="Blocker"/>, worded in <paramref name="language"/>.
     /// </summary>
-    internal static SummaryFacts Facts(IReadOnlyList<SessionMessage> window)
+    internal static SummaryFacts Facts(IReadOnlyList<SessionMessage> window, IReadOnlyList<WorkerTail>? workers = null,
+        string language = "en")
     {
-        var permissions = new List<PermissionFact>();
+        var permissions = Denials(window, null, _ => false);
+        var ownerWrote = window.Where(IsOwnerMessage).Select(m => Utc(m.Timestamp)).OfType<DateTimeOffset>().ToArray();
+        foreach (var worker in workers ?? [])
+            permissions.AddRange(Denials(worker.Messages, worker, at => at is { } denied
+                && (ownerWrote.Any(written => written > denied) || worker.DelegatedAt > denied)));
+        // Oldest first; a fact without a time keeps its place after the dated ones.
+        permissions = permissions.Select((fact, index) => (fact, index))
+            .OrderBy(item => item.fact.At ?? DateTimeOffset.MaxValue).ThenBy(item => item.index)
+            .Select(item => item.fact).ToList();
+
         var notes = new List<AgentNoteFact>();
-        for (var i = 0; i < window.Count; i++)
+        foreach (var m in window)
         {
-            var m = window[i];
-            if (m.EventType == "tool_result" && (m.Content ?? m.ToolResult) is { Length: > 0 } result)
-            {
-                var text = result.TrimStart();
-                var (outcome, match) = UnattendedDenial.Match(text) is { Success: true } u ? ("denied_unattended", u)
-                    : UnansweredDenial.Match(text) is { Success: true } x ? ("denied_unanswered", x)
-                    : PersonDenial.Match(text) is { Success: true } p ? ("denied_by_you", p)
-                    : (null, null);
-                if (outcome is null || match is null) continue;
-                var tool = Clip(match.Groups["what"].Value.Trim().Trim('\'', '"', '`'), 60)!;
-                var toolName = string.IsNullOrWhiteSpace(m.ToolName) ? tool : m.ToolName!;
-                var superseded = window.Skip(i + 1).Any(later => IsOwnerMessage(later)
-                    || later.EventType == "tool_use" && (string.Equals(later.ToolName, toolName, StringComparison.Ordinal)
-                        || string.Equals(later.ToolName, tool, StringComparison.Ordinal)));
-                var fact = outcome switch
-                {
-                    "denied_unattended" => $"{tool} was denied because nobody was there to approve it (session runs at {match.Groups["level"].Value}).",
-                    "denied_unanswered" => $"{tool} was denied because nobody approved it within {match.Groups["wait"].Value.Trim()}.",
-                    _ => $"You denied {tool}.",
-                };
-                if (superseded) fact += " Superseded later.";
-                permissions.Add(new(tool, outcome, fact, superseded,
-                    outcome != "denied_by_you" && !superseded, m.MessageUid));
-            }
-            else if (m.Role == "user" && m.EventType is "text" or "user_message" && m.Content is { Length: > 0 } content
+            if (m.Role == "user" && m.EventType is "text" or "user_message" && m.Content is { Length: > 0 } content
                 && ConversationExporter.StripInjectedTags(content).Trim() is var body
                 && body.StartsWith("<nova-event", StringComparison.Ordinal)
                 && EventFrame.Match(body) is { Success: true } frame
@@ -498,10 +513,103 @@ public sealed class DiscussionSummaries(
             }
         }
         var blocker = permissions.LastOrDefault(p => p.OwnerMustAct) is { } held
-            ? new Blocker(held.Tool, Clip($"{held.Tool} needs your approval", 64)!,
-                $"Approve {held.Tool} for this discussion, or tell it to continue without it", held.MessageUid)
+            ? new Blocker(held.Tool, Wording.Label(language, held.Tool),
+                Wording.Action(language, held.Tool, held.Worker, held.WorkerSession is not null),
+                held.WorkerSession is null ? held.MessageUid : null, held.WorkerSession)
             : null;
         return new(permissions.TakeLast(MaxPermissionFacts).ToArray(), notes.TakeLast(MaxAgentNotes).ToArray(), blocker);
+    }
+
+    private static List<PermissionFact> Denials(IReadOnlyList<SessionMessage> window, WorkerTail? worker,
+        Func<DateTimeOffset?, bool> supersededOutside)
+    {
+        var facts = new List<PermissionFact>();
+        for (var i = 0; i < window.Count; i++)
+        {
+            var m = window[i];
+            if (m.EventType != "tool_result" || (m.Content ?? m.ToolResult) is not { Length: > 0 } result) continue;
+            var text = result.TrimStart();
+            var (outcome, match) = UnattendedDenial.Match(text) is { Success: true } u ? ("denied_unattended", u)
+                : UnansweredDenial.Match(text) is { Success: true } x ? ("denied_unanswered", x)
+                : PersonDenial.Match(text) is { Success: true } p ? ("denied_by_you", p)
+                : (null, null);
+            if (outcome is null || match is null) continue;
+            var tool = Clip(match.Groups["what"].Value.Trim().Trim('\'', '"', '`'), 60)!;
+            var toolName = string.IsNullOrWhiteSpace(m.ToolName) ? tool : m.ToolName!;
+            var at = Utc(m.Timestamp);
+            var superseded = window.Skip(i + 1).Any(later => IsOwnerMessage(later)
+                    || later.EventType == "tool_use" && (string.Equals(later.ToolName, toolName, StringComparison.Ordinal)
+                        || string.Equals(later.ToolName, tool, StringComparison.Ordinal)))
+                || supersededOutside(at);
+            var where = worker is null ? "" : $" in delegated work \"{Clip(worker.Title, 60) ?? worker.SessionId}\"";
+            var fact = outcome switch
+            {
+                "denied_unattended" => $"{tool} was denied{where} because nobody was there to approve it (session runs at {match.Groups["level"].Value}).",
+                "denied_unanswered" => $"{tool} was denied{where} because nobody approved it within {match.Groups["wait"].Value.Trim()}.",
+                _ => $"You denied {tool}{where}.",
+            };
+            if (superseded) fact += " Superseded later.";
+            facts.Add(new(tool, outcome, fact, superseded, outcome != "denied_by_you" && !superseded, m.MessageUid,
+                worker?.SessionId, Clip(worker?.Title, 60), at));
+        }
+        return facts;
+    }
+
+    private static DateTimeOffset? Utc(DateTime value)
+        => value == default ? null
+            : new DateTimeOffset(value.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(value, DateTimeKind.Utc) : value.ToUniversalTime());
+
+    /// <summary>
+    /// The conversation's language for wording Nova writes itself (the fallback action and label):
+    /// French when the evidence reads as French, English otherwise.
+    /// </summary>
+    internal static string Language(IEnumerable<string?> texts)
+    {
+        int french = 0, english = 0;
+        foreach (var word in string.Join(' ', texts.OfType<string>()).ToLowerInvariant()
+                     .Split([' ', '\n', '\r', '\t', '.', ',', ';', ':', '!', '?', '(', ')', '"', '«', '»', '\'', '’'],
+                         StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (FrenchWords.Contains(word)) french++;
+            else if (EnglishWords.Contains(word)) english++;
+        }
+        return french >= 3 && french > english ? "fr" : "en";
+    }
+
+    private static readonly HashSet<string> FrenchWords = new(StringComparer.Ordinal)
+    {
+        "le", "les", "des", "une", "est", "pour", "dans", "que", "qui", "pas", "avec", "sur", "du", "au", "aux",
+        "vous", "je", "nous", "ce", "cette", "mais", "où", "et", "il", "elle", "sont", "été", "être", "fait",
+        "peux", "peut", "tu", "ton", "ta", "tes", "mon", "ma", "mes", "votre", "vos", "son", "sa", "ses", "très",
+        "déjà", "aussi", "plus", "moins", "encore", "merci", "oui", "non",
+    };
+    private static readonly HashSet<string> EnglishWords = new(StringComparer.Ordinal)
+    {
+        "the", "is", "and", "to", "of", "for", "with", "this", "that", "it", "you", "not", "on", "in", "are", "was",
+        "be", "have", "has", "can", "will", "your", "my", "we", "they", "from", "but", "or", "please", "thanks", "yes", "no",
+    };
+
+    /// <summary>Nova's own fallback wording for a blocker, in the conversation's language.</summary>
+    internal static class Wording
+    {
+        public static string Label(string language, string tool) => Clip(language == "fr"
+            ? $"{tool} attend votre accord" : $"{tool} needs your approval", 64)!;
+
+        public static string Action(string language, string tool, string? worker, bool delegated)
+        {
+            var work = Clip(worker, 40);
+            return Clip((language, delegated) switch
+            {
+                ("fr", true) => work is null
+                    ? $"Autorisez {tool} pour le travail délégué, dans cette discussion, ou dites-lui de continuer sans"
+                    : $"Autorisez {tool} pour le travail délégué « {work} », dans cette discussion, ou dites-lui de continuer sans",
+                ("fr", false) => $"Autorisez {tool} pour cette discussion, ou dites-lui de continuer sans",
+                (_, true) => work is null
+                    ? $"Approve {tool} for the delegated work, here in this discussion, or tell it to continue without it"
+                    : $"Approve {tool} for the delegated work \"{work}\", here in this discussion, or tell it to continue without it",
+                _ => $"Approve {tool} for this discussion, or tell it to continue without it",
+            }, 200)!;
+        }
     }
 
     private static bool IsOwnerMessage(SessionMessage m)
@@ -576,7 +684,8 @@ public sealed class DiscussionSummaries(
         facts.permissions are permission requests that were denied in the recent window: denied_unattended
         (nobody was there to approve), denied_unanswered (nobody approved in time) or denied_by_you. ownerMustAct
         true means nothing later superseded it: then status is needs_you and userAction asks the reader to approve
-        it or decide. facts.delegations is work started from here that is still outstanding (null when it could
+        it or decide. A permission with workerSession was denied inside work delegated from this discussion
+        (worker is its title); the reader approves it here, in this discussion. facts.delegations is work started from here that is still outstanding (null when it could
         not be read). facts.agentNotes are the latest notes from other Agents, with the discussion each came from.
         Return one JSON object with status, label, overview, nextStep, userAction, waitingOn and evidenceMessageUids.
         Status is waiting, needs_you, in_progress, complete or unclear. Label is at most 64 characters,
@@ -711,7 +820,8 @@ public sealed class DiscussionSummaries(
                     .Distinct(StringComparer.Ordinal).Take(4).ToArray();
             if (blocker?.MessageUid is { Length: > 0 } held && !evidence.Contains(held, StringComparer.Ordinal))
                 evidence = [held, .. evidence.Take(3)];
-            return text.Status is not ("complete" or "needs_you") || evidence.Length > 0;
+            // A blocker from a worker session is itself the evidence: its record is not in this transcript.
+            return text.Status is not ("complete" or "needs_you") || evidence.Length > 0 || blocker is not null;
         }
         catch (JsonException) { return false; }
     }

@@ -611,7 +611,8 @@ public sealed class DiscussionSummaryTests
         var text = new string('a', 850);
         var evidence = Enumerable.Range(0, 14).Select(i => new DiscussionSummaries.Evidence($"uid-{i:D2}", "user", text, "other Agent " + new string('n', 80))).ToArray();
         var permissions = Enumerable.Range(0, DiscussionSummaries.MaxPermissionFacts).Select(i => new DiscussionSummaries.PermissionFact(
-            new string('t', 60), "denied_unattended", new string('f', 160), false, true, $"p{i}")).ToArray();
+            new string('t', 60), "denied_unattended", new string('f', 200), false, true, $"p{i}",
+            Guid.NewGuid().ToString(), new string('w', 60), DateTimeOffset.UtcNow)).ToArray();
         var delegations = Enumerable.Range(0, DiscussionSummaries.MaxDelegations).Select(i => new DiscussionSummaries.DelegationFact(
             Guid.NewGuid().ToString(), new string('d', 120), "blocked", new string('b', 60))).ToArray();
         var notes = Enumerable.Range(0, DiscussionSummaries.MaxAgentNotes).Select(i => new DiscussionSummaries.AgentNoteFact(
@@ -622,10 +623,15 @@ public sealed class DiscussionSummaryTests
             new("Previous summary: prior state only.", "waiting", new string('l', 64), new string('o', 240), null, null, DateTimeOffset.UtcNow),
             new(permissions, delegations, notes), related, evidence);
 
-        // Every field at its own limit fits without dropping anything.
+        // Every field at its own limit at once: the cap holds by dropping at most the oldest excerpt.
         var json = DiscussionSummaries.Input(full);
         Assert.True(json.Length <= DiscussionSummaries.MaxInputChars, json.Length.ToString());
-        Assert.Equal(14, JsonNode.Parse(json)!["evidence"]!.AsArray().Count);
+        var all = JsonNode.Parse(json)!["evidence"]!.AsArray();
+        Assert.True(all.Count >= 13, all.Count.ToString());
+        Assert.Equal("uid-13", all[^1]!["messageUid"]!.GetValue<string>());
+        // Without worker facts, everything fits as it is.
+        var parentOnly = full with { Facts = full.Facts with { Permissions = full.Facts.Permissions.Select(p => p with { WorkerSession = null, Worker = null, At = null }).ToArray() } };
+        Assert.Equal(14, JsonNode.Parse(DiscussionSummaries.Input(parentOnly))!["evidence"]!.AsArray().Count);
 
         // Text that escapes heavily (non-ASCII) is trimmed from the oldest evidence to stay under the cap.
         var escaped = full with { Evidence = evidence.Select(e => e with { Text = new string('é', 850) }).ToArray() };
@@ -634,6 +640,140 @@ public sealed class DiscussionSummaryTests
         var kept = JsonNode.Parse(bounded)!["evidence"]!.AsArray();
         Assert.True(kept.Count < 14);
         Assert.Equal("uid-13", kept[^1]!["messageUid"]!.GetValue<string>());
+    }
+
+    // ---- Denials inside delegated worker sessions, and the conversation's language ----
+
+    private static readonly DateTime Denied = DateTime.Parse("2026-11-28T08:00:00Z").ToUniversalTime();
+
+    private static SessionMessage At(SessionMessage message, DateTime at) { message.Timestamp = at; return message; }
+    private static SessionMessage Owner(string text, DateTime at)
+        => At(new() { Role = "user", EventType = "user_message", MessageUid = "owner-" + at.Ticks, Content = text }, at);
+    private static DiscussionSummaries.WorkerTail Worker(DateTimeOffset? delegatedAt, params SessionMessage[] messages)
+        => new("worker-1", "Sandbox eval run", delegatedAt, messages);
+    private static SessionMessage[] WorkerDenial() => [
+        At(ToolUse("w1", "SandboxLaunch"), Denied.AddSeconds(-1)),
+        At(ToolResult("w1", "SandboxLaunch", UnattendedDenialText), Denied),
+        At(new() { Role = "assistant", EventType = "text", MessageUid = "w2", Content = "I could not launch the Sandbox." }, Denied.AddSeconds(5)),
+    ];
+
+    [Fact]
+    public void A_worker_denial_needs_the_reader_until_the_parent_supersedes_it()
+    {
+        var delegatedAt = new DateTimeOffset(Denied.AddMinutes(-10));
+        var parent = new[] { At(new() { Role = "assistant", EventType = "text", MessageUid = "p", Content = "Delegated the eval." }, Denied.AddMinutes(-9)) };
+
+        var facts = DiscussionSummaries.Facts(parent, [Worker(delegatedAt, WorkerDenial())]);
+        var fact = Assert.Single(facts.Permissions);
+        Assert.Equal(("worker-1", "Sandbox eval run", true), (fact.WorkerSession, fact.Worker, fact.OwnerMustAct));
+        Assert.Equal("SandboxLaunch was denied in delegated work \"Sandbox eval run\" because nobody was there to approve it (session runs at Ask).", fact.Fact);
+        Assert.Equal(new DiscussionSummaries.Blocker("SandboxLaunch", "SandboxLaunch needs your approval",
+            "Approve SandboxLaunch for the delegated work \"Sandbox eval run\", here in this discussion, or tell it to continue without it",
+            null, "worker-1"), facts.Blocker);
+        Assert.DoesNotContain("secret", JsonSerializer.Serialize(facts, DiscussionSummary.Json)); // no tool input carried
+
+        // The owner writing in the parent after the denial supersedes it; before it does not.
+        Assert.Null(DiscussionSummaries.Facts([.. parent, Owner("Skip the Sandbox, use the local run.", Denied.AddMinutes(1))],
+            [Worker(delegatedAt, WorkerDenial())]).Blocker);
+        Assert.NotNull(DiscussionSummaries.Facts([Owner("Run the eval in the Sandbox.", Denied.AddMinutes(-20)), .. parent],
+            [Worker(delegatedAt, WorkerDenial())]).Blocker);
+        // A later delegation to the same worker supersedes it.
+        Assert.Null(DiscussionSummaries.Facts(parent, [Worker(new DateTimeOffset(Denied.AddMinutes(2)), WorkerDenial())]).Blocker);
+        // Inside the worker, the same rules: a retry of the tool supersedes it.
+        Assert.Null(DiscussionSummaries.Facts(parent,
+            [Worker(delegatedAt, [.. WorkerDenial(), At(ToolUse("w3", "SandboxLaunch"), Denied.AddMinutes(1))])]).Blocker);
+
+        // The parent's own unsuperseded denial and a worker's are both facts; the newest decides.
+        var both = DiscussionSummaries.Facts(
+            [At(ToolResult("p1", "Bash", "Denied: this session runs at Ask with nobody to approve 'Bash'. Continue without it."), Denied.AddMinutes(-30))],
+            [Worker(delegatedAt, WorkerDenial())]);
+        Assert.Equal(["Bash", "SandboxLaunch"], both.Permissions.Select(p => p.Tool));
+        Assert.Equal("worker-1", both.Blocker!.WorkerSession);
+    }
+
+    [Fact]
+    public void Fallback_wording_follows_a_French_conversation()
+    {
+        Assert.Equal("fr", DiscussionSummaries.Language([
+            "Lance l'évaluation dans la Sandbox et donne-moi les scores.",
+            "Je n'ai pas pu lancer la Sandbox : la session ne peut pas obtenir l'autorisation.",
+        ]));
+        Assert.Equal("en", DiscussionSummaries.Language(["Launch the eval in the Sandbox and send me the scores.", "I could not launch it."]));
+        Assert.Equal("en", DiscussionSummaries.Language([null, "ok"]));
+
+        var delegatedAt = new DateTimeOffset(Denied.AddMinutes(-10));
+        var worker = DiscussionSummaries.Facts([], [Worker(delegatedAt, WorkerDenial())], "fr").Blocker!;
+        Assert.Equal("SandboxLaunch attend votre accord", worker.Label);
+        Assert.Equal("Autorisez SandboxLaunch pour le travail délégué « Sandbox eval run », dans cette discussion, ou dites-lui de continuer sans", worker.Action);
+        var own = DiscussionSummaries.Facts([ToolResult("t", "SandboxLaunch", UnattendedDenialText)], language: "fr").Blocker!;
+        Assert.Equal("Autorisez SandboxLaunch pour cette discussion, ou dites-lui de continuer sans", own.Action);
+
+        // Through precedence: a French model answer that is not needs_you gets the French fallback.
+        var evidence = DiscussionSummaries.Excerpts([
+            new SessionMessage { Role = "assistant", EventType = "text", MessageUid = "dit", Content = "Le lancement est en attente." },
+        ]);
+        Assert.True(DiscussionSummaries.TryParse(Answer("waiting", "En attente", "L'évaluation attend la Sandbox."),
+            evidence, out var text, out var cited, "eval", reader: "Laurent", blocker: worker));
+        Assert.Equal(("needs_you", "SandboxLaunch attend votre accord", worker.Action), (text!.Status, text.Label, text.UserAction));
+        Assert.Empty(cited); // the worker's record is not this transcript's evidence, and that is enough
+        Assert.True(worker.Action.Length <= 200);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_sweep_reads_delegated_workers_and_a_later_owner_message_supersedes_their_denial(bool ownerWroteLater)
+    {
+        using var h = new Harness();
+        var target = await h.ReadAsync();
+        // The delegation marker Nova records in the parent, and the worker's ownership metadata.
+        var marker = new DiscussionMessage(1, h.F.Target.Id, "system", "delegated", new JsonObject
+        {
+            ["source"] = "event:delegation",
+            ["parts_json"] = JsonSerializer.Serialize(new[] { new { type = "event_data", data = new { sessionId = "worker-1", status = "started" } } }),
+        }, new DateTimeOffset(Denied.AddMinutes(-10)));
+        var workerEntity = CallbackDeliveryTests.Entity("ai-session", "session-worker-1", new()
+        {
+            ["session_id"] = "worker-1", ["user_id"] = target.OwnerId, ["owner_agent_id"] = target.AgentId, ["confidential"] = false,
+        }) with { Name = "Sandbox eval run" };
+        var messages = CallbackDeliveryTests.Proxy.Create<IDiscussions>((method, args) =>
+        {
+            Assert.Equal("GetMessagesAsync", method);
+            return Task.FromResult<IReadOnlyList<DiscussionMessage>>((long)args[2]! == 0 ? [marker] : []);
+        });
+        var entities = CallbackDeliveryTests.Proxy.Create<IEntityStore>((method, args) => method switch
+        {
+            "GetAsync" => Task.FromResult((LeafEntity?)((Guid)args[0]! == workerEntity.Id ? workerEntity : null)),
+            "QueryAsync" => Task.FromResult<IReadOnlyList<LeafEntity>>(((EntityQuery)args[0]!).TypeSlug == "ai-session" ? [workerEntity] : []),
+            _ => throw new NotSupportedException(method),
+        });
+        var summaries = h.NewService(new DelegationActivity(messages, new RedComputeClient(h.Compute), entities));
+        h.Compute.Workers["worker-1"] = [.. WorkerDenial()];
+        if (ownerWroteLater) h.Compute.Window.Add(Owner("Skip the Sandbox, run it locally.", Denied.AddMinutes(3)));
+        h.Clock.Now = h.Compute.EndedAt.AddMinutes(3);
+        await summaries.SweepAsync([await h.ReadAsync()], default);
+
+        // One tail read of the worker, no cursor.
+        var path = Assert.Single(h.Compute.WorkerPaths);
+        Assert.Equal($"/ai-session/sessions/worker-1/transcript-page?limit={DiscussionSummaries.WorkerWindowRecords}", path);
+        var content = h.Compute.RequestBody!["messages"]![0]!["content"]!.GetValue<string>();
+        var permission = JsonNode.Parse(content)!["facts"]!["permissions"]![0]!;
+        Assert.Equal("worker-1", permission["workerSession"]!.GetValue<string>());
+        Assert.Equal(!ownerWroteLater, permission["ownerMustAct"]!.GetValue<bool>());
+        Assert.DoesNotContain("secret", content);
+
+        var saved = (await h.ReadAsync()).AutoSummary!;
+        if (ownerWroteLater)
+        {
+            Assert.Equal("waiting", saved.Text.Status); // the model's own answer stands
+            Assert.Null(saved.Text.UserAction);
+        }
+        else
+        {
+            Assert.Equal("needs_you", saved.Text.Status);
+            Assert.Equal("Approve SandboxLaunch for the delegated work \"Sandbox eval run\", here in this discussion, or tell it to continue without it",
+                saved.Text.UserAction);
+        }
     }
 
     private sealed class Harness : IDisposable
@@ -659,8 +799,8 @@ public sealed class DiscussionSummaryTests
             Summaries = NewService();
         }
 
-        public DiscussionSummaries NewService() => new(F.Store, F.Entities, preferences, F.Agents,
-            new RedComputeClient(Compute), Events, NullLogger<DiscussionSummaries>.Instance, Clock);
+        public DiscussionSummaries NewService(DelegationActivity? delegations = null) => new(F.Store, F.Entities, preferences, F.Agents,
+            new RedComputeClient(Compute), Events, NullLogger<DiscussionSummaries>.Instance, Clock, delegations);
 
         public async Task<DiscussionRead> ReadAsync() => (await F.Store.GetAsync(F.Target.Id))!;
         public async Task SweepAsync() => await Summaries.SweepAsync([await ReadAsync()], default);
@@ -702,6 +842,9 @@ public sealed class DiscussionSummaryTests
         public Func<Task>? BeforeOutput { get; set; }
         /// <summary>Records appended after the default window, newest last.</summary>
         public List<SessionMessage> Window { get; } = [];
+        /// <summary>Worker sessions' transcripts by session id, served as tail pages.</summary>
+        public Dictionary<string, List<SessionMessage>> Workers { get; } = [];
+        public List<string> WorkerPaths { get; } = [];
         public string? TranscriptPath { get; private set; }
         public bool InvalidOutput { get; set; }
 
@@ -723,6 +866,16 @@ public sealed class DiscussionSummaryTests
                     },
                     inputQueue = new { depth = Depth },
                 });
+            if (Workers.Keys.FirstOrDefault(id => path.StartsWith($"/ai-session/sessions/{id}/transcript-page", StringComparison.Ordinal)) is { } worker)
+            {
+                WorkerPaths.Add(path);
+                return Json(new
+                {
+                    session = new { id = worker, status = "Idle" },
+                    page = new { epoch = "worker-epoch", boundaryComplete = true, throughSequence = 9 },
+                    messages = Workers[worker],
+                });
+            }
             if (path.Contains("transcript-page", StringComparison.Ordinal) && (TranscriptPath ??= path) is not null)
                 return Json(new
                 {

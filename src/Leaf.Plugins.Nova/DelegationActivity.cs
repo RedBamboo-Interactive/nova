@@ -19,7 +19,10 @@ public sealed record DiscussionDelegationActivity(
 
 internal sealed record DelegationLink(
     string SessionId, long MarkerId, string? RepositoryId, string? Repository,
-    string? Branch = null, string? WorktreePath = null);
+    string? Branch = null, string? WorktreePath = null, DateTimeOffset? At = null);
+
+/// <summary>A worker session delegated from a discussion, as its newest started marker records it.</summary>
+internal sealed record LinkedWorker(string SessionId, string? Title, DateTimeOffset? DelegatedAt);
 
 /// <summary>
 /// Product-only read projection. Durable system markers establish membership;
@@ -223,6 +226,23 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
         return result;
     }
 
+    /// <summary>
+    /// For the summary sweep: the <paramref name="max"/> most recently delegated worker sessions of the
+    /// owner's own non-confidential discussion, running or finished, that pass <see cref="MatchesScope"/>
+    /// against fresh ownership metadata. A continuation re-marks its session, so DelegatedAt is the
+    /// latest delegation to it. No Compute status read. Null when the metadata is unavailable.
+    /// </summary>
+    internal async Task<IReadOnlyList<LinkedWorker>?> RecentWorkersAsync(DiscussionRead discussion, int max, CancellationToken ct)
+    {
+        if (discussion.Confidential || DiscussionStatus.IsClosed(discussion.Status)) return [];
+        var links = (await ReadLinksAsync(discussion, ct)).OrderByDescending(link => link.MarkerId).Take(max).ToArray();
+        if (links.Length == 0) return [];
+        var metadata = await ReadMetadataAsync(links.Select(link => link.SessionId).ToHashSet(StringComparer.Ordinal), ct);
+        if (metadata is null) return null;
+        return links.Where(link => metadata.TryGetValue(link.SessionId, out var current) && MatchesScope(discussion, current))
+            .Select(link => new LinkedWorker(link.SessionId, metadata[link.SessionId].Title, link.At)).ToArray();
+    }
+
     private async Task<Dictionary<string, RedComputeClient.DelegationSnapshot>?> ReadMetadataAsync(
         IReadOnlySet<string> linked, CancellationToken ct)
     {
@@ -406,7 +426,7 @@ public sealed class DelegationActivity(IDiscussions messages, RedComputeClient c
                 var sessionId = String(data, "sessionId");
                 if (!ValidSessionId(sessionId)) continue;
                 return new(sessionId!, message.Id, String(data, "repositoryId"), String(data, "repository"),
-                    String(data, "branch"), String(data, "worktreePath"));
+                    String(data, "branch"), String(data, "worktreePath"), message.CreatedAt);
             }
         }
         catch (JsonException) { }
