@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { ORCHESTRATION_LABELS, agentsWithHeartbeat, behaviourMarks, effectiveBehaviours, orchestrationState } from "./discussion-behaviours.ts"
+import { readFileSync } from "node:fs"
+import { ORCHESTRATION_LABELS, agentsWithHeartbeat, behaviourMarks, discussionLooksAlive, effectiveBehaviours, orchestrationState } from "./discussion-behaviours.ts"
 import type { DiscussionInfo } from "./types.ts"
 
 function discussion(overrides: Partial<DiscussionInfo> = {}): DiscussionInfo {
@@ -63,4 +64,33 @@ test("only an open Heartbeat discussion counts for its Agent", () => {
     discussion({ id: "c1", agentId: "zed" }),
   ])
   assert.deepEqual([...agents], ["nova"])
+})
+
+test("a stopped discussion looks alive only while its orchestration is ongoing; archived never does", () => {
+  const ongoing = { orchestrated: true, orchestration: { state: "ongoing" as const, dueAt: null, chain: 1 } }
+  const settled = { orchestrated: true, orchestration: { state: "settled" as const, dueAt: null, chain: 1, settledReason: "complete" as const } }
+
+  // Stopped + Orchestrated + ongoing: still being driven, not dimmed.
+  assert.equal(discussionLooksAlive(discussion({ status: "stopped", ...ongoing }), true), true)
+  // Stopped + Orchestrated + settled: dimmed as before.
+  assert.equal(discussionLooksAlive(discussion({ status: "stopped", ...settled }), true), false)
+  // Stopped and not Orchestrated: dimmed as before.
+  assert.equal(discussionLooksAlive(discussion({ status: "stopped" }), true), false)
+  // Archived stays dimmed whatever its orchestration says.
+  assert.equal(discussionLooksAlive(discussion({ status: "archived", ...ongoing }), true), false)
+
+  // It follows the magenta heart: no Heartbeat to drive it, or Confidential, and nothing is ongoing.
+  assert.equal(discussionLooksAlive(discussion({ status: "stopped", ...ongoing }), false), false)
+  assert.equal(discussionLooksAlive(discussion({ status: "stopped", confidential: true, ...ongoing }), true), false)
+  // Live statuses are unaffected.
+  for (const status of ["idle", "thinking"] as const) assert.equal(discussionLooksAlive(discussion({ status }), true), true)
+})
+
+test("the sidebar dims through that rule but keeps Stop on the status rule", () => {
+  const sidebar = readFileSync(new URL("../components/discussion/discussion-sidebar.tsx", import.meta.url), "utf8")
+  assert.match(sidebar, /const alive = discussionLooksAlive\(discussion, heartbeatAgents\.has\(discussion\.agentId\)\)/)
+  assert.match(sidebar, /const unread = alive && isDiscussionUnread\(discussion\)/)
+  assert.match(sidebar, /const stoppable = discussion\.status !== "archived" && discussion\.status !== "stopped"/)
+  assert.match(sidebar, /onStop: onStop && stoppable && discussion\.sessionId/)
+  assert.doesNotMatch(sidebar, /const alive = discussion\.status/)
 })

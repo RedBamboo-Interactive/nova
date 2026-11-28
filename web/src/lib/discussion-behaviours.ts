@@ -45,6 +45,18 @@ export const ORCHESTRATION_LABELS: Record<OrchestrationState, string> = {
 }
 
 /**
+ * Whether the list shows a discussion as alive (full title, unread shown) rather than dimmed. Archived is always
+ * dimmed. Stopped is dimmed too, except an Orchestrated discussion whose orchestration is ongoing: its session was
+ * only released while idle and the Heartbeat will resume it, so it wears the magenta heart and must not look dead.
+ * Same rule as that heart, so the two never contradict. Visual only: actions keep their own status checks.
+ */
+export function discussionLooksAlive(discussion: DiscussionInfo, agentHasHeartbeat: boolean): boolean {
+  if (discussion.status === "archived") return false
+  if (discussion.status !== "stopped") return true
+  return behaviourMarks(discussion, agentHasHeartbeat).orchestration === "ongoing"
+}
+
+/**
  * The marks after a discussion's title in the list: each behaviour switched on, except the
  * intrinsic LIVE timeline of LIVE and Heartbeat discussions, which isn't a choice. The heartbeat
  * says whether its orchestration is ongoing or settled.

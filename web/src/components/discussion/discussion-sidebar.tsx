@@ -12,6 +12,7 @@ import { isDiscussionUnread } from "../../lib/discussion-unread"
 import { discussionActivityIndicator } from "../../lib/delegation-activity"
 import { discussionActionEntries } from "./discussion-actions"
 import { DiscussionBehaviourMarks } from "./discussion-behaviour"
+import { discussionLooksAlive } from "../../lib/discussion-behaviours"
 import { LiveQuotaBorder } from "./live-quota-ring"
 import { DiscussionThumbnail } from "./discussion-thumbnail"
 import { discussionLabel, discussionSections, groupingIcon, sidebarDiscussionTitle, type DiscussionGroupingSort, type DiscussionGroupingView } from "../../lib/discussion-grouping"
@@ -242,7 +243,9 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
   const renderChatItem = useCallback((discussion: DiscussionInfo) => {
     const label = discussionLabel(discussion, grouping)
     const visualCue = !!label && showAvatars
-    const alive = discussion.status !== "archived" && discussion.status !== "stopped"
+    // Dimming is visual: an ongoing Orchestrated discussion stays lit while stopped. Stopping keeps the status rule.
+    const alive = discussionLooksAlive(discussion, heartbeatAgents.has(discussion.agentId))
+    const stoppable = discussion.status !== "archived" && discussion.status !== "stopped"
     const unread = alive && isDiscussionUnread(discussion)
     const agent = showAvatars ? getAgent?.(discussion.agentId) : undefined
     const entries: ContextMenuEntry[] = discussion.status === "archived"
@@ -264,7 +267,7 @@ export const DiscussionSidebar = memo(function DiscussionSidebar({ discussions, 
             onUpdateTitle: () => onUpdateTitle(discussion.id),
             onShare: !discussion.confidential ? () => onRowAction(discussion.id, "share") : undefined,
             onFloat: onFloat ? () => onFloat(discussion.id) : undefined,
-            onStop: onStop && alive && discussion.sessionId ? () => onStop(discussion.id) : undefined,
+            onStop: onStop && stoppable && discussion.sessionId ? () => onStop(discussion.id) : undefined,
             onClose: () => onArchive(discussion.id),
           })
     const summary = currentDiscussionSummary(discussion, summaryViews?.[discussion.id])
