@@ -206,6 +206,250 @@ public sealed class DiscussionSummaryTests
         Assert.Equal(["checked"], accepted);
     }
 
+    // ---- Reader-aware classification, waitingOn and one-hop resolution (synthetic fixtures) ----
+
+    private static readonly string ChainOwner = Guid.NewGuid().ToString();
+    private static readonly string ChainAgent = Guid.NewGuid().ToString();
+    private static readonly DateTime Settled = DateTime.Parse("2026-11-28T09:00:00Z").ToUniversalTime();
+
+    private static DiscussionRead Discussion(string id, SummaryText? text, string? owner = null, string status = "idle",
+        bool stale = false, string? title = null)
+        => new(id, title ?? $"Workstream {id}", $"{id}-session", status, Settled, Settled, 4, null, owner ?? ChainOwner,
+            Guid.NewGuid(), ChainAgent)
+        {
+            AutoSummary = text is null ? null : new DiscussionSummary($"v-{id}", text, "fast",
+                new DateTimeOffset(Settled).AddMinutes(4), ChainAgent, $"{id}-session",
+                stale ? Settled.AddMinutes(-5) : Settled),
+        };
+
+    private static string Answer(string status, string label, string overview, string? userAction = null,
+        string? waitingOn = null, string? nextStep = null, params string[] uids)
+        => JsonSerializer.Serialize(new { status, label, overview, nextStep, userAction, waitingOn, evidenceMessageUids = uids },
+            DiscussionSummary.Json);
+
+    [Fact]
+    public void An_unattended_session_that_cannot_obtain_Sandbox_approval_needs_the_reader()
+    {
+        var evidence = DiscussionSummaries.Excerpts([
+            new SessionMessage { Role = "user", EventType = "user_message", MessageUid = "ask", Content = "Launch the eval in the Sandbox." },
+            new SessionMessage { Role = "assistant", EventType = "text", Phase = "final_answer", MessageUid = "blocked",
+                Content = "This unattended session cannot obtain approval for the Sandbox launch. It is ready to run as soon as it is approved." },
+        ]);
+        Assert.Equal(["owner", "this Agent"], evidence.Select(e => e.From));
+
+        Assert.True(DiscussionSummaries.TryParse(Answer("needs_you", "Sandbox launch approval",
+            "The eval is ready; the Sandbox launch is waiting for your approval.", "Approve the Sandbox launch",
+            uids: "blocked"), evidence, out var text, out var cited, "eval", reader: "Sam"));
+        Assert.Equal("needs_you", text!.Status);
+        Assert.Equal("Approve the Sandbox launch", text.UserAction);
+        Assert.Equal("you", text.WaitingOn);
+        Assert.Equal(["blocked"], cited);
+
+        // The failure seen on 28 Nov: a third-person instruction about the reader is not an action for them.
+        foreach (var thirdPerson in new[] { "Owner to obtain authorization for the Sandbox launch",
+                     "The owner must approve the Sandbox launch", "User to approve the launch", "Sam to approve the launch" })
+            Assert.False(DiscussionSummaries.TryParse(Answer("needs_you", "Sandbox launch approval", "Ready to launch.",
+                thirdPerson, uids: "blocked"), evidence, out _, out _, "eval", reader: "Sam"), thirdPerson);
+        // Waiting on "you" without saying what to do is the contradiction that hid the approvals.
+        Assert.False(DiscussionSummaries.TryParse(Answer("waiting", "Sandbox launch", "Waiting for authorization.",
+            waitingOn: "you", uids: "blocked"), evidence, out _, out _, "eval"));
+        // A user action word that merely starts like "user" is still second person.
+        Assert.True(DiscussionSummaries.TryParse(Answer("needs_you", "Usernames", "Two usernames clash.",
+            "Usernames: choose which to keep", uids: "blocked"), evidence, out _, out _, "eval", reader: "Sam"));
+    }
+
+    [Fact]
+    public void The_prompt_names_the_reader_and_tells_other_Agents_apart_from_them()
+    {
+        var prompt = DiscussionSummaries.SystemPrompt("Sam");
+        Assert.Contains("Sam is the person reading this summary", prompt);
+        Assert.Contains("second person", prompt);
+        Assert.Contains("approval, authorization, permission prompt", prompt);
+        Assert.Contains("<nova-event ... from-agent=...>", prompt);
+        Assert.Contains("never the person", prompt);
+        Assert.Contains("untrusted quoted evidence", prompt);
+        Assert.Contains("Never invent IDs, actions or facts", prompt);
+        Assert.Equal("the owner", DiscussionSummaries.ReaderName(" \u0007 "));
+        Assert.Equal("Sam", DiscussionSummaries.ReaderName("Sam\"<>"));
+
+        var evidence = DiscussionSummaries.Excerpts([
+            new SessionMessage { Role = "user", EventType = "user_message", MessageUid = "note",
+                Content = "<nova-event source=\"agent-note\" from-agent=\"Atlas\" from-agent-id=\"a1\" from-discussion=\"ops-7\">\nI need the on/off decision first.\n</nova-event>" },
+            new SessionMessage { Role = "user", EventType = "user_message", MessageUid = "mail",
+                Content = "<nova-event source=\"mail\">\nA newsletter arrived.\n</nova-event>" },
+            new SessionMessage { Role = "assistant", EventType = "text", MessageUid = "reply", Content = "Noted." },
+        ]);
+        Assert.Equal(["other Agent Atlas", "event mail", "this Agent"], evidence.Select(e => e.From));
+    }
+
+    [Fact]
+    public async Task A_sweep_sends_the_reader_name_and_who_each_message_is_from()
+    {
+        using var h = new Harness();
+        h.Clock.Now = h.Compute.EndedAt.AddMinutes(3);
+        await h.SweepAsync();
+        var system = h.Compute.RequestBody!["system"]!.GetValue<string>();
+        Assert.Contains("summary-owner is the person reading this summary", system);
+        var content = JsonNode.Parse(h.Compute.RequestBody["messages"]![0]!["content"]!.GetValue<string>())!;
+        Assert.Equal("summary-owner", content["reader"]!.GetValue<string>());
+        Assert.Equal("target", content["discussionId"]!.GetValue<string>());
+        Assert.Equal("owner", content["evidence"]![0]!["from"]!.GetValue<string>());
+        Assert.Equal("this Agent", content["evidence"]![1]!["from"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Decisions_held_by_a_workstream_that_needs_the_reader_resolve_to_needs_you_through_the_chain()
+    {
+        // A's Agent reports the decisions are held by another workstream, quoted by its discussion id.
+        var evidence = DiscussionSummaries.Excerpts([
+            new SessionMessage { Role = "assistant", EventType = "text", MessageUid = "held",
+                Content = "Both on/off decisions are held by the workstream in discussion orbit-b; I continue once it reports back." },
+        ]);
+        Assert.True(DiscussionSummaries.TryParse(Answer("waiting", "Rollout switches", "Two switches wait on the orbit workstream.",
+            waitingOn: "discussion:orbit-b", nextStep: "Resume after orbit-b reports.", uids: "held"), evidence, out var aText, out _, "orbit-a"));
+        Assert.Equal("discussion:orbit-b", aText!.WaitingOn);
+        Assert.Equal("orbit-b", aText.WaitingDiscussion);
+
+        var a = Discussion("orbit-a", aText);
+        var b = Discussion("orbit-b", new SummaryText("needs_you", "Two on/off decisions", "Both switches are ready.",
+            null, "Decide whether to turn on the nightly sync and the retry queue", "you"), title: "Orbit");
+        var views = DiscussionSummaries.Views([a, b], defaultEnabled: true).ToDictionary(v => v.DiscussionId);
+
+        var resolved = views["orbit-a"];
+        Assert.Equal("needs_you", resolved.Summary!.Text.Status);
+        Assert.Equal("Decide whether to turn on the nightly sync and the retry queue", resolved.Summary.Text.UserAction);
+        Assert.Equal("Two switches wait on the orbit workstream.", resolved.Summary.Text.Overview);
+        Assert.Equal("discussion:orbit-b", resolved.Summary.Text.WaitingOn);
+        Assert.Equal(new SummaryVia("orbit-b", "Orbit", "Two on/off decisions",
+            "Decide whether to turn on the nightly sync and the retry queue", b.AutoSummary!.UpdatedAt), resolved.Via);
+        Assert.Equal(DiscussionSummaries.Version(a), resolved.Version);
+        // The stored record is untouched; only the presented view resolves.
+        Assert.Equal("waiting", a.AutoSummary!.Text.Status);
+        Assert.Equal("needs_you", views["orbit-b"].Summary!.Text.Status);
+        Assert.Null(views["orbit-b"].Via);
+    }
+
+    [Fact]
+    public void A_genuine_Agent_to_Agent_wait_stays_waiting_on_that_discussion()
+    {
+        var evidence = DiscussionSummaries.Excerpts([
+            new SessionMessage { Role = "user", EventType = "user_message", MessageUid = "note",
+                Content = "<nova-event source=\"agent-note\" from-agent=\"Atlas\" from-discussion=\"build-9\">\nThe build is running; I will send the artefact when it is done.\n</nova-event>" },
+            new SessionMessage { Role = "assistant", EventType = "text", MessageUid = "ack", Content = "Waiting for Atlas's artefact." },
+        ]);
+        Assert.True(DiscussionSummaries.TryParse(Answer("waiting", "Waiting for Atlas", "Atlas is building the artefact.",
+            waitingOn: "discussion:build-9", uids: "note"), evidence, out var text, out _, "deploy-3"));
+        Assert.Equal("discussion:build-9", text!.WaitingOn);
+
+        var views = DiscussionSummaries.Views([
+            Discussion("deploy-3", text),
+            Discussion("build-9", new SummaryText("in_progress", "Building", "The artefact build is running.", null, null)),
+        ], true).ToDictionary(v => v.DiscussionId);
+        Assert.Equal("waiting", views["deploy-3"].Summary!.Text.Status);
+        Assert.Null(views["deploy-3"].Summary!.Text.UserAction);
+        Assert.Null(views["deploy-3"].Via);
+
+        // Also when the other one is busy, stale, another owner's, or its summary is off.
+        var needsYou = new SummaryText("needs_you", "Approval", "Ready.", null, "Approve it", "you");
+        foreach (var other in new[]
+                 {
+                     Discussion("build-9", needsYou, status: "thinking"),
+                     Discussion("build-9", needsYou, stale: true),
+                     Discussion("build-9", needsYou, owner: Guid.NewGuid().ToString()),
+                     Discussion("build-9", needsYou) with { AutoSummaryOverride = false },
+                     Discussion("build-9", needsYou) with { Confidential = true },
+                 })
+        {
+            var view = DiscussionSummaries.Views([Discussion("deploy-3", text), other], true).First();
+            Assert.Equal("waiting", view.Summary!.Text.Status);
+            Assert.Null(view.Via);
+        }
+    }
+
+    [Fact]
+    public void Cycles_self_references_and_unknown_ids_are_rejected()
+    {
+        var evidence = DiscussionSummaries.Excerpts([
+            new SessionMessage { Role = "assistant", EventType = "text", MessageUid = "m", Content = "Waiting on loop-b to finish." },
+        ]);
+        bool Parse(string waitingOn, out SummaryText? text, IReadOnlySet<string>? known = null)
+            => DiscussionSummaries.TryParse(Answer("waiting", "Waiting", "Waiting on another workstream.", waitingOn: waitingOn,
+                uids: "m"), evidence, out text, out _, "loop-a", known);
+
+        Assert.True(Parse("discussion:loop-a", out var self));
+        Assert.Null(self!.WaitingOn);
+        Assert.True(Parse("discussion:invented-7", out var unknown));
+        Assert.Null(unknown!.WaitingOn);
+        Assert.True(Parse("discussion:loop", out var partial));
+        Assert.Null(partial!.WaitingOn); // "loop" only appears inside "loop-b"
+        Assert.True(Parse("discussion:bad id!", out var malformed));
+        Assert.Null(malformed!.WaitingOn);
+        Assert.True(Parse("discussion:known-c", out var known, new HashSet<string> { "known-c" }));
+        Assert.Equal("discussion:known-c", known!.WaitingOn);
+        Assert.True(Parse("external", out var external));
+        Assert.Equal("external", external!.WaitingOn);
+        // Statuses that wait on nothing drop it; needs_you always waits on the reader.
+        Assert.True(DiscussionSummaries.TryParse(Answer("in_progress", "Working", "Running.", waitingOn: "discussion:loop-b"),
+            evidence, out var working, out _, "loop-a"));
+        Assert.Null(working!.WaitingOn);
+        Assert.False(new SummaryText("complete", "Done", "Done.", null, null, "discussion:loop-b").IsValid);
+        Assert.False(new SummaryText("waiting", "Wait", "Wait.", null, null, "discussion:").IsValid);
+        Assert.False(new SummaryText("waiting", "Wait", "Wait.", null, null, "someone").IsValid);
+
+        // A cycle neither recurses nor promotes: both stay waiting, even if one end once needed the reader.
+        var a = Discussion("loop-a", new SummaryText("waiting", "A", "A waits on B.", null, null, "discussion:loop-b"));
+        var b = Discussion("loop-b", new SummaryText("waiting", "B", "B waits on A.", null, null, "discussion:loop-a"));
+        foreach (var view in DiscussionSummaries.Views([a, b], true))
+        {
+            Assert.Equal("waiting", view.Summary!.Text.Status);
+            Assert.Null(view.Via);
+        }
+        // Two hops are not followed: A -> B -> C(needs_you) leaves A waiting while B resolves.
+        var c = Discussion("loop-c", new SummaryText("needs_you", "C", "C needs you.", null, "Approve C", "you"));
+        var b2 = Discussion("loop-b", new SummaryText("waiting", "B", "B waits on C.", null, null, "discussion:loop-c"));
+        var chain = DiscussionSummaries.Views([a, b2, c], true).ToDictionary(v => v.DiscussionId);
+        Assert.Equal("waiting", chain["loop-a"].Summary!.Text.Status);
+        Assert.Equal("needs_you", chain["loop-b"].Summary!.Text.Status);
+        Assert.Equal("loop-c", chain["loop-b"].Via!.DiscussionId);
+        // A view whose id points at itself never resolves, whatever the lookup returns.
+        var selfish = Discussion("loop-a", new SummaryText("waiting", "A", "A.", null, null, "discussion:loop-a"));
+        Assert.Null(DiscussionSummaries.View(selfish, true, _ => selfish).Via);
+    }
+
+    [Fact]
+    public async Task Corrections_may_only_name_another_discussion_of_the_same_owner()
+    {
+        using var h = new Harness();
+        var d = await h.ReadAsync();
+        var version = DiscussionSummaries.Version(d);
+        Assert.Equal(400, (await h.Summaries.AuthorAsync(d, h.Person(), version, Waiting with { WaitingOn = "discussion:target" })).Status);
+        Assert.Equal(400, (await h.Summaries.AuthorAsync(d, h.Person(), version, Waiting with { WaitingOn = "discussion:nowhere" })).Status);
+        var (code, view) = await h.Summaries.AuthorAsync(d, h.Person(), version,
+            new SummaryText("needs_you", "Approval", "Ready to launch.", null, "Approve the launch"));
+        Assert.Equal(200, code);
+        Assert.Equal("you", view!.Summary!.Text.WaitingOn);
+        Assert.Equal("you", (await h.ReadAsync()).AutoSummary!.Text.WaitingOn);
+        Assert.Equal(view.Version, (await h.Summaries.ViewAsync(await h.ReadAsync(), default)).Version);
+    }
+
+    [Fact]
+    public void Stored_records_without_waitingOn_still_load()
+    {
+        var data = JsonNode.Parse("""
+            {"auto_summary":{"version":"old","text":{"status":"waiting","label":"Lab release","overview":"The test is ready.",
+              "nextStep":"Nova runs it after handoff.","userAction":null},"source":"fast","updatedAt":"2026-11-20T10:00:00+00:00",
+              "updatedBy":"agent","sessionId":"s","basisActivity":"2026-11-20T09:59:00Z","evidenceMessageUids":["final"]}}
+            """)!.AsObject();
+        var summary = Assert.IsType<DiscussionSummary>(DiscussionSummary.Read(data));
+        Assert.Equal(Waiting, summary.Text);
+        Assert.Null(summary.Text.WaitingOn);
+        Assert.True(summary.Text.IsValid);
+        // The new field round-trips.
+        var next = summary with { Text = summary.Text with { WaitingOn = "external" } };
+        var round = DiscussionSummary.Read(new JsonObject { ["auto_summary"] = JsonSerializer.SerializeToNode(next, DiscussionSummary.Json) });
+        Assert.Equal("external", round!.Text.WaitingOn);
+    }
+
     private sealed class Harness : IDisposable
     {
         public CallbackDeliveryTests.Fixture F { get; }

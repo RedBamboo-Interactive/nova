@@ -13,15 +13,15 @@ public static class DiscussionSummaryEndpoints
     public static void Map(RouteGroupBuilder group)
     {
         group.MapGet("/discussion-summaries", ListAsync)
-            .WithSummary("Read owner-authorized Nova discussion status projections and the per-person Fast auto-summary default. No inference.");
+            .WithSummary("Read owner-authorized Nova discussion status projections and the per-person Fast auto-summary default. A discussion waiting on another that needs the owner presents as needs_you with via. No inference.");
         group.MapGet("/discussion-summaries/settings", GetSettingsAsync)
             .WithSummary("Read the signed beneficiary's Nova auto-summary default. On unless the person has saved an opt-out.");
         group.MapPut("/discussion-summaries/settings", PutSettingsAsync)
             .WithSummary("Owner-only. Persist the Nova default for discussions without an override. Body {enabled: boolean}.");
         group.MapGet("/discussions/{id}/summary", ReadAsync)
-            .WithSummary("Read this authorized discussion's derived work status, next step, user action, source, evidence, effective preference, freshness and write version. No inference.");
+            .WithSummary("Read this authorized discussion's derived work status, next step, user action, waitingOn (you, discussion:<id>, external or null), source, evidence, effective preference, freshness and write version. When it waits on another discussion of the same owner whose current summary needs the owner, summary presents as needs_you with that action and via names the other discussion (one hop). No inference.");
         group.MapPut("/discussions/{id}/summary", AuthorAsync)
-            .WithSummary("The person or owning signed Agent can correct the enabled summary. Body {expectedVersion, text:{status,label,overview,nextStep,userAction}}. Read GET first. Status: waiting, needs_you, in_progress, complete, unclear. A stale write returns 409 with current state. No transcript or work mutation.");
+            .WithSummary("The person or owning signed Agent can correct the enabled summary. Body {expectedVersion, text:{status,label,overview,nextStep,userAction,waitingOn}}. waitingOn: you (needs_you only), external or discussion:<id> of another discussion of the same owner (waiting only), or null. Read GET first. Status: waiting, needs_you, in_progress, complete, unclear. A stale write returns 409 with current state. No transcript or work mutation.");
         group.MapPut("/discussions/{id}/summary/preference", OverrideAsync)
             .WithSummary("Set the per-discussion Auto-summary override as the person or owning signed Agent. Body {enabled:true|false|null}. Null follows the Nova default. No immediate inference or new turn.");
     }
@@ -32,8 +32,8 @@ public static class DiscussionSummaryEndpoints
         if (owner is null) return Results.Unauthorized();
         var ct = ctx.RequestAborted;
         var defaultEnabled = await summaries.DefaultAsync(owner, ct);
-        var list = (await store.ListOpenAsync(ct: ct)).Where(d => DiscussionSummaries.CanAccess(d, ctx))
-            .Select(d => DiscussionSummaries.View(d, defaultEnabled));
+        var list = DiscussionSummaries.Views(
+            (await store.ListOpenAsync(ct: ct)).Where(d => DiscussionSummaries.CanAccess(d, ctx)).ToArray(), defaultEnabled);
         return Results.Ok(new { defaultEnabled, discussions = list });
     }
 
@@ -57,7 +57,7 @@ public static class DiscussionSummaryEndpoints
 
     private static async Task<IResult> ReadAsync(string id, HttpContext ctx, DiscussionStore store, DiscussionSummaries summaries)
         => await AuthorizedAsync(id, ctx, store) is { } d
-            ? Results.Ok(DiscussionSummaries.View(d, await summaries.DefaultAsync(d.OwnerId!, ctx.RequestAborted)))
+            ? Results.Ok(await summaries.ViewAsync(d, ctx.RequestAborted))
             : Results.NotFound();
 
     private static async Task<IResult> OverrideAsync(string id, HttpContext ctx, DiscussionStore store, DiscussionSummaries summaries,
